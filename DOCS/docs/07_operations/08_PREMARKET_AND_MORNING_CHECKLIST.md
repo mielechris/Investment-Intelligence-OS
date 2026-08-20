@@ -1,0 +1,21 @@
+# Pre-Market and Morning Checklist
+
+- [ ] Correct environment is PAPER.
+- [ ] Database healthy.
+- [ ] Object storage healthy.
+- [ ] Worker queue healthy.
+- [ ] Scheduler healthy.
+- [ ] Risk engine healthy.
+- [ ] Paper execution adapter healthy.
+- [ ] No unresolved accounting mismatch.
+- [ ] No active kill switch unless expected.
+- [ ] Critical sources fresh.
+- [ ] Market data fresh enough for intended workflows.
+- [ ] Model gateway healthy.
+- [ ] Overnight ingestion complete or exceptions recorded.
+- [ ] World-state snapshot generated.
+- [ ] Event radar reviewed.
+- [ ] Scheduled catalysts identified.
+- [ ] Open positions reviewed for invalidation.
+- [ ] Theme/causal-cluster concentration reviewed.
+- [ ] Daily workflow correlation ID created.
