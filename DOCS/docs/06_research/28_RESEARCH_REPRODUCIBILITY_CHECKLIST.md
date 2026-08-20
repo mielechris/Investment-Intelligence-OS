@@ -1,0 +1,22 @@
+# Research Reproducibility Checklist
+
+- [ ] Hypothesis version recorded.
+- [ ] Strategy version recorded.
+- [ ] Dataset manifest recorded.
+- [ ] Source versions recorded.
+- [ ] Point-in-time cutoff rules recorded.
+- [ ] Feature versions recorded.
+- [ ] Label versions recorded.
+- [ ] Benchmark recorded.
+- [ ] Cost model recorded.
+- [ ] Execution model recorded.
+- [ ] Parameters recorded.
+- [ ] Random seed recorded where relevant.
+- [ ] Code commit recorded.
+- [ ] Dependency-lock hash recorded.
+- [ ] Model/prompt versions recorded where AI participates.
+- [ ] Train/validation/holdout periods recorded.
+- [ ] Number of tested variants recorded.
+- [ ] Results stored immutably.
+- [ ] Failed checks stored.
+- [ ] Another clean environment can rerun the experiment.
