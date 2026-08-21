@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from factory.store import agents
 from factory.system_agents import IPO_AGENT_ID, MARKET_HISTORY_AGENT_ID
+from intelligence.committee_escalation import committee_escalations
 from intelligence.models import EvidenceItem
 
 
@@ -92,7 +93,6 @@ class EventDispatcher:
         elif item.source_kind == "company" and "sec edgar" in text:
             routes.append((MARKET_HISTORY_AGENT_ID, "SEC company event can inform historical event studies"))
 
-        # Dynamic approved agents may opt into broad evidence classes through feed identifiers.
         feed_tokens = {
             "market": {"equity_market", "equity_market_history", "market_prices", "crypto_market"},
             "macro": {"fred_macro", "macro"},
@@ -133,13 +133,8 @@ class EventDispatcher:
                         VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)
                         """,
                         (
-                            str(uuid4()),
-                            evidence_key,
-                            agent_id,
-                            reason,
-                            item.model_dump_json(),
-                            now,
-                            now,
+                            str(uuid4()), evidence_key, agent_id, reason,
+                            item.model_dump_json(), now, now,
                         ),
                     )
                     inserted += int(cursor.rowcount > 0)
@@ -163,11 +158,7 @@ class EventDispatcher:
         limit = max(1, min(limit, 1000))
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM intelligence_dispatch_queue
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
+                "SELECT * FROM intelligence_dispatch_queue ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         output = []
@@ -188,12 +179,7 @@ class EventDispatcher:
                 "SELECT status, COUNT(*) AS count FROM intelligence_dispatch_queue GROUP BY status"
             ).fetchall()
         counts = {row["status"]: int(row["count"]) for row in rows}
-        return {
-            "pending": counts.get("pending", 0),
-            "running": counts.get("running", 0),
-            "complete": counts.get("complete", 0),
-            "error": counts.get("error", 0),
-        }
+        return {key: counts.get(key, 0) for key in ("pending", "running", "complete", "error")}
 
     def _mark(self, dispatch_id: str, status: str, *, result: dict | None = None, error: str | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -204,13 +190,7 @@ class EventDispatcher:
                 SET status = ?, result_payload = ?, error = ?, updated_at = ?
                 WHERE dispatch_id = ?
                 """,
-                (
-                    status,
-                    json.dumps(result) if result is not None else None,
-                    error,
-                    now,
-                    dispatch_id,
-                ),
+                (status, json.dumps(result) if result is not None else None, error, now, dispatch_id),
             )
 
     def _run_agent(self, row: dict) -> dict:
@@ -278,17 +258,19 @@ Return ONLY valid JSON with:
         rows = self.pending(limit=limit)
         processed = 0
         errors = 0
+        escalated = 0
         for row in rows:
             dispatch_id = row["dispatch_id"]
             self._mark(dispatch_id, "running")
             try:
                 result = self._run_agent(row)
                 self._mark(dispatch_id, "complete", result=result)
+                escalated += int(committee_escalations.maybe_enqueue(dispatch_row=row, result=result))
                 processed += 1
             except Exception as exc:
                 self._mark(dispatch_id, "error", error=str(exc))
                 errors += 1
-        return {"enabled": True, "processed": processed, "errors": errors}
+        return {"enabled": True, "processed": processed, "errors": errors, "committee_escalations": escalated}
 
 
 dispatcher = EventDispatcher()
