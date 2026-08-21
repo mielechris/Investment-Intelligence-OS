@@ -43,6 +43,8 @@ jobs:
     defaults:
       run:
         working-directory: "BACK END/backend"
+    env:
+      PYTHONPATH: "."
     steps:
       - name: Checkout
         uses: actions/checkout@v4
