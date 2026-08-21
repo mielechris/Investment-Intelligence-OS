@@ -7,6 +7,7 @@ from intelligence.committee_escalation import committee_escalations
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.ingestion import ingestion_service
+from intelligence.paper_execution import paper_execution
 from intelligence.providers import CoinGeckoProvider, FredProvider
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.sec_company import fetch_recent_company_filings
@@ -34,6 +35,7 @@ def get_feed_status():
         "dispatcher": dispatcher.counts(),
         "committee_escalations": committee_escalations.counts(),
         "risk_reviews": risk_reviews.counts(),
+        "paper_execution": paper_execution.counts(),
     }
 
 
@@ -70,7 +72,7 @@ def get_risk_reviews(limit: int = 100):
 
 @router.post("/risk-reviews/process")
 def process_risk_reviews(limit: int = 3):
-    return {"processing": risk_reviews.process_pending(limit=max(1, min(limit, 20))), "counts": risk_reviews.counts(), "paper_mode": True}
+    return {"processing": risk_reviews.process_pending(limit=max(1, min(limit, 20))), "counts": risk_reviews.counts(), "paper_counts": paper_execution.counts(), "paper_mode": True}
 
 
 @router.post("/risk-reviews/backfill")
@@ -83,6 +85,22 @@ def backfill_completed_committee_reviews(limit: int = 25):
         row = {"escalation_id": item["escalation_id"], "packet_payload": json.dumps(item["packet"])}
         enqueued += int(risk_reviews.maybe_enqueue(escalation_row=row, committee_result=result))
     return {"enqueued": enqueued, "counts": risk_reviews.counts(), "paper_mode": True}
+
+
+@router.get("/paper-execution")
+def get_paper_execution_candidates(limit: int = 100):
+    return {"counts": paper_execution.counts(), "items": paper_execution.recent(limit=limit), "paper_mode": True, "live_execution": False}
+
+
+@router.post("/paper-execution/{candidate_id}/simulate")
+def simulate_paper_execution(candidate_id: str):
+    try:
+        order = paper_execution.simulate(candidate_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"candidate_id": candidate_id, "order": order, "paper_mode": True, "live_execution": False}
 
 
 @router.post("/ingestion/run-now")
