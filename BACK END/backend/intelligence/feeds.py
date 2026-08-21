@@ -7,6 +7,7 @@ from intelligence.committee_escalation import committee_escalations
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.ingestion import ingestion_service
+from intelligence.outcome_learning import outcome_learning
 from intelligence.paper_execution import paper_execution
 from intelligence.paper_portfolio import paper_portfolio
 from intelligence.providers import CoinGeckoProvider, FredProvider
@@ -130,6 +131,34 @@ def mark_paper_position(position_id: str, mark_price: float, source: str = "manu
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"position": position, "summary": paper_portfolio.summary(), "paper_mode": True, "live_execution": False}
+
+
+@router.post("/paper-portfolio/{position_id}/close")
+def close_paper_position(position_id: str, exit_price: float, source: str = "manual_close"):
+    try:
+        position = paper_portfolio.close(position_id, exit_price, source=source)
+        learning = outcome_learning.create_from_closed_position(position)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "position": position,
+        "outcome_learning": learning,
+        "summary": paper_portfolio.summary(),
+        "history_dispatch_queue": dispatcher.counts(),
+        "paper_mode": True,
+        "live_execution": False,
+    }
+
+
+@router.get("/outcome-learning")
+def get_outcome_learning(limit: int = 100):
+    return {
+        "items": outcome_learning.recent(limit=limit),
+        "paper_mode": True,
+        "live_execution": False,
+    }
 
 
 @router.post("/ingestion/run-now")
