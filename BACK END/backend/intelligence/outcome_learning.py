@@ -8,6 +8,7 @@ from uuid import uuid4
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.models import EvidenceItem
+from intelligence.postmortem_intelligence import postmortem_intelligence
 
 
 def _database_path() -> Path:
@@ -51,7 +52,10 @@ class OutcomeLearningStore:
         position_id = str(position["position_id"])
         existing = self.by_position(position_id)
         if existing is not None:
-            return {**existing, "created": False, "history_dispatches": 0}
+            review_id = existing["review_id"]
+            review = existing["review"]
+            queued = postmortem_intelligence.maybe_enqueue(review_id=review_id, review=review)
+            return {**existing, "created": False, "history_dispatches": 0, "postmortem_enqueued": queued}
 
         notional = float(position.get("simulated_notional", 0) or 0)
         realized = float(position.get("realized_pnl", 0) or 0)
@@ -116,6 +120,7 @@ class OutcomeLearningStore:
         )
         inserted = evidence_store.save(evidence)
         history_dispatches = dispatcher.enqueue([evidence]) if inserted else 0
+        postmortem_enqueued = postmortem_intelligence.maybe_enqueue(review_id=review_id, review=review)
 
         return {
             "review_id": review_id,
@@ -123,6 +128,7 @@ class OutcomeLearningStore:
             "created": True,
             "evidence_inserted": inserted,
             "history_dispatches": history_dispatches,
+            "postmortem_enqueued": postmortem_enqueued,
         }
 
     def by_position(self, position_id: str) -> dict | None:
