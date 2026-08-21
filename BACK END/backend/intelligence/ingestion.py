@@ -8,6 +8,7 @@ from intelligence.committee_escalation import committee_escalations
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.models import EvidenceItem
+from intelligence.outcome_learning import outcome_learning
 from intelligence.postmortem_intelligence import postmortem_intelligence
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.coingecko import CoinGeckoProvider
@@ -115,6 +116,7 @@ class IngestionService:
         self.last_committee_processing: dict = {"enabled": False, "processed": 0}
         self.last_risk_processing: dict = {"enabled": False, "processed": 0}
         self.last_postmortem_processing: dict = {"enabled": False, "processed": 0}
+        self.last_postmortem_backfill: int = 0
 
     async def run_job(self, job: IngestionJob) -> None:
         now = datetime.now(timezone.utc)
@@ -140,6 +142,15 @@ class IngestionService:
             job.last_inserted = 0
             job.last_dispatched = 0
 
+    def _backfill_postmortems(self) -> int:
+        inserted = 0
+        for item in outcome_learning.recent(limit=100):
+            review = item.get("review")
+            review_id = item.get("review_id")
+            if review_id and isinstance(review, dict):
+                inserted += int(postmortem_intelligence.maybe_enqueue(review_id=review_id, review=review))
+        return inserted
+
     async def run_once(self) -> None:
         now = datetime.now(timezone.utc)
         due_jobs = [job for job in self.jobs if job.due(now)]
@@ -148,6 +159,7 @@ class IngestionService:
         self.last_auto_processing = await asyncio.to_thread(dispatcher.process_pending)
         self.last_committee_processing = await asyncio.to_thread(committee_escalations.process_pending)
         self.last_risk_processing = await asyncio.to_thread(risk_reviews.process_pending)
+        self.last_postmortem_backfill = await asyncio.to_thread(self._backfill_postmortems)
         self.last_postmortem_processing = await asyncio.to_thread(postmortem_intelligence.process_pending)
 
     async def loop(self) -> None:
@@ -182,6 +194,7 @@ class IngestionService:
             "auto_committee_processing": self.last_committee_processing,
             "auto_risk_processing": self.last_risk_processing,
             "auto_postmortem_processing": self.last_postmortem_processing,
+            "postmortem_backfill_inserted": self.last_postmortem_backfill,
             "jobs": [
                 {
                     "name": job.name,
