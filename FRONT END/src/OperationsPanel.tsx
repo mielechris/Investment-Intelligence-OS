@@ -16,7 +16,21 @@ type OperationsStatus = {
 };
 type DispatchItem = { dispatch_id: string; agent_id: string; route_reason: string; status: string; created_at: string; evidence: { source_name: string; source_kind: string; title: string; summary: string }; result?: { materiality?: string; headline?: string; confidence?: number; disposition?: string } | null };
 type EscalationItem = { escalation_id: string; agent_id: string; status: string; confidence: number; materiality: string; created_at: string; packet?: { agent_result?: { headline?: string; view?: string; disposition?: string } }; committee_result?: { headline?: string; summary?: string; disposition?: string } | null };
-type RiskItem = { risk_review_id: string; status: string; created_at: string; packet?: { committee_result?: { headline?: string; disposition?: string } }; risk_result?: { decision?: string; risk_level?: string; headline?: string; confidence?: number; paper_execution_eligible?: boolean } | null };
+type RiskItem = {
+  risk_review_id: string;
+  status: string;
+  created_at: string;
+  packet?: { committee_result?: { headline?: string; disposition?: string } };
+  risk_result?: {
+    decision?: string;
+    risk_level?: string;
+    headline?: string;
+    confidence?: number;
+    primary_risks?: string[];
+    allowed_notional?: number;
+    paper_execution_eligible?: boolean;
+  } | null;
+};
 type DispatchResponse = { counts: QueueCounts; items: DispatchItem[] };
 type EscalationResponse = { counts: QueueCounts; items: EscalationItem[] };
 type RiskResponse = { counts: QueueCounts; items: RiskItem[] };
@@ -110,8 +124,25 @@ function OperationsPanel() {
       </div>
 
       <div style={{ ...card, marginTop: "16px", border: "1px solid #6a303b", background: "#10080a" }}>
-        <div style={{ color: "#e07b8e", fontSize: "10px", letterSpacing: "3px" }}>RISK INSPECTION DESK</div><h3 style={{ margin: "8px 0 12px" }}>Committee Work Under Risk Review</h3>
-        {(risk?.items ?? []).length === 0 ? <div style={{ color: "#887077", fontSize: "13px" }}>No risk packets yet.</div> : (risk?.items ?? []).slice(0, 6).map((item) => { const title = item.risk_result?.headline ?? item.packet?.committee_result?.headline ?? "Risk review"; const decision = item.risk_result?.decision ?? item.status.toUpperCase(); return <div key={item.risk_review_id} style={{ borderTop: "1px solid #3a2026", padding: "11px 0", display: "grid", gridTemplateColumns: "1fr auto", gap: "12px" }}><div><strong style={{ fontSize: "13px" }}>{title}</strong><div style={{ color: "#98747c", fontSize: "11px", marginTop: "4px" }}>{item.risk_result?.risk_level ?? "PENDING"} risk · {item.risk_result?.paper_execution_eligible ? "paper eligible" : "execution blocked"}</div></div><span style={{ color: decision === "WATCH_ONLY" ? "#d8ad59" : decision === "VETOED" ? "#e07b8e" : "#a98b91", fontSize: "10px", fontWeight: 800 }}>{decision}</span></div> })}
+        <div style={{ color: "#e07b8e", fontSize: "10px", letterSpacing: "3px" }}>RISK INBOX // RISK INSPECTION DESK</div><h3 style={{ margin: "8px 0 12px" }}>Committee Work Under Risk Review</h3>
+        {(risk?.items ?? []).length === 0 ? <div style={{ color: "#887077", fontSize: "13px" }}>No risk packets yet.</div> : (risk?.items ?? []).slice(0, 6).map((item) => {
+          const result = item.risk_result;
+          const title = result?.headline ?? item.packet?.committee_result?.headline ?? "Risk review";
+          const decision = result?.decision ?? item.status.toUpperCase();
+          const primaryRisks = result?.primary_risks?.slice(0, 3) ?? [];
+          return <div key={item.risk_review_id} style={{ borderTop: "1px solid #3a2026", padding: "13px 0", display: "grid", gridTemplateColumns: "1fr auto", gap: "12px" }}>
+            <div style={{ minWidth: 0 }}>
+              <strong style={{ fontSize: "13px" }}>{title}</strong>
+              <div style={{ color: "#98747c", fontSize: "11px", marginTop: "4px" }}>
+                {result?.risk_level ?? "PENDING"} risk · allowed notional ${Math.round(result?.allowed_notional ?? 0).toLocaleString()} · {result?.paper_execution_eligible ? "paper eligible" : "execution blocked"}
+              </div>
+              {primaryRisks.length > 0 && <ul style={{ margin: "8px 0 0", paddingLeft: "18px", color: "#b39aa0", fontSize: "11px", lineHeight: 1.45 }}>
+                {primaryRisks.map((riskItem, index) => <li key={`${item.risk_review_id}-${index}`}>{riskItem}</li>)}
+              </ul>}
+            </div>
+            <span style={{ color: decision === "WATCH_ONLY" ? "#d8ad59" : decision === "VETOED" ? "#e07b8e" : "#a98b91", fontSize: "10px", fontWeight: 800 }}>{decision}</span>
+          </div>
+        })}
       </div>
     </section>
   );
