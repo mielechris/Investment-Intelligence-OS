@@ -71,11 +71,18 @@ type EscalationItem = {
   confidence: number;
   materiality: string;
   created_at: string;
-  agent_result: {
-    headline?: string;
-    view?: string;
-    disposition?: string;
+  packet?: {
+    agent_result?: {
+      headline?: string;
+      view?: string;
+      disposition?: string;
+    };
   };
+  committee_result?: {
+    headline?: string;
+    summary?: string;
+    disposition?: string;
+  } | null;
 };
 
 type DispatchResponse = {
@@ -246,15 +253,19 @@ function OperationsPanel() {
         <h3 style={{ margin: "8px 0 12px" }}>High-Materiality Work Sent Upstairs</h3>
         {(escalations?.items ?? []).length === 0 ? (
           <div style={{ color: "#817565", fontSize: "13px" }}>No high-confidence escalations yet.</div>
-        ) : (escalations?.items ?? []).slice(0, 6).map((item) => (
-          <div key={item.escalation_id} style={{ borderTop: "1px solid #332a1c", padding: "11px 0", display: "grid", gridTemplateColumns: "1fr auto", gap: "12px" }}>
-            <div>
-              <strong style={{ fontSize: "13px" }}>{item.agent_result.headline ?? item.agent_id}</strong>
-              <div style={{ color: "#8e806c", fontSize: "11px", marginTop: "4px" }}>{item.materiality} materiality · confidence {Math.round(item.confidence * 100)}%</div>
+        ) : (escalations?.items ?? []).slice(0, 6).map((item) => {
+          const specialist = item.packet?.agent_result;
+          const title = item.committee_result?.headline ?? specialist?.headline ?? item.agent_id;
+          return (
+            <div key={item.escalation_id} style={{ borderTop: "1px solid #332a1c", padding: "11px 0", display: "grid", gridTemplateColumns: "1fr auto", gap: "12px" }}>
+              <div>
+                <strong style={{ fontSize: "13px" }}>{title}</strong>
+                <div style={{ color: "#8e806c", fontSize: "11px", marginTop: "4px" }}>{item.materiality} materiality · confidence {Math.round((item.confidence ?? 0) * 100)}%</div>
+              </div>
+              <span style={{ color: item.status === "complete" ? "#72caa7" : item.status === "error" ? "#df798b" : "#d8ad59", fontSize: "10px", fontWeight: 800 }}>{item.status.toUpperCase()}</span>
             </div>
-            <span style={{ color: item.status === "complete" ? "#72caa7" : "#d8ad59", fontSize: "10px", fontWeight: 800 }}>{item.status.toUpperCase()}</span>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
