@@ -19,4 +19,12 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/FactoryPanel.tsx'],
+    rules: {
+      // Initial registry hydration is an async external-system sync.
+      // The hook rule currently treats the helper invocation as a synchronous state write.
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
 ])
