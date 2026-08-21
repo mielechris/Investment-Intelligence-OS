@@ -1,85 +1,52 @@
 import { useEffect, useState } from "react";
 
-type AgentStatus = "idle" | "working" | "complete";
+type Status = "idle" | "working" | "complete";
+type Agent = { name: string; room: string; status: Status };
+type AgentResult = { agent: string; headline: string; view: string; confidence: number; disposition: string; floor_comment: string };
+type CommitteeResult = { headline: string; summary: string; agreement: string; dissent: string; confidence: number; disposition: string; floor_comment: string };
 
-type Agent = {
-	name: string;
-	room: string;
-	status: AgentStatus;
-};
-
-type AgentResult = {
-	agent: string;
-	status: string;
-	topic: string;
-	headline: string;
-	view: string;
-	confidence: number;
-	disposition: string;
-	floor_comment: string;
+const API = "http://localhost:8000";
+const initialTopics = {
+	Policy: "U.S. policy and technology stocks",
+	Macro: "Federal Reserve rates and the stock market",
+	Skeptic: "The market rally will continue because rates are falling",
+	Committee: "U.S. policy, interest rates, and technology stocks",
 };
 
 function App() {
 	const [agents, setAgents] = useState<Agent[]>([]);
 	const [connected, setConnected] = useState(false);
-	const [policyTopic, setPolicyTopic] = useState("U.S. policy and technology stocks");
-	const [macroTopic, setMacroTopic] = useState("Federal Reserve rates and the stock market");
-	const [skepticTopic, setSkepticTopic] = useState("The market rally will continue because rates are falling");
-	const [result, setResult] = useState<AgentResult | null>(null);
-	const [runningAgent, setRunningAgent] = useState<string | null>(null);
+	const [topics, setTopics] = useState(initialTopics);
+	const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
+	const [committeeResult, setCommitteeResult] = useState<CommitteeResult | null>(null);
+	const [running, setRunning] = useState<string | null>(null);
+	const [committeeRunning, setCommitteeRunning] = useState(false);
 
 	useEffect(() => {
-		fetch("http://localhost:8000/agents")
-			.then((response) => response.json())
-			.then((data) => { setAgents(data.agents); setConnected(true); })
-			.catch(() => setConnected(false));
+		fetch(`${API}/agents`).then(r => r.json()).then(d => { setAgents(d.agents); setConnected(true); }).catch(() => setConnected(false));
 	}, []);
 
-	const updateAgentStatus = (agentName: string, status: AgentStatus) => {
-		setAgents((current) => current.map((agent) => agent.name === agentName ? { ...agent, status } : agent));
+	const status = (name: string, value: Status) => setAgents(a => a.map(x => x.name === name ? { ...x, status: value } : x));
+	const runAgent = async (name: string, endpoint: string) => {
+		setRunning(name); setAgentResult(null); setCommitteeResult(null); status(name, "working");
+		try { const r = await fetch(API + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: topics[name as keyof typeof topics] }) }); if (!r.ok) throw Error(); setAgentResult(await r.json()); status(name, "complete"); setConnected(true); } catch { status(name, "idle"); setConnected(false); } finally { setRunning(null); }
 	};
-
-	const runAgent = async (agentName: string, endpoint: string, topic: string) => {
-		setRunningAgent(agentName);
-		setResult(null);
-		updateAgentStatus(agentName, "working");
-		try {
-			const response = await fetch(`http://localhost:8000${endpoint}`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ topic }),
-			});
-			if (!response.ok) throw new Error("Agent request failed");
-			const data: AgentResult = await response.json();
-			setResult(data);
-			updateAgentStatus(agentName, "complete");
-			setConnected(true);
-		} catch {
-			updateAgentStatus(agentName, "idle");
-			setConnected(false);
-		} finally {
-			setRunningAgent(null);
-		}
+	const runCommittee = async () => {
+		setCommitteeRunning(true); setAgentResult(null); setCommitteeResult(null); setAgents(a => a.map(x => ({ ...x, status: "working" })));
+		try { const r = await fetch(`${API}/committee/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: topics.Committee }) }); if (!r.ok) throw Error(); setCommitteeResult(await r.json()); setAgents(a => a.map(x => ({ ...x, status: "complete" }))); setConnected(true); } catch { setAgents(a => a.map(x => ({ ...x, status: "idle" }))); setConnected(false); } finally { setCommitteeRunning(false); }
 	};
-
-	const inputStyle = { width: "100%", boxSizing: "border-box" as const, marginTop: "12px", padding: "14px", borderRadius: "7px", border: "1px solid #303b49", background: "#11161d", color: "#ffffff", fontSize: "15px" };
-	const buttonStyle = { marginTop: "14px", background: "#d9a441", color: "#090909", border: 0, borderRadius: "7px", padding: "13px 20px", fontWeight: 800, cursor: runningAgent !== null ? "wait" : "pointer" };
-
-	const desks = [
-		{ label: "POLICY FLOOR", name: "Policy Analyst", description: "Government action, regulation, trade, courts, and the occasional statement that ruins everybody’s afternoon.", value: policyTopic, setValue: setPolicyTopic, endpoint: "/agents/policy/run", button: "RUN POLICY ANALYST" },
-		{ label: "MACRO DESK", name: "Macro Analyst", description: "Rates, inflation, liquidity, growth, and several ways the Federal Reserve can ruin brunch.", value: macroTopic, setValue: setMacroTopic, endpoint: "/agents/macro/run", button: "RUN MACRO ANALYST" },
-		{ label: "RED TEAM", name: "Skeptic", description: "Confirmation bias enters confidently. The Skeptic asks to see identification.", value: skepticTopic, setValue: setSkepticTopic, endpoint: "/agents/skeptic/run", button: "RUN SKEPTIC" },
-	];
-
-	return <div style={{ minHeight: "100vh", background: "radial-gradient(circle at top, #18212f 0%, #090b10 45%, #040506 100%)", color: "#f4f4f4", fontFamily: "Arial, Helvetica, sans-serif", padding: "32px" }}>
-		<header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #28313d", paddingBottom: "20px", marginBottom: "32px" }}>
-			<div><div style={{ color: "#7e8998", fontSize: "12px", letterSpacing: "4px" }}>INVESTMENT INTELLIGENCE OS</div><h1 style={{ margin: "8px 0 0", fontSize: "34px" }}>THE INTELLIGENCE FLOOR</h1></div>
-			<div style={{ textAlign: "right" }}><div style={{ marginBottom: "8px", color: connected ? "#59c68c" : "#ff6379", fontSize: "11px", letterSpacing: "2px" }}>BACKEND {connected ? "CONNECTED" : "OFFLINE"}</div><div style={{ border: "1px solid #8b1e2d", background: "#26080d", color: "#ff6379", padding: "10px 16px", borderRadius: "6px", fontWeight: 700, letterSpacing: "2px", fontSize: "12px" }}>PAPER MODE</div></div>
-		</header>
-		<div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(220px, 1fr))", gap: "18px", marginBottom: "30px" }}>{agents.map((agent) => <section key={agent.name} style={{ background: "linear-gradient(145deg, #11161d, #0a0d12)", border: agent.status === "working" ? "1px solid #d9a441" : agent.status === "complete" ? "1px solid #4fa879" : "1px solid #27303a", borderRadius: "12px", padding: "22px", minHeight: "210px", boxShadow: agent.status === "working" ? "0 0 30px rgba(217,164,65,.18)" : "none" }}><div style={{ color: "#748091", fontSize: "11px", letterSpacing: "2px", marginBottom: "30px" }}>{agent.room.toUpperCase()}</div><div style={{ width: "52px", height: "52px", borderRadius: "10px", display: "grid", placeItems: "center", background: "#171e27", border: "1px solid #303b49", fontSize: "25px", marginBottom: "18px" }}>◉</div><h2>{agent.name}</h2><div style={{ fontSize: "11px", letterSpacing: "2px", color: agent.status === "complete" ? "#59c68c" : agent.status === "working" ? "#e4b754" : "#7c8794" }}>{agent.status.toUpperCase()}</div></section>)}</div>
-		<div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(260px, 1fr))", gap: "20px", marginBottom: "20px" }}>{desks.map((desk) => <section key={desk.name} style={{ border: desk.name === "Skeptic" ? "1px solid #4b2530" : "1px solid #26303b", background: desk.name === "Skeptic" ? "#10090c" : "#090d12", borderRadius: "12px", padding: "24px" }}><div style={{ color: "#788494", fontSize: "11px", letterSpacing: "3px", marginBottom: "10px" }}>{desk.label}</div><h2>{desk.name}</h2><p style={{ color: "#9fa8b4" }}>{desk.description}</p><input value={desk.value} onChange={(event) => desk.setValue(event.target.value)} style={inputStyle} /><button onClick={() => runAgent(desk.name, desk.endpoint, desk.value)} disabled={runningAgent !== null} style={{ ...buttonStyle, background: runningAgent === desk.name ? "#6c5a34" : desk.name === "Skeptic" ? "#b24b62" : "#d9a441", color: desk.name === "Skeptic" ? "#ffffff" : "#090909" }}>{runningAgent === desk.name ? `${desk.label} WORKING...` : desk.button}</button></section>)}</div>
-		{result && <section style={{ border: "1px solid #315d48", background: "#0b1511", borderRadius: "12px", padding: "24px" }}><div style={{ color: "#59c68c", fontSize: "11px", letterSpacing: "3px" }}>{result.agent.toUpperCase()} // COMPLETE</div><h2>{result.headline}</h2><div style={{ color: "#d8dee6", lineHeight: 1.7, marginBottom: "20px" }}>{result.view}</div><div style={{ display: "flex", gap: "24px", flexWrap: "wrap", color: "#9fa8b4" }}><div><strong style={{ color: "#ffffff" }}>Disposition:</strong> {result.disposition}</div><div><strong style={{ color: "#ffffff" }}>Confidence:</strong> {Math.round(result.confidence * 100)}%</div></div><div style={{ marginTop: "20px", borderTop: "1px solid #244232", paddingTop: "16px", color: "#69c994", fontStyle: "italic" }}>Floor note: “{result.floor_comment}”</div></section>}
-	</div>;
+	const input = (key: keyof typeof topics) => <input value={topics[key]} onChange={e => setTopics(t => ({ ...t, [key]: e.target.value }))} style={styles.input} />;
+	const disabled = !!running || committeeRunning;
+	const cards = [{ key: "Policy" as const, room: "Policy Floor", description: "Government, regulation, trade, courts, and statements that ruin everybody’s afternoon.", endpoint: "/agents/policy/run" }, { key: "Macro" as const, room: "Macro Desk", description: "Rates, inflation, liquidity, growth, and several ways the Fed can ruin brunch.", endpoint: "/agents/macro/run" }, { key: "Skeptic" as const, room: "Red Team", description: "Confirmation bias enters confidently. The Skeptic asks to see identification.", endpoint: "/agents/skeptic/run" }];
+	return <main style={styles.page}>
+		<header style={styles.header}><div><small>INVESTMENT INTELLIGENCE OS</small><h1>THE INTELLIGENCE FLOOR</h1></div><div style={{ textAlign: "right" }}><small style={{ color: connected ? "#59c68c" : "#ff6379" }}>BACKEND {connected ? "CONNECTED" : "OFFLINE"}</small><b style={styles.paper}>PAPER MODE</b></div></header>
+		<div style={styles.agentGrid}>{agents.map(a => <section key={a.name} style={{ ...styles.card, borderColor: a.status === "working" ? "#d9a441" : a.status === "complete" ? "#4fa879" : "#27303a" }}><small>{a.room.toUpperCase()}</small><div style={styles.icon}>◉</div><h2>{a.name}</h2><small style={{ color: a.status === "complete" ? "#59c68c" : a.status === "working" ? "#e4b754" : "#7c8794" }}>{a.status.toUpperCase()}</small></section>)}</div>
+		<div style={styles.grid}>{cards.map(c => <section key={c.key} style={styles.panel}><small>{c.room.toUpperCase()}</small><h2>{c.key} {c.key === "Skeptic" ? "" : "Analyst"}</h2><p>{c.description}</p>{input(c.key)}<button disabled={disabled} onClick={() => runAgent(c.key, c.endpoint)} style={c.key === "Skeptic" ? styles.redButton : styles.button}>RUN {c.key.toUpperCase()} {c.key !== "Skeptic" && "ANALYST"}</button></section>)}</div>
+		<section style={styles.committee}><small>INVESTMENT COMMITTEE</small><h2>Send It Upstairs</h2><p>One topic. Three specialist reviews. One committee decision. Dissent remains on the record because apparently adults can disagree.</p>{input("Committee")}<button disabled={disabled} onClick={runCommittee} style={styles.committeeButton}>{committeeRunning ? "COMMITTEE IN SESSION..." : "CONVENE COMMITTEE"}</button></section>
+		{agentResult && <section style={styles.result}><small>{agentResult.agent.toUpperCase()} // COMPLETE</small><h2>{agentResult.headline}</h2><p>{agentResult.view}</p><p><b>Disposition:</b> {agentResult.disposition}　<b>Confidence:</b> {Math.round(agentResult.confidence * 100)}%</p><em>“{agentResult.floor_comment}”</em></section>}
+		{committeeResult && <section style={styles.result}><small>COMMITTEE DECISION // COMPLETE</small><h2>{committeeResult.headline}</h2><p>{committeeResult.summary}</p><div style={styles.split}><div><b>AGREEMENT</b><p>{committeeResult.agreement}</p></div><div><b>DISSENT</b><p>{committeeResult.dissent}</p></div></div><p><b>Disposition:</b> {committeeResult.disposition}　<b>Confidence:</b> {Math.round(committeeResult.confidence * 100)}%</p><em>Floor note: “{committeeResult.floor_comment}”</em></section>}
+	</main>;
 }
 
+const styles = { page: { minHeight: "100vh", background: "radial-gradient(circle at top, #18212f 0%, #090b10 45%, #040506 100%)", color: "#f4f4f4", fontFamily: "Arial, Helvetica, sans-serif", padding: 32 }, header: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #28313d", paddingBottom: 20, marginBottom: 32 }, agentGrid: { display: "grid", gridTemplateColumns: "repeat(3, minmax(220px, 1fr))", gap: 18, marginBottom: 30 }, grid: { display: "grid", gridTemplateColumns: "repeat(3, minmax(260px, 1fr))", gap: 20, marginBottom: 24 }, card: { background: "linear-gradient(145deg, #11161d, #0a0d12)", border: "1px solid #27303a", borderRadius: 12, padding: 22, minHeight: 190 }, panel: { border: "1px solid #26303b", background: "#090d12", borderRadius: 12, padding: 24 }, committee: { border: "1px solid #38506c", background: "#0d1621", borderRadius: 12, padding: 28, marginBottom: 24 }, result: { border: "1px solid #4c78a0", background: "#0b121b", borderRadius: 12, padding: 28, marginBottom: 24 }, input: { width: "100%", boxSizing: "border-box" as const, marginTop: 12, padding: 14, borderRadius: 7, border: "1px solid #303b49", background: "#11161d", color: "#fff", fontSize: 15 }, button: { marginTop: 14, background: "#d9a441", color: "#090909", border: 0, borderRadius: 7, padding: "13px 20px", fontWeight: 800 }, redButton: { marginTop: 14, background: "#b24b62", color: "#fff", border: 0, borderRadius: 7, padding: "13px 20px", fontWeight: 800 }, committeeButton: { marginTop: 16, background: "#5e9ed0", color: "#071018", border: 0, borderRadius: 7, padding: "14px 24px", fontWeight: 900 }, paper: { display: "block", marginTop: 8, border: "1px solid #8b1e2d", background: "#26080d", color: "#ff6379", padding: "10px 16px", borderRadius: 6, letterSpacing: 2 }, icon: { marginTop: 25, width: 52, height: 52, display: "grid", placeItems: "center", background: "#171e27", border: "1px solid #303b49", borderRadius: 10, fontSize: 25 }, split: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 } };
 export default App;

@@ -275,3 +275,135 @@ Return ONLY valid JSON with exactly these fields:
             "Someone had to ask the uncomfortable question."
         ),
     }
+    class CommitteeRequest(BaseModel):
+        topic: str
+
+
+@app.post("/committee/run")
+def run_committee(request: dict = Body(...)):
+    topic = str(request.get("topic", "")).strip()
+
+    policy_result = run_policy_agent(
+        PolicyRequest(topic=topic)
+    )
+
+    macro_result = run_macro_agent(
+        MacroRequest(topic=topic)
+    )
+
+    skeptic_result = run_skeptic_agent(
+        {"topic": topic}
+    )
+
+    client = OpenAI()
+
+    committee_packet = {
+        "topic": topic,
+        "policy": policy_result,
+        "macro": macro_result,
+        "skeptic": skeptic_result,
+    }
+
+    prompt = f"""
+You are the Investment Committee Chair inside the
+Investment Intelligence OS.
+
+Three specialist agents reviewed the same topic.
+
+TOPIC:
+{topic}
+
+SPECIALIST OUTPUTS:
+{json.dumps(committee_packet, indent=2)}
+
+Your job:
+- Compare the Policy Analyst, Macro Analyst, and Skeptic.
+- Preserve meaningful disagreement.
+- Do not average away dissent.
+- Identify what they agree on.
+- Identify what remains uncertain.
+- This is PAPER MODE only.
+- There is no live market or web data yet.
+- Do not pretend the information is current.
+- Do not recommend a real-money trade.
+- Final disposition must be WATCH or NO_TRADE.
+- Confidence must be between 0.0 and 1.0.
+- Be concise.
+- Keep the floor_comment dry and professional.
+
+Return ONLY valid JSON with exactly these fields:
+
+{{
+  "headline": "short committee headline",
+  "summary": "3 to 5 sentence committee conclusion",
+  "agreement": "what the agents broadly agree on",
+  "dissent": "the strongest disagreement or objection",
+  "confidence": 0.0,
+  "disposition": "WATCH",
+  "floor_comment": "short dry committee one-liner"
+}}
+"""
+
+    response = client.responses.create(
+        model="gpt-5.6-luna",
+        input=prompt,
+    )
+
+    try:
+        analysis = json.loads(response.output_text)
+
+        if not isinstance(analysis, dict):
+            raise ValueError("Committee output was not a JSON object")
+
+    except (json.JSONDecodeError, ValueError, TypeError):
+        analysis = {
+            "headline": "Committee review completed",
+            "summary": response.output_text,
+            "agreement": "Specialist reviews completed.",
+            "dissent": "Dissent could not be structured.",
+            "confidence": 0.5,
+            "disposition": "NO_TRADE",
+            "floor_comment": "The committee met. Minutes were taken. Nobody panicked.",
+        }
+
+    try:
+        confidence = float(analysis.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    confidence = max(0.0, min(1.0, confidence))
+
+    return {
+        "topic": topic,
+        "status": "complete",
+        "headline": analysis.get(
+            "headline",
+            "Committee review completed"
+        ),
+        "summary": analysis.get(
+            "summary",
+            "Committee review completed."
+        ),
+        "agreement": analysis.get(
+            "agreement",
+            "No clear agreement recorded."
+        ),
+        "dissent": analysis.get(
+            "dissent",
+            "No dissent recorded."
+        ),
+        "confidence": confidence,
+        "disposition": analysis.get(
+            "disposition",
+            "NO_TRADE"
+        ),
+        "floor_comment": analysis.get(
+            "floor_comment",
+            "Three analysts entered. A decision eventually left."
+        ),
+        "agents": {
+            "policy": policy_result,
+            "macro": macro_result,
+            "skeptic": skeptic_result,
+        },
+    }
