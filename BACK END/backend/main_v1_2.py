@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from main_v1_1 import app
 from factory.router import router as factory_router
 from factory.system_agents import ensure_system_agents
@@ -6,5 +8,18 @@ from intelligence.ingestion import ingestion_service
 
 ensure_system_agents()
 app.include_router(factory_router)
-app.add_event_handler("startup", ingestion_service.start)
-app.add_event_handler("shutdown", ingestion_service.stop)
+
+_original_lifespan = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def lifespan(app_instance):
+    async with _original_lifespan(app_instance):
+        await ingestion_service.start()
+        try:
+            yield
+        finally:
+            await ingestion_service.stop()
+
+
+app.router.lifespan_context = lifespan
