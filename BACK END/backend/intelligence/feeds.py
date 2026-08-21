@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 
 from intelligence.committee_escalation import committee_escalations
@@ -145,5 +147,31 @@ async def get_recent_company_filings(count_per_form: int = 40):
 async def get_recent_ipo_filings(count_per_form: int = 25):
     try:
         return await fetch_recent_ipo_filings(count_per_form=count_per_form)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/ipo/replay")
+async def replay_recent_ipo_candidate(index: int = 0, count_per_form: int = 5):
+    """Deep-analyze an existing recent SEC registration without creating duplicate queue work."""
+    if index < 0:
+        raise HTTPException(status_code=400, detail="index must be zero or greater")
+    try:
+        packet = await fetch_recent_ipo_filings(count_per_form=max(1, min(count_per_form, 25)))
+        if index >= len(packet.items):
+            raise HTTPException(
+                status_code=404,
+                detail=f"index {index} is outside the {len(packet.items)} returned candidates",
+            )
+        item = packet.items[index]
+        result = await asyncio.to_thread(dispatcher.analyze_ipo_item_now, item)
+        return {
+            "candidate_index": index,
+            "candidate": item,
+            "analysis": result,
+            "paper_mode": True,
+        }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
