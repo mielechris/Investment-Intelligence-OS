@@ -55,3 +55,23 @@ def test_simulation_never_uses_real_capital(tmp_path, monkeypatch):
     assert order["real_notional"] == 0
     assert order["broker_order_sent"] is False
     assert order["live_execution"] is False
+
+
+def test_controlled_fixture_is_synthetic_deduplicated_and_zero_real_capital(tmp_path):
+    store = PaperExecutionStore(tmp_path / "paper.db")
+    first = store.create_controlled_test_candidate()
+    second = store.create_controlled_test_candidate()
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert store.counts()["ready"] == 1
+
+    candidate = first["candidate"]
+    assert candidate is not None
+    assert candidate["packet"]["risk_result"]["synthetic_fixture"] is True
+
+    order = store.simulate(candidate["candidate_id"])
+    assert order["synthetic_fixture"] is True
+    assert order["real_notional"] == 0
+    assert order["broker_order_sent"] is False
+    assert order["live_execution"] is False
