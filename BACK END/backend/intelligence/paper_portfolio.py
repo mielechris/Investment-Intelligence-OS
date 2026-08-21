@@ -119,6 +119,8 @@ class PaperPortfolioStore:
             row = connection.execute("SELECT * FROM paper_positions WHERE position_id=?", (position_id,)).fetchone()
             if row is None:
                 raise KeyError("Paper position not found")
+            if row["status"] != "open":
+                raise ValueError("Closed paper positions cannot be re-marked")
             direction = 1.0 if row["side"] == "LONG" else -1.0
             unrealized = (mark_price - float(row["entry_price"])) * float(row["quantity"]) * direction
             now = datetime.now(timezone.utc).isoformat()
@@ -129,6 +131,33 @@ class PaperPortfolioStore:
             connection.execute(
                 "INSERT INTO paper_marks (mark_id, position_id, mark_price, unrealized_pnl, source, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (str(uuid4()), position_id, mark_price, unrealized, source, now),
+            )
+        return self.get(position_id)
+
+    def close(self, position_id: str, exit_price: float, *, source: str = "manual_close") -> dict:
+        exit_price = float(exit_price)
+        if exit_price <= 0:
+            raise ValueError("exit_price must be positive")
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM paper_positions WHERE position_id=?", (position_id,)).fetchone()
+            if row is None:
+                raise KeyError("Paper position not found")
+            if row["status"] != "open":
+                raise ValueError("Paper position is already closed")
+            direction = 1.0 if row["side"] == "LONG" else -1.0
+            realized = (exit_price - float(row["entry_price"])) * float(row["quantity"]) * direction
+            now = datetime.now(timezone.utc).isoformat()
+            connection.execute(
+                """
+                UPDATE paper_positions
+                SET mark_price=?, unrealized_pnl=0, realized_pnl=?, status='closed', updated_at=?, closed_at=?
+                WHERE position_id=?
+                """,
+                (exit_price, realized, now, now, position_id),
+            )
+            connection.execute(
+                "INSERT INTO paper_marks (mark_id, position_id, mark_price, unrealized_pnl, source, observed_at) VALUES (?, ?, ?, 0, ?, ?)",
+                (str(uuid4()), position_id, exit_price, source, now),
             )
         return self.get(position_id)
 
@@ -153,6 +182,7 @@ class PaperPortfolioStore:
         return {
             "positions": len(positions),
             "open_positions": len(open_positions),
+            "closed_positions": len(positions) - len(open_positions),
             "simulated_notional": round(sum(float(item["simulated_notional"]) for item in open_positions), 2),
             "unrealized_pnl": round(sum(float(item["unrealized_pnl"]) for item in open_positions), 2),
             "realized_pnl": round(sum(float(item["realized_pnl"]) for item in positions), 2),
