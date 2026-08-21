@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 
@@ -28,6 +29,12 @@ class AlphaVantageProvider(EvidenceProvider):
                 else "Missing ALPHAVANTAGE_API_KEY."
             ),
         )
+
+    def fetch(self, **kwargs: Any) -> EvidenceItem:
+        symbol = str(kwargs.get("symbol", "")).strip()
+        if not symbol:
+            raise ValueError("symbol is required")
+        return self.fetch_latest_daily(symbol=symbol)
 
     def fetch_latest_daily(self, *, symbol: str) -> EvidenceItem:
         payload = self.fetch_daily_history(symbol=symbol, outputsize="compact")
