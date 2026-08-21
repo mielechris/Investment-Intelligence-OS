@@ -5,6 +5,7 @@ import App from './App.tsx'
 import FactoryPanel from './FactoryPanel.tsx'
 import OperationsPanel from './OperationsPanel.tsx'
 import PaperExecutionPanel from './PaperExecutionPanel.tsx'
+import PaperPortfolioPanel from './PaperPortfolioPanel.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -17,6 +18,7 @@ createRoot(document.getElementById('root')!).render(
       <div style={{ padding: '32px 32px 0' }}>
         <OperationsPanel />
         <PaperExecutionPanel />
+        <PaperPortfolioPanel />
         <FactoryPanel />
       </div>
       <App />
