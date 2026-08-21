@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
+from intelligence.evidence_store import evidence_store
+from intelligence.ingestion import ingestion_service
 from intelligence.providers import CoinGeckoProvider, FredProvider
 from intelligence.providers.sec_ipo import fetch_recent_ipo_filings, sec_ipo_status
 
@@ -26,7 +28,27 @@ def get_feed_status():
         "live_execution": False,
         "providers": [_status_dict(provider) for provider in providers],
         "specialized_providers": [sec_ipo_status()],
+        "ingestion": ingestion_service.status(),
     }
+
+
+@router.get("/inbox")
+def get_evidence_inbox(limit: int = 100, source_kind: str | None = None):
+    items = evidence_store.recent(limit=limit, source_kind=source_kind)
+    return {
+        "count": len(items),
+        "total_persisted": evidence_store.count(),
+        "items": items,
+        "paper_mode": True,
+    }
+
+
+@router.post("/ingestion/run-now")
+async def run_ingestion_now():
+    for job in ingestion_service.jobs:
+        job.next_run_at = None
+    await ingestion_service.run_once()
+    return ingestion_service.status()
 
 
 @router.get("/macro/fred/{series_id}")
