@@ -6,8 +6,10 @@ from typing import Awaitable, Callable
 
 from intelligence.evidence_store import evidence_store
 from intelligence.models import EvidenceItem
+from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.coingecko import CoinGeckoProvider
 from intelligence.providers.fred import FredProvider
+from intelligence.providers.sec_company import fetch_recent_company_filings
 from intelligence.providers.sec_ipo import fetch_recent_ipo_filings
 
 
@@ -45,17 +47,33 @@ async def _fetch_sec_ipo() -> list[EvidenceItem]:
     return packet.items
 
 
+async def _fetch_sec_company() -> list[EvidenceItem]:
+    packet = await fetch_recent_company_filings(count_per_form=40)
+    return packet.items
+
+
 async def _fetch_crypto() -> list[EvidenceItem]:
     provider = CoinGeckoProvider()
-    assets = [
-        item.strip()
-        for item in os.getenv("IIOS_CRYPTO_ASSETS", "bitcoin,ethereum").split(",")
+    assets = [item.strip() for item in os.getenv("IIOS_CRYPTO_ASSETS", "bitcoin,ethereum").split(",") if item.strip()]
+    items: list[EvidenceItem] = []
+    for asset_id in assets:
+        items.append(await asyncio.to_thread(provider.fetch, asset_id=asset_id, vs_currency="usd"))
+    return items
+
+
+async def _fetch_equities() -> list[EvidenceItem]:
+    provider = AlphaVantageProvider()
+    if not provider.status().configured:
+        return []
+    symbols = [
+        item.strip().upper()
+        for item in os.getenv("IIOS_EQUITY_SYMBOLS", "SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,AMZN,META").split(",")
         if item.strip()
     ]
     items: list[EvidenceItem] = []
-    for asset_id in assets:
-        item = await asyncio.to_thread(provider.fetch, asset_id=asset_id, vs_currency="usd")
-        items.append(item)
+    for symbol in symbols:
+        items.append(await asyncio.to_thread(provider.fetch_latest_daily, symbol=symbol))
+        await asyncio.sleep(0.25)
     return items
 
 
@@ -67,35 +85,24 @@ async def _fetch_fred() -> list[EvidenceItem]:
         item.strip().upper()
         for item in os.getenv(
             "IIOS_FRED_SERIES",
-            "FEDFUNDS,CPIAUCSL,UNRATE,DGS2,DGS10,VIXCLS",
+            "FEDFUNDS,CPIAUCSL,CPILFESL,PCEPI,PCEPILFE,UNRATE,PAYEMS,DGS2,DGS10,DGS30,T10Y2Y,T10Y3M,VIXCLS,DTWEXBGS,DCOILWTICO,DCOILBRENTEU",
         ).split(",")
         if item.strip()
     ]
     items: list[EvidenceItem] = []
     for series_id in series:
-        item = await asyncio.to_thread(provider.fetch, series_id=series_id)
-        items.append(item)
+        items.append(await asyncio.to_thread(provider.fetch, series_id=series_id))
     return items
 
 
 class IngestionService:
     def __init__(self) -> None:
         self.jobs: list[IngestionJob] = [
-            IngestionJob(
-                name="sec_ipo",
-                interval_seconds=_env_int("IIOS_SEC_IPO_INTERVAL_SECONDS", 300),
-                fetcher=_fetch_sec_ipo,
-            ),
-            IngestionJob(
-                name="crypto_market",
-                interval_seconds=_env_int("IIOS_CRYPTO_INTERVAL_SECONDS", 60),
-                fetcher=_fetch_crypto,
-            ),
-            IngestionJob(
-                name="fred_macro",
-                interval_seconds=_env_int("IIOS_FRED_INTERVAL_SECONDS", 1800),
-                fetcher=_fetch_fred,
-            ),
+            IngestionJob("sec_ipo", _env_int("IIOS_SEC_IPO_INTERVAL_SECONDS", 300), _fetch_sec_ipo),
+            IngestionJob("sec_company", _env_int("IIOS_SEC_COMPANY_INTERVAL_SECONDS", 300), _fetch_sec_company),
+            IngestionJob("crypto_market", _env_int("IIOS_CRYPTO_INTERVAL_SECONDS", 60), _fetch_crypto),
+            IngestionJob("equity_market", _env_int("IIOS_EQUITY_INTERVAL_SECONDS", 900), _fetch_equities),
+            IngestionJob("fred_macro", _env_int("IIOS_FRED_INTERVAL_SECONDS", 1800), _fetch_fred),
         ]
         self._task: asyncio.Task | None = None
         self._stopping = False
