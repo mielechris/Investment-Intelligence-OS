@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from intelligence.providers import CoinGeckoProvider, FredProvider
+from intelligence.providers.sec_ipo import fetch_recent_ipo_filings, sec_ipo_status
 
 
 router = APIRouter(prefix="/intelligence/feeds", tags=["intelligence-feeds"])
@@ -23,7 +24,10 @@ def get_feed_status():
     return {
         "paper_mode": True,
         "live_execution": False,
-        "providers": [_status_dict(provider) for provider in providers],
+        "providers": [
+            *_status_dict(provider) for provider in providers
+        ],
+        "specialized_providers": [sec_ipo_status()],
     }
 
 
@@ -48,3 +52,11 @@ def get_crypto_price(asset_id: str, vs_currency: str = "usd"):
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return item
+
+
+@router.get("/ipo/recent")
+async def get_recent_ipo_filings(count_per_form: int = 25):
+    try:
+        return await fetch_recent_ipo_filings(count_per_form=count_per_form)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
