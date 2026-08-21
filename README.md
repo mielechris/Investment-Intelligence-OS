@@ -11,7 +11,7 @@ PRs remain draft until these checks are green.
 
 ## V1.2 persistence
 
-The Interview-to-Agent Factory persists interviews, insight packets, agent definitions, and the live evidence inbox in SQLite instead of process memory.
+The Interview-to-Agent Factory persists interviews, insight packets, agent definitions, the live evidence inbox, and dispatch work in SQLite instead of process memory.
 
 - Default database: `BACK END/backend/data/iios.db`
 - Override path with `IIOS_DB_PATH`
@@ -68,13 +68,34 @@ Configuration:
 - `IIOS_EQUITY_SYMBOLS` (default `SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,AMZN,META`)
 - `IIOS_FRED_SERIES` (expanded default covers rates, inflation, labor, yield curves, VIX, dollar, and oil)
 
+## Automatic evidence dispatcher
+
+New evidence is routed immediately after it is inserted into the persistent inbox. Duplicate feed observations do not create duplicate agent work.
+
+Initial deterministic routing includes:
+
+- IPO-related SEC evidence -> IPO Intelligence Agent + Market History & Regime Analyst
+- macro evidence -> Market History & Regime Analyst
+- market evidence -> Market History & Regime Analyst
+- broader SEC company events -> Market History & Regime Analyst
+- approved dynamic agents -> evidence classes they explicitly subscribe to through their `data_feeds`
+
+The dispatcher writes persistent work records with the evidence, target agent, routing reason, status, result, and errors.
+
+Unattended model calls are cost-safe by default. Routing and queue creation always happen, but automatic LLM processing is enabled only when:
+
+- `IIOS_AUTO_RUN_AGENTS=true`
+- `IIOS_AUTO_RUN_MAX_PER_CYCLE` controls the maximum processed work items per ingestion cycle (default `5`, maximum `50`)
+
 Operations endpoints:
 
-- `GET /intelligence/feeds/status` — provider and ingestion health
+- `GET /intelligence/feeds/status` — provider, ingestion, and dispatch health
 - `GET /intelligence/feeds/inbox` — persisted evidence inbox
+- `GET /intelligence/feeds/dispatch` — recent routed agent work and results
+- `POST /intelligence/feeds/dispatch/process` — process pending work when automatic agent processing is enabled
 - `POST /intelligence/feeds/ingestion/run-now` — force an immediate ingestion cycle
 - `GET /intelligence/feeds/company/recent` — recent SEC company filings
 - `GET /intelligence/feeds/market/equity/{symbol}` — latest equity daily bar
 - `GET /intelligence/feeds/history/equity/{symbol}` — historical daily equity series
 
-The current loop is designed for a single always-on IIOS instance. A true 24/7 production deployment requires the backend process itself to stay running on a server/container host. The persistence and provider interfaces are separated so the scheduler can later move to dedicated workers with Postgres/Redis without changing agent APIs.
+The current loop is designed for a single always-on IIOS instance. A true 24/7 production deployment requires the backend process itself to stay running on a server/container host. The persistence and provider interfaces are separated so the scheduler and dispatch processor can later move to dedicated workers with Postgres/Redis without changing agent APIs.
