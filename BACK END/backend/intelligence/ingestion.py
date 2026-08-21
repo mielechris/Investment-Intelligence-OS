@@ -13,6 +13,7 @@ from intelligence.providers.coingecko import CoinGeckoProvider
 from intelligence.providers.fred import FredProvider
 from intelligence.providers.sec_company import fetch_recent_company_filings
 from intelligence.providers.sec_ipo import fetch_recent_ipo_filings
+from intelligence.risk_review import risk_reviews
 
 
 Fetcher = Callable[[], Awaitable[list[EvidenceItem]]]
@@ -111,6 +112,7 @@ class IngestionService:
         self._stopping = False
         self.last_auto_processing: dict = {"enabled": False, "processed": 0}
         self.last_committee_processing: dict = {"enabled": False, "processed": 0}
+        self.last_risk_processing: dict = {"enabled": False, "processed": 0}
 
     async def run_job(self, job: IngestionJob) -> None:
         now = datetime.now(timezone.utc)
@@ -143,6 +145,7 @@ class IngestionService:
             await asyncio.gather(*(self.run_job(job) for job in due_jobs))
         self.last_auto_processing = await asyncio.to_thread(dispatcher.process_pending)
         self.last_committee_processing = await asyncio.to_thread(committee_escalations.process_pending)
+        self.last_risk_processing = await asyncio.to_thread(risk_reviews.process_pending)
 
     async def loop(self) -> None:
         self._stopping = False
@@ -170,8 +173,10 @@ class IngestionService:
             "evidence_count": evidence_store.count(),
             "dispatch_queue": dispatcher.counts(),
             "committee_queue": committee_escalations.counts(),
+            "risk_queue": risk_reviews.counts(),
             "auto_agent_processing": self.last_auto_processing,
             "auto_committee_processing": self.last_committee_processing,
+            "auto_risk_processing": self.last_risk_processing,
             "jobs": [
                 {
                     "name": job.name,
