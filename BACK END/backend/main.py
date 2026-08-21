@@ -110,3 +110,68 @@ Return ONLY valid JSON with exactly these fields:
 		"disposition": analysis["disposition"],
 		"floor_comment": analysis["floor_comment"],
 	}
+class MacroRequest(BaseModel):
+    topic: str
+
+
+@app.post("/agents/macro/run")
+def run_macro_agent(request: MacroRequest):
+    client = OpenAI()
+
+    prompt = f"""
+You are the Macro and Rates Analyst inside the Investment Intelligence OS.
+
+Analyze this topic:
+
+{request.topic}
+
+Important rules:
+- This is PAPER MODE only.
+- You do not have live market data or live web access yet.
+- Do not pretend information is current if fresh data would be required.
+- Focus on rates, inflation, growth, labor, liquidity, the Federal Reserve,
+  the dollar, and broad market transmission where relevant.
+- Clearly identify what fresh evidence would be needed.
+- Do not recommend a real-money trade.
+- Disposition must be WATCH or NO_TRADE.
+- Be concise and analytical.
+- Include uncertainty.
+- Use dry professional market-floor humor in the floor_comment.
+
+Return ONLY valid JSON with exactly these fields:
+
+{{
+  "headline": "short headline",
+  "view": "2 to 4 sentence macro analysis",
+  "confidence": 0.0,
+  "disposition": "WATCH",
+  "floor_comment": "short dry one-liner"
+}}
+"""
+
+    response = client.responses.create(
+        model="gpt-5.6-luna",
+        input=prompt,
+    )
+
+    try:
+        analysis = json.loads(response.output_text)
+    except json.JSONDecodeError:
+        analysis = {
+            "headline": "Macro analysis completed",
+            "view": response.output_text,
+            "confidence": 0.5,
+            "disposition": "WATCH",
+            "floor_comment": "Rates moved. Economists formed a committee.",
+        }
+
+    return {
+        "agent": "Macro Analyst",
+        "status": "complete",
+        "topic": request.topic,
+        "headline": analysis["headline"],
+        "view": analysis["view"],
+        "confidence": analysis["confidence"],
+        "disposition": analysis["disposition"],
+        "floor_comment": analysis["floor_comment"],
+    }
