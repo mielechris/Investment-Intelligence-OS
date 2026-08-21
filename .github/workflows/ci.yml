@@ -45,6 +45,7 @@ jobs:
         working-directory: "BACK END/backend"
     env:
       PYTHONPATH: "."
+      IIOS_DB_PATH: /tmp/iios-ci.db
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,3 +68,22 @@ jobs:
 
       - name: Verify V1.2 app imports
         run: python -c "import main_v1_2; assert main_v1_2.app is not None"
+
+  compose:
+    name: Docker Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare CI environment file
+        run: cp "BACK END/backend/.env.example" "BACK END/backend/.env"
+
+      - name: Validate Compose stack
+        run: docker compose config --quiet
+
+      - name: Build backend image
+        run: docker compose build backend
+
+      - name: Build frontend image
+        run: docker compose build frontend
