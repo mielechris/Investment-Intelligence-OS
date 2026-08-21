@@ -454,4 +454,64 @@ def evaluate_risk(request: dict = Body(...)):
         "committee_disposition": disposition,
         "floor_comment": floor_comment,
         "paper_mode": True,
+}
+
+@app.post("/paper-execution/submit")
+def submit_paper_order(request: dict = Body(...)):
+    topic = str(request.get("topic", "")).strip()
+    risk_decision = str(
+        request.get("risk_decision", "VETOED")
+    ).upper()
+
+    try:
+        allowed_notional = float(
+            request.get("allowed_notional", 0)
+        )
+    except (TypeError, ValueError):
+        allowed_notional = 0
+
+    if risk_decision != "APPROVED":
+        return {
+            "room": "Paper Execution",
+            "status": "blocked",
+            "topic": topic,
+            "execution": "NOT_SUBMITTED",
+            "reason": "RISK_NOT_APPROVED",
+            "risk_decision": risk_decision,
+            "allowed_notional": 0,
+            "paper_mode": True,
+            "floor_comment": (
+                "Execution checked the paperwork. "
+                "Risk forgot to sign it."
+            ),
+        }
+
+    if allowed_notional <= 0:
+        return {
+            "room": "Paper Execution",
+            "status": "blocked",
+            "topic": topic,
+            "execution": "NOT_SUBMITTED",
+            "reason": "NO_NOTIONAL_AUTHORIZED",
+            "risk_decision": risk_decision,
+            "allowed_notional": 0,
+            "paper_mode": True,
+            "floor_comment": (
+                "Approval without capital is mostly decorative."
+            ),
+        }
+
+    return {
+        "room": "Paper Execution",
+        "status": "complete",
+        "topic": topic,
+        "execution": "PAPER_ORDER_CREATED",
+        "risk_decision": risk_decision,
+        "allowed_notional": allowed_notional,
+        "paper_mode": True,
+        "live_execution": False,
+        "floor_comment": (
+            "Paper order accepted. "
+            "No actual money was harmed in the making of this trade."
+        ),
     }
