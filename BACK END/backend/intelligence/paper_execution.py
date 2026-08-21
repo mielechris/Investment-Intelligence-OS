@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from intelligence.paper_portfolio import paper_portfolio
+
 
 def _database_path() -> Path:
     configured = os.getenv("IIOS_DB_PATH")
@@ -76,7 +78,6 @@ class PaperExecutionStore:
         return cursor.rowcount > 0
 
     def create_controlled_test_candidate(self) -> dict:
-        """Create a deterministic simulation-only candidate through the normal paper gate."""
         risk_review_id = "synthetic-controlled-paper-readiness-v1"
         synthetic_packet = {
             "fixture": True,
@@ -84,6 +85,9 @@ class PaperExecutionStore:
             "synthetic": True,
             "description": "Deterministic test data used only to verify Risk-to-Paper handoff.",
             "market_data": {
+                "symbol": "IIOS-TEST",
+                "side": "LONG",
+                "entry_price": 100.0,
                 "listing_confirmed": True,
                 "pricing_confirmed": True,
                 "liquidity_confirmed": True,
@@ -109,10 +113,7 @@ class PaperExecutionStore:
             "paper_execution_eligible": True,
             "synthetic_fixture": True,
         }
-        risk_row = {
-            "risk_review_id": risk_review_id,
-            "packet_payload": json.dumps(synthetic_packet),
-        }
+        risk_row = {"risk_review_id": risk_review_id, "packet_payload": json.dumps(synthetic_packet)}
         created = self.maybe_enqueue(risk_row=risk_row, risk_result=synthetic_risk_result)
         candidates = [item for item in self.recent(limit=100) if item["risk_review_id"] == risk_review_id]
         return {
@@ -150,15 +151,19 @@ class PaperExecutionStore:
     def simulate(self, candidate_id: str) -> dict:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM paper_execution_candidates WHERE candidate_id=?",
-                (candidate_id,),
+                "SELECT * FROM paper_execution_candidates WHERE candidate_id=?", (candidate_id,)
             ).fetchone()
         if row is None:
             raise KeyError("Paper execution candidate not found")
-        if row["status"] == "simulated" and row["simulated_order_payload"]:
-            return json.loads(row["simulated_order_payload"])
-
         packet = json.loads(row["packet_payload"])
+        if row["status"] == "simulated" and row["simulated_order_payload"]:
+            order = json.loads(row["simulated_order_payload"])
+            try:
+                paper_portfolio.record_simulated_order(candidate_id=candidate_id, order=order, candidate_packet=packet)
+            except Exception:
+                pass
+            return order
+
         risk_result = packet.get("risk_result", {})
         if str(risk_result.get("decision", "VETOED")).upper() != "WATCH_ONLY" or not risk_result.get("paper_execution_eligible"):
             raise RuntimeError("Risk review does not authorize paper simulation")
@@ -183,7 +188,8 @@ class PaperExecutionStore:
                 "UPDATE paper_execution_candidates SET status='simulated', simulated_order_payload=?, updated_at=? WHERE candidate_id=?",
                 (json.dumps(order), now, candidate_id),
             )
-        return order
+        position = paper_portfolio.record_simulated_order(candidate_id=candidate_id, order=order, candidate_packet=packet)
+        return {**order, "position_id": position["position_id"]}
 
 
 paper_execution = PaperExecutionStore()
