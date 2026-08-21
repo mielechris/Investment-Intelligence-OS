@@ -23,16 +23,14 @@ def _database_path() -> Path:
 
 
 def _evidence_key(item: EvidenceItem) -> str:
-    identity = "|".join(
-        [
-            item.source_name,
-            item.source_kind,
-            item.url or "",
-            item.title,
-            item.published_at.isoformat() if item.published_at else "",
-            item.summary,
-        ]
-    )
+    identity = "|".join([
+        item.source_name,
+        item.source_kind,
+        item.url or "",
+        item.title,
+        item.published_at.isoformat() if item.published_at else "",
+        item.summary,
+    ])
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
@@ -133,10 +131,7 @@ class EventDispatcher:
                          status, result_payload, error, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)
                         """,
-                        (
-                            str(uuid4()), evidence_key, agent_id, reason,
-                            item.model_dump_json(), now, now,
-                        ),
+                        (str(uuid4()), evidence_key, agent_id, reason, item.model_dump_json(), now, now),
                     )
                     inserted += int(cursor.rowcount > 0)
         return inserted
@@ -145,12 +140,7 @@ class EventDispatcher:
         limit = max(1, min(limit, 1000))
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM intelligence_dispatch_queue
-                WHERE status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
+                "SELECT * FROM intelligence_dispatch_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -186,11 +176,7 @@ class EventDispatcher:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
             connection.execute(
-                """
-                UPDATE intelligence_dispatch_queue
-                SET status = ?, result_payload = ?, error = ?, updated_at = ?
-                WHERE dispatch_id = ?
-                """,
+                "UPDATE intelligence_dispatch_queue SET status = ?, result_payload = ?, error = ?, updated_at = ? WHERE dispatch_id = ?",
                 (status, json.dumps(result) if result is not None else None, error, now, dispatch_id),
             )
 
@@ -205,12 +191,24 @@ class EventDispatcher:
         if agent.id == IPO_AGENT_ID:
             try:
                 evidence_item = EvidenceItem.model_validate(evidence)
-                evidence_context["sec_filing_detail"] = enrich_sec_filing(evidence_item)
+                detail = enrich_sec_filing(evidence_item)
+                evidence_context["sec_filing_detail"] = detail
+                qualification = detail.get("ipo_qualification", {})
+                if qualification.get("classification") == "likely_non_ipo":
+                    return {
+                        "materiality": "IGNORE",
+                        "headline": "SEC registration screened out as non-IPO",
+                        "view": qualification.get("reason", "Filing did not qualify as an operating-company IPO."),
+                        "mechanism": "Pre-agent IPO qualification filter",
+                        "key_filing_findings": qualification.get("signals", []),
+                        "missing_evidence": [],
+                        "committee_escalation": False,
+                        "confidence": 0.95,
+                        "disposition": "NO_TRADE",
+                        "ipo_qualification": qualification,
+                    }
             except Exception as exc:
-                evidence_context["sec_filing_detail"] = {
-                    "available": False,
-                    "reason": str(exc),
-                }
+                evidence_context["sec_filing_detail"] = {"available": False, "reason": str(exc)}
 
         client = OpenAI()
         prompt = f"""
@@ -226,9 +224,11 @@ EVIDENCE CONTEXT:
 {json.dumps(evidence_context, indent=2)}
 
 If SEC filing detail is available, use the filing text itself as the primary evidence for IPO analysis.
-Extract offering structure, stated use of proceeds, financial condition, dilution/control terms, risk factors,
-and missing pricing/listing details when they are actually present. Do not infer facts absent from the filing.
-Analyze whether this new evidence materially changes anything worth escalating.
+First determine whether this is actually an operating-company IPO, versus an ETF registration, follow-on,
+secondary offering, shelf registration, or other non-IPO transaction. If it is not an IPO, say so clearly
+and use materiality IGNORE unless the evidence is independently important.
+For actual IPOs, extract offering structure, stated use of proceeds, financial condition, dilution/control
+terms, risk factors, and missing pricing/listing details when present. Do not infer facts absent from the filing.
 Use only supplied evidence for current factual claims. Identify missing evidence.
 This is PAPER MODE only. Do not authorize capital or recommend a real-money trade.
 Return ONLY valid JSON with:
@@ -262,6 +262,14 @@ Return ONLY valid JSON with:
                 "confidence": 0.4,
                 "disposition": "NO_TRADE",
             }
+
+    def analyze_ipo_item_now(self, item: EvidenceItem) -> dict:
+        row = {
+            "agent_id": IPO_AGENT_ID,
+            "route_reason": "Manual IPO replay for deep filing analysis",
+            "evidence_payload": item.model_dump_json(),
+        }
+        return self._run_agent(row)
 
     def process_pending(self, limit: int | None = None) -> dict:
         if not _bool_env("IIOS_AUTO_RUN_AGENTS", False):
