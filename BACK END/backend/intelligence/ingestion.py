@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
+from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.models import EvidenceItem
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
@@ -34,6 +35,7 @@ class IngestionJob:
     last_status: str = "never_run"
     last_error: str | None = None
     last_inserted: int = 0
+    last_dispatched: int = 0
 
     def due(self, now: datetime) -> bool:
         return self.next_run_at is None or now >= self.next_run_at
@@ -106,6 +108,7 @@ class IngestionService:
         ]
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self.last_auto_processing: dict = {"enabled": False, "processed": 0}
 
     async def run_job(self, job: IngestionJob) -> None:
         now = datetime.now(timezone.utc)
@@ -115,8 +118,13 @@ class IngestionService:
         job.schedule_next(now)
         try:
             items = await job.fetcher()
-            inserted = await asyncio.to_thread(evidence_store.save_many, items)
-            job.last_inserted = inserted
+            new_items: list[EvidenceItem] = []
+            for item in items:
+                inserted = await asyncio.to_thread(evidence_store.save, item)
+                if inserted:
+                    new_items.append(item)
+            job.last_inserted = len(new_items)
+            job.last_dispatched = await asyncio.to_thread(dispatcher.enqueue, new_items) if new_items else 0
             job.last_completed_at = datetime.now(timezone.utc)
             job.last_status = "ok"
         except Exception as exc:
@@ -124,12 +132,14 @@ class IngestionService:
             job.last_status = "error"
             job.last_error = str(exc)
             job.last_inserted = 0
+            job.last_dispatched = 0
 
     async def run_once(self) -> None:
         now = datetime.now(timezone.utc)
         due_jobs = [job for job in self.jobs if job.due(now)]
         if due_jobs:
             await asyncio.gather(*(self.run_job(job) for job in due_jobs))
+        self.last_auto_processing = await asyncio.to_thread(dispatcher.process_pending)
 
     async def loop(self) -> None:
         self._stopping = False
@@ -155,6 +165,8 @@ class IngestionService:
         return {
             "running": self._task is not None and not self._task.done(),
             "evidence_count": evidence_store.count(),
+            "dispatch_queue": dispatcher.counts(),
+            "auto_agent_processing": self.last_auto_processing,
             "jobs": [
                 {
                     "name": job.name,
@@ -165,6 +177,7 @@ class IngestionService:
                     "last_status": job.last_status,
                     "last_error": job.last_error,
                     "last_inserted": job.last_inserted,
+                    "last_dispatched": job.last_dispatched,
                 }
                 for job in self.jobs
             ],
