@@ -407,3 +407,51 @@ Return ONLY valid JSON with exactly these fields:
             "skeptic": skeptic_result,
         },
     }
+@app.post("/risk/evaluate")
+def evaluate_risk(request: dict = Body(...)):
+    topic = str(request.get("topic", "")).strip()
+    disposition = str(
+        request.get("disposition", "NO_TRADE")
+    ).upper()
+
+    try:
+        confidence = float(
+            request.get("confidence", 0.0)
+        )
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    confidence = max(0.0, min(1.0, confidence))
+
+    triggered_rules = []
+
+    if disposition == "NO_TRADE":
+        triggered_rules.append("COMMITTEE_NO_TRADE")
+
+    if confidence < 0.65:
+        triggered_rules.append("CONFIDENCE_BELOW_THRESHOLD")
+
+    if not topic:
+        triggered_rules.append("MISSING_INVESTMENT_TOPIC")
+
+    if triggered_rules:
+        decision = "VETOED"
+        allowed_notional = 0
+        floor_comment = "Risk saw the proposal and quietly moved the keys."
+    else:
+        decision = "WATCH_ONLY"
+        allowed_notional = 0
+        floor_comment = "Interesting. Still not getting a company credit card."
+
+    return {
+        "room": "Risk Inspection",
+        "status": "complete",
+        "topic": topic,
+        "decision": decision,
+        "allowed_notional": allowed_notional,
+        "triggered_rules": triggered_rules,
+        "confidence_received": confidence,
+        "committee_disposition": disposition,
+        "floor_comment": floor_comment,
+        "paper_mode": True,
+    }
