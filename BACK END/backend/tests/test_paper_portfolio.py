@@ -1,4 +1,4 @@
-import json
+import pytest
 
 from intelligence.paper_portfolio import PaperPortfolioStore
 
@@ -48,6 +48,33 @@ def test_mark_to_market_calculates_unrealized_pnl(tmp_path):
     assert marked["mark_price"] == 105.0
     assert marked["unrealized_pnl"] == 500.0
     assert store.summary()["unrealized_pnl"] == 500.0
+
+
+def test_close_moves_unrealized_to_realized_pnl(tmp_path):
+    store = PaperPortfolioStore(tmp_path / "portfolio.db")
+    position = store.record_simulated_order(candidate_id="candidate-1", order=_order(), candidate_packet=_packet())
+    store.mark(position["position_id"], 105.0, source="test")
+    closed = store.close(position["position_id"], 105.0, source="test_close")
+
+    assert closed["status"] == "closed"
+    assert closed["mark_price"] == 105.0
+    assert closed["unrealized_pnl"] == 0
+    assert closed["realized_pnl"] == 500.0
+    summary = store.summary()
+    assert summary["open_positions"] == 0
+    assert summary["closed_positions"] == 1
+    assert summary["realized_pnl"] == 500.0
+
+
+def test_closed_position_cannot_close_twice_or_be_remarked(tmp_path):
+    store = PaperPortfolioStore(tmp_path / "portfolio.db")
+    position = store.record_simulated_order(candidate_id="candidate-1", order=_order(), candidate_packet=_packet())
+    store.close(position["position_id"], 105.0)
+
+    with pytest.raises(ValueError, match="already closed"):
+        store.close(position["position_id"], 110.0)
+    with pytest.raises(ValueError, match="cannot be re-marked"):
+        store.mark(position["position_id"], 106.0)
 
 
 def test_real_capital_remains_zero(tmp_path):
