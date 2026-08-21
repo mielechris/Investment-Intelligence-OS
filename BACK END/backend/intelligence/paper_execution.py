@@ -75,6 +75,55 @@ class PaperExecutionStore:
             )
         return cursor.rowcount > 0
 
+    def create_controlled_test_candidate(self) -> dict:
+        """Create a deterministic simulation-only candidate through the normal paper gate."""
+        risk_review_id = "synthetic-controlled-paper-readiness-v1"
+        synthetic_packet = {
+            "fixture": True,
+            "fixture_name": "Controlled Paper Readiness Test",
+            "synthetic": True,
+            "description": "Deterministic test data used only to verify Risk-to-Paper handoff.",
+            "market_data": {
+                "listing_confirmed": True,
+                "pricing_confirmed": True,
+                "liquidity_confirmed": True,
+                "capitalization_confirmed": True,
+            },
+            "paper_mode": True,
+            "live_execution": False,
+            "real_security": False,
+        }
+        synthetic_risk_result = {
+            "decision": "WATCH_ONLY",
+            "risk_level": "LOW",
+            "headline": "CONTROLLED TEST: synthetic case cleared for paper simulation",
+            "primary_risks": ["Synthetic test fixture only; no real security or market exposure."],
+            "downside_scenarios": ["Simulation result has no investment meaning."],
+            "liquidity_assessment": "Synthetic liquidity assumption marked confirmed for gate testing.",
+            "concentration_assessment": "No real portfolio concentration exists; fixture is simulation-only.",
+            "sizing_constraints": ["Simulated notional capped by IIOS_MAX_PAPER_NOTIONAL.", "Real notional must remain zero."],
+            "hard_vetoes": [],
+            "missing_evidence": [],
+            "allowed_notional": 0,
+            "confidence": 1.0,
+            "paper_execution_eligible": True,
+            "synthetic_fixture": True,
+        }
+        risk_row = {
+            "risk_review_id": risk_review_id,
+            "packet_payload": json.dumps(synthetic_packet),
+        }
+        created = self.maybe_enqueue(risk_row=risk_row, risk_result=synthetic_risk_result)
+        candidates = [item for item in self.recent(limit=100) if item["risk_review_id"] == risk_review_id]
+        return {
+            "created": created,
+            "candidate": candidates[0] if candidates else None,
+            "synthetic": True,
+            "paper_mode": True,
+            "live_execution": False,
+            "real_capital_authorized": 0,
+        }
+
     def recent(self, limit: int = 100) -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -124,6 +173,7 @@ class PaperExecutionStore:
             "broker_order_sent": False,
             "live_execution": False,
             "paper_mode": True,
+            "synthetic_fixture": bool(risk_result.get("synthetic_fixture", False)),
             "source_risk_review_id": row["risk_review_id"],
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
