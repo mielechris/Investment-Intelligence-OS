@@ -24,9 +24,7 @@ def get_feed_status():
     return {
         "paper_mode": True,
         "live_execution": False,
-        "providers": [
-            *_status_dict(provider) for provider in providers
-        ],
+        "providers": [_status_dict(provider) for provider in providers],
         "specialized_providers": [sec_ipo_status()],
     }
 
