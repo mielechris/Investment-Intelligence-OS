@@ -4,10 +4,12 @@ from main_v1_1 import app
 from factory.router import router as factory_router
 from factory.system_agents import ensure_system_agents
 from intelligence.ingestion import ingestion_service
+from intelligence.memory_router import router as memory_router
 
 
 ensure_system_agents()
 app.include_router(factory_router)
+app.include_router(memory_router)
 
 _original_lifespan = app.router.lifespan_context
 
