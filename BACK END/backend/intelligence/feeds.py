@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from fastapi import APIRouter, HTTPException
 
@@ -10,6 +11,7 @@ from intelligence.providers import CoinGeckoProvider, FredProvider
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.sec_company import fetch_recent_company_filings
 from intelligence.providers.sec_ipo import fetch_recent_ipo_filings, sec_ipo_status
+from intelligence.risk_review import risk_reviews
 
 
 router = APIRouter(prefix="/intelligence/feeds", tags=["intelligence-feeds"])
@@ -17,13 +19,7 @@ router = APIRouter(prefix="/intelligence/feeds", tags=["intelligence-feeds"])
 
 def _status_dict(provider):
     status = provider.status()
-    return {
-        "name": status.name,
-        "kind": status.kind,
-        "configured": status.configured,
-        "live": status.live,
-        "detail": status.detail,
-    }
+    return {"name": status.name, "kind": status.kind, "configured": status.configured, "live": status.live, "detail": status.detail}
 
 
 @router.get("/status")
@@ -37,55 +33,56 @@ def get_feed_status():
         "ingestion": ingestion_service.status(),
         "dispatcher": dispatcher.counts(),
         "committee_escalations": committee_escalations.counts(),
+        "risk_reviews": risk_reviews.counts(),
     }
 
 
 @router.get("/inbox")
 def get_evidence_inbox(limit: int = 100, source_kind: str | None = None):
     items = evidence_store.recent(limit=limit, source_kind=source_kind)
-    return {
-        "count": len(items),
-        "total_persisted": evidence_store.count(),
-        "items": items,
-        "paper_mode": True,
-    }
+    return {"count": len(items), "total_persisted": evidence_store.count(), "items": items, "paper_mode": True}
 
 
 @router.get("/dispatch")
 def get_dispatch_queue(limit: int = 100):
-    return {
-        "counts": dispatcher.counts(),
-        "items": dispatcher.recent(limit=limit),
-        "paper_mode": True,
-    }
+    return {"counts": dispatcher.counts(), "items": dispatcher.recent(limit=limit), "paper_mode": True}
 
 
 @router.post("/dispatch/process")
 def process_dispatch_queue(limit: int = 5):
-    return {
-        "processing": dispatcher.process_pending(limit=max(1, min(limit, 50))),
-        "counts": dispatcher.counts(),
-        "committee_counts": committee_escalations.counts(),
-        "paper_mode": True,
-    }
+    return {"processing": dispatcher.process_pending(limit=max(1, min(limit, 50))), "counts": dispatcher.counts(), "committee_counts": committee_escalations.counts(), "paper_mode": True}
 
 
 @router.get("/committee-escalations")
 def get_committee_escalations(limit: int = 100):
-    return {
-        "counts": committee_escalations.counts(),
-        "items": committee_escalations.recent(limit=limit),
-        "paper_mode": True,
-    }
+    return {"counts": committee_escalations.counts(), "items": committee_escalations.recent(limit=limit), "paper_mode": True}
 
 
 @router.post("/committee-escalations/process")
 def process_committee_escalations(limit: int = 3):
-    return {
-        "processing": committee_escalations.process_pending(limit=max(1, min(limit, 20))),
-        "counts": committee_escalations.counts(),
-        "paper_mode": True,
-    }
+    return {"processing": committee_escalations.process_pending(limit=max(1, min(limit, 20))), "counts": committee_escalations.counts(), "risk_counts": risk_reviews.counts(), "paper_mode": True}
+
+
+@router.get("/risk-reviews")
+def get_risk_reviews(limit: int = 100):
+    return {"counts": risk_reviews.counts(), "items": risk_reviews.recent(limit=limit), "paper_mode": True}
+
+
+@router.post("/risk-reviews/process")
+def process_risk_reviews(limit: int = 3):
+    return {"processing": risk_reviews.process_pending(limit=max(1, min(limit, 20))), "counts": risk_reviews.counts(), "paper_mode": True}
+
+
+@router.post("/risk-reviews/backfill")
+def backfill_completed_committee_reviews(limit: int = 25):
+    enqueued = 0
+    for item in committee_escalations.recent(limit=max(1, min(limit, 100))):
+        result = item.get("committee_result")
+        if item.get("status") != "complete" or not isinstance(result, dict):
+            continue
+        row = {"escalation_id": item["escalation_id"], "packet_payload": json.dumps(item["packet"])}
+        enqueued += int(risk_reviews.maybe_enqueue(escalation_row=row, committee_result=result))
+    return {"enqueued": enqueued, "counts": risk_reviews.counts(), "paper_mode": True}
 
 
 @router.post("/ingestion/run-now")
@@ -153,24 +150,15 @@ async def get_recent_ipo_filings(count_per_form: int = 25):
 
 @router.post("/ipo/replay")
 async def replay_recent_ipo_candidate(index: int = 0, count_per_form: int = 5):
-    """Deep-analyze an existing recent SEC registration without creating duplicate queue work."""
     if index < 0:
         raise HTTPException(status_code=400, detail="index must be zero or greater")
     try:
         packet = await fetch_recent_ipo_filings(count_per_form=max(1, min(count_per_form, 25)))
         if index >= len(packet.items):
-            raise HTTPException(
-                status_code=404,
-                detail=f"index {index} is outside the {len(packet.items)} returned candidates",
-            )
+            raise HTTPException(status_code=404, detail=f"index {index} is outside the {len(packet.items)} returned candidates")
         item = packet.items[index]
-        result = await asyncio.to_thread(dispatcher.analyze_ipo_item_now, item)
-        return {
-            "candidate_index": index,
-            "candidate": item,
-            "analysis": result,
-            "paper_mode": True,
-        }
+        analysis = await asyncio.to_thread(dispatcher.analyze_ipo_item_now, item)
+        return {"candidate_index": index, "candidate": item, "analysis": analysis, "paper_mode": True}
     except HTTPException:
         raise
     except Exception as exc:
