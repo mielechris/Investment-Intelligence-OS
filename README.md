@@ -11,7 +11,7 @@ PRs remain draft until these checks are green.
 
 ## V1.2 persistence
 
-The Interview-to-Agent Factory persists interviews, insight packets, agent definitions, the live evidence inbox, and dispatch work in SQLite instead of process memory.
+The Interview-to-Agent Factory persists interviews, insight packets, agent definitions, the live evidence inbox, dispatch work, and committee escalations in SQLite instead of process memory.
 
 - Default database: `BACK END/backend/data/iios.db`
 - Override path with `IIOS_DB_PATH`
@@ -87,15 +87,32 @@ Unattended model calls are cost-safe by default. Routing and queue creation alwa
 - `IIOS_AUTO_RUN_AGENTS=true`
 - `IIOS_AUTO_RUN_MAX_PER_CYCLE` controls the maximum processed work items per ingestion cycle (default `5`, maximum `50`)
 
+## Automatic committee escalation
+
+Completed agent work is automatically packaged for committee review only when all escalation gates pass:
+
+- agent output says `materiality=HIGH`
+- agent explicitly requests `committee_escalation=true`
+- confidence is at or above `IIOS_COMMITTEE_CONFIDENCE_THRESHOLD` (default `0.70`)
+
+The escalation packet preserves the triggering evidence, route reason, specialist result, agent identity, confidence, and Paper Mode state. Duplicate dispatches cannot create duplicate committee packets.
+
+Queue creation is automatic. Unattended committee model calls remain separately opt-in:
+
+- `IIOS_AUTO_RUN_COMMITTEE=true`
+- `IIOS_AUTO_RUN_COMMITTEE_MAX_PER_CYCLE` controls maximum committee packets processed per ingestion cycle (default `3`, maximum `20`)
+
 Operations endpoints:
 
-- `GET /intelligence/feeds/status` — provider, ingestion, and dispatch health
+- `GET /intelligence/feeds/status` — provider, ingestion, dispatch, and committee-queue health
 - `GET /intelligence/feeds/inbox` — persisted evidence inbox
 - `GET /intelligence/feeds/dispatch` — recent routed agent work and results
-- `POST /intelligence/feeds/dispatch/process` — process pending work when automatic agent processing is enabled
+- `POST /intelligence/feeds/dispatch/process` — process pending agent work when automatic agent processing is enabled
+- `GET /intelligence/feeds/committee-escalations` — recent committee escalation packets and results
+- `POST /intelligence/feeds/committee-escalations/process` — process pending committee work when automatic committee processing is enabled
 - `POST /intelligence/feeds/ingestion/run-now` — force an immediate ingestion cycle
 - `GET /intelligence/feeds/company/recent` — recent SEC company filings
 - `GET /intelligence/feeds/market/equity/{symbol}` — latest equity daily bar
 - `GET /intelligence/feeds/history/equity/{symbol}` — historical daily equity series
 
-The current loop is designed for a single always-on IIOS instance. A true 24/7 production deployment requires the backend process itself to stay running on a server/container host. The persistence and provider interfaces are separated so the scheduler and dispatch processor can later move to dedicated workers with Postgres/Redis without changing agent APIs.
+The current loop is designed for a single always-on IIOS instance. A true 24/7 production deployment requires the backend process itself to stay running on a server/container host. The persistence and provider interfaces are separated so the scheduler, dispatch processor, and committee processor can later move to dedicated workers with Postgres/Redis without changing agent APIs.
