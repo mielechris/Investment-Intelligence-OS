@@ -45,19 +45,63 @@ def html_to_text(document: str, *, max_chars: int = 50000) -> str:
     return text[:max_chars]
 
 
-def _candidate_document_links(index_html: str, base_url: str) -> list[str]:
-    hrefs = re.findall(r'href=["\']([^"\']+)["\']', index_html, flags=re.IGNORECASE)
-    links: list[str] = []
-    for href in hrefs:
+def _form_from_item(item: EvidenceItem) -> str | None:
+    for source in (item.title, item.summary):
+        match = re.search(r"\b(S-1/A|S-1|F-1/A|F-1|424B4|EFFECT)\b", source, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return None
+
+
+def _candidate_document_links(index_html: str, base_url: str, preferred_form: str | None = None) -> list[str]:
+    """Return SEC filing-document links ranked with the primary form document first."""
+    ranked: list[tuple[int, str]] = []
+    seen: set[str] = set()
+
+    # SEC filing index pages expose document rows with sequence, description, document, type, size.
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", index_html, flags=re.IGNORECASE | re.DOTALL)
+    for row in rows:
+        href_match = re.search(r'href=["\']([^"\']+)["\']', row, flags=re.IGNORECASE)
+        if not href_match:
+            continue
+        href = href_match.group(1)
         lower = href.lower()
         if not lower.endswith((".htm", ".html")):
             continue
-        if "ixviewer" in lower or "javascript:" in lower:
+        if any(marker in lower for marker in ("-index.htm", "-index.html", "filingsummary", "ixviewer", "javascript:")):
             continue
+
         absolute = urljoin(base_url, href)
-        if absolute not in links:
-            links.append(absolute)
-    return links
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+
+        row_text = html_to_text(row, max_chars=2000).upper()
+        score = 50
+        if preferred_form and preferred_form.upper() in row_text:
+            score = 0
+        elif any(form in row_text for form in ("S-1/A", "S-1", "F-1/A", "F-1", "424B4")):
+            score = 10
+        elif "EX-" in row_text or "EXHIBIT" in row_text:
+            score = 90
+        ranked.append((score, absolute))
+
+    # Fallback for atypical index pages: still exclude obvious index/support pages.
+    if not ranked:
+        hrefs = re.findall(r'href=["\']([^"\']+)["\']', index_html, flags=re.IGNORECASE)
+        for href in hrefs:
+            lower = href.lower()
+            if not lower.endswith((".htm", ".html")):
+                continue
+            if any(marker in lower for marker in ("-index.htm", "-index.html", "filingsummary", "ixviewer", "javascript:")):
+                continue
+            absolute = urljoin(base_url, href)
+            if absolute not in seen:
+                seen.add(absolute)
+                ranked.append((50, absolute))
+
+    ranked.sort(key=lambda item: item[0])
+    return [url for _, url in ranked]
 
 
 def classify_ipo_filing(detail: dict) -> dict:
@@ -127,7 +171,8 @@ def enrich_sec_filing(item: EvidenceItem) -> dict:
         index_url = str(index_response.url)
         index_text = html_to_text(index_response.text, max_chars=12000)
 
-        candidates = _candidate_document_links(index_response.text, index_url)
+        preferred_form = _form_from_item(item)
+        candidates = _candidate_document_links(index_response.text, index_url, preferred_form=preferred_form)
         primary_url = candidates[0] if candidates else index_url
         primary_text = index_text
 
@@ -141,6 +186,7 @@ def enrich_sec_filing(item: EvidenceItem) -> dict:
         "available": True,
         "index_url": index_url,
         "primary_document_url": primary_url,
+        "preferred_form": preferred_form,
         "index_text": index_text,
         "filing_text": primary_text,
         "filing_text_truncated": len(primary_text) >= 50000,
