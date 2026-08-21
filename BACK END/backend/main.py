@@ -1,0 +1,112 @@
+import json
+
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAI
+from pydantic import BaseModel
+
+load_dotenv()
+
+app = FastAPI()
+
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=["http://localhost:5173"],
+	allow_credentials=True,
+	allow_methods=["*"],
+	allow_headers=["*"],
+)
+
+
+class PolicyRequest(BaseModel):
+	topic: str
+
+
+@app.get("/")
+def root():
+	return {"message": "Hello from IIOS backend"}
+
+
+@app.get("/agents")
+def get_agents():
+	return {
+		"agents": [
+			{
+				"name": "Policy Analyst",
+				"room": "Policy Floor",
+				"status": "idle",
+			},
+			{
+				"name": "Macro Analyst",
+				"room": "Macro Desk",
+				"status": "idle",
+			},
+			{
+				"name": "Skeptic",
+				"room": "Red Team",
+				"status": "idle",
+			},
+		]
+	}
+
+
+@app.post("/agents/policy/run")
+def run_policy_agent(request: PolicyRequest):
+	client = OpenAI()
+
+	prompt = f"""
+You are the Policy Analyst inside the Investment Intelligence OS.
+
+Analyze this topic:
+
+{request.topic}
+
+Important rules:
+- This is PAPER MODE only.
+- You do not have live market data or live web access yet.
+- Do not pretend information is current if that requires live data.
+- Separate what is known from what would require fresh evidence.
+- Do not recommend a real-money trade.
+- Disposition must be WATCH or NO_TRADE.
+- Be concise and analytical.
+- Include uncertainty.
+- Use dry, professional floor humor in the floor_comment.
+
+Return ONLY valid JSON with exactly these fields:
+
+{{
+  "headline": "short headline",
+  "view": "2 to 4 sentence analysis",
+  "confidence": 0.0,
+  "disposition": "WATCH",
+  "floor_comment": "short dry one-liner"
+}}
+"""
+
+	response = client.responses.create(
+		model="gpt-5.6-luna",
+		input=prompt,
+	)
+
+	try:
+		analysis = json.loads(response.output_text)
+	except json.JSONDecodeError:
+		analysis = {
+			"headline": "Policy analysis completed",
+			"view": response.output_text,
+			"confidence": 0.5,
+			"disposition": "WATCH",
+			"floor_comment": "The machine had thoughts. Formatting had other plans.",
+		}
+
+	return {
+		"agent": "Policy Analyst",
+		"status": "complete",
+		"topic": request.topic,
+		"headline": analysis["headline"],
+		"view": analysis["view"],
+		"confidence": analysis["confidence"],
+		"disposition": analysis["disposition"],
+		"floor_comment": analysis["floor_comment"],
+	}
