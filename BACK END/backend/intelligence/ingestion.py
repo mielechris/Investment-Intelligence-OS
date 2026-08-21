@@ -8,6 +8,7 @@ from intelligence.committee_escalation import committee_escalations
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.models import EvidenceItem
+from intelligence.postmortem_intelligence import postmortem_intelligence
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.coingecko import CoinGeckoProvider
 from intelligence.providers.fred import FredProvider
@@ -113,6 +114,7 @@ class IngestionService:
         self.last_auto_processing: dict = {"enabled": False, "processed": 0}
         self.last_committee_processing: dict = {"enabled": False, "processed": 0}
         self.last_risk_processing: dict = {"enabled": False, "processed": 0}
+        self.last_postmortem_processing: dict = {"enabled": False, "processed": 0}
 
     async def run_job(self, job: IngestionJob) -> None:
         now = datetime.now(timezone.utc)
@@ -146,6 +148,7 @@ class IngestionService:
         self.last_auto_processing = await asyncio.to_thread(dispatcher.process_pending)
         self.last_committee_processing = await asyncio.to_thread(committee_escalations.process_pending)
         self.last_risk_processing = await asyncio.to_thread(risk_reviews.process_pending)
+        self.last_postmortem_processing = await asyncio.to_thread(postmortem_intelligence.process_pending)
 
     async def loop(self) -> None:
         self._stopping = False
@@ -174,9 +177,11 @@ class IngestionService:
             "dispatch_queue": dispatcher.counts(),
             "committee_queue": committee_escalations.counts(),
             "risk_queue": risk_reviews.counts(),
+            "postmortem_queue": postmortem_intelligence.counts(),
             "auto_agent_processing": self.last_auto_processing,
             "auto_committee_processing": self.last_committee_processing,
             "auto_risk_processing": self.last_risk_processing,
+            "auto_postmortem_processing": self.last_postmortem_processing,
             "jobs": [
                 {
                     "name": job.name,
