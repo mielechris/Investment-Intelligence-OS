@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
+from intelligence.committee_escalation import committee_escalations
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.models import EvidenceItem
@@ -109,6 +110,7 @@ class IngestionService:
         self._task: asyncio.Task | None = None
         self._stopping = False
         self.last_auto_processing: dict = {"enabled": False, "processed": 0}
+        self.last_committee_processing: dict = {"enabled": False, "processed": 0}
 
     async def run_job(self, job: IngestionJob) -> None:
         now = datetime.now(timezone.utc)
@@ -140,6 +142,7 @@ class IngestionService:
         if due_jobs:
             await asyncio.gather(*(self.run_job(job) for job in due_jobs))
         self.last_auto_processing = await asyncio.to_thread(dispatcher.process_pending)
+        self.last_committee_processing = await asyncio.to_thread(committee_escalations.process_pending)
 
     async def loop(self) -> None:
         self._stopping = False
@@ -166,7 +169,9 @@ class IngestionService:
             "running": self._task is not None and not self._task.done(),
             "evidence_count": evidence_store.count(),
             "dispatch_queue": dispatcher.counts(),
+            "committee_queue": committee_escalations.counts(),
             "auto_agent_processing": self.last_auto_processing,
+            "auto_committee_processing": self.last_committee_processing,
             "jobs": [
                 {
                     "name": job.name,
