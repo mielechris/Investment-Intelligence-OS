@@ -92,6 +92,12 @@ def get_paper_execution_candidates(limit: int = 100):
     return {"counts": paper_execution.counts(), "items": paper_execution.recent(limit=limit), "paper_mode": True, "live_execution": False}
 
 
+@router.post("/paper-execution/test-fixture")
+def create_controlled_paper_test_fixture():
+    result = paper_execution.create_controlled_test_candidate()
+    return {**result, "counts": paper_execution.counts()}
+
+
 @router.post("/paper-execution/{candidate_id}/simulate")
 def simulate_paper_execution(candidate_id: str):
     try:
