@@ -8,6 +8,7 @@ from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.ingestion import ingestion_service
 from intelligence.paper_execution import paper_execution
+from intelligence.paper_portfolio import paper_portfolio
 from intelligence.providers import CoinGeckoProvider, FredProvider
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.sec_company import fetch_recent_company_filings
@@ -36,6 +37,7 @@ def get_feed_status():
         "committee_escalations": committee_escalations.counts(),
         "risk_reviews": risk_reviews.counts(),
         "paper_execution": paper_execution.counts(),
+        "paper_portfolio": paper_portfolio.summary(),
     }
 
 
@@ -106,7 +108,28 @@ def simulate_paper_execution(candidate_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"candidate_id": candidate_id, "order": order, "paper_mode": True, "live_execution": False}
+    return {"candidate_id": candidate_id, "order": order, "portfolio": paper_portfolio.summary(), "paper_mode": True, "live_execution": False}
+
+
+@router.get("/paper-portfolio")
+def get_paper_portfolio(limit: int = 100):
+    return {
+        "summary": paper_portfolio.summary(),
+        "positions": paper_portfolio.recent(limit=limit),
+        "paper_mode": True,
+        "live_execution": False,
+    }
+
+
+@router.post("/paper-portfolio/{position_id}/mark")
+def mark_paper_position(position_id: str, mark_price: float, source: str = "manual"):
+    try:
+        position = paper_portfolio.mark(position_id, mark_price, source=source)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"position": position, "summary": paper_portfolio.summary(), "paper_mode": True, "live_execution": False}
 
 
 @router.post("/ingestion/run-now")
