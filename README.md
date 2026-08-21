@@ -1,11 +1,25 @@
 # Investment-Intelligence-OS
 
+## Quick local launch
+
+V1.2 can run as a two-service Docker Compose stack: FastAPI backend plus the Vite frontend.
+
+1. Copy `BACK END/backend/.env.example` to `BACK END/backend/.env`.
+2. Set at minimum `SEC_USER_AGENT` to a descriptive value with a contact email.
+3. Add `OPENAI_API_KEY` if you want agent/committee model processing.
+4. Optionally add `FRED_API_KEY` and `ALPHAVANTAGE_API_KEY` for macro and equity feeds.
+5. From the repository root run `docker compose up --build`.
+6. Open `http://localhost:5173`. The backend is available at `http://localhost:8000`.
+
+The Compose stack persists SQLite data in the named `iios_data` volume and restarts services unless stopped. Routing and evidence ingestion run automatically. Unattended LLM processing remains opt-in through the environment flags below.
+
 ## Verification
 
 GitHub Actions runs the repository's automated verification on feature branches and pull requests via `.github/workflows/ci.yml`:
 
 - Frontend: `npm ci`, TypeScript/Vite build, ESLint
 - Backend: dependency install, `pytest -q`, V1.2 FastAPI import check
+- Deployment: Docker Compose configuration plus backend/frontend image builds
 
 PRs remain draft until these checks are green.
 
@@ -15,6 +29,7 @@ The Interview-to-Agent Factory persists interviews, insight packets, agent defin
 
 - Default database: `BACK END/backend/data/iios.db`
 - Override path with `IIOS_DB_PATH`
+- Docker Compose uses `/data/iios.db` in the persistent `iios_data` volume
 - Local database files are ignored by Git
 - The repository layer preserves the existing factory API and is isolated so a future Postgres migration does not require rewriting the frontend or factory routes
 
@@ -93,14 +108,13 @@ Completed agent work is automatically packaged for committee review only when al
 
 - agent output says `materiality=HIGH`
 - agent explicitly requests `committee_escalation=true`
-- confidence is at or above `IIOS_COMMITTEE_CONFIDENCE_THRESHOLD` (default `0.70`)
+- confidence is at or above `IIOS_COMMITTEE_ESCALATION_CONFIDENCE` (default `0.70`)
 
 The escalation packet preserves the triggering evidence, route reason, specialist result, agent identity, confidence, and Paper Mode state. Duplicate dispatches cannot create duplicate committee packets.
 
 Queue creation is automatic. Unattended committee model calls remain separately opt-in:
 
 - `IIOS_AUTO_RUN_COMMITTEE=true`
-- `IIOS_AUTO_RUN_COMMITTEE_MAX_PER_CYCLE` controls maximum committee packets processed per ingestion cycle (default `3`, maximum `20`)
 
 Operations endpoints:
 
