@@ -1,0 +1,139 @@
+import json
+import os
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+
+def _database_path() -> Path:
+    configured = os.getenv("IIOS_DB_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(__file__).resolve().parents[1] / "data" / "iios.db"
+
+
+def _paper_notional_cap() -> float:
+    try:
+        return max(0.0, min(float(os.getenv("IIOS_MAX_PAPER_NOTIONAL", "10000")), 1_000_000.0))
+    except ValueError:
+        return 10000.0
+
+
+class PaperExecutionStore:
+    def __init__(self, database_path: Path | None = None) -> None:
+        self.database_path = database_path or _database_path()
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.database_path, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        return connection
+
+    def _initialize(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS paper_execution_candidates (
+                    candidate_id TEXT PRIMARY KEY,
+                    risk_review_id TEXT NOT NULL UNIQUE,
+                    packet_payload TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    simulated_order_payload TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def maybe_enqueue(self, *, risk_row: dict, risk_result: dict) -> bool:
+        decision = str(risk_result.get("decision", "VETOED")).upper()
+        eligible = bool(risk_result.get("paper_execution_eligible", False))
+        hard_vetoes = risk_result.get("hard_vetoes") or []
+        if decision != "WATCH_ONLY" or not eligible or hard_vetoes:
+            return False
+
+        packet = {
+            "risk_review_id": risk_row["risk_review_id"],
+            "risk_packet": json.loads(risk_row["packet_payload"]),
+            "risk_result": risk_result,
+            "paper_mode": True,
+            "live_execution": False,
+            "real_capital_authorized": 0,
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO paper_execution_candidates
+                (candidate_id, risk_review_id, packet_payload, status, simulated_order_payload, created_at, updated_at)
+                VALUES (?, ?, ?, 'ready', NULL, ?, ?)
+                """,
+                (str(uuid4()), risk_row["risk_review_id"], json.dumps(packet), now, now),
+            )
+        return cursor.rowcount > 0
+
+    def recent(self, limit: int = 100) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM paper_execution_candidates ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        output = []
+        for row in rows:
+            item = dict(row)
+            item["packet"] = json.loads(item.pop("packet_payload"))
+            raw = item.pop("simulated_order_payload", None)
+            item["simulated_order"] = json.loads(raw) if raw else None
+            output.append(item)
+        return output
+
+    def counts(self) -> dict:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM paper_execution_candidates GROUP BY status"
+            ).fetchall()
+        counts = {row["status"]: int(row["count"]) for row in rows}
+        return {"ready": counts.get("ready", 0), "simulated": counts.get("simulated", 0)}
+
+    def simulate(self, candidate_id: str) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_execution_candidates WHERE candidate_id=?",
+                (candidate_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Paper execution candidate not found")
+        if row["status"] == "simulated" and row["simulated_order_payload"]:
+            return json.loads(row["simulated_order_payload"])
+
+        packet = json.loads(row["packet_payload"])
+        risk_result = packet.get("risk_result", {})
+        if str(risk_result.get("decision", "VETOED")).upper() != "WATCH_ONLY" or not risk_result.get("paper_execution_eligible"):
+            raise RuntimeError("Risk review does not authorize paper simulation")
+        if risk_result.get("hard_vetoes"):
+            raise RuntimeError("Hard risk veto prevents paper simulation")
+
+        simulated_notional = _paper_notional_cap()
+        order = {
+            "execution": "PAPER_ORDER_SIMULATED",
+            "simulated_notional": simulated_notional,
+            "real_notional": 0,
+            "broker_order_sent": False,
+            "live_execution": False,
+            "paper_mode": True,
+            "source_risk_review_id": row["risk_review_id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE paper_execution_candidates SET status='simulated', simulated_order_payload=?, updated_at=? WHERE candidate_id=?",
+                (json.dumps(order), now, candidate_id),
+            )
+        return order
+
+
+paper_execution = PaperExecutionStore()
