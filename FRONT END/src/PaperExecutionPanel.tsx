@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -12,6 +12,7 @@ type Candidate = {
       decision?: string
       risk_level?: string
       paper_execution_eligible?: boolean
+      synthetic_fixture?: boolean
     }
   }
   simulated_order?: {
@@ -19,6 +20,7 @@ type Candidate = {
     simulated_notional?: number
     real_notional?: number
     broker_order_sent?: boolean
+    synthetic_fixture?: boolean
   } | null
 }
 
@@ -30,29 +32,53 @@ type Response = {
 export default function PaperExecutionPanel() {
   const [data, setData] = useState<Response | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-    const refresh = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/intelligence/feeds/paper-execution?limit=10`)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const next = (await response.json()) as Response
-        if (!cancelled) {
-          setData(next)
-          setError(null)
-        }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Paper execution feed unavailable')
-      }
-    }
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), 5000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/intelligence/feeds/paper-execution?limit=10`)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const next = (await response.json()) as Response
+      setData(next)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Paper execution feed unavailable')
     }
   }, [])
+
+  useEffect(() => {
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 5000)
+    return () => window.clearInterval(timer)
+  }, [refresh])
+
+  const createControlledTest = async () => {
+    setBusy(true)
+    try {
+      const response = await fetch(`${API_BASE}/intelligence/feeds/paper-execution/test-fixture`, { method: 'POST' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await refresh()
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create controlled test candidate')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const simulate = async (candidateId: string) => {
+    setBusy(true)
+    try {
+      const response = await fetch(`${API_BASE}/intelligence/feeds/paper-execution/${candidateId}/simulate`, { method: 'POST' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await refresh()
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Paper simulation failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <section
@@ -78,7 +104,7 @@ export default function PaperExecutionPanel() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '12px', marginTop: '18px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '12px', marginTop: '18px', flexWrap: 'wrap', alignItems: 'stretch' }}>
         <div style={{ border: '1px solid #29483b', borderRadius: '10px', padding: '13px 18px', minWidth: '150px' }}>
           <div style={{ color: '#728b81', fontSize: '10px', letterSpacing: '2px' }}>READY</div>
           <strong style={{ fontSize: '25px' }}>{data?.counts.ready ?? 0}</strong>
@@ -87,6 +113,18 @@ export default function PaperExecutionPanel() {
           <div style={{ color: '#728b81', fontSize: '10px', letterSpacing: '2px' }}>SIMULATED</div>
           <strong style={{ fontSize: '25px' }}>{data?.counts.simulated ?? 0}</strong>
         </div>
+        <button
+          type="button"
+          onClick={() => void createControlledTest()}
+          disabled={busy}
+          style={{ border: '1px solid #386b57', background: '#0c1b15', color: '#7fd4ae', borderRadius: '10px', padding: '12px 18px', fontWeight: 800, letterSpacing: '1px', cursor: busy ? 'wait' : 'pointer' }}
+        >
+          {busy ? 'WORKING…' : 'CREATE CONTROLLED TEST'}
+        </button>
+      </div>
+
+      <div style={{ marginTop: '12px', color: '#71857d', fontSize: '11px' }}>
+        Controlled tests use synthetic data only and never represent a real security, recommendation, or broker order.
       </div>
 
       {error && <div style={{ marginTop: '14px', color: '#e68191' }}>{error}</div>}
@@ -99,18 +137,32 @@ export default function PaperExecutionPanel() {
         ) : (
           data!.items.slice(0, 6).map((item) => {
             const result = item.packet?.risk_result
+            const synthetic = Boolean(result?.synthetic_fixture || item.simulated_order?.synthetic_fixture)
             return (
               <div key={item.candidate_id} style={{ padding: '13px 0', borderBottom: '1px solid #20352c' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                  <strong style={{ fontSize: '13px' }}>{result?.headline ?? 'Paper execution candidate'}</strong>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
+                  <div>
+                    <strong style={{ fontSize: '13px' }}>{result?.headline ?? 'Paper execution candidate'}</strong>
+                    {synthetic && <div style={{ color: '#d8ad59', fontSize: '10px', marginTop: '4px', fontWeight: 800 }}>SYNTHETIC TEST FIXTURE</div>}
+                  </div>
                   <span style={{ color: '#69c89d', fontSize: '10px', fontWeight: 800 }}>{item.status.toUpperCase()}</span>
                 </div>
                 <div style={{ color: '#789187', fontSize: '11px', marginTop: '4px' }}>
                   {result?.risk_level ?? '—'} risk · {result?.decision ?? '—'} · broker order sent: NO
                 </div>
+                {item.status === 'ready' && (
+                  <button
+                    type="button"
+                    onClick={() => void simulate(item.candidate_id)}
+                    disabled={busy}
+                    style={{ marginTop: '9px', border: '1px solid #386b57', background: '#0c1b15', color: '#7fd4ae', borderRadius: '8px', padding: '8px 12px', fontWeight: 800, cursor: busy ? 'wait' : 'pointer' }}
+                  >
+                    SIMULATE PAPER ORDER
+                  </button>
+                )}
                 {item.simulated_order && (
-                  <div style={{ color: '#9db3a9', fontSize: '11px', marginTop: '5px' }}>
-                    Simulated notional ${Math.round(item.simulated_order.simulated_notional ?? 0).toLocaleString()} · real notional $0
+                  <div style={{ color: '#9db3a9', fontSize: '11px', marginTop: '7px' }}>
+                    Simulated notional ${Math.round(item.simulated_order.simulated_notional ?? 0).toLocaleString()} · real notional $0 · broker order sent NO
                   </div>
                 )}
               </div>
