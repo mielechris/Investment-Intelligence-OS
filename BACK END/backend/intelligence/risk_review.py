@@ -119,7 +119,7 @@ class RiskReviewStore:
         prompt = f"""
 You are the Risk Desk inside Investment Intelligence OS.
 
-Review this committee-approved research packet independently. Your job is not to find reasons to trade;
+Review this committee research packet independently. Your job is not to find reasons to trade;
 your job is to identify ways the paper thesis can fail, size uncertainty, and veto unsafe or under-evidenced setups.
 
 RISK PACKET:
@@ -129,9 +129,10 @@ Rules:
 - PAPER MODE ONLY. Never authorize live execution or real capital.
 - Evaluate liquidity, pricing uncertainty, concentration/control, dilution, governance, jurisdiction/regulatory risk,
   business solvency/going-concern risk, market-structure risk, downside scenarios, and missing data.
-- If pricing/listing/liquidity evidence is incomplete, maximum decision is WATCH_ONLY.
 - A VETO is appropriate when evidence is insufficient to size risk responsibly or a hard risk boundary is triggered.
-- allowed_notional must remain 0 in this version.
+- WATCH_ONLY is allowed only when there are no hard vetoes and the evidence is sufficient for a bounded paper simulation.
+- paper_execution_eligible may be true ONLY with WATCH_ONLY, no hard vetoes, and sufficient pricing/listing/liquidity/capitalization evidence.
+- Real allowed_notional must remain 0 in this version. Paper simulation uses a separate fictional notional cap.
 
 Return ONLY valid JSON:
 {{
@@ -154,10 +155,18 @@ Return ONLY valid JSON:
         parsed = json.loads(response.output_text)
         if not isinstance(parsed, dict):
             raise ValueError("Risk output was not an object")
+
+        decision = str(parsed.get("decision", "VETOED")).upper()
+        if decision not in {"VETOED", "WATCH_ONLY"}:
+            decision = "VETOED"
+        parsed["decision"] = decision
         parsed["allowed_notional"] = 0
-        parsed["paper_execution_eligible"] = False
-        if str(parsed.get("decision", "VETOED")).upper() not in {"VETOED", "WATCH_ONLY"}:
-            parsed["decision"] = "VETOED"
+
+        hard_vetoes = parsed.get("hard_vetoes") or []
+        eligible = bool(parsed.get("paper_execution_eligible", False))
+        if decision != "WATCH_ONLY" or hard_vetoes:
+            eligible = False
+        parsed["paper_execution_eligible"] = eligible
         return parsed
 
     def process_pending(self, limit: int | None = None) -> dict:
@@ -170,16 +179,19 @@ Return ONLY valid JSON:
                 limit = 3
         processed = 0
         errors = 0
+        paper_candidates = 0
         for row in self.pending(limit=limit):
             self._mark(row["risk_review_id"], "running")
             try:
                 result = self._run_risk_review(row)
                 self._mark(row["risk_review_id"], "complete", result=result)
+                from intelligence.paper_execution import paper_execution
+                paper_candidates += int(paper_execution.maybe_enqueue(risk_row=row, risk_result=result))
                 processed += 1
             except Exception as exc:
                 self._mark(row["risk_review_id"], "error", error=str(exc))
                 errors += 1
-        return {"enabled": True, "processed": processed, "errors": errors}
+        return {"enabled": True, "processed": processed, "errors": errors, "paper_candidates": paper_candidates}
 
 
 risk_reviews = RiskReviewStore()
