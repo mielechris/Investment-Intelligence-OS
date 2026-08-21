@@ -60,6 +60,59 @@ def _candidate_document_links(index_html: str, base_url: str) -> list[str]:
     return links
 
 
+def classify_ipo_filing(detail: dict) -> dict:
+    """Conservatively classify enriched SEC text before spending an agent call."""
+    text = str(detail.get("filing_text", "")).lower()
+    if not text:
+        return {
+            "classification": "uncertain",
+            "likely_ipo": None,
+            "signals": [],
+            "reason": "No filing text available for qualification.",
+        }
+
+    strong_positive = [
+        "this is our initial public offering",
+        "initial public offering of",
+        "our initial public offering",
+        "no public market currently exists",
+        "no public market for our",
+        "we have applied to list",
+        "we intend to apply to list",
+    ]
+    strong_non_ipo = [
+        "exchange-traded fund",
+        "exchange traded fund",
+        "etf shares",
+    ]
+
+    positive_hits = [marker for marker in strong_positive if marker in text]
+    negative_hits = [marker for marker in strong_non_ipo if marker in text]
+
+    if positive_hits:
+        return {
+            "classification": "likely_ipo",
+            "likely_ipo": True,
+            "signals": positive_hits,
+            "reason": "Filing contains explicit initial-offering or first-listing language.",
+        }
+
+    if negative_hits:
+        return {
+            "classification": "likely_non_ipo",
+            "likely_ipo": False,
+            "signals": negative_hits,
+            "reason": "Filing appears to be an ETF registration rather than an operating-company IPO.",
+        }
+
+    return {
+        "classification": "uncertain",
+        "likely_ipo": None,
+        "signals": [],
+        "reason": "No decisive IPO or ETF marker found; specialist review is still required.",
+    }
+
+
 def enrich_sec_filing(item: EvidenceItem) -> dict:
     if not item.url:
         return {"available": False, "reason": "Evidence item has no SEC filing URL."}
@@ -84,7 +137,7 @@ def enrich_sec_filing(item: EvidenceItem) -> dict:
             primary_url = str(primary_response.url)
             primary_text = html_to_text(primary_response.text, max_chars=50000)
 
-    return {
+    detail = {
         "available": True,
         "index_url": index_url,
         "primary_document_url": primary_url,
@@ -92,3 +145,5 @@ def enrich_sec_filing(item: EvidenceItem) -> dict:
         "filing_text": primary_text,
         "filing_text_truncated": len(primary_text) >= 50000,
     }
+    detail["ipo_qualification"] = classify_ipo_filing(detail)
+    return detail
