@@ -12,6 +12,7 @@ from factory.store import agents
 from factory.system_agents import IPO_AGENT_ID, MARKET_HISTORY_AGENT_ID
 from intelligence.committee_escalation import committee_escalations
 from intelligence.models import EvidenceItem
+from intelligence.providers.sec_filing_detail import enrich_sec_filing
 
 
 def _database_path() -> Path:
@@ -199,6 +200,18 @@ class EventDispatcher:
             raise RuntimeError("Dispatch target is not an approved agent")
 
         evidence = json.loads(row["evidence_payload"])
+        evidence_context: dict = {"event": evidence}
+
+        if agent.id == IPO_AGENT_ID:
+            try:
+                evidence_item = EvidenceItem.model_validate(evidence)
+                evidence_context["sec_filing_detail"] = enrich_sec_filing(evidence_item)
+            except Exception as exc:
+                evidence_context["sec_filing_detail"] = {
+                    "available": False,
+                    "reason": str(exc),
+                }
+
         client = OpenAI()
         prompt = f"""
 You are {agent.name}, an approved specialist agent inside Investment Intelligence OS.
@@ -209,9 +222,12 @@ INSTRUCTIONS: {agent.instructions}
 RISK BOUNDARIES: {json.dumps(agent.risk_boundaries)}
 ROUTE REASON: {row['route_reason']}
 
-NEW EVIDENCE EVENT:
-{json.dumps(evidence, indent=2)}
+EVIDENCE CONTEXT:
+{json.dumps(evidence_context, indent=2)}
 
+If SEC filing detail is available, use the filing text itself as the primary evidence for IPO analysis.
+Extract offering structure, stated use of proceeds, financial condition, dilution/control terms, risk factors,
+and missing pricing/listing details when they are actually present. Do not infer facts absent from the filing.
 Analyze whether this new evidence materially changes anything worth escalating.
 Use only supplied evidence for current factual claims. Identify missing evidence.
 This is PAPER MODE only. Do not authorize capital or recommend a real-money trade.
@@ -221,6 +237,7 @@ Return ONLY valid JSON with:
   "headline": "string",
   "view": "string",
   "mechanism": "string",
+  "key_filing_findings": ["string"],
   "missing_evidence": ["string"],
   "committee_escalation": true,
   "confidence": 0.0,
@@ -239,6 +256,7 @@ Return ONLY valid JSON with:
                 "headline": f"{agent.name} reviewed new evidence",
                 "view": response.output_text,
                 "mechanism": "Unstructured model response",
+                "key_filing_findings": [],
                 "missing_evidence": agent.evidence_requirements,
                 "committee_escalation": False,
                 "confidence": 0.4,
