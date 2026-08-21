@@ -11,6 +11,7 @@ from openai import OpenAI
 from factory.store import agents
 from factory.system_agents import IPO_AGENT_ID, MARKET_HISTORY_AGENT_ID
 from intelligence.committee_escalation import committee_escalations
+from intelligence.memory_retrieval import retrieve_relevant_patterns
 from intelligence.models import EvidenceItem
 from intelligence.providers.sec_filing_detail import enrich_sec_filing
 
@@ -201,6 +202,17 @@ class EventDispatcher:
 
         evidence = json.loads(row["evidence_payload"])
         evidence_context: dict = {"event": evidence}
+        memory_patterns = retrieve_relevant_patterns(evidence, limit=3)
+        evidence_context["institutional_memory"] = {
+            "retrieved_count": len(memory_patterns),
+            "patterns": memory_patterns,
+            "usage_rules": [
+                "Prior outcomes are context, not authority or proof.",
+                "Reject analogs when regime, instrument, catalyst, liquidity, or evidence quality differs materially.",
+                "Synthetic/process-only lessons must never support a real-market conclusion.",
+                "A prior WIN or LOSS does not by itself increase or decrease the probability of the current setup.",
+            ],
+        }
 
         if agent.id == IPO_AGENT_ID:
             try:
@@ -216,6 +228,8 @@ class EventDispatcher:
                         "mechanism": "Pre-agent IPO qualification filter",
                         "key_filing_findings": qualification.get("signals", []),
                         "missing_evidence": [],
+                        "memory_analogs": [],
+                        "memory_cautions": ["Institutional memory was not needed because the filing failed the IPO qualification gate."],
                         "committee_escalation": False,
                         "confidence": 0.95,
                         "disposition": "NO_TRADE",
@@ -237,13 +251,20 @@ ROUTE REASON: {row['route_reason']}
 EVIDENCE CONTEXT:
 {json.dumps(evidence_context, indent=2)}
 
+Institutional-memory rules:
+- Treat retrieved postmortem lessons as hypotheses and prior examples, never as current factual evidence.
+- For every memory analog you use, state why it is relevant AND the most important difference that could invalidate it.
+- If no retrieved lesson is genuinely comparable, say so and ignore memory.
+- Never use a synthetic fixture or process-validation lesson to support a real-market thesis.
+- Never infer causality from a prior winning or losing outcome alone.
+
 If SEC filing detail is available, use the filing text itself as the primary evidence for IPO analysis.
 First determine whether this is actually an operating-company IPO, versus an ETF registration, follow-on,
 secondary offering, shelf registration, or other non-IPO transaction. If it is not an IPO, say so clearly
 and use materiality IGNORE unless the evidence is independently important.
 For actual IPOs, extract offering structure, stated use of proceeds, financial condition, dilution/control
 terms, risk factors, and missing pricing/listing details when present. Do not infer facts absent from the filing.
-Use only supplied evidence for current factual claims. Identify missing evidence.
+Use only supplied event/filing evidence for current factual claims. Identify missing evidence.
 This is PAPER MODE only. Do not authorize capital or recommend a real-money trade.
 Return ONLY valid JSON with:
 {{
@@ -253,6 +274,8 @@ Return ONLY valid JSON with:
   "mechanism": "string",
   "key_filing_findings": ["string"],
   "missing_evidence": ["string"],
+  "memory_analogs": [{{"pattern_id": "string", "relevance": "string", "key_difference": "string"}}],
+  "memory_cautions": ["string"],
   "committee_escalation": true,
   "confidence": 0.0,
   "disposition": "WATCH|NO_TRADE"
@@ -263,6 +286,8 @@ Return ONLY valid JSON with:
             parsed = json.loads(response.output_text)
             if not isinstance(parsed, dict):
                 raise ValueError("Agent output was not an object")
+            parsed.setdefault("memory_analogs", [])
+            parsed.setdefault("memory_cautions", [])
             return parsed
         except (json.JSONDecodeError, ValueError, TypeError):
             return {
@@ -272,6 +297,8 @@ Return ONLY valid JSON with:
                 "mechanism": "Unstructured model response",
                 "key_filing_findings": [],
                 "missing_evidence": agent.evidence_requirements,
+                "memory_analogs": [],
+                "memory_cautions": ["Institutional memory was not relied on because the model response was unstructured."],
                 "committee_escalation": False,
                 "confidence": 0.4,
                 "disposition": "NO_TRADE",
