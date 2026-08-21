@@ -3,6 +3,8 @@ from fastapi import APIRouter, HTTPException
 from intelligence.evidence_store import evidence_store
 from intelligence.ingestion import ingestion_service
 from intelligence.providers import CoinGeckoProvider, FredProvider
+from intelligence.providers.alpha_vantage import AlphaVantageProvider
+from intelligence.providers.sec_company import fetch_recent_company_filings
 from intelligence.providers.sec_ipo import fetch_recent_ipo_filings, sec_ipo_status
 
 
@@ -22,7 +24,7 @@ def _status_dict(provider):
 
 @router.get("/status")
 def get_feed_status():
-    providers = [FredProvider(), CoinGeckoProvider()]
+    providers = [FredProvider(), CoinGeckoProvider(), AlphaVantageProvider()]
     return {
         "paper_mode": True,
         "live_execution": False,
@@ -55,23 +57,47 @@ async def run_ingestion_now():
 def get_fred_series(series_id: str):
     provider = FredProvider()
     try:
-        item = provider.fetch(series_id=series_id.upper())
+        return provider.fetch(series_id=series_id.upper())
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return item
 
 
 @router.get("/market/crypto/{asset_id}")
 def get_crypto_price(asset_id: str, vs_currency: str = "usd"):
     provider = CoinGeckoProvider()
     try:
-        item = provider.fetch(
-            asset_id=asset_id.lower(),
-            vs_currency=vs_currency.lower(),
-        )
+        return provider.fetch(asset_id=asset_id.lower(), vs_currency=vs_currency.lower())
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return item
+
+
+@router.get("/market/equity/{symbol}")
+def get_equity_latest(symbol: str):
+    provider = AlphaVantageProvider()
+    try:
+        return provider.fetch_latest_daily(symbol=symbol.upper())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/history/equity/{symbol}")
+def get_equity_history(symbol: str, outputsize: str = "compact"):
+    provider = AlphaVantageProvider()
+    if outputsize not in {"compact", "full"}:
+        raise HTTPException(status_code=400, detail="outputsize must be compact or full")
+    try:
+        series = provider.fetch_daily_history(symbol=symbol.upper(), outputsize=outputsize)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"symbol": symbol.upper(), "daily": series, "paper_mode": True}
+
+
+@router.get("/company/recent")
+async def get_recent_company_filings(count_per_form: int = 40):
+    try:
+        return await fetch_recent_company_filings(count_per_form=count_per_form)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/ipo/recent")
