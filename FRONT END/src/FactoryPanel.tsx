@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 
 type InterviewSession = {
   id: string;
@@ -14,7 +15,7 @@ type InterviewInsight = {
   claim: string;
   category: string;
   confidence: number;
-  source_excerpt: string;
+  source_excerpt: string | null;
 };
 
 type InsightPacket = {
@@ -46,12 +47,12 @@ type FactoryAgent = {
 const API_BASE = "http://localhost:8000";
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers = new Headers(options?.headers);
+  headers.set("Content-Type", "application/json");
+
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers ?? {}),
-    },
     ...options,
+    headers,
   });
 
   if (!response.ok) {
@@ -68,16 +69,16 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-const panel = {
+const panel: CSSProperties = {
   border: "1px solid #273448",
   background: "linear-gradient(145deg, #0a0f17, #080b10)",
   borderRadius: "14px",
   padding: "22px",
 };
 
-const field = {
+const field: CSSProperties = {
   width: "100%",
-  boxSizing: "border-box" as const,
+  boxSizing: "border-box",
   background: "#0b1119",
   border: "1px solid #2b3a50",
   borderRadius: "8px",
@@ -86,7 +87,7 @@ const field = {
   fontSize: "14px",
 };
 
-const label = {
+const label: CSSProperties = {
   display: "block",
   color: "#7f91a9",
   fontSize: "10px",
@@ -94,7 +95,7 @@ const label = {
   marginBottom: "7px",
 };
 
-const button = {
+const button: CSSProperties = {
   border: "1px solid #36536d",
   background: "linear-gradient(145deg, #11283b, #0b1824)",
   color: "#a8d8ff",
@@ -210,7 +211,9 @@ function FactoryPanel() {
       );
       setProposals(agents);
       await loadRegistry();
-      setNotice(`${agents.length} agent proposal${agents.length === 1 ? "" : "s"} created. Human approval is still required.`);
+      setNotice(
+        `${agents.length} agent proposal${agents.length === 1 ? "" : "s"} created. Human approval is still required.`
+      );
     });
 
   const setAgentStatus = (agentId: string, action: "approve" | "disable") =>
@@ -464,9 +467,11 @@ function FactoryPanel() {
                   {item.category.toUpperCase()} // {Math.round(item.confidence * 100)}%
                 </div>
                 <p style={{ color: "#e0e8ee", lineHeight: 1.45 }}>{item.claim}</p>
-                <div style={{ color: "#73818e", fontSize: "12px", fontStyle: "italic" }}>
-                  “{item.source_excerpt}”
-                </div>
+                {item.source_excerpt && (
+                  <div style={{ color: "#73818e", fontSize: "12px", fontStyle: "italic" }}>
+                    “{item.source_excerpt}”
+                  </div>
+                )}
               </div>
             ))}
           </div>
