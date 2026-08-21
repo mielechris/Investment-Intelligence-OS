@@ -10,6 +10,7 @@ from intelligence.ingestion import ingestion_service
 from intelligence.outcome_learning import outcome_learning
 from intelligence.paper_execution import paper_execution
 from intelligence.paper_portfolio import paper_portfolio
+from intelligence.postmortem_intelligence import postmortem_intelligence
 from intelligence.providers import CoinGeckoProvider, FredProvider
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.sec_company import fetch_recent_company_filings
@@ -39,6 +40,7 @@ def get_feed_status():
         "risk_reviews": risk_reviews.counts(),
         "paper_execution": paper_execution.counts(),
         "paper_portfolio": paper_portfolio.summary(),
+        "postmortems": postmortem_intelligence.counts(),
     }
 
 
@@ -147,6 +149,7 @@ def close_paper_position(position_id: str, exit_price: float, source: str = "man
         "outcome_learning": learning,
         "summary": paper_portfolio.summary(),
         "history_dispatch_queue": dispatcher.counts(),
+        "postmortem_queue": postmortem_intelligence.counts(),
         "paper_mode": True,
         "live_execution": False,
     }
@@ -154,8 +157,36 @@ def close_paper_position(position_id: str, exit_price: float, source: str = "man
 
 @router.get("/outcome-learning")
 def get_outcome_learning(limit: int = 100):
+    return {"items": outcome_learning.recent(limit=limit), "paper_mode": True, "live_execution": False}
+
+
+@router.get("/postmortems")
+def get_postmortems(limit: int = 100):
     return {
-        "items": outcome_learning.recent(limit=limit),
+        "counts": postmortem_intelligence.counts(),
+        "items": postmortem_intelligence.recent_jobs(limit=limit),
+        "paper_mode": True,
+        "live_execution": False,
+    }
+
+
+@router.post("/postmortems/process")
+def process_postmortems(limit: int = 2):
+    return {
+        "processing": postmortem_intelligence.process_pending(limit=max(1, min(limit, 10))),
+        "counts": postmortem_intelligence.counts(),
+        "paper_mode": True,
+        "live_execution": False,
+    }
+
+
+@router.get("/pattern-library")
+def get_pattern_library(q: str = "", limit: int = 100):
+    items = postmortem_intelligence.search_patterns(q, limit=max(1, min(limit, 200)))
+    return {
+        "query": q,
+        "count": len(items),
+        "items": items,
         "paper_mode": True,
         "live_execution": False,
     }
