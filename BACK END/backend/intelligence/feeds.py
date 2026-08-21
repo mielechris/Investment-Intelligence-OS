@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
+from intelligence.committee_escalation import committee_escalations
 from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.ingestion import ingestion_service
@@ -33,6 +34,7 @@ def get_feed_status():
         "specialized_providers": [sec_ipo_status()],
         "ingestion": ingestion_service.status(),
         "dispatcher": dispatcher.counts(),
+        "committee_escalations": committee_escalations.counts(),
     }
 
 
@@ -61,6 +63,25 @@ def process_dispatch_queue(limit: int = 5):
     return {
         "processing": dispatcher.process_pending(limit=max(1, min(limit, 50))),
         "counts": dispatcher.counts(),
+        "committee_counts": committee_escalations.counts(),
+        "paper_mode": True,
+    }
+
+
+@router.get("/committee-escalations")
+def get_committee_escalations(limit: int = 100):
+    return {
+        "counts": committee_escalations.counts(),
+        "items": committee_escalations.recent(limit=limit),
+        "paper_mode": True,
+    }
+
+
+@router.post("/committee-escalations/process")
+def process_committee_escalations(limit: int = 3):
+    return {
+        "processing": committee_escalations.process_pending(limit=max(1, min(limit, 20))),
+        "counts": committee_escalations.counts(),
         "paper_mode": True,
     }
 
