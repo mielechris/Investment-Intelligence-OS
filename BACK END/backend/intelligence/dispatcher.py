@@ -23,14 +23,16 @@ def _database_path() -> Path:
 
 
 def _evidence_key(item: EvidenceItem) -> str:
-    identity = "|".join([
-        item.source_name,
-        item.source_kind,
-        item.url or "",
-        item.title,
-        item.published_at.isoformat() if item.published_at else "",
-        item.summary,
-    ])
+    identity = "|".join(
+        [
+            item.source_name,
+            item.source_kind,
+            item.url or "",
+            item.title,
+            item.published_at.isoformat() if item.published_at else "",
+            item.summary,
+        ]
+    )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
@@ -131,7 +133,10 @@ class EventDispatcher:
                          status, result_payload, error, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)
                         """,
-                        (str(uuid4()), evidence_key, agent_id, reason, item.model_dump_json(), now, now),
+                        (
+                            str(uuid4()), evidence_key, agent_id, reason,
+                            item.model_dump_json(), now, now,
+                        ),
                     )
                     inserted += int(cursor.rowcount > 0)
         return inserted
@@ -140,7 +145,12 @@ class EventDispatcher:
         limit = max(1, min(limit, 1000))
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM intelligence_dispatch_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
+                """
+                SELECT * FROM intelligence_dispatch_queue
+                WHERE status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -176,7 +186,11 @@ class EventDispatcher:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
             connection.execute(
-                "UPDATE intelligence_dispatch_queue SET status = ?, result_payload = ?, error = ?, updated_at = ? WHERE dispatch_id = ?",
+                """
+                UPDATE intelligence_dispatch_queue
+                SET status = ?, result_payload = ?, error = ?, updated_at = ?
+                WHERE dispatch_id = ?
+                """,
                 (status, json.dumps(result) if result is not None else None, error, now, dispatch_id),
             )
 
@@ -264,12 +278,20 @@ Return ONLY valid JSON with:
             }
 
     def analyze_ipo_item_now(self, item: EvidenceItem) -> dict:
+        evidence_key = _evidence_key(item)
         row = {
+            "dispatch_id": f"replay-{evidence_key}",
             "agent_id": IPO_AGENT_ID,
             "route_reason": "Manual IPO replay for deep filing analysis",
             "evidence_payload": item.model_dump_json(),
         }
-        return self._run_agent(row)
+        result = self._run_agent(row)
+        escalated = committee_escalations.maybe_enqueue(dispatch_row=row, result=result)
+        return {
+            "result": result,
+            "committee_escalated": escalated,
+            "committee_counts": committee_escalations.counts(),
+        }
 
     def process_pending(self, limit: int | None = None) -> dict:
         if not _bool_env("IIOS_AUTO_RUN_AGENTS", False):
