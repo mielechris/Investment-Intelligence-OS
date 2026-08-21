@@ -1,7 +1,7 @@
 import json
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel
@@ -174,4 +174,104 @@ Return ONLY valid JSON with exactly these fields:
         "confidence": analysis["confidence"],
         "disposition": analysis["disposition"],
         "floor_comment": analysis["floor_comment"],
+
+ }
+@app.post("/agents/skeptic/run")
+def run_skeptic_agent(request: dict = Body(...)):
+    topic = str(request.get("topic", "")).strip()
+
+    if not topic:
+        return {
+            "agent": "Skeptic",
+            "status": "complete",
+            "topic": "",
+            "headline": "No thesis supplied",
+            "view": "The Red Team needs an actual thesis or market claim to challenge.",
+            "confidence": 0.0,
+            "disposition": "NO_TRADE",
+            "floor_comment": "Even the skeptic needs something to complain about.",
+        }
+
+    client = OpenAI()
+
+    prompt = f"""
+You are the Skeptic / Red Team inside the Investment Intelligence OS.
+
+Analyze this topic:
+
+{topic}
+
+Your job is to challenge the leading narrative.
+
+Important rules:
+- This is PAPER MODE only.
+- You do not have live market data or live web access yet.
+- Do not pretend information is current if fresh evidence would be required.
+- Look for false causality, confirmation bias, priced-in expectations,
+  crowding, hidden assumptions, missing evidence, and alternative explanations.
+- Do not recommend a real-money trade.
+- Disposition must be WATCH or NO_TRADE.
+- Be concise and analytical.
+- Include uncertainty.
+- Use dry professional market-floor humor in the floor_comment.
+
+Return ONLY valid JSON with exactly these fields:
+
+{{
+  "headline": "short skeptical headline",
+  "view": "2 to 4 sentence red-team analysis",
+  "confidence": 0.0,
+  "disposition": "NO_TRADE",
+  "floor_comment": "short dry one-liner"
+}}
+"""
+
+    response = client.responses.create(
+        model="gpt-5.6-luna",
+        input=prompt,
+    )
+
+    try:
+        analysis = json.loads(response.output_text)
+
+        if not isinstance(analysis, dict):
+            raise ValueError("Model output was not a JSON object")
+
+    except (json.JSONDecodeError, ValueError, TypeError):
+        analysis = {
+            "headline": "Red Team review completed",
+            "view": response.output_text,
+            "confidence": 0.5,
+            "disposition": "NO_TRADE",
+            "floor_comment": "Someone had to ask the uncomfortable question.",
+        }
+
+    try:
+        confidence = float(analysis.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    confidence = max(0.0, min(1.0, confidence))
+
+    return {
+        "agent": "Skeptic",
+        "status": "complete",
+        "topic": topic,
+        "headline": analysis.get(
+            "headline",
+            "Red Team review completed"
+        ),
+        "view": analysis.get(
+            "view",
+            "The Red Team completed its review."
+        ),
+        "confidence": confidence,
+        "disposition": analysis.get(
+            "disposition",
+            "NO_TRADE"
+        ),
+        "floor_comment": analysis.get(
+            "floor_comment",
+            "Someone had to ask the uncomfortable question."
+        ),
     }
