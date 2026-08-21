@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
+from intelligence.dispatcher import dispatcher
 from intelligence.evidence_store import evidence_store
 from intelligence.ingestion import ingestion_service
 from intelligence.providers import CoinGeckoProvider, FredProvider
@@ -31,6 +32,7 @@ def get_feed_status():
         "providers": [_status_dict(provider) for provider in providers],
         "specialized_providers": [sec_ipo_status()],
         "ingestion": ingestion_service.status(),
+        "dispatcher": dispatcher.counts(),
     }
 
 
@@ -41,6 +43,24 @@ def get_evidence_inbox(limit: int = 100, source_kind: str | None = None):
         "count": len(items),
         "total_persisted": evidence_store.count(),
         "items": items,
+        "paper_mode": True,
+    }
+
+
+@router.get("/dispatch")
+def get_dispatch_queue(limit: int = 100):
+    return {
+        "counts": dispatcher.counts(),
+        "items": dispatcher.recent(limit=limit),
+        "paper_mode": True,
+    }
+
+
+@router.post("/dispatch/process")
+def process_dispatch_queue(limit: int = 5):
+    return {
+        "processing": dispatcher.process_pending(limit=max(1, min(limit, 50))),
+        "counts": dispatcher.counts(),
         "paper_mode": True,
     }
 
