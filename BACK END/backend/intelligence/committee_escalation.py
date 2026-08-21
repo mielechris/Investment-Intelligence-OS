@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from openai import OpenAI
 
+from intelligence.risk_review import risk_reviews
+
 
 def _database_path() -> Path:
     configured = os.getenv("IIOS_DB_PATH")
@@ -54,10 +56,7 @@ class CommitteeEscalationStore:
                 """
             )
             connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_committee_escalations_status
-                ON committee_escalations(status, created_at ASC)
-                """
+                "CREATE INDEX IF NOT EXISTS idx_committee_escalations_status ON committee_escalations(status, created_at ASC)"
             )
 
     def maybe_enqueue(self, *, dispatch_row: dict, result: dict) -> bool:
@@ -66,12 +65,10 @@ class CommitteeEscalationStore:
             confidence = float(result.get("confidence", 0.0))
         except (TypeError, ValueError):
             confidence = 0.0
-
         threshold = float(os.getenv("IIOS_COMMITTEE_CONFIDENCE_THRESHOLD", "0.70"))
         requested = bool(result.get("committee_escalation", False))
         if materiality != "HIGH" or confidence < threshold or not requested:
             return False
-
         packet = {
             "dispatch_id": dispatch_row["dispatch_id"],
             "agent_id": dispatch_row["agent_id"],
@@ -86,90 +83,50 @@ class CommitteeEscalationStore:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO committee_escalations
-                (escalation_id, dispatch_id, agent_id, materiality, confidence,
-                 packet_payload, status, committee_result_payload, error, created_at, updated_at)
+                (escalation_id, dispatch_id, agent_id, materiality, confidence, packet_payload, status,
+                 committee_result_payload, error, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)
                 """,
-                (
-                    str(uuid4()),
-                    dispatch_row["dispatch_id"],
-                    dispatch_row["agent_id"],
-                    materiality,
-                    confidence,
-                    json.dumps(packet),
-                    now,
-                    now,
-                ),
+                (str(uuid4()), dispatch_row["dispatch_id"], dispatch_row["agent_id"], materiality,
+                 confidence, json.dumps(packet), now, now),
             )
         return cursor.rowcount > 0
 
     def pending(self, limit: int = 50) -> list[dict]:
-        limit = max(1, min(limit, 500))
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM committee_escalations
-                WHERE status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
-                (limit,),
+                "SELECT * FROM committee_escalations WHERE status='pending' ORDER BY created_at ASC LIMIT ?",
+                (max(1, min(limit, 500)),),
             ).fetchall()
         return [dict(row) for row in rows]
 
     def recent(self, limit: int = 100) -> list[dict]:
-        limit = max(1, min(limit, 500))
         with self._connect() as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM committee_escalations
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
+                "SELECT * FROM committee_escalations ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(limit, 500)),),
             ).fetchall()
-
-        output: list[dict] = []
+        output = []
         for row in rows:
             item = dict(row)
             item["packet"] = json.loads(item.pop("packet_payload"))
-            if item.get("committee_result_payload"):
-                item["committee_result"] = json.loads(item.pop("committee_result_payload"))
-            else:
-                item.pop("committee_result_payload", None)
-                item["committee_result"] = None
+            raw = item.pop("committee_result_payload", None)
+            item["committee_result"] = json.loads(raw) if raw else None
             output.append(item)
         return output
 
     def counts(self) -> dict:
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT status, COUNT(*) AS count FROM committee_escalations GROUP BY status"
-            ).fetchall()
+            rows = connection.execute("SELECT status, COUNT(*) AS count FROM committee_escalations GROUP BY status").fetchall()
         counts = {row["status"]: int(row["count"]) for row in rows}
-        return {
-            "pending": counts.get("pending", 0),
-            "running": counts.get("running", 0),
-            "complete": counts.get("complete", 0),
-            "error": counts.get("error", 0),
-        }
+        return {key: counts.get(key, 0) for key in ("pending", "running", "complete", "error")}
 
     def _mark(self, escalation_id: str, status: str, *, result: dict | None = None, error: str | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
             connection.execute(
-                """
-                UPDATE committee_escalations
-                SET status = ?, committee_result_payload = ?, error = ?, updated_at = ?
-                WHERE escalation_id = ?
-                """,
-                (
-                    status,
-                    json.dumps(result) if result is not None else None,
-                    error,
-                    now,
-                    escalation_id,
-                ),
+                "UPDATE committee_escalations SET status=?, committee_result_payload=?, error=?, updated_at=? WHERE escalation_id=?",
+                (status, json.dumps(result) if result is not None else None, error, now, escalation_id),
             )
 
     def _run_committee(self, row: dict) -> dict:
@@ -212,31 +169,27 @@ Return ONLY valid JSON:
 
     def process_pending(self, limit: int | None = None) -> dict:
         if not _bool_env("IIOS_AUTO_RUN_COMMITTEE", False):
-            return {
-                "enabled": False,
-                "processed": 0,
-                "message": "Set IIOS_AUTO_RUN_COMMITTEE=true to enable unattended committee model calls.",
-            }
-
+            return {"enabled": False, "processed": 0, "message": "Set IIOS_AUTO_RUN_COMMITTEE=true to enable unattended committee model calls."}
         if limit is None:
             try:
                 limit = max(1, min(int(os.getenv("IIOS_AUTO_RUN_COMMITTEE_MAX_PER_CYCLE", "3")), 20))
             except ValueError:
                 limit = 3
-
         processed = 0
         errors = 0
+        risk_enqueued = 0
         for row in self.pending(limit=limit):
             escalation_id = row["escalation_id"]
             self._mark(escalation_id, "running")
             try:
                 result = self._run_committee(row)
                 self._mark(escalation_id, "complete", result=result)
+                risk_enqueued += int(risk_reviews.maybe_enqueue(escalation_row=row, committee_result=result))
                 processed += 1
             except Exception as exc:
                 self._mark(escalation_id, "error", error=str(exc))
                 errors += 1
-        return {"enabled": True, "processed": processed, "errors": errors}
+        return {"enabled": True, "processed": processed, "errors": errors, "risk_reviews_enqueued": risk_enqueued}
 
 
 committee_escalations = CommitteeEscalationStore()
