@@ -95,7 +95,7 @@ class FactoryChainTests(unittest.TestCase):
 
         event_types = [event["event_type"] for event in audit["events"]]
         self.assertIn("CASE_CREATED", event_types)
-        self.assertIn("EIGHT_SPECIALISTS_COMPLETE", event_types)
+        self.assertEqual(event_types.count("AGENT_COMPLETE"), 8)
         self.assertIn("COMMITTEE_COMPLETE", event_types)
         self.assertIn("RISK_COMPLETE", event_types)
         self.assertIn("PAPER_EXECUTION_CHECKED", event_types)
