@@ -9,9 +9,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel
 
+from ledger import (
+    consume_authorization,
+    get_audit,
+    get_object,
+    latest_object,
+    list_objects,
+    record_event,
+    record_object,
+)
+
 load_dotenv()
 
-app = FastAPI(title="Investment Intelligence OS", version="0.2.0")
+app = FastAPI(title="Investment Intelligence OS", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,84 +34,53 @@ app.add_middleware(
 PAPER_MODE = True
 MIN_COMMITTEE_CONFIDENCE = 0.65
 
-# Prototype persistence. Move these stores to a database before production/live capital.
-CASES: dict[str, dict[str, Any]] = {}
-COMMITTEE_DECISIONS: dict[str, dict[str, Any]] = {}
-RISK_AUTHORIZATIONS: dict[str, dict[str, Any]] = {}
-EXECUTIONS: dict[str, dict[str, Any]] = {}
-
-
 AGENT_CONFIGS = {
     "policy": {
         "name": "Policy Analyst",
         "room": "Policy Floor",
-        "focus": (
-            "government policy, executive actions, legislation, regulation, tariffs, "
-            "industrial policy, fiscal transmission, and policy-sensitive sectors"
-        ),
+        "focus": "government policy, executive actions, legislation, regulation, tariffs, industrial policy, fiscal transmission, and policy-sensitive sectors",
         "stance": "Analyze policy transmission without assuming causality that is not evidenced.",
     },
     "macro": {
         "name": "Macro & Rates Analyst",
         "room": "Macro Desk",
-        "focus": (
-            "rates, inflation, growth, labor, liquidity, Federal Reserve policy, the dollar, "
-            "credit conditions, and broad market transmission"
-        ),
+        "focus": "rates, inflation, growth, labor, liquidity, Federal Reserve policy, the dollar, credit conditions, and broad market transmission",
         "stance": "Separate cyclical, liquidity, and policy effects and identify regime uncertainty.",
     },
     "fundamentals": {
         "name": "Fundamentals Analyst",
         "room": "Fundamentals Lab",
-        "focus": (
-            "revenue, earnings, margins, balance sheet quality, valuation, capital intensity, "
-            "competitive position, and business-model durability"
-        ),
+        "focus": "revenue, earnings, margins, balance sheet quality, valuation, capital intensity, competitive position, and business-model durability",
         "stance": "Distinguish business quality from security price and valuation attractiveness.",
     },
     "market_structure": {
         "name": "Market Structure Analyst",
         "room": "Tape & Positioning",
-        "focus": (
-            "price action, positioning, liquidity, volatility, crowding, flows, catalysts, "
-            "technical structure, and what may already be priced in"
-        ),
+        "focus": "price action, positioning, liquidity, volatility, crowding, flows, catalysts, technical structure, and what may already be priced in",
         "stance": "Treat narrative and price behavior as separate evidence streams.",
     },
     "commodities": {
         "name": "Commodities & Supply Chain Analyst",
         "room": "Physical Markets",
-        "focus": (
-            "energy, agriculture, metals, freight, inventories, production, supply disruptions, "
-            "seasonality, input costs, and supply-chain transmission"
-        ),
+        "focus": "energy, agriculture, metals, freight, inventories, production, supply disruptions, seasonality, input costs, and supply-chain transmission",
         "stance": "Focus on physical constraints, timing, seasonality, and second-order effects.",
     },
     "geo_weather": {
         "name": "Geopolitics & Weather Analyst",
         "room": "Global Events Room",
-        "focus": (
-            "war, sanctions, elections, geopolitical chokepoints, extreme weather, drought, "
-            "hurricanes, crop conditions, and event-driven supply or demand shocks"
-        ),
+        "focus": "war, sanctions, elections, geopolitical chokepoints, extreme weather, drought, hurricanes, crop conditions, and event-driven supply or demand shocks",
         "stance": "Separate confirmed events from scenario risk and avoid sensational weighting.",
     },
     "skeptic": {
         "name": "Skeptic / Red Team",
         "room": "Red Team",
-        "focus": (
-            "false causality, confirmation bias, hidden assumptions, missing evidence, crowding, "
-            "priced-in expectations, base-rate neglect, and alternative explanations"
-        ),
+        "focus": "false causality, confirmation bias, hidden assumptions, missing evidence, crowding, priced-in expectations, base-rate neglect, and alternative explanations",
         "stance": "Attack the strongest version of the thesis and identify what would falsify it.",
     },
     "portfolio": {
         "name": "Portfolio Context Analyst",
         "room": "Portfolio Control",
-        "focus": (
-            "portfolio concentration, correlation, factor exposure, scenario overlap, opportunity cost, "
-            "drawdown sensitivity, and whether a good idea is a good portfolio addition"
-        ),
+        "focus": "portfolio concentration, correlation, factor exposure, scenario overlap, opportunity cost, drawdown sensitivity, and whether a good idea is a good portfolio addition",
         "stance": "Judge the idea in portfolio context rather than as an isolated prediction.",
     },
 }
@@ -146,16 +125,14 @@ def new_case(topic: str, evidence: list[dict[str, Any]] | None = None) -> dict[s
         "created_at": utc_now(),
         "paper_mode": PAPER_MODE,
     }
-    CASES[case_id] = case
+    record_object(case_id, "case", case_id, case, topic=case["topic"])
+    record_event(case_id, "CASE_CREATED", entity_id=case_id, payload={"topic": case["topic"], "evidence_count": len(case["evidence"])})
     return case
 
 
 def evidence_prompt(evidence: list[dict[str, Any]]) -> str:
     if not evidence:
-        return (
-            "No structured evidence packet was supplied. Treat all claims requiring current data as "
-            "unverified and explicitly state what fresh evidence is needed."
-        )
+        return "No structured evidence packet was supplied. Treat all claims requiring current data as unverified and explicitly state what fresh evidence is needed."
     return json.dumps(evidence, indent=2, default=str)
 
 
@@ -163,7 +140,6 @@ def run_specialist(agent_key: str, topic: str, evidence: list[dict[str, Any]] | 
     config = AGENT_CONFIGS.get(agent_key)
     if not config:
         raise HTTPException(status_code=404, detail="Unknown agent")
-
     topic = topic.strip()
     if not topic:
         return {
@@ -184,48 +160,26 @@ def run_specialist(agent_key: str, topic: str, evidence: list[dict[str, Any]] | 
     client = OpenAI()
     prompt = f"""
 You are the {config['name']} inside the Investment Intelligence OS.
-
-TOPIC:
-{topic}
-
-YOUR DOMAIN:
-{config['focus']}
-
-YOUR OPERATING STANCE:
-{config['stance']}
-
-EVIDENCE PACKET:
-{evidence_prompt(evidence or [])}
-
+TOPIC: {topic}
+YOUR DOMAIN: {config['focus']}
+YOUR OPERATING STANCE: {config['stance']}
+EVIDENCE PACKET: {evidence_prompt(evidence or [])}
 Rules:
 - PAPER MODE only. Never recommend or execute a real-money trade.
 - Do not pretend information is current when fresh data is required.
 - Separate evidence, inference, and unknowns.
 - Identify missing evidence that materially affects the conclusion.
-- State at least one falsifier: what observation would weaken or overturn your view.
+- State at least one falsifier.
 - Disposition must be WATCH or NO_TRADE.
-- Confidence must be 0.0 to 1.0 and should reflect evidence quality, not writing confidence.
-- Be concise and analytical.
-- Use dry professional floor humor in floor_comment.
-
+- Confidence must be 0.0 to 1.0 and reflect evidence quality.
 Return ONLY valid JSON with exactly these fields:
-{{
-  "headline": "short headline",
-  "view": "2 to 4 sentence domain analysis",
-  "confidence": 0.0,
-  "disposition": "WATCH",
-  "missing_evidence": ["specific missing item"],
-  "falsifier": "what would weaken or overturn this view",
-  "floor_comment": "short dry one-liner"
-}}
+{{"headline":"short headline","view":"2 to 4 sentence domain analysis","confidence":0.0,"disposition":"WATCH","missing_evidence":["specific missing item"],"falsifier":"what would weaken or overturn this view","floor_comment":"short dry one-liner"}}
 """
-
     response = client.responses.create(model="gpt-5.6-luna", input=prompt)
-
     try:
         analysis = json.loads(response.output_text)
         if not isinstance(analysis, dict):
-            raise ValueError("Agent output was not a JSON object")
+            raise ValueError
     except (json.JSONDecodeError, ValueError, TypeError):
         analysis = {
             "headline": f"{config['name']} review completed",
@@ -236,7 +190,6 @@ Return ONLY valid JSON with exactly these fields:
             "falsifier": "Unable to structure falsifier from model output.",
             "floor_comment": "The analysis arrived. The paperwork did not.",
         }
-
     return {
         "agent_key": agent_key,
         "agent": config["name"],
@@ -255,27 +208,12 @@ Return ONLY valid JSON with exactly these fields:
 
 @app.get("/")
 def root():
-    return {
-        "message": "IIOS backend online",
-        "version": "0.2.0",
-        "paper_mode": PAPER_MODE,
-        "governed_chain": True,
-    }
+    return {"message": "IIOS backend online", "version": "0.3.0", "paper_mode": PAPER_MODE, "governed_chain": True, "persistent_ledger": True}
 
 
 @app.get("/agents")
 def get_agents():
-    return {
-        "agents": [
-            {
-                "key": key,
-                "name": config["name"],
-                "room": config["room"],
-                "status": "idle",
-            }
-            for key, config in AGENT_CONFIGS.items()
-        ]
-    }
+    return {"agents": [{"key": key, "name": config["name"], "room": config["room"], "status": "idle"} for key, config in AGENT_CONFIGS.items()]}
 
 
 @app.post("/agents/{agent_key}/run")
@@ -283,7 +221,6 @@ def run_agent(agent_key: str, request: TopicRequest):
     return run_specialist(agent_key, request.topic, request.evidence)
 
 
-# Backward-compatible specialist endpoints used by the current frontend.
 @app.post("/agents/policy/run")
 def run_policy_agent(request: PolicyRequest):
     return run_specialist("policy", request.topic)
@@ -300,72 +237,32 @@ def run_skeptic_agent(request: dict = Body(...)):
 
 
 def build_committee(case: dict[str, Any]) -> dict[str, Any]:
-    specialist_results = {
-        key: run_specialist(key, case["topic"], case["evidence"])
-        for key in AGENT_CONFIGS
-    }
+    specialist_results = {key: run_specialist(key, case["topic"], case["evidence"]) for key in AGENT_CONFIGS}
+    for key, result in specialist_results.items():
+        result_id = f"agent_{uuid4().hex}"
+        persistent = {**result, "agent_result_id": result_id, "case_id": case["case_id"], "created_at": utc_now()}
+        specialist_results[key] = persistent
+        record_object(result_id, "agent_result", case["case_id"], persistent, parent_id=case["case_id"], topic=case["topic"])
+        record_event(case["case_id"], "AGENT_COMPLETE", entity_id=result_id, payload={"agent_key": key, "confidence": persistent["confidence"], "disposition": persistent["disposition"]})
 
     client = OpenAI()
-    committee_packet = {
-        "case_id": case["case_id"],
-        "topic": case["topic"],
-        "evidence_count": len(case["evidence"]),
-        "specialists": specialist_results,
-    }
-
+    committee_packet = {"case_id": case["case_id"], "topic": case["topic"], "evidence_count": len(case["evidence"]), "specialists": specialist_results}
     prompt = f"""
 You are the Investment Committee Chair inside the Investment Intelligence OS.
-
 Eight specialist agents reviewed one case.
-
 CASE PACKET:
 {json.dumps(committee_packet, indent=2, default=str)}
-
-Your job:
-- Synthesize; do not merely average.
-- Preserve meaningful disagreement and identify the strongest dissent.
-- Distinguish evidence from inference.
-- Penalize confidence when evidence is stale, absent, contradictory, or unverified.
-- Identify the strongest bullish case and strongest bearish case even if the final disposition is NO_TRADE.
-- Identify the key evidence required before the case could advance.
-- PAPER MODE only; never recommend a real-money trade.
-- Final disposition must be WATCH or NO_TRADE.
-- Confidence must be 0.0 to 1.0.
-
+Synthesize rather than average. Preserve dissent. Distinguish evidence from inference. Penalize stale, absent, contradictory, or unverified evidence. Identify strongest bull and bear cases and required evidence. PAPER MODE only. Final disposition WATCH or NO_TRADE. Confidence 0.0 to 1.0.
 Return ONLY valid JSON with exactly these fields:
-{{
-  "headline": "short committee headline",
-  "summary": "3 to 5 sentence committee conclusion",
-  "agreement": "what the specialists broadly agree on",
-  "dissent": "strongest disagreement or objection",
-  "bull_case": "strongest supported bullish case",
-  "bear_case": "strongest supported bearish case",
-  "required_evidence": ["next evidence item"],
-  "confidence": 0.0,
-  "disposition": "WATCH",
-  "floor_comment": "short dry committee one-liner"
-}}
+{{"headline":"short committee headline","summary":"3 to 5 sentence committee conclusion","agreement":"what specialists agree on","dissent":"strongest objection","bull_case":"strongest supported bullish case","bear_case":"strongest supported bearish case","required_evidence":["next evidence item"],"confidence":0.0,"disposition":"WATCH","floor_comment":"short dry committee one-liner"}}
 """
-
     response = client.responses.create(model="gpt-5.6-luna", input=prompt)
-
     try:
         analysis = json.loads(response.output_text)
         if not isinstance(analysis, dict):
-            raise ValueError("Committee output was not a JSON object")
+            raise ValueError
     except (json.JSONDecodeError, ValueError, TypeError):
-        analysis = {
-            "headline": "Committee review completed",
-            "summary": response.output_text,
-            "agreement": "Specialist reviews completed.",
-            "dissent": "Dissent could not be structured.",
-            "bull_case": "Not structured.",
-            "bear_case": "Not structured.",
-            "required_evidence": ["structured committee output"],
-            "confidence": 0.25,
-            "disposition": "NO_TRADE",
-            "floor_comment": "Eight opinions entered. Governance kept the door locked.",
-        }
+        analysis = {"headline":"Committee review completed","summary":response.output_text,"agreement":"Specialist reviews completed.","dissent":"Dissent could not be structured.","bull_case":"Not structured.","bear_case":"Not structured.","required_evidence":["structured committee output"],"confidence":0.25,"disposition":"NO_TRADE","floor_comment":"Eight opinions entered. Governance kept the door locked."}
 
     decision_id = f"decision_{uuid4().hex}"
     decision = {
@@ -387,7 +284,8 @@ Return ONLY valid JSON with exactly these fields:
         "created_at": utc_now(),
         "paper_mode": PAPER_MODE,
     }
-    COMMITTEE_DECISIONS[decision_id] = decision
+    record_object(decision_id, "committee_decision", case["case_id"], decision, parent_id=case["case_id"], topic=case["topic"])
+    record_event(case["case_id"], "COMMITTEE_COMPLETE", entity_id=decision_id, payload={"confidence": decision["confidence"], "disposition": decision["disposition"]})
     return decision
 
 
@@ -395,13 +293,11 @@ Return ONLY valid JSON with exactly these fields:
 def run_committee(request: dict = Body(...)):
     topic = str(request.get("topic", "")).strip()
     evidence = request.get("evidence") if isinstance(request.get("evidence"), list) else []
-    case = new_case(topic, evidence)
-    return build_committee(case)
+    return build_committee(new_case(topic, evidence))
 
 
 def evaluate_decision(decision: dict[str, Any]) -> dict[str, Any]:
     triggered_rules: list[str] = []
-
     if decision["disposition"] == "NO_TRADE":
         triggered_rules.append("COMMITTEE_NO_TRADE")
     if decision["confidence"] < MIN_COMMITTEE_CONFIDENCE:
@@ -410,12 +306,7 @@ def evaluate_decision(decision: dict[str, Any]) -> dict[str, Any]:
         triggered_rules.append("MISSING_INVESTMENT_TOPIC")
     if decision.get("required_evidence"):
         triggered_rules.append("OPEN_EVIDENCE_REQUIREMENTS")
-
-    # Current v0.2 policy intentionally cannot authorize capital.
-    # Later paper-trading phases can introduce deterministic sizing rules here.
     decision_value = "VETOED" if triggered_rules else "WATCH_ONLY"
-    allowed_notional = 0.0
-
     authorization_id = f"risk_{uuid4().hex}"
     authorization = {
         "risk_authorization_id": authorization_id,
@@ -425,171 +316,100 @@ def evaluate_decision(decision: dict[str, Any]) -> dict[str, Any]:
         "status": "complete",
         "topic": decision["topic"],
         "decision": decision_value,
-        "allowed_notional": allowed_notional,
+        "allowed_notional": 0.0,
         "triggered_rules": triggered_rules,
         "confidence_received": decision["confidence"],
         "committee_disposition": decision["disposition"],
-        "floor_comment": (
-            "Risk saw the proposal and quietly moved the keys."
-            if decision_value == "VETOED"
-            else "Interesting. Still not getting a company credit card."
-        ),
+        "floor_comment": "Risk saw the proposal and quietly moved the keys." if decision_value == "VETOED" else "Interesting. Still not getting a company credit card.",
         "paper_mode": PAPER_MODE,
         "created_at": utc_now(),
-        "consumed": False,
     }
-    RISK_AUTHORIZATIONS[authorization_id] = authorization
+    record_object(authorization_id, "risk_authorization", decision["case_id"], authorization, parent_id=decision["decision_id"], topic=decision["topic"])
+    record_event(decision["case_id"], "RISK_COMPLETE", entity_id=authorization_id, payload={"decision": decision_value, "triggered_rules": triggered_rules})
     return authorization
 
 
 @app.post("/risk/evaluate")
 def evaluate_risk(request: dict = Body(...)):
     decision_id = str(request.get("decision_id", "")).strip()
-
     if decision_id:
-        decision = COMMITTEE_DECISIONS.get(decision_id)
-        if not decision:
+        decision = get_object(decision_id)
+        if not decision or not str(decision_id).startswith("decision_"):
             raise HTTPException(status_code=404, detail="Unknown committee decision_id")
         return evaluate_decision(decision)
 
-    # Legacy compatibility for the existing UI: only accept fields that exactly match
-    # the latest server-created committee decision for this topic.
     topic = str(request.get("topic", "")).strip()
-    candidates = [d for d in COMMITTEE_DECISIONS.values() if d["topic"] == topic]
-    if not candidates:
-        raise HTTPException(
-            status_code=409,
-            detail="No server-created committee decision exists for this topic",
-        )
-    decision = candidates[-1]
-
-    supplied_disposition = normalize_disposition(request.get("disposition"))
-    supplied_confidence = clamp_confidence(request.get("confidence"), 0.0)
-    if (
-        supplied_disposition != decision["disposition"]
-        or abs(supplied_confidence - decision["confidence"]) > 1e-9
-    ):
+    decision = latest_object("committee_decision", topic=topic)
+    if not decision:
+        raise HTTPException(status_code=409, detail="No server-created committee decision exists for this topic")
+    if normalize_disposition(request.get("disposition")) != decision["disposition"] or abs(clamp_confidence(request.get("confidence"), 0.0) - decision["confidence"]) > 1e-9:
         raise HTTPException(status_code=409, detail="Committee handoff mismatch")
-
     return evaluate_decision(decision)
 
 
 @app.post("/paper-execution/submit")
 def submit_paper_order(request: dict = Body(...)):
     authorization_id = str(request.get("risk_authorization_id", "")).strip()
-
     if authorization_id:
-        authorization = RISK_AUTHORIZATIONS.get(authorization_id)
+        authorization = get_object(authorization_id)
     else:
-        # Legacy compatibility for the current UI. We never trust caller-supplied approval;
-        # we resolve the latest server-issued authorization for the topic instead.
         topic = str(request.get("topic", "")).strip()
-        matches = [a for a in RISK_AUTHORIZATIONS.values() if a["topic"] == topic]
-        authorization = matches[-1] if matches else None
-
+        authorization = latest_object("risk_authorization", topic=topic)
     if not authorization:
         raise HTTPException(status_code=409, detail="Valid risk authorization required")
+    authorization_id = authorization["risk_authorization_id"]
+    if not consume_authorization(authorization_id):
+        raise HTTPException(status_code=409, detail="Risk authorization already consumed or invalid")
 
-    if authorization["consumed"]:
-        raise HTTPException(status_code=409, detail="Risk authorization already consumed")
-
-    authorization["consumed"] = True
-
-    if authorization["decision"] != "APPROVED":
-        return {
-            "room": "Paper Execution",
-            "status": "blocked",
-            "case_id": authorization["case_id"],
-            "decision_id": authorization["decision_id"],
-            "risk_authorization_id": authorization["risk_authorization_id"],
-            "topic": authorization["topic"],
-            "execution": "NOT_SUBMITTED",
-            "reason": "RISK_NOT_APPROVED",
-            "risk_decision": authorization["decision"],
-            "allowed_notional": 0,
-            "paper_mode": PAPER_MODE,
-            "floor_comment": "Execution checked the authorization. Risk did not approve capital.",
-        }
-
-    if authorization["allowed_notional"] <= 0:
-        return {
-            "room": "Paper Execution",
-            "status": "blocked",
-            "case_id": authorization["case_id"],
-            "decision_id": authorization["decision_id"],
-            "risk_authorization_id": authorization["risk_authorization_id"],
-            "topic": authorization["topic"],
-            "execution": "NOT_SUBMITTED",
-            "reason": "NO_NOTIONAL_AUTHORIZED",
-            "risk_decision": authorization["decision"],
-            "allowed_notional": 0,
-            "paper_mode": PAPER_MODE,
-            "floor_comment": "Approval without capital is mostly decorative.",
-        }
-
-    execution_id = f"paper_{uuid4().hex}"
-    execution = {
-        "execution_id": execution_id,
+    base = {
+        "execution_id": f"paper_{uuid4().hex}",
         "room": "Paper Execution",
-        "status": "complete",
         "case_id": authorization["case_id"],
         "decision_id": authorization["decision_id"],
-        "risk_authorization_id": authorization["risk_authorization_id"],
+        "risk_authorization_id": authorization_id,
         "topic": authorization["topic"],
-        "execution": "PAPER_ORDER_CREATED",
         "risk_decision": authorization["decision"],
-        "allowed_notional": authorization["allowed_notional"],
         "paper_mode": PAPER_MODE,
         "live_execution": False,
         "created_at": utc_now(),
-        "floor_comment": "Paper order accepted. No actual money was harmed in the making of this trade.",
     }
-    EXECUTIONS[execution_id] = execution
+    if authorization["decision"] != "APPROVED":
+        execution = {**base, "status":"blocked", "execution":"NOT_SUBMITTED", "reason":"RISK_NOT_APPROVED", "allowed_notional":0, "floor_comment":"Execution checked the authorization. Risk did not approve capital."}
+    elif authorization["allowed_notional"] <= 0:
+        execution = {**base, "status":"blocked", "execution":"NOT_SUBMITTED", "reason":"NO_NOTIONAL_AUTHORIZED", "allowed_notional":0, "floor_comment":"Approval without capital is mostly decorative."}
+    else:
+        execution = {**base, "status":"complete", "execution":"PAPER_ORDER_CREATED", "allowed_notional":authorization["allowed_notional"], "floor_comment":"Paper order accepted. No actual money was harmed in the making of this trade."}
+    record_object(execution["execution_id"], "execution", authorization["case_id"], execution, parent_id=authorization_id, topic=authorization["topic"])
+    record_event(authorization["case_id"], "PAPER_EXECUTION_CHECKED", entity_id=execution["execution_id"], payload={"status": execution["status"], "execution": execution["execution"], "reason": execution.get("reason")})
     return execution
 
 
 @app.post("/factory/run")
 def run_factory(request: TopicRequest):
-    """Run one governed case end-to-end through committee, risk, and paper execution."""
     case = new_case(request.topic, request.evidence)
     committee = build_committee(case)
     risk = evaluate_decision(committee)
     execution = submit_paper_order({"risk_authorization_id": risk["risk_authorization_id"]})
-
     return {
         "case": case,
         "committee": committee,
         "risk": risk,
         "execution": execution,
-        "chain": [
-            "CASE_CREATED",
-            "EIGHT_SPECIALISTS_COMPLETE",
-            "COMMITTEE_COMPLETE",
-            "RISK_COMPLETE",
-            "PAPER_EXECUTION_CHECKED",
-        ],
+        "chain": ["CASE_CREATED", "EIGHT_SPECIALISTS_COMPLETE", "COMMITTEE_COMPLETE", "RISK_COMPLETE", "PAPER_EXECUTION_CHECKED"],
     }
 
 
 @app.get("/audit/{case_id}")
 def get_case_audit(case_id: str):
-    case = CASES.get(case_id)
+    case = get_object(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Unknown case_id")
-
-    decisions = [d for d in COMMITTEE_DECISIONS.values() if d["case_id"] == case_id]
-    decision_ids = {d["decision_id"] for d in decisions}
-    authorizations = [
-        a for a in RISK_AUTHORIZATIONS.values() if a["decision_id"] in decision_ids
-    ]
-    auth_ids = {a["risk_authorization_id"] for a in authorizations}
-    executions = [
-        e for e in EXECUTIONS.values() if e["risk_authorization_id"] in auth_ids
-    ]
-
+    audit = get_audit(case_id)
     return {
         "case": case,
-        "committee_decisions": decisions,
-        "risk_authorizations": authorizations,
-        "executions": executions,
+        "agent_results": list_objects(case_id, "agent_result"),
+        "committee_decisions": list_objects(case_id, "committee_decision"),
+        "risk_authorizations": list_objects(case_id, "risk_authorization"),
+        "executions": list_objects(case_id, "execution"),
+        "events": audit["events"],
     }
