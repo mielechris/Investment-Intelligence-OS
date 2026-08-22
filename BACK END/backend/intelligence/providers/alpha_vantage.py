@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -24,7 +26,7 @@ class AlphaVantageProvider(EvidenceProvider):
             configured=configured,
             live=configured,
             detail=(
-                "Configured for equity daily OHLCV history and company overview data."
+                "Configured for equity history, company overview, earnings, calendar, and macro indicators."
                 if configured
                 else "Missing ALPHAVANTAGE_API_KEY."
             ),
@@ -53,6 +55,29 @@ class AlphaVantageProvider(EvidenceProvider):
         if not isinstance(payload, dict) or not payload:
             raise RuntimeError("Alpha Vantage returned no data")
         return payload
+
+    def _request_csv(self, params: dict) -> list[dict]:
+        if not self.api_key:
+            raise RuntimeError("ALPHAVANTAGE_API_KEY is not configured")
+        response = httpx.get(
+            self.base_url,
+            params={**params, "apikey": self.api_key},
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        text = response.text.strip()
+        lower = text.lower()
+        if any(marker in lower for marker in (
+            "thank you for using alpha vantage",
+            "rate limit",
+            "requests per day",
+            "request per second",
+        )):
+            raise RuntimeError(text)
+        rows = list(csv.DictReader(io.StringIO(text)))
+        if not rows:
+            raise RuntimeError("Alpha Vantage returned no CSV rows")
+        return rows
 
     def fetch_latest_daily(self, *, symbol: str) -> EvidenceItem:
         payload = self.fetch_daily_history(symbol=symbol, outputsize="compact")
@@ -91,4 +116,27 @@ class AlphaVantageProvider(EvidenceProvider):
         })
         if not payload.get("Symbol"):
             raise RuntimeError(f"No company overview returned for {symbol}")
+        return payload
+
+    def fetch_earnings(self, *, symbol: str) -> dict:
+        payload = self._request({
+            "function": "EARNINGS",
+            "symbol": symbol.upper(),
+        })
+        if not payload.get("quarterlyEarnings") and not payload.get("annualEarnings"):
+            raise RuntimeError(f"No earnings history returned for {symbol}")
+        return payload
+
+    def fetch_earnings_calendar(self, *, symbol: str, horizon: str = "3month") -> list[dict]:
+        return self._request_csv({
+            "function": "EARNINGS_CALENDAR",
+            "symbol": symbol.upper(),
+            "horizon": horizon,
+        })
+
+    def fetch_economic_indicator(self, *, function: str, **params: str) -> dict:
+        payload = self._request({"function": function, **params})
+        data = payload.get("data")
+        if not isinstance(data, list) or not data:
+            raise RuntimeError(f"No economic-indicator data returned for {function}")
         return payload
