@@ -3,10 +3,13 @@ import { FormEvent, useState } from 'react'
 const API_BASE = 'http://localhost:8000'
 
 type Stance = 'SUPPORT' | 'NEUTRAL' | 'OPPOSE'
+type Applicability = 'APPLICABLE' | 'NOT_APPLICABLE'
 
 type AgentReview = {
   agent_id: string
   agent_name: string
+  applicability?: Applicability
+  applicability_reason?: string
   headline?: string
   stance: Stance
   confidence: number
@@ -23,8 +26,22 @@ type VoteSummary = {
   support: number
   neutral: number
   oppose: number
+  abstain?: number
   average_confidence: number
   agent_count: number
+  applicable_count?: number
+  support_ratio?: number
+  required_support?: number
+  red_team_block?: boolean
+  abstaining_agents?: string[]
+}
+
+type CouncilGate = {
+  passed?: boolean
+  reasons?: string[]
+  minimum_applicable_specialists?: number
+  support_requirement?: number
+  red_team_high_confidence_opposition_blocks?: boolean
 }
 
 type CouncilChair = {
@@ -58,10 +75,12 @@ type Diagnostics = {
   alpha_vantage_history?: string
   alpha_vantage_overview?: string
   alpha_vantage_earnings?: string
+  alpha_vantage_earnings_estimates?: string
   alpha_vantage_earnings_calendar?: string
   alpha_vantage_macro?: Record<string, string>
   sec_company?: string
   sec_filings?: number
+  sec_company_facts?: string
   fred?: Record<string, string>
   archive_matches?: number
 }
@@ -73,6 +92,7 @@ type CouncilResult = {
   live_execution?: boolean
   real_capital?: number
   vote_summary: VoteSummary
+  council_gate?: CouncilGate
   agent_reviews: AgentReview[]
   council_chair: CouncilChair
   risk_gate: RiskGate
@@ -166,6 +186,7 @@ export default function CouncilPanel() {
   }
 
   const diagnostics = result?.live_evidence_enrichment?.diagnostics
+  const vote = result?.vote_summary
 
   return (
     <section style={{ border: '1px solid #2d6c79', background: '#061014', borderRadius: '16px', padding: '24px', marginBottom: '26px', color: '#eef6ff' }}>
@@ -173,7 +194,7 @@ export default function CouncilPanel() {
         <div>
           <div style={{ color: '#63c6d8', fontSize: '11px', letterSpacing: '4px' }}>EIGHT-AGENT COUNCIL // LIVE EVIDENCE</div>
           <h2 style={{ margin: '7px 0 6px', fontSize: '25px' }}>Full Council Paper Simulator</h2>
-          <div style={{ color: '#89a7ad', fontSize: '13px' }}>Live evidence → 8 independent specialists → Council Chair → isolated Risk gate → hypothetical paper order.</div>
+          <div style={{ color: '#89a7ad', fontSize: '13px' }}>Live evidence → 8 independent specialists → relevance-aware quorum → Council Chair → isolated Risk gate.</div>
         </div>
         <div style={{ border: '1px solid #6e3440', background: '#190a0f', color: '#ef8092', borderRadius: '8px', padding: '10px 14px', fontWeight: 800, letterSpacing: '2px', fontSize: '11px', height: 'fit-content' }}>REAL CAPITAL $0</div>
       </div>
@@ -209,26 +230,37 @@ export default function CouncilPanel() {
 
       {error && <div style={{ marginTop: '14px', color: '#ef8092', border: '1px solid #5a2731', background: '#16090d', borderRadius: '8px', padding: '10px 12px' }}>{error}</div>}
 
-      {result && (
+      {result && vote && (
         <div style={{ marginTop: '20px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
-            <Metric label="SUPPORT" value={result.vote_summary.support} color="#70caa5" />
-            <Metric label="NEUTRAL" value={result.vote_summary.neutral} color="#d8ad59" />
-            <Metric label="OPPOSE" value={result.vote_summary.oppose} color="#ef8092" />
-            <Metric label="AVG CONF" value={`${Math.round(result.vote_summary.average_confidence * 100)}%`} color="#82dceb" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))', gap: '10px' }}>
+            <Metric label="SUPPORT" value={vote.support} color="#70caa5" />
+            <Metric label="NEUTRAL" value={vote.neutral} color="#d8ad59" />
+            <Metric label="OPPOSE" value={vote.oppose} color="#ef8092" />
+            <Metric label="ABSTAIN" value={vote.abstain ?? 0} color="#9baeb3" />
+            <Metric label="AVG CONF" value={`${Math.round(vote.average_confidence * 100)}%`} color="#82dceb" />
             <Metric label="LIVE EVIDENCE" value={result.live_evidence_enrichment?.evidence_item_count ?? 0} color="#b5d7de" />
+          </div>
+
+          <div style={{ marginTop: '12px', border: '1px solid #183e46', borderRadius: '10px', padding: '12px 14px', background: '#071216', color: '#96b1b7', fontSize: '11px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+            <span>Applicable: <strong>{vote.applicable_count ?? vote.agent_count}/{vote.agent_count}</strong></span>
+            <span>Support required: <strong>{vote.required_support ?? '—'}</strong></span>
+            <span>Support ratio: <strong>{typeof vote.support_ratio === 'number' ? `${Math.round(vote.support_ratio * 100)}%` : '—'}</strong></span>
+            <span>Red Team block: <strong style={{ color: vote.red_team_block ? '#ef8092' : '#70caa5' }}>{vote.red_team_block ? 'YES' : 'NO'}</strong></span>
+            {(vote.abstaining_agents ?? []).length > 0 && <span>Abstaining: <strong>{vote.abstaining_agents?.join(', ')}</strong></span>}
           </div>
 
           <div style={{ marginTop: '16px', border: '1px solid #183e46', borderRadius: '10px', padding: '13px 15px', background: '#07181d' }}>
             <div style={{ color: '#63c6d8', fontSize: '10px', letterSpacing: '2px', marginBottom: '7px' }}>LIVE EVIDENCE DIAGNOSTICS</div>
             <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', color: '#9eb9bf', fontSize: '11px' }}>
-              <span>SEC: <strong style={{ color: statusColor(diagnostics?.sec_company) }}>{diagnostics?.sec_company ?? '—'}</strong> · {diagnostics?.sec_filings ?? 0} filings</span>
-              <span>Price history: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_history) }}>{diagnostics?.alpha_vantage_history ?? '—'}</strong></span>
+              <span>SEC filings: <strong style={{ color: statusColor(diagnostics?.sec_company) }}>{diagnostics?.sec_company ?? '—'}</strong> · {diagnostics?.sec_filings ?? 0}</span>
+              <span>SEC facts: <strong style={{ color: statusColor(diagnostics?.sec_company_facts) }}>{diagnostics?.sec_company_facts ?? '—'}</strong></span>
+              <span>Price: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_history) }}>{diagnostics?.alpha_vantage_history ?? '—'}</strong></span>
               <span>Overview: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_overview) }}>{diagnostics?.alpha_vantage_overview ?? '—'}</strong></span>
               <span>Earnings: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_earnings) }}>{diagnostics?.alpha_vantage_earnings ?? '—'}</strong></span>
+              <span>Estimates: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_earnings_estimates) }}>{diagnostics?.alpha_vantage_earnings_estimates ?? '—'}</strong></span>
               <span>Calendar: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_earnings_calendar) }}>{diagnostics?.alpha_vantage_earnings_calendar ?? '—'}</strong></span>
               <span>AV Macro: <strong>{diagnostics?.alpha_vantage_macro ? Object.values(diagnostics.alpha_vantage_macro).join(' · ') : '—'}</strong></span>
-              <span>Archive matches: <strong>{diagnostics?.archive_matches ?? 0}</strong></span>
+              <span>Archive: <strong>{diagnostics?.archive_matches ?? 0}</strong></span>
               <span>FRED: <strong>{diagnostics?.fred ? Object.values(diagnostics.fred).join(' · ') : '—'}</strong></span>
             </div>
           </div>
@@ -236,21 +268,33 @@ export default function CouncilPanel() {
           <div style={{ marginTop: '18px' }}>
             <div style={{ color: '#63c6d8', fontSize: '10px', letterSpacing: '3px', marginBottom: '10px' }}>EIGHT INDEPENDENT REVIEWS</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(285px, 1fr))', gap: '10px' }}>
-              {result.agent_reviews.map((review) => (
-                <div key={review.agent_id} style={{ border: `1px solid ${stanceColor(review.stance)}55`, background: '#081318', borderRadius: '10px', padding: '14px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'start' }}>
-                    <strong style={{ fontSize: '12px' }}>{review.agent_name}</strong>
-                    <span style={{ color: stanceColor(review.stance), fontSize: '10px', fontWeight: 900, letterSpacing: '1px' }}>{review.stance} · {Math.round((review.confidence ?? 0) * 100)}%</span>
+              {result.agent_reviews.map((review) => {
+                const abstain = review.applicability === 'NOT_APPLICABLE'
+                const color = abstain ? '#9baeb3' : stanceColor(review.stance)
+                return (
+                  <div key={review.agent_id} style={{ border: `1px solid ${color}55`, background: '#081318', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'start' }}>
+                      <strong style={{ fontSize: '12px' }}>{review.agent_name}</strong>
+                      <span style={{ color, fontSize: '10px', fontWeight: 900, letterSpacing: '1px' }}>{abstain ? 'ABSTAIN' : review.stance} · {Math.round((review.confidence ?? 0) * 100)}%</span>
+                    </div>
+                    {review.applicability_reason && <div style={{ color: '#789198', fontSize: '10px', marginTop: '5px' }}>{review.applicability_reason}</div>}
+                    <div style={{ color: '#c6d7db', fontSize: '12px', marginTop: '7px', fontWeight: 700 }}>{review.headline}</div>
+                    <div style={{ color: '#8fa5aa', fontSize: '11px', marginTop: '6px', lineHeight: 1.45 }}>{review.view}</div>
+                    {(review.risks ?? []).slice(0, 2).map((item, index) => <div key={`risk-${index}`} style={{ color: '#d899a5', fontSize: '10px', marginTop: '5px' }}>Risk: {item}</div>)}
+                    {(review.missing_evidence ?? []).slice(0, 2).map((item, index) => <div key={`missing-${index}`} style={{ color: '#b8a36e', fontSize: '10px', marginTop: '4px' }}>Missing: {item}</div>)}
+                    {review.error && <div style={{ color: '#ef8092', fontSize: '10px', marginTop: '5px', fontWeight: 800 }}>AGENT EXECUTION ERROR</div>}
                   </div>
-                  <div style={{ color: '#c6d7db', fontSize: '12px', marginTop: '7px', fontWeight: 700 }}>{review.headline}</div>
-                  <div style={{ color: '#8fa5aa', fontSize: '11px', marginTop: '6px', lineHeight: 1.45 }}>{review.view}</div>
-                  {(review.risks ?? []).slice(0, 2).map((item, index) => <div key={`risk-${index}`} style={{ color: '#d899a5', fontSize: '10px', marginTop: '5px' }}>Risk: {item}</div>)}
-                  {(review.missing_evidence ?? []).slice(0, 2).map((item, index) => <div key={`missing-${index}`} style={{ color: '#b8a36e', fontSize: '10px', marginTop: '4px' }}>Missing: {item}</div>)}
-                  {review.error && <div style={{ color: '#ef8092', fontSize: '10px', marginTop: '5px', fontWeight: 800 }}>AGENT EXECUTION ERROR</div>}
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
+
+          {result.council_gate && (
+            <div style={{ marginTop: '16px', border: `1px solid ${result.council_gate.passed ? '#2d765f' : '#5a2731'}`, borderRadius: '10px', padding: '12px 14px', background: result.council_gate.passed ? '#081a14' : '#16090d' }}>
+              <div style={{ color: result.council_gate.passed ? '#70caa5' : '#ef8092', fontSize: '10px', letterSpacing: '2px', fontWeight: 900 }}>DETERMINISTIC COUNCIL GATE · {result.council_gate.passed ? 'PASS' : 'BLOCKED'}</div>
+              {(result.council_gate.reasons ?? []).map((reason, index) => <div key={index} style={{ color: '#b69aa1', fontSize: '10px', marginTop: '5px' }}>{reason}</div>)}
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '18px' }}>
             <DecisionCard title="COUNCIL CHAIR" decision={result.council_chair.decision} confidence={result.council_chair.confidence} headline={result.council_chair.headline} body={result.council_chair.summary} details={[
