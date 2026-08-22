@@ -24,6 +24,26 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_synthetic_evidence(evidence: dict) -> bool:
+    """Hard safety gate: process/test fixtures may never reach Committee."""
+    if bool(evidence.get("synthetic")) or bool(evidence.get("synthetic_fixture")) or bool(evidence.get("fixture")):
+        return True
+
+    text = " ".join(
+        str(evidence.get(key) or "")
+        for key in ("source_name", "source_kind", "title", "summary", "url")
+    ).lower()
+    synthetic_markers = (
+        "synthetic",
+        "test fixture",
+        "controlled test",
+        "iios-test",
+        "process validation",
+        "workflow validation",
+    )
+    return any(marker in text for marker in synthetic_markers)
+
+
 class CommitteeEscalationStore:
     def __init__(self, database_path: Path | None = None) -> None:
         self.database_path = database_path or _database_path()
@@ -69,11 +89,19 @@ class CommitteeEscalationStore:
         requested = bool(result.get("committee_escalation", False))
         if materiality != "HIGH" or confidence < threshold or not requested:
             return False
+
+        try:
+            evidence = json.loads(dispatch_row["evidence_payload"])
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(evidence, dict) or _is_synthetic_evidence(evidence):
+            return False
+
         packet = {
             "dispatch_id": dispatch_row["dispatch_id"],
             "agent_id": dispatch_row["agent_id"],
             "route_reason": dispatch_row["route_reason"],
-            "evidence": json.loads(dispatch_row["evidence_payload"]),
+            "evidence": evidence,
             "agent_result": result,
             "paper_mode": True,
             "live_execution": False,
