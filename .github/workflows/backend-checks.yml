@@ -1,4 +1,4 @@
-name: Backend checks
+name: IIOS checks
 
 on:
   push:
@@ -24,6 +24,25 @@ jobs:
       - name: Install runtime dependencies
         run: pip install fastapi uvicorn openai python-dotenv
       - name: Compile backend
-        run: python -m py_compile app.py main.py ledger.py evidence_engine.py source_ingestion.py public_factory.py learning_loop.py chain_verifier.py run_v03_simulation.py run_v05_learning_simulation.py test_ledger.py test_factory_chain.py test_evidence_engine.py test_source_ingestion.py test_chain_verifier.py test_learning_loop.py
+        run: python -m py_compile app.py main.py ledger.py evidence_engine.py source_ingestion.py public_factory.py learning_loop.py monitoring_engine.py chain_verifier.py run_v03_simulation.py run_v05_learning_simulation.py test_ledger.py test_factory_chain.py test_evidence_engine.py test_source_ingestion.py test_chain_verifier.py test_learning_loop.py test_monitoring_engine.py
       - name: Run backend tests
-        run: python -m unittest -v test_ledger.py test_factory_chain.py test_evidence_engine.py test_source_ingestion.py test_chain_verifier.py test_learning_loop.py
+        run: python -m unittest -v test_ledger.py test_factory_chain.py test_evidence_engine.py test_source_ingestion.py test_chain_verifier.py test_learning_loop.py test_monitoring_engine.py
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build Factory UI
+        run: npm run build
