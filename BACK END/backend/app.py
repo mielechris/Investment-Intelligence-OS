@@ -1,10 +1,12 @@
 from main import app
 from learning_loop import router as learning_router
 from monitoring_engine import router as monitoring_router, start_scheduler, stop_scheduler
+from public_case_router import router as public_case_router
 
 
 app.include_router(learning_router)
 app.include_router(monitoring_router)
+app.include_router(public_case_router)
 app.version = "0.6.0"
 
 
