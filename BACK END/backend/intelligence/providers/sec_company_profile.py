@@ -7,7 +7,40 @@ from intelligence.providers.sec_filing_detail import html_to_text
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
+
+
+FACT_TAGS = {
+    "revenue": (
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+    ),
+    "operating_income": ("OperatingIncomeLoss",),
+    "net_income": ("NetIncomeLoss", "ProfitLoss"),
+    "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
+    "capex": (
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PaymentsForAdditionsToPropertyPlantAndEquipment",
+    ),
+    "cash": (
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    ),
+    "total_assets": ("Assets",),
+    "total_liabilities": ("Liabilities",),
+    "stockholders_equity": (
+        "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    ),
+    "long_term_debt": (
+        "LongTermDebtCurrent",
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndFinanceLeaseObligationsCurrent",
+        "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
+    ),
+}
 
 
 def _headers() -> dict[str, str]:
@@ -123,4 +156,119 @@ def fetch_company_sec_evidence(
         "company": company,
         "count": len(evidence),
         "evidence": evidence,
+    }
+
+
+def _unit_rows(fact: dict) -> tuple[str | None, list[dict]]:
+    units = fact.get("units") or {}
+    for preferred in ("USD", "shares", "USD/shares", "pure"):
+        rows = units.get(preferred)
+        if isinstance(rows, list) and rows:
+            return preferred, rows
+    for unit, rows in units.items():
+        if isinstance(rows, list) and rows:
+            return str(unit), rows
+    return None, []
+
+
+def _compact_fact(row: dict, unit: str | None, tag: str) -> dict:
+    return {
+        "tag": tag,
+        "unit": unit,
+        "value": row.get("val"),
+        "start": row.get("start"),
+        "end": row.get("end"),
+        "filed": row.get("filed"),
+        "form": row.get("form"),
+        "fy": row.get("fy"),
+        "fp": row.get("fp"),
+        "frame": row.get("frame"),
+        "accession_number": row.get("accn"),
+    }
+
+
+def _latest_for_forms(facts: dict, tags: tuple[str, ...], forms: set[str]) -> dict | None:
+    for tag in tags:
+        fact = facts.get(tag)
+        if not isinstance(fact, dict):
+            continue
+        unit, rows = _unit_rows(fact)
+        candidates = [row for row in rows if row.get("form") in forms and row.get("val") is not None]
+        if not candidates:
+            continue
+        candidates.sort(
+            key=lambda row: (
+                str(row.get("end") or ""),
+                str(row.get("filed") or ""),
+                str(row.get("frame") or ""),
+            ),
+            reverse=True,
+        )
+        return _compact_fact(candidates[0], unit, tag)
+    return None
+
+
+def _free_cash_flow(operating_cash_flow: dict | None, capex: dict | None) -> dict | None:
+    if not operating_cash_flow or not capex:
+        return None
+    if operating_cash_flow.get("unit") != "USD" or capex.get("unit") != "USD":
+        return None
+    if operating_cash_flow.get("start") != capex.get("start") or operating_cash_flow.get("end") != capex.get("end"):
+        return None
+    try:
+        value = float(operating_cash_flow["value"]) - float(capex["value"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    return {
+        "unit": "USD",
+        "value": value,
+        "start": operating_cash_flow.get("start"),
+        "end": operating_cash_flow.get("end"),
+        "calculation": "operating_cash_flow - capex",
+    }
+
+
+def fetch_company_facts_evidence(*, symbol: str) -> dict:
+    """Fetch structured SEC XBRL facts for cash flow, capex, balance sheet, and earnings quality."""
+    headers = _headers()
+    with httpx.Client(timeout=20.0, headers=headers, follow_redirects=True) as client:
+        company = _resolve_company(client, symbol)
+        response = client.get(COMPANY_FACTS_URL.format(cik=company["cik"]))
+        response.raise_for_status()
+        payload = response.json()
+
+    us_gaap = ((payload.get("facts") or {}).get("us-gaap") or {})
+    metrics: dict[str, dict] = {}
+    for name, tags in FACT_TAGS.items():
+        metrics[name] = {
+            "annual": _latest_for_forms(us_gaap, tags, {"10-K"}),
+            "quarterly": _latest_for_forms(us_gaap, tags, {"10-Q"}),
+        }
+
+    annual_fcf = _free_cash_flow(
+        metrics["operating_cash_flow"]["annual"],
+        metrics["capex"]["annual"],
+    )
+    quarterly_fcf = _free_cash_flow(
+        metrics["operating_cash_flow"]["quarterly"],
+        metrics["capex"]["quarterly"],
+    )
+
+    return {
+        "source": "SEC EDGAR Company Facts XBRL",
+        "source_kind": "company",
+        "symbol": company["symbol"],
+        "company_name": company["company_name"],
+        "cik": company["cik"],
+        "metrics": metrics,
+        "derived": {
+            "annual_free_cash_flow": annual_fcf,
+            "quarterly_or_ytd_free_cash_flow": quarterly_fcf,
+        },
+        "guardrails": [
+            "Derived free cash flow is calculated only when operating cash flow and capex share the same reported period.",
+            "Quarterly SEC cash-flow facts can be year-to-date; period start/end fields must be inspected before comparison.",
+            "Missing XBRL tags remain missing rather than being estimated.",
+        ],
+        "detail": "Structured issuer-specific SEC XBRL facts for financial statements, cash flow, capex, liquidity, leverage, and equity.",
     }
