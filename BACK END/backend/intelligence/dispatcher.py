@@ -44,6 +44,13 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_committee_escalation(result: dict) -> dict:
+    """Committee requests are only meaningful for HIGH-materiality agent output."""
+    if str(result.get("materiality", "")).upper() != "HIGH":
+        result["committee_escalation"] = False
+    return result
+
+
 class EventDispatcher:
     def __init__(self, database_path: Path | None = None) -> None:
         self.database_path = database_path or _database_path()
@@ -288,7 +295,7 @@ Return ONLY valid JSON with:
                 raise ValueError("Agent output was not an object")
             parsed.setdefault("memory_analogs", [])
             parsed.setdefault("memory_cautions", [])
-            return parsed
+            return _normalize_committee_escalation(parsed)
         except (json.JSONDecodeError, ValueError, TypeError):
             return {
                 "materiality": "LOW",
