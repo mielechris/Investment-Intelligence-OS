@@ -1,795 +1,469 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type AgentStatus = "idle" | "working" | "complete";
+const API = "http://localhost:8000";
+
+type SystemStatus = {
+  version: string;
+  paper_mode: boolean;
+  automatic_monitoring: boolean;
+};
 
 type Agent = {
+  key: string;
   name: string;
   room: string;
-  status: AgentStatus;
+  status: string;
 };
 
-type AgentResult = {
-  agent: string;
-  status: string;
+type DashboardCase = {
+  case_id: string;
   topic: string;
-  headline: string;
-  view: string;
-  confidence: number;
-  disposition: string;
-  floor_comment: string;
+  created_at?: string;
+  health: string;
+  committee_disposition?: string;
+  committee_confidence?: number;
+  evidence_quality?: number;
+  monitoring_enabled: boolean;
+  interval_minutes?: number;
+  ticker?: string;
+  last_refresh_at?: string;
+  latest_return_pct?: number;
+  thesis_flags: string[];
+  latest_action?: string;
+  outcome?: string;
 };
 
-type CommitteeResult = {
-  topic: string;
-  status: string;
-  headline: string;
-  summary: string;
-  agreement: string;
-  dissent: string;
-  confidence: number;
-  disposition: string;
-  floor_comment: string;
+type Scorecard = {
+  agent_key: string;
+  agent?: string;
+  observations: number;
+  accuracy?: number | null;
+  average_confidence: number;
+  average_calibration_score: number;
 };
 
-type RiskResult = {
-  room: string;
-  status: string;
-  topic: string;
-  decision: string;
-  allowed_notional: number;
-  triggered_rules: string[];
-  confidence_received: number;
-  committee_disposition: string;
-  floor_comment: string;
-  paper_mode: boolean;
+type FactoryBootstrap = {
+  ingestion: {
+    successful_sources: number;
+    failed_sources: number;
+  };
+  quote: {
+    current_price?: number | null;
+    status?: string;
+  };
+  factory: {
+    case: {
+      case_id: string;
+      topic: string;
+      evidence_summary?: {
+        average_quality_score?: number;
+      };
+    };
+    committee: {
+      headline: string;
+      summary: string;
+      confidence: number;
+      disposition: string;
+      bull_case?: string;
+      bear_case?: string;
+    };
+    risk: {
+      decision: string;
+      triggered_rules: string[];
+    };
+    execution: {
+      status: string;
+      execution: string;
+      reason?: string;
+    };
+  };
+  monitor_profile?: {
+    interval_minutes: number;
+    enabled: boolean;
+  } | null;
 };
-type ExecutionResult = {
-  room: string;
-  status: string;
-  topic: string;
-  execution: string;
-  reason?: string;
-  risk_decision: string;
-  allowed_notional: number;
-  paper_mode: boolean;
-  live_execution?: boolean;
-  floor_comment: string;
-};
+
+async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${API}${path}`, options);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Request failed: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function pct(value?: number | null): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return "—";
+  return `${Math.round(value * 100)}%`;
+}
+
+function returnPct(value?: number | null): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function healthTone(health: string): string {
+  if (health === "THESIS_BROKEN") return "#ff6379";
+  if (health === "REUNDERWRITE_REQUIRED") return "#e6bd5c";
+  if (health === "INTACT") return "#59c68c";
+  if (health === "CLOSED") return "#8b96a5";
+  if (health === "AUTO_WATCH") return "#78b9eb";
+  return "#7e8998";
+}
 
 function App() {
+  const [system, setSystem] = useState<SystemStatus | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [cases, setCases] = useState<DashboardCase[]>([]);
+  const [scorecards, setScorecards] = useState<Scorecard[]>([]);
   const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("Ready for governed paper research.");
+  const [topic, setTopic] = useState(
+    "AI infrastructure demand may support semiconductor memory pricing"
+  );
+  const [ticker, setTicker] = useState("MU.US");
+  const [direction, setDirection] = useState("LONG");
+  const [referencePrice, setReferencePrice] = useState("");
+  const [intervalMinutes, setIntervalMinutes] = useState("240");
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [factoryResult, setFactoryResult] = useState<FactoryBootstrap | null>(null);
 
-  const [policyTopic, setPolicyTopic] = useState(
-    "U.S. policy and technology stocks"
+  const activeCase = useMemo(
+    () => cases.find((item) => item.case_id === activeCaseId) ?? null,
+    [cases, activeCaseId]
   );
 
-  const [macroTopic, setMacroTopic] = useState(
-    "Federal Reserve rates and the stock market"
-  );
-
-  const [skepticTopic, setSkepticTopic] = useState(
-    "The market rally will continue because rates are falling"
-  );
-
-  const [committeeTopic, setCommitteeTopic] = useState(
-    "U.S. policy, interest rates, and technology stocks"
-  );
-
-  const [agentResult, setAgentResult] =
-    useState<AgentResult | null>(null);
-
-  const [committeeResult, setCommitteeResult] =
-    useState<CommitteeResult | null>(null);
-
-  const [riskResult, setRiskResult] =
-    useState<RiskResult | null>(null);
-
-  const [, setRunningAgent] =
-  useState<string | null>(null);
-
-  const [executionResult, setExecutionResult] =
-  useState<ExecutionResult | null>(null);
-
-  const [committeeRunning, setCommitteeRunning] =
-    useState(false);
+  const loadDashboard = async () => {
+    try {
+      const [statusData, agentData, dashboardData, scorecardData] = await Promise.all([
+        apiJson<SystemStatus>("/system/status"),
+        apiJson<{ agents: Agent[] }>("/agents"),
+        apiJson<{ cases: DashboardCase[] }>("/monitoring/dashboard"),
+        apiJson<{ scorecards: Scorecard[] }>("/judgment-bank/scorecards/all"),
+      ]);
+      setSystem(statusData);
+      setAgents(agentData.agents);
+      setCases(dashboardData.cases);
+      setScorecards(scorecardData.scorecards);
+      setConnected(true);
+    } catch {
+      setConnected(false);
+    }
+  };
 
   useEffect(() => {
-    fetch("http://localhost:8000/agents")
-      .then((response) => response.json())
-      .then((data) => {
-        setAgents(data.agents);
-        setConnected(true);
-      })
-      .catch(() => {
-        setConnected(false);
-      });
+    void loadDashboard();
+    const timer = window.setInterval(() => {
+      void loadDashboard();
+    }, 15000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  const updateAgentStatus = (
-    agentName: string,
-    status: AgentStatus
-  ) => {
-    setAgents((current) =>
-      current.map((agent) =>
-        agent.name === agentName
-          ? { ...agent, status }
-          : agent
-      )
-    );
-  };
-
-  const runAgent = async (
-    agentName: string,
-    endpoint: string,
-    topic: string
-  ) => {
-    setRunningAgent(agentName);
-    setAgentResult(null);
-    setCommitteeResult(null);
-    setRiskResult(null);
-
-    updateAgentStatus(agentName, "working");
-
+  const runGovernedCase = async () => {
+    setBusy(true);
+    setNotice("Evidence is being collected and the eight desks are working...");
     try {
-      const response = await fetch(
-        `http://localhost:8000${endpoint}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ topic }),
-        }
+      const numericReference = referencePrice.trim()
+        ? Number(referencePrice)
+        : undefined;
+      const result = await apiJson<FactoryBootstrap>("/factory/run-public", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic,
+          ticker,
+          direction,
+          reference_price: numericReference,
+          interval_minutes: Number(intervalMinutes),
+          auto_watch: true,
+          analysis_mode: "llm",
+        }),
+      });
+      setFactoryResult(result);
+      setActiveCaseId(result.factory.case.case_id);
+      setNotice(
+        `Case ${result.factory.case.case_id.slice(-8)} entered AUTO WATCH. ${result.ingestion.successful_sources} public sources responded.`
       );
-
-      if (!response.ok) {
-        throw new Error("Agent request failed");
-      }
-
-      const data: AgentResult = await response.json();
-
-      setAgentResult(data);
-      updateAgentStatus(agentName, "complete");
-      setConnected(true);
-    } catch {
-      updateAgentStatus(agentName, "idle");
-      setConnected(false);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? `Factory error: ${error.message}` : "Factory request failed.");
     } finally {
-      setRunningAgent(null);
+      setBusy(false);
     }
   };
 
-  const runCommittee = async () => {
-    setCommitteeRunning(true);
-    setAgentResult(null);
-    setCommitteeResult(null);
-    setRiskResult(null);
-
-    setAgents((current) =>
-      current.map((agent) => ({
-        ...agent,
-        status: "working",
-      }))
-    );
-
+  const refreshActiveCase = async () => {
+    if (!activeCaseId) return;
+    setBusy(true);
+    setNotice("Refreshing evidence and re-checking the stored thesis...");
     try {
-      const committeeResponse = await fetch(
-        "http://localhost:8000/committee/run",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            topic: committeeTopic,
-          }),
-        }
-      );
-
-      if (!committeeResponse.ok) {
-        throw new Error("Committee request failed");
-      }
-
-      const committeeData: CommitteeResult =
-        await committeeResponse.json();
-
-      setCommitteeResult(committeeData);
-
-      setAgents((current) =>
-        current.map((agent) => ({
-          ...agent,
-          status: "complete",
-        }))
-      );
-
-      const riskResponse = await fetch(
-        "http://localhost:8000/risk/evaluate",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            topic: committeeData.topic,
-            disposition: committeeData.disposition,
-            confidence: committeeData.confidence,
-          }),
-        }
-      );
-
-      if (!riskResponse.ok) {
-        throw new Error("Risk request failed");
-      }
-
-      const riskData: RiskResult =
-        await riskResponse.json();
-
-      setRiskResult(riskData);
-            const executionResponse = await fetch(
-        "http://localhost:8000/paper-execution/submit",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            topic: committeeData.topic,
-            risk_decision: riskData.decision,
-            allowed_notional: riskData.allowed_notional,
-          }),
-        }
-      );
-
-      if (!executionResponse.ok) {
-        throw new Error("Execution request failed");
-      }
-
-      const executionData: ExecutionResult =
-        await executionResponse.json();
-
-      setExecutionResult(executionData);
-      setConnected(true);
-    } catch {
-      setConnected(false);
+      await apiJson(`/monitoring/refresh/${activeCaseId}`, { method: "POST" });
+      setNotice("Automatic-monitoring refresh completed and was written to the ledger.");
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? `Monitoring error: ${error.message}` : "Monitoring refresh failed.");
     } finally {
-      setCommitteeRunning(false);
+      setBusy(false);
     }
   };
 
-  const inputStyle = {
+  const panel = {
+    background: "rgba(7, 11, 17, 0.92)",
+    border: "1px solid #28313d",
+    borderRadius: "14px",
+    padding: "22px",
+  } as const;
+
+  const input = {
     width: "100%",
     boxSizing: "border-box" as const,
-    marginTop: "12px",
-    padding: "14px",
-    borderRadius: "7px",
+    background: "#0d131b",
     border: "1px solid #303b49",
-    background: "#11161d",
-    color: "#ffffff",
-    fontSize: "15px",
+    color: "#f4f4f4",
+    borderRadius: "7px",
+    padding: "12px 13px",
+    fontSize: "14px",
   };
 
-  const panelStyle = {
-    background: "#090d12",
-    border: "1px solid #26303b",
-    borderRadius: "12px",
-    padding: "24px",
+  const smallLabel = {
+    color: "#758294",
+    fontSize: "10px",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   };
 
   return (
-    <div
+    <main
       style={{
         minHeight: "100vh",
         background:
-          "radial-gradient(circle at top, #18212f 0%, #090b10 45%, #040506 100%)",
-        color: "#f4f4f4",
-        fontFamily: "Arial, Helvetica, sans-serif",
-        padding: "32px",
+          "radial-gradient(circle at 20% -10%, #20304a 0%, #0a0d13 35%, #040506 75%)",
+        color: "#f2f5f8",
+        fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+        padding: "28px",
       }}
     >
       <header
         style={{
           display: "flex",
           justifyContent: "space-between",
+          gap: "24px",
           alignItems: "center",
-          borderBottom: "1px solid #28313d",
+          borderBottom: "1px solid #27313d",
           paddingBottom: "20px",
-          marginBottom: "32px",
+          marginBottom: "24px",
         }}
       >
         <div>
-          <div
-            style={{
-              color: "#7e8998",
-              fontSize: "12px",
-              letterSpacing: "4px",
-            }}
-          >
-            INVESTMENT INTELLIGENCE OS
-          </div>
-
-          <h1 style={{ margin: "8px 0 0", fontSize: "34px" }}>
-            THE INTELLIGENCE FLOOR
+          <div style={{ ...smallLabel, letterSpacing: "4px" }}>INVESTMENT INTELLIGENCE OS</div>
+          <h1 style={{ margin: "7px 0 3px", fontSize: "34px", letterSpacing: "-1px" }}>
+            THE INTELLIGENCE FACTORY
           </h1>
-        </div>
-
-        <div style={{ textAlign: "right" }}>
-          <div
-            style={{
-              marginBottom: "8px",
-              color: connected ? "#59c68c" : "#ff6379",
-              fontSize: "11px",
-              letterSpacing: "2px",
-            }}
-          >
-            BACKEND {connected ? "CONNECTED" : "OFFLINE"}
+          <div style={{ color: "#788596", fontSize: "13px" }}>
+            Evidence → 8 desks → Committee → Risk → Monitor → Judgment Bank
           </div>
-
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ color: connected ? "#59c68c" : "#ff6379", fontSize: "11px", letterSpacing: "2px" }}>
+            {connected ? "SYSTEM ONLINE" : "SYSTEM OFFLINE"}
+          </div>
+          <div style={{ marginTop: "7px", color: "#9aa6b5", fontSize: "12px" }}>
+            v{system?.version ?? "—"} · AUTO MONITOR {system?.automatic_monitoring ? "ARMED" : "—"}
+          </div>
           <div
             style={{
+              display: "inline-block",
+              marginTop: "9px",
               border: "1px solid #8b1e2d",
               background: "#26080d",
               color: "#ff6379",
-              padding: "10px 16px",
+              padding: "8px 13px",
               borderRadius: "6px",
-              fontWeight: 700,
+              fontWeight: 800,
               letterSpacing: "2px",
-              fontSize: "12px",
+              fontSize: "11px",
             }}
           >
-            PAPER MODE
+            PAPER / SHADOW MODE
           </div>
         </div>
       </header>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, minmax(220px, 1fr))",
-          gap: "18px",
-          marginBottom: "30px",
-        }}
-      >
-        {agents.map((agent) => (
-          <section
-            key={agent.name}
+      <section style={{ ...panel, marginBottom: "22px", borderColor: "#365575" }}>
+        <div style={smallLabel}>CASE LAUNCH BAY</div>
+        <h2 style={{ margin: "7px 0 15px" }}>Run governed case + auto-watch</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 3fr) 1fr 1fr 1fr 1fr", gap: "10px" }}>
+          <input style={input} value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="Investment thesis" />
+          <input style={input} value={ticker} onChange={(event) => setTicker(event.target.value)} placeholder="Ticker e.g. MU.US" />
+          <select style={input} value={direction} onChange={(event) => setDirection(event.target.value)}>
+            <option value="LONG">LONG</option>
+            <option value="SHORT">SHORT</option>
+            <option value="UNSPECIFIED">WATCH ONLY</option>
+          </select>
+          <input style={input} value={referencePrice} onChange={(event) => setReferencePrice(event.target.value)} placeholder="Ref price optional" inputMode="decimal" />
+          <select style={input} value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)}>
+            <option value="60">Every 1h</option>
+            <option value="240">Every 4h</option>
+            <option value="720">Every 12h</option>
+            <option value="1440">Daily</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginTop: "14px", flexWrap: "wrap" }}>
+          <button
+            onClick={() => void runGovernedCase()}
+            disabled={busy || topic.trim().length < 2}
             style={{
-              background: "#0a0d12",
-              border:
-                agent.status === "working"
-                  ? "1px solid #d9a441"
-                  : agent.status === "complete"
-                  ? "1px solid #4fa879"
-                  : "1px solid #27303a",
-              borderRadius: "12px",
-              padding: "22px",
+              border: "1px solid #4d7fa9",
+              background: busy ? "#202833" : "#173552",
+              color: "#d8ecff",
+              borderRadius: "7px",
+              padding: "12px 18px",
+              fontWeight: 800,
+              cursor: busy ? "default" : "pointer",
             }}
           >
-            <div
-              style={{
-                color: "#748091",
-                fontSize: "11px",
-                letterSpacing: "2px",
-              }}
-            >
-              {agent.room.toUpperCase()}
-            </div>
-
-            <h2>{agent.name}</h2>
-
-            <strong
-              style={{
-                color:
-                  agent.status === "complete"
-                    ? "#59c68c"
-                    : agent.status === "working"
-                    ? "#e4b754"
-                    : "#7c8794",
-              }}
-            >
-              {agent.status.toUpperCase()}
-            </strong>
-          </section>
-        ))}
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, minmax(260px, 1fr))",
-          gap: "20px",
-          marginBottom: "24px",
-        }}
-      >
-        <section style={panelStyle}>
-          <h2>Policy Analyst</h2>
-
-          <input
-            value={policyTopic}
-            onChange={(event) =>
-              setPolicyTopic(event.target.value)
-            }
-            style={inputStyle}
-          />
-
-          <button
-            onClick={() =>
-              runAgent(
-                "Policy Analyst",
-                "/agents/policy/run",
-                policyTopic
-              )
-            }
-          >
-            RUN POLICY ANALYST
+            {busy ? "FACTORY WORKING..." : "RUN FACTORY + AUTO WATCH"}
           </button>
-        </section>
-
-        <section style={panelStyle}>
-          <h2>Macro Analyst</h2>
-
-          <input
-            value={macroTopic}
-            onChange={(event) =>
-              setMacroTopic(event.target.value)
-            }
-            style={inputStyle}
-          />
-
           <button
-            onClick={() =>
-              runAgent(
-                "Macro Analyst",
-                "/agents/macro/run",
-                macroTopic
-              )
-            }
+            onClick={() => void refreshActiveCase()}
+            disabled={busy || !activeCaseId}
+            style={{
+              border: "1px solid #3a4654",
+              background: "#10161e",
+              color: activeCaseId ? "#cbd5df" : "#596574",
+              borderRadius: "7px",
+              padding: "12px 16px",
+              fontWeight: 700,
+            }}
           >
-            RUN MACRO ANALYST
+            REFRESH ACTIVE CASE NOW
           </button>
-        </section>
-
-        <section
-          style={{
-            ...panelStyle,
-            border: "1px solid #4b2530",
-            background: "#10090c",
-          }}
-        >
-          <h2>Skeptic</h2>
-
-          <input
-            value={skepticTopic}
-            onChange={(event) =>
-              setSkepticTopic(event.target.value)
-            }
-            style={inputStyle}
-          />
-
-          <button
-            onClick={() =>
-              runAgent(
-                "Skeptic",
-                "/agents/skeptic/run",
-                skepticTopic
-              )
-            }
-          >
-            RUN SKEPTIC
-          </button>
-        </section>
-      </div>
-
-      <section
-        style={{
-          ...panelStyle,
-          border: "1px solid #38506c",
-          marginBottom: "24px",
-        }}
-      >
-        <div style={{ color: "#6da9dd" }}>
-          INVESTMENT COMMITTEE
+          <span style={{ color: "#8d9aaa", fontSize: "13px" }}>{notice}</span>
         </div>
-
-        <h2>Send It Upstairs</h2>
-
-        <input
-          value={committeeTopic}
-          onChange={(event) =>
-            setCommitteeTopic(event.target.value)
-          }
-          style={inputStyle}
-        />
-
-        <button
-          onClick={runCommittee}
-          disabled={committeeRunning}
-        >
-          {committeeRunning
-            ? "COMMITTEE IN SESSION..."
-            : "CONVENE COMMITTEE"}
-        </button>
       </section>
 
-      {agentResult && (
-        <section
-          style={{
-            ...panelStyle,
-            border: "1px solid #315d48",
-            marginBottom: "24px",
-          }}
-        >
-          <h2>{agentResult.headline}</h2>
+      <section style={{ marginBottom: "22px" }}>
+        <div style={{ ...smallLabel, marginBottom: "10px" }}>SPECIALIST FLOOR · 8 DESKS</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(190px, 1fr))", gap: "12px" }}>
+          {agents.map((agent) => (
+            <article key={agent.key} style={{ ...panel, padding: "17px" }}>
+              <div style={smallLabel}>{agent.room}</div>
+              <div style={{ marginTop: "8px", fontWeight: 800, fontSize: "15px" }}>{agent.name}</div>
+              <div style={{ marginTop: "10px", color: "#59c68c", fontSize: "10px", letterSpacing: "2px" }}>READY</div>
+            </article>
+          ))}
+        </div>
+      </section>
 
-          <p>{agentResult.view}</p>
-
-          <p>
-            <strong>Disposition:</strong>{" "}
-            {agentResult.disposition}
-          </p>
-
-          <p>
-            <strong>Confidence:</strong>{" "}
-            {Math.round(agentResult.confidence * 100)}%
-          </p>
-        </section>
-      )}
-
-      {committeeResult && (
-        <section
-          style={{
-            ...panelStyle,
-            border: "1px solid #4c78a0",
-            marginBottom: "24px",
-          }}
-        >
-          <div style={{ color: "#78b9eb" }}>
-            COMMITTEE DECISION // COMPLETE
-          </div>
-
-          <h2>{committeeResult.headline}</h2>
-
-          <p>{committeeResult.summary}</p>
-
-          <p>
-            <strong>Agreement:</strong>{" "}
-            {committeeResult.agreement}
-          </p>
-
-          <p>
-            <strong>Dissent:</strong>{" "}
-            {committeeResult.dissent}
-          </p>
-
-          <p>
-            <strong>Disposition:</strong>{" "}
-            {committeeResult.disposition}
-          </p>
-
-          <p>
-            <strong>Confidence:</strong>{" "}
-            {Math.round(committeeResult.confidence * 100)}%
-          </p>
-        </section>
-      )}
-
-      {riskResult && (
-        <section
-          style={{
-            border:
-              riskResult.decision === "VETOED"
-                ? "1px solid #a73b4c"
-                : "1px solid #b38b3e",
-            background:
-              riskResult.decision === "VETOED"
-                ? "#190a0e"
-                : "#17130a",
-            borderRadius: "12px",
-            padding: "28px",
-          }}
-        >
-          <div
-            style={{
-              color:
-                riskResult.decision === "VETOED"
-                  ? "#ff6379"
-                  : "#e6bd5c",
-              letterSpacing: "4px",
-              fontSize: "11px",
-            }}
-          >
-            RISK INSPECTION // COMPLETE
-          </div>
-
-          <h2>
-            {riskResult.decision === "VETOED"
-              ? "Risk Veto"
-              : "Watch Only"}
-          </h2>
-
-          <p>
-            <strong>Decision:</strong>{" "}
-            {riskResult.decision}
-          </p>
-
-          <p>
-            <strong>Allowed Notional:</strong> $
-            {riskResult.allowed_notional}
-          </p>
-
-          <p>
-            <strong>Committee Disposition:</strong>{" "}
-            {riskResult.committee_disposition}
-          </p>
-
-          <p>
-            <strong>Confidence Received:</strong>{" "}
-            {Math.round(
-              riskResult.confidence_received * 100
-            )}
-            %
-          </p>
-
+      <section style={{ ...panel, marginBottom: "22px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: "15px" }}>
           <div>
-            <strong>Triggered Rules:</strong>
-
-            <ul>
-              {riskResult.triggered_rules.map((rule) => (
-                <li key={rule}>{rule}</li>
-              ))}
-            </ul>
+            <div style={smallLabel}>SURVEILLANCE FLOOR</div>
+            <h2 style={{ margin: "7px 0 0" }}>Case health board</h2>
           </div>
+          <div style={{ color: "#6f7d8e", fontSize: "12px" }}>UI refreshes every 15 seconds</div>
+        </div>
+        <div style={{ overflowX: "auto", marginTop: "16px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "980px" }}>
+            <thead>
+              <tr style={{ color: "#778496", fontSize: "10px", letterSpacing: "1.5px", textAlign: "left" }}>
+                <th style={{ padding: "10px" }}>CASE</th>
+                <th style={{ padding: "10px" }}>THESIS</th>
+                <th style={{ padding: "10px" }}>HEALTH</th>
+                <th style={{ padding: "10px" }}>COMMITTEE</th>
+                <th style={{ padding: "10px" }}>EVIDENCE</th>
+                <th style={{ padding: "10px" }}>RETURN</th>
+                <th style={{ padding: "10px" }}>WATCH</th>
+                <th style={{ padding: "10px" }}>LAST REFRESH</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cases.length === 0 && (
+                <tr><td colSpan={8} style={{ padding: "18px 10px", color: "#697688" }}>No persisted cases yet.</td></tr>
+              )}
+              {cases.map((item) => (
+                <tr
+                  key={item.case_id}
+                  onClick={() => setActiveCaseId(item.case_id)}
+                  style={{ borderTop: "1px solid #1e2731", cursor: "pointer", background: item.case_id === activeCaseId ? "rgba(55, 91, 126, 0.16)" : "transparent" }}
+                >
+                  <td style={{ padding: "12px 10px", fontFamily: "monospace", color: "#9fb0c2" }}>{item.case_id.slice(-8)}</td>
+                  <td style={{ padding: "12px 10px", maxWidth: "330px" }}>{item.topic}</td>
+                  <td style={{ padding: "12px 10px", color: healthTone(item.health), fontWeight: 800 }}>{item.health.replaceAll("_", " ")}</td>
+                  <td style={{ padding: "12px 10px" }}>{item.committee_disposition ?? "—"} · {pct(item.committee_confidence)}</td>
+                  <td style={{ padding: "12px 10px" }}>{pct(item.evidence_quality)}</td>
+                  <td style={{ padding: "12px 10px" }}>{returnPct(item.latest_return_pct)}</td>
+                  <td style={{ padding: "12px 10px", color: item.monitoring_enabled ? "#59c68c" : "#7e8998" }}>
+                    {item.monitoring_enabled ? `${item.interval_minutes ?? "—"}m` : "OFF"}
+                  </td>
+                  <td style={{ padding: "12px 10px", color: "#8996a6" }}>
+                    {item.last_refresh_at ? new Date(item.last_refresh_at).toLocaleString() : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-          <p
-            style={{
-              color: "#ff8293",
-              fontStyle: "italic",
-            }}
-          >
-            "{riskResult.floor_comment}"
-          </p>
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "20px", marginBottom: "22px" }}>
+        <section style={panel}>
+          <div style={smallLabel}>ACTIVE CASE</div>
+          <h2 style={{ margin: "7px 0 14px" }}>{activeCase ? activeCase.topic : "Select a case from surveillance"}</h2>
+          {activeCase ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" }}>
+              <div><span style={smallLabel}>Health</span><div style={{ marginTop: "5px", color: healthTone(activeCase.health), fontWeight: 800 }}>{activeCase.health}</div></div>
+              <div><span style={smallLabel}>Ticker</span><div style={{ marginTop: "5px" }}>{activeCase.ticker || "—"}</div></div>
+              <div><span style={smallLabel}>Thesis flags</span><div style={{ marginTop: "5px" }}>{activeCase.thesis_flags.length ? activeCase.thesis_flags.join(", ") : "None"}</div></div>
+              <div><span style={smallLabel}>Latest action</span><div style={{ marginTop: "5px" }}>{activeCase.latest_action || "WATCH"}</div></div>
+            </div>
+          ) : (
+            <div style={{ color: "#748091" }}>The factory will attach monitoring metadata here after a governed case is created.</div>
+          )}
         </section>
-      )}
-      
-     {executionResult && (
-  <section
-    style={{
-      border:
-        executionResult.status === "blocked"
-          ? "1px solid #6f3140"
-          : "1px solid #315d48",
-      background:
-        executionResult.status === "blocked"
-          ? "linear-gradient(145deg, #150b0f, #0b080a)"
-          : "linear-gradient(145deg, #0b1511, #08100c)",
-      borderRadius: "12px",
-      padding: "28px",
-      marginTop: "24px",
-      boxShadow: "0 12px 30px rgba(0,0,0,.22)",
-    }}
-  >
-    <div
-      style={{
-        color:
-          executionResult.status === "blocked"
-            ? "#d96b7d"
-            : "#59c68c",
-        fontSize: "11px",
-        letterSpacing: "4px",
-        marginBottom: "10px",
-      }}
-    >
-      PAPER EXECUTION // {executionResult.status.toUpperCase()}
-    </div>
 
-    <h2
-      style={{
-        marginTop: 0,
-        marginBottom: "18px",
-      }}
-    >
-      {executionResult.execution === "PAPER_ORDER_CREATED"
-        ? "Paper Order Created"
-        : "Execution Blocked"}
-    </h2>
-
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(180px, 1fr))",
-        gap: "14px",
-        marginBottom: "20px",
-      }}
-    >
-      <div
-        style={{
-          background: "#0d1117",
-          border: "1px solid #252d36",
-          borderRadius: "8px",
-          padding: "16px",
-        }}
-      >
-        <div style={{ color: "#778392", fontSize: "11px" }}>
-          EXECUTION
-        </div>
-        <strong>{executionResult.execution}</strong>
+        <section style={panel}>
+          <div style={smallLabel}>LAST FACTORY PASS</div>
+          {factoryResult ? (
+            <>
+              <h2 style={{ margin: "7px 0 8px" }}>{factoryResult.factory.committee.headline}</h2>
+              <p style={{ color: "#aab5c1", lineHeight: 1.5 }}>{factoryResult.factory.committee.summary}</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px", marginTop: "12px" }}>
+                <div><span style={smallLabel}>Committee</span><div>{factoryResult.factory.committee.disposition} · {pct(factoryResult.factory.committee.confidence)}</div></div>
+                <div><span style={smallLabel}>Risk</span><div>{factoryResult.factory.risk.decision}</div></div>
+                <div><span style={smallLabel}>Execution</span><div>{factoryResult.factory.execution.execution}</div></div>
+                <div><span style={smallLabel}>Quote</span><div>{factoryResult.quote.current_price ?? "—"}</div></div>
+              </div>
+            </>
+          ) : (
+            <div style={{ color: "#748091", marginTop: "10px" }}>No factory pass in this browser session.</div>
+          )}
+        </section>
       </div>
 
-      <div
-        style={{
-          background: "#0d1117",
-          border: "1px solid #252d36",
-          borderRadius: "8px",
-          padding: "16px",
-        }}
-      >
-        <div style={{ color: "#778392", fontSize: "11px" }}>
-          RISK DECISION
-        </div>
-        <strong>{executionResult.risk_decision}</strong>
-      </div>
-
-      <div
-        style={{
-          background: "#0d1117",
-          border: "1px solid #252d36",
-          borderRadius: "8px",
-          padding: "16px",
-        }}
-      >
-        <div style={{ color: "#778392", fontSize: "11px" }}>
-          ALLOWED NOTIONAL
-        </div>
-        <strong>${executionResult.allowed_notional}</strong>
-      </div>
-
-      <div
-        style={{
-          background: "#0d1117",
-          border: "1px solid #252d36",
-          borderRadius: "8px",
-          padding: "16px",
-        }}
-      >
-        <div style={{ color: "#778392", fontSize: "11px" }}>
-          LIVE EXECUTION
-        </div>
-        <strong style={{ color: "#ff6379" }}>
-          {executionResult.live_execution ? "YES" : "NO"}
-        </strong>
-      </div>
-    </div>
-
-    {executionResult.reason && (
-      <div
-        style={{
-          borderTop: "1px solid #39232a",
-          paddingTop: "16px",
-          marginTop: "4px",
-          color: "#c8a2aa",
-        }}
-      >
-        <strong>Reason:</strong> {executionResult.reason}
-      </div>
-    )}
-
-    <div
-      style={{
-        marginTop: "18px",
-        borderTop: "1px solid #2a3038",
-        paddingTop: "16px",
-        color:
-          executionResult.status === "blocked"
-            ? "#d87989"
-            : "#69c994",
-        fontStyle: "italic",
-      }}
-    >
-      Floor note: “{executionResult.floor_comment}”
-    </div>
-  </section>
-)}
-    </div>
+      <section style={panel}>
+        <div style={smallLabel}>JUDGMENT BANK</div>
+        <h2 style={{ margin: "7px 0 15px" }}>Agent calibration board</h2>
+        {scorecards.length === 0 ? (
+          <div style={{ color: "#748091" }}>Scorecards appear after post-mortems create Judgment Bank outcomes.</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(190px, 1fr))", gap: "12px" }}>
+            {scorecards.map((card) => (
+              <article key={card.agent_key} style={{ border: "1px solid #26313d", borderRadius: "10px", padding: "14px", background: "#080c11" }}>
+                <div style={{ fontWeight: 800 }}>{card.agent || card.agent_key}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px", fontSize: "12px" }}>
+                  <div><span style={smallLabel}>Calibration</span><div>{pct(card.average_calibration_score)}</div></div>
+                  <div><span style={smallLabel}>Accuracy</span><div>{pct(card.accuracy)}</div></div>
+                  <div><span style={smallLabel}>Confidence</span><div>{pct(card.average_confidence)}</div></div>
+                  <div><span style={smallLabel}>Outcomes</span><div>{card.observations}</div></div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
   );
 }
 

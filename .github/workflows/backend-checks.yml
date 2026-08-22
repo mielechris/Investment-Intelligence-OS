@@ -1,0 +1,48 @@
+name: IIOS checks
+
+on:
+  push:
+    branches:
+      - feature/governed-chain-v1
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BACK END/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: pip install fastapi uvicorn openai python-dotenv
+      - name: Compile backend
+        run: python -m py_compile app.py main.py ledger.py evidence_engine.py source_ingestion.py public_factory.py public_case_router.py learning_loop.py monitoring_engine.py chain_verifier.py run_v03_simulation.py run_v05_learning_simulation.py test_ledger.py test_factory_chain.py test_evidence_engine.py test_source_ingestion.py test_chain_verifier.py test_learning_loop.py test_monitoring_engine.py
+      - name: Run backend tests
+        run: python -m unittest -v test_ledger.py test_factory_chain.py test_evidence_engine.py test_source_ingestion.py test_chain_verifier.py test_learning_loop.py test_monitoring_engine.py
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build Factory UI
+        run: npm run build
