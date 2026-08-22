@@ -57,6 +57,11 @@ type RiskGate = {
 type Diagnostics = {
   alpha_vantage_history?: string
   alpha_vantage_overview?: string
+  alpha_vantage_earnings?: string
+  alpha_vantage_earnings_calendar?: string
+  alpha_vantage_macro?: Record<string, string>
+  sec_company?: string
+  sec_filings?: number
   fred?: Record<string, string>
   archive_matches?: number
 }
@@ -105,6 +110,12 @@ function decisionColor(value?: string) {
   if (normalized.includes('PASS') || normalized.includes('WATCH_ONLY')) return '#70caa5'
   if (normalized.includes('REJECT') || normalized.includes('VETO')) return '#ef8092'
   return '#d8ad59'
+}
+
+function statusColor(value?: string) {
+  if ((value ?? '').startsWith('ok')) return '#70caa5'
+  if ((value ?? '').includes('not_configured')) return '#d8ad59'
+  return '#ef8092'
 }
 
 export default function CouncilPanel() {
@@ -211,8 +222,12 @@ export default function CouncilPanel() {
           <div style={{ marginTop: '16px', border: '1px solid #183e46', borderRadius: '10px', padding: '13px 15px', background: '#07181d' }}>
             <div style={{ color: '#63c6d8', fontSize: '10px', letterSpacing: '2px', marginBottom: '7px' }}>LIVE EVIDENCE DIAGNOSTICS</div>
             <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', color: '#9eb9bf', fontSize: '11px' }}>
-              <span>Price history: <strong style={{ color: diagnostics?.alpha_vantage_history?.startsWith('ok') ? '#70caa5' : '#ef8092' }}>{diagnostics?.alpha_vantage_history ?? '—'}</strong></span>
-              <span>Overview: <strong style={{ color: diagnostics?.alpha_vantage_overview?.startsWith('ok') ? '#70caa5' : '#ef8092' }}>{diagnostics?.alpha_vantage_overview ?? '—'}</strong></span>
+              <span>SEC: <strong style={{ color: statusColor(diagnostics?.sec_company) }}>{diagnostics?.sec_company ?? '—'}</strong> · {diagnostics?.sec_filings ?? 0} filings</span>
+              <span>Price history: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_history) }}>{diagnostics?.alpha_vantage_history ?? '—'}</strong></span>
+              <span>Overview: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_overview) }}>{diagnostics?.alpha_vantage_overview ?? '—'}</strong></span>
+              <span>Earnings: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_earnings) }}>{diagnostics?.alpha_vantage_earnings ?? '—'}</strong></span>
+              <span>Calendar: <strong style={{ color: statusColor(diagnostics?.alpha_vantage_earnings_calendar) }}>{diagnostics?.alpha_vantage_earnings_calendar ?? '—'}</strong></span>
+              <span>AV Macro: <strong>{diagnostics?.alpha_vantage_macro ? Object.values(diagnostics.alpha_vantage_macro).join(' · ') : '—'}</strong></span>
               <span>Archive matches: <strong>{diagnostics?.archive_matches ?? 0}</strong></span>
               <span>FRED: <strong>{diagnostics?.fred ? Object.values(diagnostics.fred).join(' · ') : '—'}</strong></span>
             </div>
