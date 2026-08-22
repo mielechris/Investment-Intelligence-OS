@@ -24,6 +24,6 @@ jobs:
       - name: Install runtime dependencies
         run: pip install fastapi uvicorn openai python-dotenv
       - name: Compile backend
-        run: python -m py_compile main.py ledger.py test_ledger.py test_factory_chain.py
-      - name: Run ledger and factory tests
-        run: python -m unittest -v test_ledger.py test_factory_chain.py
+        run: python -m py_compile main.py ledger.py evidence_engine.py test_ledger.py test_factory_chain.py test_evidence_engine.py
+      - name: Run backend tests
+        run: python -m unittest -v test_ledger.py test_factory_chain.py test_evidence_engine.py
