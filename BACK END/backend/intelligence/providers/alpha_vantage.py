@@ -24,7 +24,7 @@ class AlphaVantageProvider(EvidenceProvider):
             configured=configured,
             live=configured,
             detail=(
-                "Configured for equity daily OHLCV history."
+                "Configured for equity daily OHLCV history and company overview data."
                 if configured
                 else "Missing ALPHAVANTAGE_API_KEY."
             ),
@@ -35,6 +35,24 @@ class AlphaVantageProvider(EvidenceProvider):
         if not symbol:
             raise ValueError("symbol is required")
         return self.fetch_latest_daily(symbol=symbol)
+
+    def _request(self, params: dict) -> dict:
+        if not self.api_key:
+            raise RuntimeError("ALPHAVANTAGE_API_KEY is not configured")
+        response = httpx.get(
+            self.base_url,
+            params={**params, "apikey": self.api_key},
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if "Error Message" in payload:
+            raise RuntimeError(payload["Error Message"])
+        if "Note" in payload or "Information" in payload:
+            raise RuntimeError(payload.get("Note") or payload.get("Information"))
+        if not isinstance(payload, dict) or not payload:
+            raise RuntimeError("Alpha Vantage returned no data")
+        return payload
 
     def fetch_latest_daily(self, *, symbol: str) -> EvidenceItem:
         payload = self.fetch_daily_history(symbol=symbol, outputsize="compact")
@@ -56,26 +74,21 @@ class AlphaVantageProvider(EvidenceProvider):
         )
 
     def fetch_daily_history(self, *, symbol: str, outputsize: str = "compact") -> dict:
-        if not self.api_key:
-            raise RuntimeError("ALPHAVANTAGE_API_KEY is not configured")
-
-        response = httpx.get(
-            self.base_url,
-            params={
-                "function": "TIME_SERIES_DAILY",
-                "symbol": symbol.upper(),
-                "outputsize": outputsize,
-                "apikey": self.api_key,
-            },
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if "Error Message" in payload:
-            raise RuntimeError(payload["Error Message"])
-        if "Note" in payload or "Information" in payload:
-            raise RuntimeError(payload.get("Note") or payload.get("Information"))
+        payload = self._request({
+            "function": "TIME_SERIES_DAILY",
+            "symbol": symbol.upper(),
+            "outputsize": outputsize,
+        })
         series = payload.get("Time Series (Daily)")
         if not isinstance(series, dict) or not series:
             raise RuntimeError(f"No daily equity history returned for {symbol}")
         return series
+
+    def fetch_company_overview(self, *, symbol: str) -> dict:
+        payload = self._request({
+            "function": "OVERVIEW",
+            "symbol": symbol.upper(),
+        })
+        if not payload.get("Symbol"):
+            raise RuntimeError(f"No company overview returned for {symbol}")
+        return payload
