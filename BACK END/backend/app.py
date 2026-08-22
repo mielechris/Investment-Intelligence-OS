@@ -8,6 +8,7 @@ app.version = "0.5.0"
 
 @app.get("/system/status")
 def system_status():
+    """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
         "version": "0.5.0",
