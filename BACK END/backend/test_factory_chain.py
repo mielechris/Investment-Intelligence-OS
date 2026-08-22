@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,12 +64,20 @@ class FactoryChainTests(unittest.TestCase):
         }
 
     def test_full_factory_chain_persists_audit_lineage(self):
+        now = datetime.now(timezone.utc).isoformat()
         with patch.object(self.main, "run_specialist", side_effect=self.specialist_stub), \
              patch.object(self.main, "OpenAI", FakeOpenAI):
             result = self.main.run_factory(
                 self.main.TopicRequest(
                     topic="Deterministic semiconductor paper thesis",
-                    evidence=[{"source": "test-fixture", "fresh": True}],
+                    evidence=[{
+                        "claim": "Fresh deterministic market evidence",
+                        "source": "Federal Reserve",
+                        "url": "https://www.federalreserve.gov/example",
+                        "source_type": "official",
+                        "evidence_type": "policy",
+                        "observed_at": now,
+                    }],
                 )
             )
 
@@ -76,6 +85,7 @@ class FactoryChainTests(unittest.TestCase):
             result["chain"],
             [
                 "CASE_CREATED",
+                "EVIDENCE_NORMALIZED",
                 "EIGHT_SPECIALISTS_COMPLETE",
                 "COMMITTEE_COMPLETE",
                 "RISK_COMPLETE",
@@ -88,6 +98,7 @@ class FactoryChainTests(unittest.TestCase):
 
         case_id = result["case"]["case_id"]
         audit = self.main.get_case_audit(case_id)
+        self.assertEqual(len(audit["evidence_packets"]), 1)
         self.assertEqual(len(audit["agent_results"]), 8)
         self.assertEqual(len(audit["committee_decisions"]), 1)
         self.assertEqual(len(audit["risk_authorizations"]), 1)
@@ -95,6 +106,7 @@ class FactoryChainTests(unittest.TestCase):
 
         event_types = [event["event_type"] for event in audit["events"]]
         self.assertIn("CASE_CREATED", event_types)
+        self.assertIn("EVIDENCE_NORMALIZED", event_types)
         self.assertEqual(event_types.count("AGENT_COMPLETE"), 8)
         self.assertIn("COMMITTEE_COMPLETE", event_types)
         self.assertIn("RISK_COMPLETE", event_types)
