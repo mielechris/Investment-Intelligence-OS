@@ -32,21 +32,34 @@ def _resolve_company(client: httpx.Client, symbol: str) -> dict:
     raise RuntimeError(f"SEC ticker mapping did not contain {target}")
 
 
+def _row_at(recent: dict, index: int) -> dict:
+    row = {}
+    for key, values in recent.items():
+        if isinstance(values, list) and index < len(values):
+            row[key] = values[index]
+    return row
+
+
 def _recent_rows(submissions: dict, forms: tuple[str, ...], limit: int) -> list[dict]:
+    """Prefer the newest filing for each requested form before adding additional recent rows."""
     recent = (submissions.get("filings") or {}).get("recent") or {}
     form_values = recent.get("form") or []
-    rows: list[dict] = []
-    for index, form in enumerate(form_values):
-        if form not in forms:
-            continue
-        row = {}
-        for key, values in recent.items():
-            if isinstance(values, list) and index < len(values):
-                row[key] = values[index]
-        rows.append(row)
-        if len(rows) >= limit:
-            break
-    return rows
+    selected_indices: list[int] = []
+
+    for requested_form in forms:
+        for index, form in enumerate(form_values):
+            if form == requested_form:
+                selected_indices.append(index)
+                break
+
+    if len(selected_indices) < limit:
+        for index, form in enumerate(form_values):
+            if form in forms and index not in selected_indices:
+                selected_indices.append(index)
+            if len(selected_indices) >= limit:
+                break
+
+    return [_row_at(recent, index) for index in selected_indices[:limit]]
 
 
 def fetch_company_sec_evidence(
