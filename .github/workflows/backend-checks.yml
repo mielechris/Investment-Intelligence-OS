@@ -1,0 +1,27 @@
+name: Backend checks
+
+on:
+  push:
+    branches:
+      - feature/governed-chain-v1
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BACK END/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile backend
+        run: python -m py_compile main.py ledger.py test_ledger.py
+      - name: Run ledger tests
+        run: python -m unittest -v test_ledger.py
