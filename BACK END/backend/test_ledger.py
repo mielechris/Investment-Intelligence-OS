@@ -1,4 +1,6 @@
+import importlib
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,10 +10,8 @@ class LedgerTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         os.environ["IIOS_DB_PATH"] = str(Path(self.tempdir.name) / "test_ledger.db")
-
-        import importlib
+        sys.modules.pop("ledger", None)
         import ledger
-
         self.ledger = importlib.reload(ledger)
         self.ledger.init_ledger()
 
