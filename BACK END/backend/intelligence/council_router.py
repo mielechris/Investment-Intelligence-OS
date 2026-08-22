@@ -1,4 +1,5 @@
 import json
+import math
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -77,13 +78,17 @@ Rules:
 - This is a SIMULATION-ONLY council test. PAPER MODE ONLY. No live execution or real capital.
 - Review independently. Do not assume the thesis is good because it was submitted for testing.
 - Use only supplied evidence for factual claims. Explicitly identify missing evidence.
-- If your specialty is not relevant, say so and use NEUTRAL rather than inventing a view.
+- First classify whether your specialist mandate genuinely applies to this asset/thesis.
+- Use NOT_APPLICABLE only for a true mandate mismatch (for example an IPO-only specialist reviewing a mature listed company).
+- Missing or weak evidence is NOT a reason to mark NOT_APPLICABLE; remain APPLICABLE and use NEUTRAL or OPPOSE as warranted.
 - SUPPORT means the supplied evidence supports advancing the thesis to council/risk review, not that a real-money trade should be placed.
 - OPPOSE means the evidence or thesis has a material flaw.
 - Confidence must be 0.0 to 1.0.
 
 Return ONLY valid JSON:
 {{
+  "applicability": "APPLICABLE|NOT_APPLICABLE",
+  "applicability_reason": "string",
   "headline": "string",
   "stance": "SUPPORT|NEUTRAL|OPPOSE",
   "confidence": 0.0,
@@ -97,10 +102,22 @@ Return ONLY valid JSON:
 """
     response = client.responses.create(model=agent.model, input=prompt)
     output = _parse_object(response.output_text)
+
+    applicability = str(output.get("applicability", "APPLICABLE")).upper()
+    if applicability not in {"APPLICABLE", "NOT_APPLICABLE"}:
+        applicability = "APPLICABLE"
+    if agent.id == RED_TEAM_AGENT_ID:
+        applicability = "APPLICABLE"
+    output["applicability"] = applicability
+    output.setdefault("applicability_reason", "Specialist mandate applies to this thesis.")
+
     stance = str(output.get("stance", "NEUTRAL")).upper()
     if stance not in {"SUPPORT", "NEUTRAL", "OPPOSE"}:
         stance = "NEUTRAL"
+    if applicability == "NOT_APPLICABLE":
+        stance = "NEUTRAL"
     output["stance"] = stance
+
     try:
         confidence = float(output.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -111,12 +128,73 @@ Return ONLY valid JSON:
     return output
 
 
+def _build_vote_summary(reviews: list[dict]) -> dict:
+    applicable = [item for item in reviews if item.get("applicability") != "NOT_APPLICABLE"]
+    abstentions = [item for item in reviews if item.get("applicability") == "NOT_APPLICABLE"]
+
+    support = sum(1 for item in applicable if item.get("stance") == "SUPPORT")
+    neutral = sum(1 for item in applicable if item.get("stance") == "NEUTRAL")
+    oppose = sum(1 for item in applicable if item.get("stance") == "OPPOSE")
+    confidences = [float(item.get("confidence", 0.0)) for item in applicable]
+    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+    applicable_count = len(applicable)
+    required_support = max(3, math.ceil(applicable_count * 0.60)) if applicable_count else 0
+    support_ratio = support / applicable_count if applicable_count else 0.0
+
+    red_team = next((item for item in reviews if item.get("agent_id") == RED_TEAM_AGENT_ID), None)
+    red_team_block = bool(
+        red_team
+        and red_team.get("stance") == "OPPOSE"
+        and float(red_team.get("confidence", 0.0)) >= 0.75
+    )
+
+    return {
+        "support": support,
+        "neutral": neutral,
+        "oppose": oppose,
+        "abstain": len(abstentions),
+        "average_confidence": round(avg_confidence, 4),
+        "agent_count": len(reviews),
+        "applicable_count": applicable_count,
+        "support_ratio": round(support_ratio, 4),
+        "required_support": required_support,
+        "red_team_block": red_team_block,
+        "abstaining_agents": [item.get("agent_name") for item in abstentions],
+    }
+
+
+def _deterministic_council_gate(vote_summary: dict, chair: dict) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    applicable_count = int(vote_summary.get("applicable_count", 0))
+    support = int(vote_summary.get("support", 0))
+    required_support = int(vote_summary.get("required_support", 0))
+    oppose = int(vote_summary.get("oppose", 0))
+    avg_confidence = float(vote_summary.get("average_confidence", 0.0))
+
+    if applicable_count < 5:
+        reasons.append("Fewer than five specialist mandates were applicable.")
+    if support < required_support:
+        reasons.append(f"Applicable support {support} did not meet required support {required_support}.")
+    if oppose > 1:
+        reasons.append("More than one applicable specialist opposed the thesis.")
+    if avg_confidence < 0.60:
+        reasons.append("Applicable-specialist average confidence was below 60%.")
+    if bool(vote_summary.get("red_team_block", False)):
+        reasons.append("High-confidence Red Team opposition triggered a council block.")
+    if chair.get("decision") != "PASS_TO_RISK":
+        reasons.append("Council Chair did not approve passage to Risk.")
+
+    return not reasons, reasons
+
+
 def _run_chair(client: OpenAI, request: CouncilSimulationRequest, reviews: list[dict], vote_summary: dict) -> dict:
     prompt = f"""
 You are the Eight-Agent Council Chair inside Investment Intelligence OS.
 
 This is a simulation-only paper test. Synthesize the eight independent reviews without erasing dissent.
 Do not reward consensus for its own sake and do not turn missing evidence into assumptions.
+Specialists marked NOT_APPLICABLE are abstentions because their mandate genuinely does not apply; do not count them as support or opposition.
+An APPLICABLE specialist who is NEUTRAL because evidence is missing still represents unresolved evidence risk.
 
 THESIS:
 {json.dumps(request.model_dump(), indent=2)}
@@ -132,7 +210,8 @@ Rules:
 - PASS_TO_RISK is allowed only if the evidence is coherent enough for a bounded paper simulation.
 - Preserve the strongest supporting case and the strongest objection.
 - A specialist vote is advisory; explain disagreements rather than averaging them away.
-- If important pricing, liquidity, solvency, catalyst, or invalidation evidence is missing, prefer REJECT.
+- Do not penalize a thesis merely because a genuinely non-applicable specialist abstained.
+- If important pricing, liquidity, solvency, catalyst, cash-flow, valuation, or invalidation evidence is missing, prefer REJECT.
 
 Return ONLY valid JSON:
 {{
@@ -227,6 +306,8 @@ def simulate_full_council(request: CouncilSimulationRequest):
             reviews.append({
                 "agent_id": agent.id,
                 "agent_name": agent.name,
+                "applicability": "APPLICABLE",
+                "applicability_reason": "Agent execution failed; conservatively retained in quorum.",
                 "headline": "Agent review failed",
                 "stance": "NEUTRAL",
                 "confidence": 0.0,
@@ -239,28 +320,10 @@ def simulate_full_council(request: CouncilSimulationRequest):
                 "error": True,
             })
 
-    support = sum(1 for item in reviews if item.get("stance") == "SUPPORT")
-    neutral = sum(1 for item in reviews if item.get("stance") == "NEUTRAL")
-    oppose = sum(1 for item in reviews if item.get("stance") == "OPPOSE")
-    completed_confidences = [float(item.get("confidence", 0.0)) for item in reviews]
-    avg_confidence = sum(completed_confidences) / len(completed_confidences) if completed_confidences else 0.0
-    vote_summary = {
-        "support": support,
-        "neutral": neutral,
-        "oppose": oppose,
-        "average_confidence": round(avg_confidence, 4),
-        "agent_count": len(reviews),
-    }
-
+    vote_summary = _build_vote_summary(reviews)
     chair = _run_chair(client, request, reviews, vote_summary)
-
-    deterministic_council_gate = (
-        support >= 5
-        and oppose <= 2
-        and avg_confidence >= 0.60
-        and chair.get("decision") == "PASS_TO_RISK"
-    )
-    if not deterministic_council_gate:
+    gate_passed, gate_reasons = _deterministic_council_gate(vote_summary, chair)
+    if not gate_passed:
         chair["decision"] = "REJECT"
 
     if chair["decision"] == "PASS_TO_RISK":
@@ -270,7 +333,7 @@ def simulate_full_council(request: CouncilSimulationRequest):
             "decision": "VETOED",
             "risk_level": "HIGH",
             "headline": "Council did not clear the thesis for risk review",
-            "primary_risks": ["Eight-agent council gate was not satisfied."],
+            "primary_risks": ["Relevance-aware council gate was not satisfied.", *gate_reasons],
             "downside_scenarios": [],
             "liquidity_assessment": "Not evaluated because the council gate failed.",
             "sizing_constraints": ["No paper order may be simulated."],
@@ -311,6 +374,13 @@ def simulate_full_council(request: CouncilSimulationRequest):
         "institutional_memory_write": False,
         "thesis": request.model_dump(),
         "vote_summary": vote_summary,
+        "council_gate": {
+            "passed": gate_passed,
+            "reasons": gate_reasons,
+            "minimum_applicable_specialists": 5,
+            "support_requirement": vote_summary.get("required_support"),
+            "red_team_high_confidence_opposition_blocks": True,
+        },
         "agent_reviews": reviews,
         "council_chair": chair,
         "risk_gate": risk,
