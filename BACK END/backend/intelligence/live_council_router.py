@@ -7,6 +7,7 @@ from intelligence.council_router import CouncilSimulationRequest, simulate_full_
 from intelligence.evidence_store import evidence_store
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.fred import FredProvider
+from intelligence.providers.sec_company_profile import fetch_company_sec_evidence
 
 
 router = APIRouter(prefix="/intelligence/council", tags=["eight-agent-council-live"])
@@ -81,6 +82,61 @@ def _overview_evidence(symbol: str, overview: dict) -> dict:
     }
 
 
+def _earnings_evidence(symbol: str, payload: dict) -> dict:
+    quarters = []
+    for row in (payload.get("quarterlyEarnings") or [])[:8]:
+        quarters.append({
+            key: row.get(key)
+            for key in (
+                "fiscalDateEnding", "reportedDate", "reportedEPS", "estimatedEPS",
+                "surprise", "surprisePercentage",
+            )
+        })
+    latest = quarters[0] if quarters else {}
+    return {
+        "source": "Alpha Vantage earnings history",
+        "source_kind": "company",
+        "symbol": symbol.upper(),
+        "quarterly_earnings": quarters,
+        "detail": (
+            f"Latest reported earnings date {latest.get('reportedDate')}; reported EPS "
+            f"{latest.get('reportedEPS')} versus estimate {latest.get('estimatedEPS')}; "
+            f"surprise {latest.get('surprisePercentage')}%."
+        ),
+    }
+
+
+def _earnings_calendar_evidence(symbol: str, rows: list[dict]) -> dict:
+    entries = rows[:5]
+    first = entries[0] if entries else {}
+    return {
+        "source": "Alpha Vantage earnings calendar",
+        "source_kind": "company",
+        "symbol": symbol.upper(),
+        "calendar_entries": entries,
+        "issuer_confirmed": False,
+        "detail": (
+            f"Provider calendar lists the next earnings date as {first.get('reportDate') or first.get('report_date') or 'unknown'}. "
+            "Treat this as provider-supplied calendar evidence unless separately confirmed by the issuer."
+        ),
+    }
+
+
+def _macro_evidence(label: str, payload: dict) -> dict:
+    rows = (payload.get("data") or [])[:5]
+    latest = rows[0] if rows else {}
+    return {
+        "source": "Alpha Vantage economic indicator",
+        "source_kind": "macro",
+        "indicator": label,
+        "name": payload.get("name"),
+        "interval": payload.get("interval"),
+        "unit": payload.get("unit"),
+        "observations": rows,
+        "detail": f"{label} latest observation: {latest.get('value')} on {latest.get('date')}.",
+    }
+
+
 def _matching_archive_evidence(asset: str, aliases: list[str], limit: int = 12) -> list[dict]:
     terms = {asset.lower(), *(alias.lower() for alias in aliases if alias.strip())}
     matches = []
@@ -130,15 +186,47 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
     diagnostics = {
         "alpha_vantage_history": "not_attempted",
         "alpha_vantage_overview": "not_attempted",
+        "alpha_vantage_earnings": "not_attempted",
+        "alpha_vantage_earnings_calendar": "not_attempted",
+        "alpha_vantage_macro": {},
         "alpha_vantage_pacing_seconds": 1.25,
+        "sec_company": "not_attempted",
+        "sec_filings": 0,
         "fred": {},
         "archive_matches": 0,
     }
 
+    # Primary issuer evidence is independent of Alpha Vantage quotas.
+    try:
+        sec_packet = fetch_company_sec_evidence(
+            symbol=request.asset,
+            forms=("10-Q", "10-K", "8-K"),
+            limit=3,
+            text_chars=8000,
+        )
+        evidence.extend(sec_packet.get("evidence", []))
+        diagnostics["sec_company"] = "ok"
+        diagnostics["sec_filings"] = int(sec_packet.get("count", 0))
+    except Exception as exc:
+        diagnostics["sec_company"] = f"error: {exc}"
+
     alpha = AlphaVantageProvider()
+    last_alpha_call_at: float | None = None
+
+    def alpha_call(callable_fn):
+        nonlocal last_alpha_call_at
+        if last_alpha_call_at is not None:
+            wait = 1.25 - (time.monotonic() - last_alpha_call_at)
+            if wait > 0:
+                time.sleep(wait)
+        try:
+            return _alpha_call_with_retry(callable_fn)
+        finally:
+            last_alpha_call_at = time.monotonic()
+
     if alpha.status().configured:
         try:
-            history, retried = _alpha_call_with_retry(
+            history, retried = alpha_call(
                 lambda: alpha.fetch_daily_history(symbol=request.asset, outputsize="compact")
             )
             evidence.append(_market_history_evidence(request.asset, history))
@@ -146,25 +234,53 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
         except Exception as exc:
             diagnostics["alpha_vantage_history"] = f"error: {exc}"
 
-        # Free Alpha Vantage keys currently require roughly one request per second.
-        # Pace the second endpoint even when the first call succeeds.
-        time.sleep(1.25)
         try:
-            overview, retried = _alpha_call_with_retry(
-                lambda: alpha.fetch_company_overview(symbol=request.asset)
-            )
+            overview, retried = alpha_call(lambda: alpha.fetch_company_overview(symbol=request.asset))
             evidence.append(_overview_evidence(request.asset, overview))
             diagnostics["alpha_vantage_overview"] = "ok_after_retry" if retried else "ok"
         except Exception as exc:
             diagnostics["alpha_vantage_overview"] = f"error: {exc}"
+
+        try:
+            earnings, retried = alpha_call(lambda: alpha.fetch_earnings(symbol=request.asset))
+            evidence.append(_earnings_evidence(request.asset, earnings))
+            diagnostics["alpha_vantage_earnings"] = "ok_after_retry" if retried else "ok"
+        except Exception as exc:
+            diagnostics["alpha_vantage_earnings"] = f"error: {exc}"
+
+        try:
+            calendar, retried = alpha_call(
+                lambda: alpha.fetch_earnings_calendar(symbol=request.asset, horizon="3month")
+            )
+            evidence.append(_earnings_calendar_evidence(request.asset, calendar))
+            diagnostics["alpha_vantage_earnings_calendar"] = "ok_after_retry" if retried else "ok"
+        except Exception as exc:
+            diagnostics["alpha_vantage_earnings_calendar"] = f"error: {exc}"
+
+        macro_calls = (
+            ("10Y Treasury", lambda: alpha.fetch_economic_indicator(function="TREASURY_YIELD", interval="daily", maturity="10year")),
+            ("Federal Funds Rate", lambda: alpha.fetch_economic_indicator(function="FEDERAL_FUNDS_RATE", interval="daily")),
+            ("CPI", lambda: alpha.fetch_economic_indicator(function="CPI", interval="monthly")),
+        )
+        for label, callable_fn in macro_calls:
+            try:
+                payload, retried = alpha_call(callable_fn)
+                evidence.append(_macro_evidence(label, payload))
+                diagnostics["alpha_vantage_macro"][label] = "ok_after_retry" if retried else "ok"
+            except Exception as exc:
+                diagnostics["alpha_vantage_macro"][label] = f"error: {exc}"
     else:
         diagnostics["alpha_vantage_history"] = "not_configured"
         diagnostics["alpha_vantage_overview"] = "not_configured"
+        diagnostics["alpha_vantage_earnings"] = "not_configured"
+        diagnostics["alpha_vantage_earnings_calendar"] = "not_configured"
+        diagnostics["alpha_vantage_macro"]["status"] = "not_configured"
 
     archived = _matching_archive_evidence(request.asset, request.aliases)
     evidence.extend(archived)
     diagnostics["archive_matches"] = len(archived)
 
+    # FRED remains the preferred macro source when configured; Alpha Vantage macro is the fallback.
     fred = FredProvider()
     if fred.status().configured:
         for series_id in ("DGS10", "FEDFUNDS", "CPIAUCSL"):
