@@ -56,30 +56,36 @@ def preview_memory(request: MemoryPreviewRequest):
 
 
 @router.post("/decision-test")
-def run_controlled_memory_decision_test():
-    """Run a synthetic event through the real dispatcher + approved History agent."""
+def run_memory_decision_test(request: MemoryPreviewRequest):
+    """Run a submitted event through the real dispatcher + approved History agent."""
     item = EvidenceItem(
-        source_name="IIOS Synthetic Decision Test",
-        source_kind="market",
-        title="Synthetic controlled paper handoff and process validation",
-        summary=(
-            "Synthetic fixture testing paper-mode workflow integrity, zero real capital, "
-            "memory retrieval, and postmortem process learning."
-        ),
+        source_name=request.source_name,
+        source_kind=request.source_kind,
+        title=request.title,
+        summary=request.summary,
+        url=request.url,
         freshness="fresh",
         confidence=1.0,
     )
     event = item.model_dump(mode="json")
-    memory = retrieve_relevant_patterns(event, limit=3)
+    memory = retrieve_relevant_patterns(event, limit=max(1, min(request.limit, 10)))
+    synthetic_fixture = any(
+        marker in " ".join(
+            [request.source_name, request.title, request.summary, request.url or ""]
+        ).lower()
+        for marker in ("synthetic", "iios-test", "test fixture")
+    )
     row = {
-        "dispatch_id": "synthetic-memory-decision-test",
+        "dispatch_id": "memory-decision-test",
         "agent_id": MARKET_HISTORY_AGENT_ID,
-        "route_reason": "Controlled synthetic institutional-memory decision test",
+        "route_reason": "Institutional-memory decision test",
         "evidence_payload": item.model_dump_json(),
     }
     result = dispatcher._run_agent(row)
+    if synthetic_fixture:
+        result["committee_escalation"] = False
     return {
-        "synthetic_fixture": True,
+        "synthetic_fixture": synthetic_fixture,
         "event": event,
         "retrieved_count": len(memory),
         "retrieved_memory": memory,
@@ -88,7 +94,7 @@ def run_controlled_memory_decision_test():
         "guardrails": {
             "memory_is_context_not_authority": True,
             "synthetic_lessons_excluded_from_real_market_context": True,
-            "no_real_market_inference_from_this_test": True,
+            "no_real_market_inference_from_synthetic_tests": True,
         },
         "paper_mode": True,
         "live_execution": False,
