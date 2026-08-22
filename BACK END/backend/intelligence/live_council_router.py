@@ -7,7 +7,10 @@ from intelligence.council_router import CouncilSimulationRequest, simulate_full_
 from intelligence.evidence_store import evidence_store
 from intelligence.providers.alpha_vantage import AlphaVantageProvider
 from intelligence.providers.fred import FredProvider
-from intelligence.providers.sec_company_profile import fetch_company_sec_evidence
+from intelligence.providers.sec_company_profile import (
+    fetch_company_facts_evidence,
+    fetch_company_sec_evidence,
+)
 
 
 router = APIRouter(prefix="/intelligence/council", tags=["eight-agent-council-live"])
@@ -106,6 +109,37 @@ def _earnings_evidence(symbol: str, payload: dict) -> dict:
     }
 
 
+def _earnings_estimates_evidence(symbol: str, payload: dict) -> dict:
+    collections: dict[str, list[dict]] = {}
+    revision_snapshot: list[dict] = []
+    for key, value in payload.items():
+        if not isinstance(value, list):
+            continue
+        rows = [row for row in value[:8] if isinstance(row, dict)]
+        if not rows:
+            continue
+        collections[key] = rows
+        for row in rows[:4]:
+            selected = {
+                field: field_value
+                for field, field_value in row.items()
+                if any(token in field.lower() for token in (
+                    "revision", "estimate", "analyst", "horizon", "date", "fiscal",
+                ))
+            }
+            if selected:
+                revision_snapshot.append({"collection": key, **selected})
+
+    return {
+        "source": "Alpha Vantage earnings estimates",
+        "source_kind": "company",
+        "symbol": symbol.upper(),
+        "estimate_collections": collections,
+        "revision_snapshot": revision_snapshot[:12],
+        "detail": "Analyst EPS/revenue estimates, analyst counts, and estimate-revision fields returned by Alpha Vantage.",
+    }
+
+
 def _earnings_calendar_evidence(symbol: str, rows: list[dict]) -> dict:
     entries = rows[:5]
     first = entries[0] if entries else {}
@@ -187,16 +221,17 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
         "alpha_vantage_history": "not_attempted",
         "alpha_vantage_overview": "not_attempted",
         "alpha_vantage_earnings": "not_attempted",
+        "alpha_vantage_earnings_estimates": "not_attempted",
         "alpha_vantage_earnings_calendar": "not_attempted",
         "alpha_vantage_macro": {},
         "alpha_vantage_pacing_seconds": 1.25,
         "sec_company": "not_attempted",
         "sec_filings": 0,
+        "sec_company_facts": "not_attempted",
         "fred": {},
         "archive_matches": 0,
     }
 
-    # Primary issuer evidence is independent of Alpha Vantage quotas.
     try:
         sec_packet = fetch_company_sec_evidence(
             symbol=request.asset,
@@ -209,6 +244,12 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
         diagnostics["sec_filings"] = int(sec_packet.get("count", 0))
     except Exception as exc:
         diagnostics["sec_company"] = f"error: {exc}"
+
+    try:
+        evidence.append(fetch_company_facts_evidence(symbol=request.asset))
+        diagnostics["sec_company_facts"] = "ok"
+    except Exception as exc:
+        diagnostics["sec_company_facts"] = f"error: {exc}"
 
     alpha = AlphaVantageProvider()
     last_alpha_call_at: float | None = None
@@ -249,8 +290,15 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
             diagnostics["alpha_vantage_earnings"] = f"error: {exc}"
 
         try:
+            estimates, retried = alpha_call(lambda: alpha.fetch_earnings_estimates(symbol=request.asset))
+            evidence.append(_earnings_estimates_evidence(request.asset, estimates))
+            diagnostics["alpha_vantage_earnings_estimates"] = "ok_after_retry" if retried else "ok"
+        except Exception as exc:
+            diagnostics["alpha_vantage_earnings_estimates"] = f"error: {exc}"
+
+        try:
             calendar, retried = alpha_call(
-                lambda: alpha.fetch_earnings_calendar(symbol=request.asset, horizon="3month")
+                lambda: alpha.fetch_earnings_calendar(symbol=request.asset, horizon="12month")
             )
             evidence.append(_earnings_calendar_evidence(request.asset, calendar))
             diagnostics["alpha_vantage_earnings_calendar"] = "ok_after_retry" if retried else "ok"
@@ -273,6 +321,7 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
         diagnostics["alpha_vantage_history"] = "not_configured"
         diagnostics["alpha_vantage_overview"] = "not_configured"
         diagnostics["alpha_vantage_earnings"] = "not_configured"
+        diagnostics["alpha_vantage_earnings_estimates"] = "not_configured"
         diagnostics["alpha_vantage_earnings_calendar"] = "not_configured"
         diagnostics["alpha_vantage_macro"]["status"] = "not_configured"
 
@@ -280,7 +329,6 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
     evidence.extend(archived)
     diagnostics["archive_matches"] = len(archived)
 
-    # FRED remains the preferred macro source when configured; Alpha Vantage macro is the fallback.
     fred = FredProvider()
     if fred.status().configured:
         for series_id in ("DGS10", "FEDFUNDS", "CPIAUCSL"):
