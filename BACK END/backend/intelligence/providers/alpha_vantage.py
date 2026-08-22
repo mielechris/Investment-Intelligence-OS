@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,6 +40,22 @@ class AlphaVantageProvider(EvidenceProvider):
             raise ValueError("symbol is required")
         return self.fetch_latest_daily(symbol=symbol)
 
+    def _safe_provider_message(self, value: object) -> str:
+        text = str(value or "Alpha Vantage request failed")
+        if self.api_key:
+            text = text.replace(self.api_key, "[REDACTED_API_KEY]")
+        text = re.sub(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{12,}\b", "[REDACTED_API_KEY]", text)
+        lower = text.lower()
+        if any(marker in lower for marker in (
+            "25 requests per day",
+            "rate limit",
+            "requests per day",
+            "request per second",
+            "call frequency",
+        )):
+            return "Alpha Vantage rate limit reached. Retry later or use a higher-quota Alpha Vantage plan."
+        return text[:500]
+
     def _request(self, params: dict) -> dict:
         if not self.api_key:
             raise RuntimeError("ALPHAVANTAGE_API_KEY is not configured")
@@ -50,9 +67,9 @@ class AlphaVantageProvider(EvidenceProvider):
         response.raise_for_status()
         payload = response.json()
         if "Error Message" in payload:
-            raise RuntimeError(payload["Error Message"])
+            raise RuntimeError(self._safe_provider_message(payload["Error Message"]))
         if "Note" in payload or "Information" in payload:
-            raise RuntimeError(payload.get("Note") or payload.get("Information"))
+            raise RuntimeError(self._safe_provider_message(payload.get("Note") or payload.get("Information")))
         if not isinstance(payload, dict) or not payload:
             raise RuntimeError("Alpha Vantage returned no data")
         return payload
@@ -74,7 +91,7 @@ class AlphaVantageProvider(EvidenceProvider):
             "requests per day",
             "request per second",
         )):
-            raise RuntimeError(text)
+            raise RuntimeError(self._safe_provider_message(text))
         if text.startswith("{"):
             try:
                 payload = json.loads(text)
@@ -83,7 +100,7 @@ class AlphaVantageProvider(EvidenceProvider):
             if isinstance(payload, dict):
                 message = payload.get("Information") or payload.get("Note") or payload.get("Error Message")
                 if message:
-                    raise RuntimeError(str(message))
+                    raise RuntimeError(self._safe_provider_message(message))
         rows = list(csv.DictReader(io.StringIO(text)))
         if not rows and not allow_empty:
             raise RuntimeError("Alpha Vantage returned no CSV rows")
