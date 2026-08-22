@@ -1,3 +1,4 @@
+import time
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -102,12 +103,34 @@ def _matching_archive_evidence(asset: str, aliases: list[str], limit: int = 12) 
     return matches
 
 
+def _alpha_rate_limited(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in (
+        "thank you for using alpha vantage",
+        "rate limit",
+        "request per second",
+        "requests per day",
+        "call frequency",
+    ))
+
+
+def _alpha_call_with_retry(callable_fn, *, pause_seconds: float = 1.25):
+    try:
+        return callable_fn(), False
+    except Exception as exc:
+        if not _alpha_rate_limited(exc):
+            raise
+        time.sleep(pause_seconds)
+        return callable_fn(), True
+
+
 @router.post("/simulate-live")
 def simulate_live_council(request: LiveCouncilSimulationRequest):
     evidence: list[dict] = []
     diagnostics = {
         "alpha_vantage_history": "not_attempted",
         "alpha_vantage_overview": "not_attempted",
+        "alpha_vantage_pacing_seconds": 1.25,
         "fred": {},
         "archive_matches": 0,
     }
@@ -115,15 +138,23 @@ def simulate_live_council(request: LiveCouncilSimulationRequest):
     alpha = AlphaVantageProvider()
     if alpha.status().configured:
         try:
-            history = alpha.fetch_daily_history(symbol=request.asset, outputsize="compact")
+            history, retried = _alpha_call_with_retry(
+                lambda: alpha.fetch_daily_history(symbol=request.asset, outputsize="compact")
+            )
             evidence.append(_market_history_evidence(request.asset, history))
-            diagnostics["alpha_vantage_history"] = "ok"
+            diagnostics["alpha_vantage_history"] = "ok_after_retry" if retried else "ok"
         except Exception as exc:
             diagnostics["alpha_vantage_history"] = f"error: {exc}"
+
+        # Free Alpha Vantage keys currently require roughly one request per second.
+        # Pace the second endpoint even when the first call succeeds.
+        time.sleep(1.25)
         try:
-            overview = alpha.fetch_company_overview(symbol=request.asset)
+            overview, retried = _alpha_call_with_retry(
+                lambda: alpha.fetch_company_overview(symbol=request.asset)
+            )
             evidence.append(_overview_evidence(request.asset, overview))
-            diagnostics["alpha_vantage_overview"] = "ok"
+            diagnostics["alpha_vantage_overview"] = "ok_after_retry" if retried else "ok"
         except Exception as exc:
             diagnostics["alpha_vantage_overview"] = f"error: {exc}"
     else:
