@@ -20,7 +20,10 @@ type InsiderRecord = {
   shares_owned_after?: number | null;
   plan_10b5_1?: boolean | null;
   source_url: string;
+  source_name?: string;
   admission_status: string;
+  secondary_source?: boolean;
+  requires_primary_corroboration?: boolean;
 };
 
 type InsiderStatus = {
@@ -48,7 +51,7 @@ function InsiderOwnershipPanel() {
   const [caseId, setCaseId] = useState<string | null>(() => window.localStorage.getItem(ACTIVE_CASE_KEY));
   const [status, setStatus] = useState<InsiderStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("Public SEC Form 4 and beneficial-ownership filings are contextual research evidence only; they never authorize a trade.");
+  const [message, setMessage] = useState("Public insider/ownership data is contextual research evidence only; it never authorizes a trade.");
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -75,13 +78,15 @@ function InsiderOwnershipPanel() {
   const autoCapture = async () => {
     if (!caseId) return;
     setBusy(true);
-    setMessage("Checking public SEC EDGAR Form 4, 13D and 13G filings...");
+    setMessage("Checking SEC first, then official Micron IR, then secondary public context if both official sources are unavailable...");
     try {
       const response = await fetch(`${API}/insider/${caseId}/auto-capture`, { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
       const data = await response.json() as { status?: string; records_fetched?: number; records_added?: number; error?: string; provider?: string; provider_note?: string };
       if (data.status === "provider_error") {
         setMessage(`Insider providers unavailable: ${data.error ?? "unknown provider error"}. This is recorded as a provider gap, not as “no insider activity.”`);
+      } else if (data.status === "secondary_fallback_ok") {
+        setMessage(`Secondary public insider fallback used: ${data.records_fetched ?? 0} transaction record(s) parsed, ${data.records_added ?? 0} new ledger record(s) added. ${data.provider_note ?? "These records are context-only and require primary-source corroboration."}`);
       } else if (data.status === "fallback_ok") {
         setMessage(`Official Micron IR fallback used: ${data.records_fetched ?? 0} public filing record(s) parsed, ${data.records_added ?? 0} new ledger record(s) added. ${data.provider_note ?? "Form 4 direction is not inferred without transaction detail."}`);
       } else {
@@ -114,16 +119,16 @@ function InsiderOwnershipPanel() {
   return (
     <section style={{ margin: "0 28px 28px", color: "#f2f5f8", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
       <div style={{ ...panel, borderColor: "#4a5876" }}>
-        <div style={small}>INSIDER & OWNERSHIP INTELLIGENCE · PUBLIC FILINGS</div>
+        <div style={small}>INSIDER & OWNERSHIP INTELLIGENCE · PUBLIC FILINGS / CONTEXT</div>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "18px", alignItems: "start", flexWrap: "wrap" }}>
           <div>
             <h2 style={{ margin: "7px 0 5px" }}>Separate genuine insider activity from compensation mechanics</h2>
-            <div style={{ color: "#8c99a8", fontSize: "13px", maxWidth: "880px", lineHeight: 1.5 }}>
-              Form 4 transactions are classified as open-market purchases/sales, awards, exercises, tax withholding, gifts or other events. 10b5-1 indications and 13D/13G filings remain attached to the source record. Cluster signals are context only.
+            <div style={{ color: "#8c99a8", fontSize: "13px", maxWidth: "900px", lineHeight: 1.5 }}>
+              SEC EDGAR is primary; Micron IR is the official fallback. If both are unavailable locally, a secondary public source may populate context-only transactions that require primary-source corroboration. No insider source can independently authorize a trade.
             </div>
           </div>
           <button onClick={() => void autoCapture()} disabled={busy} style={{ border: "1px solid #5d6e96", background: "#141d31", color: "#dce5ff", borderRadius: "8px", padding: "12px 16px", fontWeight: 900 }}>
-            {busy ? "CHECKING PUBLIC FILINGS..." : "AUTO CAPTURE PUBLIC INSIDER FILINGS"}
+            {busy ? "CHECKING PUBLIC SOURCES..." : "AUTO CAPTURE PUBLIC INSIDER FILINGS"}
           </button>
         </div>
 
@@ -158,13 +163,14 @@ function InsiderOwnershipPanel() {
                   {record.plan_10b5_1 === true ? " · 10b5-1" : ""}
                 </div>
                 <div style={{ marginTop: "4px", color: "#7f8c9c" }}>{record.form} · filed {record.filing_date ?? "—"} · transaction {record.transaction_date ?? "—"}</div>
+                {record.secondary_source && <div style={{ marginTop: "4px", color: "#d7b76a" }}>SECONDARY PUBLIC SOURCE · CONTEXT ONLY · PRIMARY CORROBORATION REQUIRED</div>}
               </div>
             ))}
           </div>
         )}
 
         <div style={{ marginTop: "12px", color: "#758294", fontSize: "11px", lineHeight: 1.5 }}>
-          Insider activity is a contextual signal, not a standalone BUY/SELL rule. Absence of a successful public-filing response is never interpreted as absence of insider activity.
+          Insider activity is a contextual signal, not a standalone BUY/SELL rule. Absence of a successful source response is never interpreted as absence of insider activity.
         </div>
       </div>
     </section>
