@@ -8,6 +8,8 @@ SAMPLE = """
 <tr><th>Transaction Date</th><th>Insider</th><th>Buy/Sell</th><th>Number of Shares</th><th>Average Share Price</th><th>Total Transaction</th><th>Details</th></tr>
 <tr><td>7/24/2026</td><td>Sanjay Mehrotra CEO</td><td>Sell</td><td>8,715</td><td>$951.72</td><td>$8,294,239.80</td><td>Details</td></tr>
 <tr><td>6/12/2026</td><td>Sample Director Director</td><td>Buy</td><td>1,000</td><td>$800.00</td><td>$800,000.00</td><td>Details</td></tr>
+<tr><td>9/17/2025</td><td>John Boozman Senate (R-AR)</td><td>Sell</td><td></td><td>$159.99</td><td></td><td>Details</td></tr>
+<tr><td>9/22/2025</td><td>Ro Khanna House (D-CA)</td><td>Sell</td><td></td><td>$164.62</td><td></td><td>Details</td></tr>
 </table>
 """
 
@@ -25,8 +27,16 @@ class InsiderSecondaryFallbackTests(unittest.TestCase):
         self.assertAlmostEqual(sale["price_per_share"], 951.72)
         self.assertEqual(sale["admission_status"], "CONTEXT_ONLY")
         self.assertTrue(sale["requires_primary_corroboration"])
+        self.assertEqual(sale["subject_scope"], "CORPORATE_INSIDER")
         self.assertEqual(buy["transaction_nature"], "OPEN_MARKET_PURCHASE")
         self.assertEqual(buy["transaction_date"], "2026-06-12")
+
+    def test_congressional_rows_are_excluded_from_corporate_insiders(self):
+        records = secondary.parse_marketbeat_insider_rows(SAMPLE, ticker="MU")
+        owners = {record["reporting_owner"] for record in records}
+        self.assertNotIn("John Boozman Senate (R-AR)", owners)
+        self.assertNotIn("Ro Khanna House (D-CA)", owners)
+        self.assertEqual(len(records), 2)
 
     def test_secondary_never_claims_primary_filing(self):
         record = secondary.parse_marketbeat_insider_rows(SAMPLE, ticker="MU")[0]
