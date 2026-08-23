@@ -41,18 +41,21 @@ class SemiconductorIntelligenceTests(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def test_memory_profile_contains_official_and_market_context_sources(self):
+    def test_memory_profile_is_balanced_and_fail_soft(self):
         requests = self.intel.build_memory_source_requests("Micron memory thesis")
-        self.assertEqual(len(requests), 9)
-        sec_requests = [item for item in requests if item["source"] == "sec_companyfacts"]
-        gdelt_requests = [item for item in requests if item["source"] == "gdelt_news"]
-        fred_requests = [item for item in requests if item["source"] == "fred_series"]
-        self.assertEqual(len(sec_requests), 5)
-        self.assertEqual(len(gdelt_requests), 3)
-        self.assertEqual(len(fred_requests), 1)
-        ciks = {item["params"]["cik"] for item in sec_requests}
-        self.assertIn(self.intel.MICRON_CIK, ciks)
-        self.assertTrue(set(self.intel.HYPERSCALER_CIKS.values()).issubset(ciks))
+        self.assertEqual(len(requests), 6)
+        counts = {}
+        for item in requests:
+            counts[item["source"]] = counts.get(item["source"], 0) + 1
+        self.assertEqual(counts.get("official_web"), 2)
+        self.assertEqual(counts.get("sec_companyfacts"), 1)
+        self.assertEqual(counts.get("google_news_rss"), 1)
+        self.assertEqual(counts.get("gdelt_news"), 1)
+        self.assertEqual(counts.get("fred_series"), 1)
+        sec_request = next(item for item in requests if item["source"] == "sec_companyfacts")
+        self.assertEqual(sec_request["params"]["cik"], self.intel.MICRON_CIK)
+        official_urls = [item["params"]["url"] for item in requests if item["source"] == "official_web"]
+        self.assertTrue(all("investors.micron.com" in url for url in official_urls))
 
     def test_apply_profile_keeps_same_case_and_arms_monitoring(self):
         profile = self.intel.apply_memory_profile(self.case_id)
@@ -60,7 +63,7 @@ class SemiconductorIntelligenceTests(unittest.TestCase):
         self.assertTrue(profile["enabled"])
         self.assertEqual(profile["ticker"], "MU.US")
         self.assertEqual(profile["analysis_mode"], "llm")
-        self.assertEqual(len(profile["source_requests"]), 9)
+        self.assertEqual(len(profile["source_requests"]), 6)
 
     def test_full_reunderwrite_uses_same_case_and_stays_paper_only(self):
         packet = {
