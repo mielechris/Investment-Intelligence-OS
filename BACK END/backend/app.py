@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.8 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.9 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.8 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.9 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -18,6 +18,8 @@ except ImportError:
 
 from main import app
 from decision_history import router as history_router
+from evidence_gap_hunter import router as gap_hunter_router
+from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
 import monitoring_engine
@@ -61,15 +63,21 @@ def monitoring_dashboard_live(limit: int = 25):
             row["latest_reunderwrite_id"] = reunderwrite.get("full_reunderwrite_id")
             row["latest_reunderwrite_disposition"] = (reunderwrite.get("committee") or {}).get("disposition")
             row["latest_reunderwrite_confidence"] = (reunderwrite.get("committee") or {}).get("confidence")
+        qualification = latest_object("qualification_assessment", case_id=case_id) if case_id else None
+        if qualification:
+            row["qualification_stage"] = qualification.get("stage")
+            row["qualified_buy_candidate"] = qualification.get("qualified_buy_candidate")
     return dashboard
 
 
 app.include_router(history_router)
+app.include_router(gap_hunter_router)
+app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.8.0"
+app.version = "0.9.0"
 
 
 @app.on_event("startup")
@@ -87,7 +95,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.8.0",
+        "version": "0.9.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -101,6 +109,10 @@ def system_status():
         "official_company_fallbacks": True,
         "news_rss_fallback": True,
         "decision_history": True,
-        "buy_signal_enabled": False,
+        "evidence_gap_hunter": True,
+        "qualified_buy_candidate_gate": True,
+        "paper_buy_enabled": False,
+        "professional_interview_portal": True,
+        "interview_auto_publish_to_trade_evidence": False,
         "automatic_ssl_cert_bundle": bool(os.getenv("SSL_CERT_FILE")),
     }
