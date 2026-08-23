@@ -76,7 +76,10 @@ CONTRACTS = {
     },
     "policy": {
         "label": "Policy / Regulation",
-        "match_terms": ("semiconductor incentives", "export controls", "tariffs", "permitting", "effective dates"),
+        "match_terms": (
+            "semiconductor incentives", "export controls", "tariff", "tariffs", "permitting",
+            "effective dates", "implementation guidance", "transmission", "substitution",
+        ),
         "match_min": 2,
         "minimum_fraction": 0.70,
         "facts": [
@@ -128,7 +131,6 @@ def _measured_transmission_match(item: dict[str, Any]) -> bool:
     )
     if not any(term in text for term in outcome_terms):
         return False
-    # Require a quantitative observation, not a purely narrative statement.
     return bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:%|percent|million|billion|thousand|units|bps)?\b", text))
 
 
@@ -144,6 +146,15 @@ def fact_matches(item: dict[str, Any], fact: dict[str, Any]) -> bool:
         return False
     hits = sum(1 for term in terms if term in text)
     return hits >= (1 if len(terms) == 1 else 2)
+
+
+def _critical_fact_keys(requirement: str, lane: str) -> set[str]:
+    """Facts explicitly demanded by the Committee are mandatory even above % thresholds."""
+    lowered = str(requirement or "").lower()
+    critical: set[str] = set()
+    if lane == "policy" and any(term in lowered for term in ("measurable", "transmission", "substitution", "supply-chain")):
+        critical.add("transmission")
+    return critical
 
 
 def coverage_for_requirement(requirement: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -167,6 +178,10 @@ def coverage_for_requirement(requirement: str, items: list[dict[str, Any]]) -> d
         })
     total = len(contract["facts"])
     ratio = len(covered) / total if total else 0.0
+    critical_keys = _critical_fact_keys(requirement, lane)
+    missing_critical = sorted(key for key in critical_keys if key not in covered)
+    threshold_passed = ratio >= float(contract["minimum_fraction"])
+    coverage_gate_passed = threshold_passed and not missing_critical
     return {
         "lane": lane,
         "label": contract["label"],
@@ -176,6 +191,10 @@ def coverage_for_requirement(requirement: str, items: list[dict[str, Any]]) -> d
         "total_facts": total,
         "coverage_ratio": round(ratio, 4),
         "minimum_fraction": float(contract["minimum_fraction"]),
-        "coverage_gate_passed": ratio >= float(contract["minimum_fraction"]),
+        "threshold_passed": threshold_passed,
+        "critical_fact_keys": sorted(critical_keys),
+        "missing_critical_fact_keys": missing_critical,
+        "coverage_gate_passed": coverage_gate_passed,
+        "all_facts_covered": len(covered) == total,
         "facts": fact_rows,
     }
