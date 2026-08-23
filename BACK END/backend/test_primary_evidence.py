@@ -13,6 +13,10 @@ FINANCIAL_REQUIREMENT = (
     "Micron's latest filing-based revenue mix, HBM volumes and margins, inventory, free cash flow, "
     "debt and cash, capex commitments, and sensitivity to memory ASP changes."
 )
+POLICY_CURRENT_REQUIREMENT = (
+    "Final tariff scope, effective dates, implementation guidance, and measurable evidence of "
+    "supply-chain substitution or memory-market transmission."
+)
 
 
 class PrimaryEvidenceTests(unittest.TestCase):
@@ -21,6 +25,11 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertEqual(lane, "micron_financials")
         self.assertEqual(contract["label"], "Micron Filing Financials")
         self.assertGreaterEqual(len(contract["facts"]), 8)
+
+    def test_current_policy_wording_maps_to_policy_contract(self):
+        lane, contract = contract_for_requirement(POLICY_CURRENT_REQUIREMENT)
+        self.assertEqual(lane, "policy")
+        self.assertEqual(contract["label"], "Policy / Regulation")
 
     def test_sec_tag_mapping_is_specific(self):
         self.assertEqual(
@@ -63,6 +72,20 @@ class PrimaryEvidenceTests(unittest.TestCase):
         }
         self.assertFalse(fact_matches(white_house, transmission_fact))
         self.assertTrue(fact_matches(measured_market, transmission_fact))
+
+    def test_measured_transmission_is_mandatory_when_committee_explicitly_requests_it(self):
+        items = [
+            {"primary_fact_key": "incentives", "claim": "CHIPS incentive award"},
+            {"primary_fact_key": "export_controls", "claim": "BIS export controls"},
+            {"primary_fact_key": "tariffs", "claim": "25 percent semiconductor tariff"},
+            {"primary_fact_key": "effective_dates", "claim": "effective date 2026-01-15"},
+        ]
+        coverage = coverage_for_requirement(POLICY_CURRENT_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 4)
+        self.assertTrue(coverage["threshold_passed"])
+        self.assertEqual(coverage["missing_critical_fact_keys"], ["transmission"])
+        self.assertFalse(coverage["coverage_gate_passed"])
 
     def test_fact_coverage_uses_explicit_primary_fact_keys(self):
         items = [
