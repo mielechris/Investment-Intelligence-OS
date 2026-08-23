@@ -121,13 +121,6 @@ def _iso_date(text: str | None) -> str | None:
     return None
 
 
-def _latest_date(text: str) -> str | None:
-    found = re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", text)
-    parsed = [_iso_date(item) for item in found]
-    parsed = [item for item in parsed if item]
-    return max(parsed) if parsed else None
-
-
 def parse_marketbeat_ownership(html: str, text: str) -> dict[str, Any] | None:
     ownership = re.search(r"Current\s+Institutional\s+Ownership\s+Percentage\s*([0-9.]+)%", text, re.I | re.S)
     buyers = re.search(r"Number\s+of\s+Institutional\s+Buyers(?:\s*\(last\s+12\s+months\))?\s*([0-9][0-9,]*)", text, re.I | re.S)
@@ -149,10 +142,11 @@ def parse_marketbeat_ownership(html: str, text: str) -> dict[str, Any] | None:
     outflow = values["outflows_12m"] or 0.0
     direction = "ACCUMULATION_BIAS" if b > s and inflow > outflow else "REDUCTION_BIAS" if s > b and outflow > inflow else "MIXED"
     return {
-        "data_as_of": _latest_date(text) or datetime.now(timezone.utc).isoformat(),
-        "summary": f"Secondary 13F context: institutional ownership={values['institutional_ownership_pct']}%, buyers={values['buyers_12m']}, sellers={values['sellers_12m']}; 13F data is lagged and does not represent current positioning.",
+        "data_as_of": None,
+        "data_as_of_known": False,
+        "summary": f"Secondary 13F context: institutional ownership={values['institutional_ownership_pct']}%, buyers={values['buyers_12m']}, sellers={values['sellers_12m']}; the fallback page does not prove the underlying 13F report date, so this is lagged context only.",
         "directional_context": direction,
-        "details": {**values, "fallback_scope": "13F-derived ownership context; reporting lag applies"},
+        "details": {**values, "reporting_date_unknown": True, "fallback_scope": "13F-derived ownership context; reporting date unverified and lag applies"},
     }
 
 
@@ -182,14 +176,14 @@ def parse_marketbeat_analyst(html: str, text: str) -> dict[str, Any] | None:
         return None
     rating = consensus.group(1).upper().replace(" ", "_") if consensus else "UNKNOWN"
     if positive > negative:
-        direction = "REVISION_BIAS_POSITIVE"
+        direction = "RATING_TARGET_BIAS_POSITIVE"
     elif negative > positive:
-        direction = "REVISION_BIAS_NEGATIVE"
+        direction = "RATING_TARGET_BIAS_NEGATIVE"
     else:
         direction = f"CONSENSUS_{rating}"
     return {
         "data_as_of": max((row["date"] for row in recent_rows if row.get("date")), default=datetime.now(timezone.utc).isoformat()),
-        "summary": f"Secondary analyst context: consensus={consensus.group(1) if consensus else 'unknown'}, analysts={_int(analysts.group(1)) if analysts else None}, target=${target.group(1) if target else 'unknown'}; recent rating/target actions positive={positive}, negative={negative}. This fallback is ratings/price-target context, not a point-in-time EPS revision series.",
+        "summary": f"Secondary analyst context: consensus={consensus.group(1) if consensus else 'unknown'}, analysts={_int(analysts.group(1)) if analysts else None}, target=${target.group(1) if target else 'unknown'}; recent rating/target actions positive={positive}, negative={negative}. This is ratings/price-target context, not a point-in-time EPS revision series.",
         "directional_context": direction,
         "details": {
             "consensus_rating": consensus.group(1) if consensus else None,
@@ -199,6 +193,8 @@ def parse_marketbeat_analyst(html: str, text: str) -> dict[str, Any] | None:
             "positive_recent_actions": positive,
             "negative_recent_actions": negative,
             "recent_actions": recent_rows,
+            "analyst_feed_kind": "RATINGS_AND_TARGET_ACTIONS",
+            "true_eps_revision_series": False,
             "fallback_scope": "analyst ratings and target changes; not true EPS-estimate revision history",
         },
     }
@@ -213,18 +209,22 @@ def parse_marketbeat_short_interest(html: str, text: str) -> dict[str, Any] | No
     date = re.search(r"Last\s+Record\s+Date\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I | re.S)
     if not any((current, previous, change, ratio, pct, date)):
         return None
-    change_value = _num(change.group(1)) if change else None
-    direction = "SHORTS_INCREASING" if change_value is not None and change_value > 5 else "SHORTS_DECREASING" if change_value is not None and change_value < -5 else "STABLE_OR_UNKNOWN"
+    raw_change_pct = _num(change.group(1)) if change else None
+    change_fraction = (raw_change_pct / 100.0) if raw_change_pct is not None else None
+    raw_float_pct = _num(pct.group(1)) if pct else None
+    float_fraction = (raw_float_pct / 100.0) if raw_float_pct is not None else None
+    direction = "SHORTS_INCREASING" if change_fraction is not None and change_fraction > 0.05 else "SHORTS_DECREASING" if change_fraction is not None and change_fraction < -0.05 else "STABLE_OR_UNKNOWN"
     return {
         "data_as_of": _iso_date(date.group(1)) if date else None,
-        "summary": f"Secondary short-interest context: {_int(current.group(1)) if current else None} shares short, {_num(pct.group(1)) if pct else None}% of float, change={change_value}%, days-to-cover={_num(ratio.group(1)) if ratio else None}.",
+        "summary": f"Secondary short-interest context: {_int(current.group(1)) if current else None} shares short, {raw_float_pct}% of float, change={raw_change_pct}%, days-to-cover={_num(ratio.group(1)) if ratio else None}.",
         "directional_context": direction,
         "details": {
             "shares_short": _int(current.group(1)) if current else None,
-            "shares_short_prior": _int(previous.group(1)) if previous else None,
-            "change_pct": change_value,
-            "days_to_cover": _num(ratio.group(1)) if ratio else None,
-            "short_percent_float": _num(pct.group(1)) if pct else None,
+            "shares_short_prior_month": _int(previous.group(1)) if previous else None,
+            "change_vs_prior_month": change_fraction,
+            "short_ratio": _num(ratio.group(1)) if ratio else None,
+            "short_percent_float": float_fraction,
+            "percentage_schema": "DECIMAL_FRACTION",
             "fallback_scope": "published short-interest report; periodic and lagged",
         },
     }
