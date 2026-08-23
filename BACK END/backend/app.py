@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.8 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.11.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.8 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.11.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -27,6 +27,8 @@ from insider_intelligence import router as insider_router
 from insider_ir_fallback import install_insider_fallback
 from insider_secondary_fallback import install_secondary_insider_fallback
 from insider_scope_guard import install_insider_scope_guard
+import institutional_intelligence
+from institutional_intelligence import router as institutional_router
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -66,9 +68,11 @@ install_secondary_insider_fallback(insider_intelligence)
 install_insider_scope_guard(insider_intelligence)
 
 
-# Hard Data and Insider/Ownership records remain separate governed ledger classes. The
-# Gap Hunter sees admitted records through its prior-evidence loader; the existing
-# quality firewall and resolution matrix still decide what can actually resolve a gap.
+# Hard Data, Insider/Ownership, and Institutional Expectations remain separate governed
+# ledger classes. The Gap Hunter can see fresh admitted/context records, but the Quality
+# Firewall and Resolution Matrix decide what can actually resolve a gap. Institutional
+# records explicitly carry gap_resolution_eligible=False, so they inform the Committee
+# without becoming a shortcut through primary-evidence requirements.
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
 
@@ -78,6 +82,7 @@ def _gap_packet_items_with_governed_data(packet):
     if case_id:
         items.extend(hard_data_evidence(case_id))
         items.extend(insider_intelligence.insider_evidence(case_id))
+        items.extend(institutional_intelligence.institutional_evidence(case_id))
     return items
 
 
@@ -90,8 +95,8 @@ def monitoring_dashboard_live(limit: int = 25):
 
     Monitor snapshots remain useful surveillance data, but the Committee decision and
     its locked evidence summary are authoritative for the current research disposition.
-    This prevents an older 25-item monitor snapshot from being displayed beside a newer
-    17-item Gap Hunter Committee decision.
+    This prevents an older monitor snapshot from being displayed beside a newer Gap
+    Hunter Committee decision.
     """
     dashboard = build_dashboard(limit)
     coherent_rows = []
@@ -124,12 +129,13 @@ app.include_router(history_router)
 app.include_router(gap_hunter_router)
 app.include_router(hard_data_router)
 app.include_router(insider_router)
+app.include_router(institutional_router)
 app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.10.8"
+app.version = "0.11.0"
 
 
 @app.on_event("startup")
@@ -147,7 +153,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.10.8",
+        "version": "0.11.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -183,6 +189,17 @@ def system_status():
         "insider_date_display_utc": True,
         "insider_fallback_transaction_inference": False,
         "insider_auto_trade_authority": False,
+        "institutional_expectations_layer": True,
+        "institutional_lanes": [
+            "INSTITUTIONAL_OWNERSHIP_13F_CONTEXT",
+            "ANALYST_ESTIMATE_REVISIONS",
+            "SHORT_INTEREST",
+            "OPTIONS_POSITIONING",
+            "CATALYST_CALENDAR",
+        ],
+        "institutional_primary_corroboration_required": True,
+        "institutional_gap_resolution_eligible": False,
+        "institutional_auto_trade_authority": False,
         "qualified_buy_candidate_gate": True,
         "paper_buy_enabled": False,
         "professional_interview_portal": True,
