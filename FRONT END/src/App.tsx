@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 const API = "http://localhost:8000";
+const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 type SystemStatus = {
   version: string;
@@ -23,6 +24,7 @@ type DashboardCase = {
   committee_disposition?: string;
   committee_confidence?: number;
   evidence_quality?: number;
+  latest_evidence_count?: number;
   monitoring_enabled: boolean;
   interval_minutes?: number;
   ticker?: string;
@@ -126,13 +128,20 @@ function App() {
   const [direction, setDirection] = useState("LONG");
   const [referencePrice, setReferencePrice] = useState("");
   const [intervalMinutes, setIntervalMinutes] = useState("240");
-  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(() =>
+    window.localStorage.getItem(ACTIVE_CASE_KEY)
+  );
   const [factoryResult, setFactoryResult] = useState<FactoryBootstrap | null>(null);
 
   const activeCase = useMemo(
     () => cases.find((item) => item.case_id === activeCaseId) ?? null,
     [cases, activeCaseId]
   );
+
+  const selectCase = (caseId: string) => {
+    setActiveCaseId(caseId);
+    window.localStorage.setItem(ACTIVE_CASE_KEY, caseId);
+  };
 
   const loadDashboard = async () => {
     try {
@@ -146,6 +155,20 @@ function App() {
       setAgents(agentData.agents);
       setCases(dashboardData.cases);
       setScorecards(scorecardData.scorecards);
+      setActiveCaseId((current) => {
+        const remembered = current ?? window.localStorage.getItem(ACTIVE_CASE_KEY);
+        const rememberedStillExists =
+          remembered !== null && dashboardData.cases.some((item) => item.case_id === remembered);
+        const nextCaseId = rememberedStillExists
+          ? remembered
+          : dashboardData.cases[0]?.case_id ?? null;
+        if (nextCaseId) {
+          window.localStorage.setItem(ACTIVE_CASE_KEY, nextCaseId);
+        } else {
+          window.localStorage.removeItem(ACTIVE_CASE_KEY);
+        }
+        return nextCaseId;
+      });
       setConnected(true);
     } catch {
       setConnected(false);
@@ -181,7 +204,7 @@ function App() {
         }),
       });
       setFactoryResult(result);
-      setActiveCaseId(result.factory.case.case_id);
+      selectCase(result.factory.case.case_id);
       setNotice(
         `Case ${result.factory.case.case_id.slice(-8)} entered AUTO WATCH. ${result.ingestion.successful_sources} public sources responded.`
       );
@@ -335,6 +358,7 @@ function App() {
               borderRadius: "7px",
               padding: "12px 16px",
               fontWeight: 700,
+              cursor: busy || !activeCaseId ? "default" : "pointer",
             }}
           >
             REFRESH ACTIVE CASE NOW
@@ -385,14 +409,16 @@ function App() {
               {cases.map((item) => (
                 <tr
                   key={item.case_id}
-                  onClick={() => setActiveCaseId(item.case_id)}
+                  onClick={() => selectCase(item.case_id)}
                   style={{ borderTop: "1px solid #1e2731", cursor: "pointer", background: item.case_id === activeCaseId ? "rgba(55, 91, 126, 0.16)" : "transparent" }}
                 >
                   <td style={{ padding: "12px 10px", fontFamily: "monospace", color: "#9fb0c2" }}>{item.case_id.slice(-8)}</td>
                   <td style={{ padding: "12px 10px", maxWidth: "330px" }}>{item.topic}</td>
                   <td style={{ padding: "12px 10px", color: healthTone(item.health), fontWeight: 800 }}>{item.health.replaceAll("_", " ")}</td>
                   <td style={{ padding: "12px 10px" }}>{item.committee_disposition ?? "—"} · {pct(item.committee_confidence)}</td>
-                  <td style={{ padding: "12px 10px" }}>{pct(item.evidence_quality)}</td>
+                  <td style={{ padding: "12px 10px" }}>
+                    {pct(item.evidence_quality)}{item.latest_evidence_count !== undefined ? ` · ${item.latest_evidence_count} items` : ""}
+                  </td>
                   <td style={{ padding: "12px 10px" }}>{returnPct(item.latest_return_pct)}</td>
                   <td style={{ padding: "12px 10px", color: item.monitoring_enabled ? "#59c68c" : "#7e8998" }}>
                     {item.monitoring_enabled ? `${item.interval_minutes ?? "—"}m` : "OFF"}
