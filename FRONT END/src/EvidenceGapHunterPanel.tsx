@@ -23,11 +23,31 @@ type ResolutionRow = {
   top_support: Array<{ source?: string; claim?: string; quality_score?: number; url?: string }>;
 };
 
+type RequirementLineageRow = {
+  prior_requirement: string;
+  lane?: string | null;
+  prior_resolved: boolean;
+  effective_resolved: boolean;
+  status: string;
+  replacement_requirement?: string | null;
+};
+
+type RequirementLineage = {
+  prior_requirement_count: number;
+  prior_resolved_count: number;
+  accepted_resolved_count: number;
+  reopened_count: number;
+  current_open_count: number;
+  current_requirements: string[];
+  rows: RequirementLineageRow[];
+};
+
 type GapRun = {
   case_id: string;
   evidence_summary: { evidence_count?: number; average_quality_score?: number };
   quality_firewall?: { raw_count: number; admitted_count: number; rejected_count: number };
   resolution_matrix?: ResolutionRow[];
+  requirement_lineage?: RequirementLineage;
   committee: {
     disposition?: string;
     confidence?: number;
@@ -97,10 +117,14 @@ function EvidenceGapHunterPanel() {
       const data = (await response.json()) as GapRun;
       setResult(data);
       const firewall = data.quality_firewall;
+      const lineage = data.requirement_lineage;
       const resolved = data.resolution_matrix?.filter((item) => item.resolved).length ?? 0;
       const total = data.resolution_matrix?.length ?? 0;
+      const lineageText = lineage
+        ? `${lineage.accepted_resolved_count} prior gap(s) remain closed; ${lineage.reopened_count} reopened/tightened; ${lineage.current_open_count} current requirement(s).`
+        : `${resolved}/${total} prior gaps resolved.`;
       setMessage(
-        `Gap hunt complete: ${firewall ? `${firewall.admitted_count}/${firewall.raw_count} items admitted` : `${data.evidence_summary.evidence_count ?? 0} items`} at ${pct(data.evidence_summary.average_quality_score)} quality. ${resolved}/${total} prior gaps resolved. Stage: ${labelize(data.qualification.stage)}.`
+        `Gap hunt complete: ${firewall ? `${firewall.admitted_count}/${firewall.raw_count} items admitted` : `${data.evidence_summary.evidence_count ?? 0} items`} at ${pct(data.evidence_summary.average_quality_score)} quality. ${lineageText} Stage: ${labelize(data.qualification.stage)}.`
       );
       const planResponse = await fetch(`${API}/gap-hunter/${caseId}/plan`);
       if (planResponse.ok) setPlan((await planResponse.json()) as GapPlan);
@@ -127,8 +151,12 @@ function EvidenceGapHunterPanel() {
   };
 
   const skeptic = result?.committee.agents?.skeptic;
-  const resolvedCount = result?.resolution_matrix?.filter((item) => item.resolved).length ?? 0;
-  const gapCount = result?.resolution_matrix?.length ?? 0;
+  const lineage = result?.requirement_lineage;
+  const priorClosed = lineage?.accepted_resolved_count ?? 0;
+  const priorTotal = lineage?.prior_requirement_count ?? (result?.resolution_matrix?.length ?? 0);
+  const currentOpen = lineage?.current_open_count ?? plan?.requirements.length ?? 0;
+
+  const lineageFor = (requirement: string) => lineage?.rows.find((row) => row.prior_requirement === requirement);
 
   return (
     <section style={{ margin: "0 28px 28px", color: "#f2f5f8", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
@@ -161,7 +189,7 @@ function EvidenceGapHunterPanel() {
         {plan && (
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "14px", marginTop: "18px" }}>
             <div style={{ ...panel, padding: "16px", background: "#090d12" }}>
-              <div style={small}>OPEN EVIDENCE REQUIREMENTS</div>
+              <div style={small}>CURRENT OPEN EVIDENCE REQUIREMENTS</div>
               {plan.requirements.map((gap, index) => (
                 <div key={`${gap}-${index}`} style={{ marginTop: "9px", borderTop: index ? "1px solid #1e2731" : "none", paddingTop: index ? "9px" : 0, fontSize: "13px", lineHeight: 1.45 }}>
                   {index + 1}. {gap}
@@ -186,14 +214,20 @@ function EvidenceGapHunterPanel() {
               <div style={{ marginTop: "8px", fontSize: "22px", fontWeight: 900, color: result.qualification.qualified_buy_candidate ? "#69d99a" : "#d7b76a" }}>
                 {labelize(result.qualification.stage)}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(115px, 1fr))", gap: "9px", marginTop: "13px", fontSize: "12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(100px, 1fr))", gap: "9px", marginTop: "13px", fontSize: "12px" }}>
                 <div><span style={small}>Committee</span><div>{result.committee.disposition} · {pct(result.committee.confidence)}</div></div>
                 <div><span style={small}>Evidence</span><div>{pct(result.evidence_summary.average_quality_score)} · {result.evidence_summary.evidence_count ?? 0}</div></div>
                 <div><span style={small}>Firewall</span><div>{result.quality_firewall ? `${result.quality_firewall.admitted_count}/${result.quality_firewall.raw_count} admitted` : "—"}</div></div>
-                <div><span style={small}>Gaps Resolved</span><div>{resolvedCount}/{gapCount}</div></div>
+                <div><span style={small}>Prior Closed</span><div>{priorClosed}/{priorTotal}</div></div>
+                <div><span style={small}>Current Open</span><div>{currentOpen}</div></div>
                 <div><span style={small}>Risk</span><div>{result.risk.decision ?? "—"}</div></div>
                 <div><span style={small}>Paper Buy</span><div>{result.qualification.paper_buy_enabled ? "ENABLED" : "LOCKED"}</div></div>
               </div>
+              {lineage && lineage.reopened_count > 0 && (
+                <div style={{ marginTop: "11px", color: "#d0a45d", fontSize: "11px", lineHeight: 1.5 }}>
+                  Requirement lineage: {lineage.reopened_count} prior green requirement(s) were tightened/reopened by the new Committee and are not counted as currently closed.
+                </div>
+              )}
               {result.qualification.unmet_requirements.length > 0 && (
                 <div style={{ marginTop: "13px", color: "#c9a768", fontSize: "12px", lineHeight: 1.6 }}>
                   Still blocking qualification: {result.qualification.unmet_requirements.map(labelize).join(" · ")}
@@ -211,35 +245,46 @@ function EvidenceGapHunterPanel() {
 
             {result.resolution_matrix && result.resolution_matrix.length > 0 && (
               <div style={{ ...panel, marginTop: "14px", padding: "16px", background: "#090d12" }}>
-                <div style={small}>EVIDENCE REQUIREMENT RESOLUTION MATRIX</div>
+                <div style={small}>PRIOR REQUIREMENT RESOLUTION MATRIX</div>
                 <div style={{ marginTop: "7px", color: "#8996a6", fontSize: "12px" }}>
-                  A gap is only resolved with strong quality plus independent corroboration. Mentions alone do not count.
+                  This matrix adjudicates the requirements that existed before this re-underwrite. The new Committee may tighten a previously green requirement; those rows are shown as REOPENED rather than current closures.
                 </div>
-                {result.resolution_matrix.map((row, index) => (
-                  <details key={`${row.requirement}-${index}`} style={{ borderTop: index ? "1px solid #1f2832" : "none", padding: "12px 0" }}>
-                    <summary style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", listStyle: "none" }}>
-                      <span style={{ fontSize: "12px", lineHeight: 1.45, maxWidth: "75%" }}>{index + 1}. {row.requirement}</span>
-                      <strong style={{ color: row.resolved ? "#69d99a" : "#d7b76a", fontSize: "11px" }}>{row.resolved ? "RESOLVED" : "OPEN"}</strong>
-                    </summary>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(100px, 1fr))", gap: "8px", marginTop: "10px", fontSize: "11px" }}>
-                      <div><span style={small}>Quality</span><div>{pct(row.average_quality)}</div></div>
-                      <div><span style={small}>Support</span><div>{row.supporting_items}</div></div>
-                      <div><span style={small}>High Quality</span><div>{row.high_quality_items}</div></div>
-                      <div><span style={small}>Sources</span><div>{row.independent_sources}</div></div>
-                      <div><span style={small}>Primary/Market</span><div>{row.official_or_market_items}</div></div>
-                    </div>
-                    {row.blockers.length > 0 && <div style={{ marginTop: "9px", color: "#c9a768", fontSize: "11px" }}>Blockers: {row.blockers.map(labelize).join(" · ")}</div>}
-                    {row.top_support.length > 0 && (
-                      <div style={{ marginTop: "9px" }}>
-                        {row.top_support.map((item, supportIndex) => (
-                          <div key={supportIndex} style={{ marginTop: "6px", color: "#8f9cab", fontSize: "11px", lineHeight: 1.4 }}>
-                            {item.source || "Source"} · {pct(item.quality_score)} · {item.claim || "—"}
-                          </div>
-                        ))}
+                {result.resolution_matrix.map((row, index) => {
+                  const rowLineage = lineageFor(row.requirement);
+                  const reopened = rowLineage?.status === "SUPERSEDED_REOPENED";
+                  const displayStatus = reopened ? "REOPENED" : row.resolved ? "PRIOR CLOSED" : "OPEN";
+                  const displayColor = reopened ? "#d09c54" : row.resolved ? "#69d99a" : "#d7b76a";
+                  return (
+                    <details key={`${row.requirement}-${index}`} style={{ borderTop: index ? "1px solid #1f2832" : "none", padding: "12px 0" }}>
+                      <summary style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", listStyle: "none" }}>
+                        <span style={{ fontSize: "12px", lineHeight: 1.45, maxWidth: "75%" }}>{index + 1}. {row.requirement}</span>
+                        <strong style={{ color: displayColor, fontSize: "11px" }}>{displayStatus}</strong>
+                      </summary>
+                      {reopened && rowLineage?.replacement_requirement && (
+                        <div style={{ marginTop: "8px", color: "#d0a45d", fontSize: "11px", lineHeight: 1.45 }}>
+                          Replacement requirement: {rowLineage.replacement_requirement}
+                        </div>
+                      )}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(100px, 1fr))", gap: "8px", marginTop: "10px", fontSize: "11px" }}>
+                        <div><span style={small}>Quality</span><div>{pct(row.average_quality)}</div></div>
+                        <div><span style={small}>Support</span><div>{row.supporting_items}</div></div>
+                        <div><span style={small}>High Quality</span><div>{row.high_quality_items}</div></div>
+                        <div><span style={small}>Sources</span><div>{row.independent_sources}</div></div>
+                        <div><span style={small}>Primary/Market</span><div>{row.official_or_market_items}</div></div>
                       </div>
-                    )}
-                  </details>
-                ))}
+                      {row.blockers.length > 0 && <div style={{ marginTop: "9px", color: "#c9a768", fontSize: "11px" }}>Blockers: {row.blockers.map(labelize).join(" · ")}</div>}
+                      {row.top_support.length > 0 && (
+                        <div style={{ marginTop: "9px" }}>
+                          {row.top_support.map((item, supportIndex) => (
+                            <div key={supportIndex} style={{ marginTop: "6px", color: "#8f9cab", fontSize: "11px", lineHeight: 1.4 }}>
+                              {item.source || "Source"} · {pct(item.quality_score)} · {item.claim || "—"}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </details>
+                  );
+                })}
               </div>
             )}
           </>
