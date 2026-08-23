@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from evidence_engine import build_packet
+from primary_evidence_contracts import coverage_for_requirement
 
 NEWS_MIN_QUALITY = 0.45
 GENERAL_MIN_QUALITY = 0.35
@@ -109,15 +110,19 @@ def build_resolution_matrix(requirements: list[str], admitted_raw: list[dict[str
             if str(item.get("source_type") or "").lower() in {"official", "company", "market_data", "filing", "regulatory"}
         ]
         average_quality = float((packet.get("summary") or {}).get("average_quality_score") or 0.0)
+        high_quality_raw = [item.get("raw") if isinstance(item.get("raw"), dict) else item for item in high_quality]
+        fact_coverage = coverage_for_requirement(requirement, high_quality_raw)
+        coverage_passed = fact_coverage is None or bool(fact_coverage.get("coverage_gate_passed"))
 
-        # Resolution requires quality plus independent corroboration. Explicitly context-only
-        # records (for example lagged 13F, analyst, short-interest, or options context) may inform
-        # the Committee but can never resolve a Committee evidence requirement by themselves.
+        # Resolution requires quality, independent corroboration, and—when the Committee
+        # requirement maps to a v0.12 fact contract—enough distinct facts to prove the actual
+        # thesis component. Article volume alone cannot turn a broad requirement green.
         resolved = (
             average_quality >= RESOLUTION_MIN_QUALITY
             and len(high_quality) >= 2
             and len(identities) >= 2
             and (len(official_like) >= 1 or len(high_quality) >= 3)
+            and coverage_passed
         )
         blockers: list[str] = []
         if average_quality < RESOLUTION_MIN_QUALITY:
@@ -128,6 +133,8 @@ def build_resolution_matrix(requirements: list[str], admitted_raw: list[dict[str
             blockers.append("INSUFFICIENT_SOURCE_DIVERSITY")
         if not official_like and len(high_quality) < 3:
             blockers.append("NO_PRIMARY_OR_THREE_SOURCE_CORROBORATION")
+        if fact_coverage is not None and not coverage_passed:
+            blockers.append("PRIMARY_FACT_COVERAGE_INCOMPLETE")
         if context_only_count and not supporting:
             blockers.append("ONLY_CONTEXT_NOT_RESOLUTION_ELIGIBLE")
 
@@ -140,6 +147,7 @@ def build_resolution_matrix(requirements: list[str], admitted_raw: list[dict[str
             "independent_sources": len(identities),
             "official_or_market_items": len(official_like),
             "average_quality": round(average_quality, 4),
+            "fact_coverage": fact_coverage,
             "blockers": blockers,
             "top_support": [
                 {
