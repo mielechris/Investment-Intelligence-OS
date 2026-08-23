@@ -12,6 +12,13 @@ SAMPLE = b"""
 </table>
 """
 
+STATIC_TEXT_SAMPLE = b"""
+<div>Filing date</div><div>Form</div><div>Description</div><div>Filer</div>
+<div>Jul 27, 2026</div><div>4</div><div>Statement of changes in beneficial ownership of securities</div><div>ALLEN SCOTT R.</div>
+<div>Jul 24, 2026</div><div>144</div><div>Filed by insiders prior intended sale of restricted stock.</div>
+<div>May 14, 2026</div><div>SCHEDULE 13G/A</div><div>SCHEDULE 13G/A - Description</div>
+"""
+
 
 class InsiderIRFallbackTests(unittest.TestCase):
     def test_form4_is_context_only_without_transaction_detail(self):
@@ -36,6 +43,16 @@ class InsiderIRFallbackTests(unittest.TestCase):
         self.assertEqual(ownership["record_kind"], "BENEFICIAL_OWNERSHIP_FILING")
         self.assertEqual(ownership["admission_status"], "ADMITTED")
         self.assertTrue(ownership["fallback_source"])
+
+    def test_visible_text_rendering_variant_is_parsed_without_inferring_trade_direction(self):
+        records = fallback.parse_micron_ir_filings(STATIC_TEXT_SAMPLE.decode(), ticker="MU")
+        forms = [item["form"] for item in records]
+        self.assertIn("4", forms)
+        self.assertIn("144", forms)
+        self.assertIn("SCHEDULE 13G/A", forms)
+        form4 = next(item for item in records if item["form"] == "4")
+        self.assertEqual(form4["transaction_nature"], "FORM4_TRANSACTION_DETAIL_UNAVAILABLE")
+        self.assertEqual(form4["admission_status"], "CONTEXT_ONLY")
 
 
 if __name__ == "__main__":
