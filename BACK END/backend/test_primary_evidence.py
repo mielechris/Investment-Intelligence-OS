@@ -47,6 +47,21 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", "HBM volume and margin"), "hbm_margin")
         self.assertEqual(primary_evidence._fact_from_keyword("supply_inventory", "HBM packaging capacity"), "capacity")
 
+    def test_static_micron_financial_keywords_map_to_specific_facts(self):
+        cases = {
+            "Revenue": "revenue",
+            "Inventories": "inventory",
+            "net cash provided by operating activities": "cash_flow",
+            "cash and cash equivalents": "cash",
+            "Long-term debt": "debt",
+            "capital expenditures": "capex",
+            "prices increased in the low-60s percentage range": "asp_sensitivity",
+            "HBM4 volume shipment": "hbm_margin",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", text), expected)
+
     def test_policy_transmission_requires_policy_and_supply_mechanism_at_ingestion(self):
         self.assertFalse(policy_transmission_supported("Domestic semiconductor supply capacity is expanding."))
         self.assertFalse(policy_transmission_supported("A 25 percent tariff applies to covered chips."))
