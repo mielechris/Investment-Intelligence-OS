@@ -28,15 +28,18 @@ from monitoring_engine import (
     start_scheduler,
     stop_scheduler,
 )
+from official_sources import fetch_google_news_rss, fetch_official_web
 from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
 from public_case_router import router as public_case_router_api
 from semiconductor_intelligence import router as semiconductor_router
 
 
-# Provider hardening is installed centrally so every route and background refresh
-# uses the same pacing, retry, SEC identification, SSL, and market-data fallback logic.
+# Provider hardening/fallbacks are installed centrally so every route and background
+# refresh uses the same pacing, retry, SSL, official-company, news, and market logic.
 source_ingestion.FETCHERS["gdelt_news"] = fetch_gdelt_news
 source_ingestion.FETCHERS["sec_companyfacts"] = fetch_sec_companyfacts
+source_ingestion.FETCHERS["official_web"] = fetch_official_web
+source_ingestion.FETCHERS["google_news_rss"] = fetch_google_news_rss
 monitoring_engine._fetch_stooq_quote = fetch_market_quote
 public_case_router._fetch_stooq_quote = fetch_market_quote
 
@@ -64,7 +67,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.7.1"
+app.version = "0.7.2"
 
 
 @app.on_event("startup")
@@ -82,7 +85,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.7.1",
+        "version": "0.7.2",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -93,5 +96,7 @@ def system_status():
         "factory_dashboard": True,
         "semiconductor_memory_intelligence": True,
         "provider_hardening": True,
+        "official_company_fallbacks": True,
+        "news_rss_fallback": True,
         "automatic_ssl_cert_bundle": bool(os.getenv("SSL_CERT_FILE")),
     }
