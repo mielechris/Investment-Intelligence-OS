@@ -1,5 +1,10 @@
 import os
 
+os.environ.setdefault(
+    "IIOS_USER_AGENT",
+    "Investment-Intelligence-OS/0.7 research-client github.com/mielechris/Investment-Intelligence-OS",
+)
+
 try:
     import certifi
 
