@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.6 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.10.7 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.6 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.10.7 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -57,9 +57,9 @@ public_case_router._fetch_stooq_quote = fetch_market_quote
 # 1) direct SEC EDGAR,
 # 2) official Micron IR filing index,
 # 3) secondary public insider source for context only.
-# The scope guard runs last so congressional/political trades from mixed aggregator
-# pages are excluded from corporate-insider counts and evidence. Existing raw rows stay
-# in the audit ledger but disappear from the governed insider view.
+# The scope/freshness guard runs last so congressional/political rows and stale insider
+# history cannot contaminate current corporate-insider research. Raw history remains in
+# the audit ledger for provenance.
 install_insider_fallback(insider_intelligence)
 install_secondary_insider_fallback(insider_intelligence)
 install_insider_scope_guard(insider_intelligence)
@@ -115,7 +115,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.10.6"
+app.version = "0.10.7"
 
 
 @app.on_event("startup")
@@ -133,7 +133,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.10.6",
+        "version": "0.10.7",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -162,6 +162,9 @@ def system_status():
         "insider_scope_filter": "CORPORATE_INSIDERS_ONLY",
         "insider_political_trade_exclusion": True,
         "insider_coverage_aware_summary": True,
+        "insider_freshness_window_days": 90,
+        "insider_stale_history_current_signal": False,
+        "insider_stale_history_research_admission": False,
         "insider_fallback_transaction_inference": False,
         "insider_auto_trade_authority": False,
         "qualified_buy_candidate_gate": True,
