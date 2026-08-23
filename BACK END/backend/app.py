@@ -35,6 +35,7 @@ from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
 import monitoring_engine
+import primary_evidence
 import public_case_router
 import source_ingestion
 from monitoring_engine import (
@@ -45,6 +46,7 @@ from monitoring_engine import (
 )
 from official_sources import fetch_google_news_rss, fetch_official_web
 from primary_evidence import primary_evidence_evidence, router as primary_evidence_router
+from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
 from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
 from public_case_router import router as public_case_router_api
 from semiconductor_intelligence import router as semiconductor_router
@@ -76,6 +78,11 @@ install_insider_scope_guard(insider_intelligence)
 # 3) integrity normalization so secondary units/semantics cannot masquerade as primary.
 install_institutional_secondary_fallback(institutional_intelligence)
 install_institutional_integrity_guard(institutional_intelligence)
+
+# Primary-evidence semantics are stricter than keyword presence. Broad product mentions
+# such as "HBM" cannot satisfy narrow HBM-margin or HBM-yield facts unless the supporting
+# language actually contains the required operational concept.
+install_primary_evidence_semantic_guard(primary_evidence)
 
 
 # Hard Data, Insider/Ownership, Institutional Expectations, and Primary Evidence remain
@@ -184,6 +191,7 @@ def system_status():
         "gap_resolution_matrix": True,
         "primary_fact_contracts": True,
         "primary_fact_coverage_required_for_resolution": True,
+        "primary_evidence_semantic_guard": True,
         "hard_data_acquisition": True,
         "hard_data_best_match_mapping": True,
         "hard_data_mapping_repair": True,
