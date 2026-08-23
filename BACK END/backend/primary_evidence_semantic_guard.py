@@ -8,6 +8,14 @@ WHITE_HOUSE_SEMICONDUCTOR_232_URL = (
     "adjusting-imports-of-semiconductors-semiconductor-manufacturing-equipment-"
     "and-their-derivative-products-into-the-united-states/"
 )
+MICRON_Q3_2026_PRESS_RELEASE_URL = (
+    "https://investors.micron.com/news/press-release/2026/"
+    "Micron-Technology-Inc--Reports-Record-Results-for-the-Third-Quarter-of-Fiscal-2026/default.aspx"
+)
+MICRON_HBM4_VOLUME_URL = (
+    "https://investors.micron.com/news/press-release/2026/"
+    "Micron-in-High-Volume-Production-of-HBM4-Designed-for-NVIDIA-Vera-Rubin-PCIe-Gen6-SSD-and-SOCAMM2-03-16-2026/default.aspx"
+)
 
 
 def policy_transmission_supported(text: str) -> bool:
@@ -19,16 +27,31 @@ def policy_transmission_supported(text: str) -> bool:
 
 
 def install_primary_evidence_semantic_guard(module: Any) -> None:
-    """Prevent broad mentions from satisfying narrow facts, add targeted policy capture, and keep UI labels honest."""
+    """Prevent broad mentions from satisfying narrow facts and add resilient official-source fallbacks."""
     prior_fact = module._fact_from_keyword
     prior_capture_policy = module._capture_policy
+    prior_capture_micron_ir = module._capture_micron_ir
     prior_lane_status = module._lane_status
 
     def guarded(lane: str, text: str):
         value = str(text or "").lower()
-        if lane == "micron_financials" and "hbm" in value:
-            if not any(term in value for term in ("margin", "volume", "shipment", "revenue")):
+        if lane == "micron_financials":
+            if "hbm" in value and not any(term in value for term in ("margin", "volume", "shipment", "revenue")):
                 value = value.replace("hbm", " ")
+            if "revenue" in value and "hbm" not in value:
+                return "revenue"
+            if "inventor" in value:
+                return "inventory"
+            if "cash provided by operating activities" in value or "operating cash flow" in value:
+                return "cash_flow"
+            if "cash equivalent" in value or "cash, marketable investments" in value:
+                return "cash"
+            if "current debt" in value or "long-term debt" in value or "repayments of debt" in value:
+                return "debt"
+            if "capital expenditure" in value or "capex" in value:
+                return "capex"
+            if "prices increased" in value or "higher pricing" in value or "average selling price" in value:
+                return "asp_sensitivity"
         if lane == "supply_inventory" and "hbm" in value:
             if not any(term in value for term in ("packaging", "yield", "capacity")):
                 value = value.replace("hbm", " ")
@@ -47,6 +70,36 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             "White House Semiconductor Section 232 Proclamation",
             ["25 percent", "tariff", "effective", "supply chain", "domestic manufacturing capacity"],
             0.99,
+        )
+        added.extend(records)
+        failures.extend(errors)
+        return added, failures
+
+    def capture_micron_financials_static(case_id: str, case: dict[str, Any]):
+        added, failures = prior_capture_micron_ir(case_id, case)
+        for keywords in (
+            ["Revenue", "Inventories", "net cash provided by operating activities", "cash equivalents", "Current debt", "Long-term debt"],
+            ["capital expenditures", "free cash flow", "higher pricing", "prices increased"],
+        ):
+            records, errors = module._capture_official_page(
+                case_id,
+                case,
+                "micron_financials",
+                MICRON_Q3_2026_PRESS_RELEASE_URL,
+                "Micron Fiscal Q3 2026 Results",
+                keywords,
+                0.98,
+            )
+            added.extend(records)
+            failures.extend(errors)
+        records, errors = module._capture_official_page(
+            case_id,
+            case,
+            "micron_financials",
+            MICRON_HBM4_VOLUME_URL,
+            "Micron HBM4 Volume Production",
+            ["HBM4", "volume shipment", "high-volume production"],
+            0.96,
         )
         added.extend(records)
         failures.extend(errors)
@@ -80,4 +133,5 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
 
     module._fact_from_keyword = guarded
     module._capture_policy = capture_policy_targeted
+    module._capture_micron_ir = capture_micron_financials_static
     module._lane_status = lane_status_guarded
