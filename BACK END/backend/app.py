@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.2 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.2 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -49,6 +49,7 @@ from primary_evidence import primary_evidence_evidence, router as primary_eviden
 from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
 from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
 from public_case_router import router as public_case_router_api
+from requirement_lineage_guard import install_requirement_lineage_guard
 from semiconductor_intelligence import router as semiconductor_router
 
 
@@ -81,7 +82,8 @@ install_institutional_integrity_guard(institutional_intelligence)
 
 # Primary-evidence semantics are stricter than keyword presence. Broad product mentions
 # such as "HBM" cannot satisfy narrow HBM-margin or HBM-yield facts unless the supporting
-# language actually contains the required operational concept.
+# language actually contains the required operational concept. Policy mechanism text also
+# cannot prove measured market transmission without quantitative outcome evidence.
 install_primary_evidence_semantic_guard(primary_evidence)
 
 
@@ -104,6 +106,11 @@ def _gap_packet_items_with_governed_data(packet):
 
 
 evidence_gap_hunter._raw_items_from_packet = _gap_packet_items_with_governed_data
+
+# A Gap Hunt adjudicates the prior Committee requirements and then the new Committee may
+# tighten or rewrite them. Preserve that lineage explicitly so a prior green row is not
+# presented as a currently closed gap when the new Committee reopens the same evidence lane.
+install_requirement_lineage_guard(evidence_gap_hunter)
 
 
 @app.get("/monitoring/dashboard")
@@ -153,7 +160,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.0"
+app.version = "0.12.2"
 
 
 @app.on_event("startup")
@@ -171,7 +178,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.0",
+        "version": "0.12.2",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -189,9 +196,11 @@ def system_status():
         "evidence_gap_hunter": True,
         "gap_quality_firewall": True,
         "gap_resolution_matrix": True,
+        "requirement_lineage_guard": True,
         "primary_fact_contracts": True,
         "primary_fact_coverage_required_for_resolution": True,
         "primary_evidence_semantic_guard": True,
+        "policy_measured_transmission_required": True,
         "hard_data_acquisition": True,
         "hard_data_best_match_mapping": True,
         "hard_data_mapping_repair": True,
