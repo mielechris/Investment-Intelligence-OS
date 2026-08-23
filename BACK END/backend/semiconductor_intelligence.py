@@ -11,7 +11,7 @@ from monitoring_engine import configure_profile, refresh_profile
 
 router = APIRouter()
 PAPER_MODE = True
-PROFILE_VERSION = "0.7.0"
+PROFILE_VERSION = "0.7.2"
 
 MICRON_CIK = "723125"
 HYPERSCALER_CIKS = {
@@ -31,12 +31,6 @@ MICRON_TAGS = [
     "PropertyPlantAndEquipmentNet",
 ]
 
-HYPERSCALER_TAGS = [
-    "PaymentsToAcquirePropertyPlantAndEquipment",
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "Revenues",
-]
-
 
 def utc_case(case_id: str) -> dict[str, Any]:
     case = get_object(case_id)
@@ -46,64 +40,67 @@ def utc_case(case_id: str) -> dict[str, Any]:
 
 
 def build_memory_source_requests(topic: str = "") -> list[dict[str, Any]]:
-    """Public evidence profile for semiconductor-memory cases.
+    """Balanced public evidence profile for semiconductor-memory cases.
 
-    The profile deliberately mixes official filings with targeted news and macro evidence.
-    It does not scrape paywalled/private sources and it does not treat news as equivalent to filings.
+    The profile prefers official Micron investor-relations content, keeps SEC as an
+    optional official filing source, uses one current-news query per provider to
+    avoid rate-limit concentration, and retains macro/market context.
     """
     topic = topic.strip() or "Micron memory demand"
-    requests: list[dict[str, Any]] = [
+    news_query = (
+        '(Micron OR "Micron Technology" OR HBM OR DRAM OR NAND) '
+        '(pricing OR price OR inventory OR capacity OR supply OR demand OR capex OR hyperscaler OR "AI data center")'
+    )
+    return [
+        {
+            "source": "official_web",
+            "params": {
+                "url": "https://investors.micron.com/overview/default.aspx",
+                "label": "Micron Investor Relations",
+                "keywords": [
+                    "record fiscal Q3",
+                    "HBM",
+                    "Strategic Customer Agreements",
+                    "investing at record levels",
+                ],
+                "limit": 4,
+                "evidence_type": "fundamental",
+                "reliability_score": 0.93,
+            },
+        },
+        {
+            "source": "official_web",
+            "params": {
+                "url": "https://investors.micron.com/quarterly-results",
+                "label": "Micron Quarterly Results",
+                "keywords": ["Q3", "Revenue", "Prepared Remarks", "Form 10-Q"],
+                "limit": 4,
+                "evidence_type": "fundamental",
+                "reliability_score": 0.93,
+            },
+        },
         {
             "source": "sec_companyfacts",
             "params": {
                 "cik": MICRON_CIK,
                 "tags": MICRON_TAGS,
-                "limit": 10,
+                "limit": 8,
+                "label": "Micron SEC Company Facts",
             },
         },
         {
-            "source": "gdelt_news",
-            "params": {
-                "query": '("Micron Technology" OR Micron) (HBM OR DRAM OR NAND OR memory)',
-                "limit": 18,
-                "timespan": "72h",
-            },
+            "source": "google_news_rss",
+            "params": {"query": news_query, "limit": 8},
         },
         {
             "source": "gdelt_news",
-            "params": {
-                "query": '(HBM OR DRAM OR NAND) (pricing OR price OR inventory OR capacity) (Micron OR Samsung OR "SK hynix")',
-                "limit": 18,
-                "timespan": "7d",
-            },
-        },
-        {
-            "source": "gdelt_news",
-            "params": {
-                "query": '("AI data center" OR hyperscaler) (capex OR spending OR demand) (Microsoft OR Meta OR Alphabet OR Amazon)',
-                "limit": 18,
-                "timespan": "7d",
-            },
+            "params": {"query": news_query, "limit": 8, "timespan": "7d"},
         },
         {
             "source": "fred_series",
             "params": {"series_id": "DGS10", "limit": 4},
         },
     ]
-
-    for company, cik in HYPERSCALER_CIKS.items():
-        requests.append(
-            {
-                "source": "sec_companyfacts",
-                "params": {
-                    "cik": cik,
-                    "tags": HYPERSCALER_TAGS,
-                    "limit": 4,
-                    "label": company,
-                },
-            }
-        )
-    return requests
 
 
 def apply_memory_profile(case_id: str) -> dict[str, Any]:
