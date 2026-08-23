@@ -31,20 +31,40 @@ type InsiderStatus = {
   records: InsiderRecord[];
   summary: {
     record_count: number;
+    raw_record_count?: number;
+    excluded_non_corporate_records?: number;
     open_market_buys: number;
     open_market_sales: number;
-    planned_10b5_1_sales: number;
-    beneficial_ownership_filings: number;
+    planned_10b5_1_sales: number | null;
+    beneficial_ownership_filings: number | null;
     buy_dollar_value: number;
     sale_dollar_value: number;
     cluster_signal_30d: string;
     cluster_is_context_only: boolean;
+  };
+  coverage?: {
+    active_source_tier: string;
+    primary_sec_records: number;
+    official_company_records: number;
+    secondary_public_records: number;
+    open_market_direction_covered: boolean;
+    plan_10b5_1_covered: boolean;
+    beneficial_ownership_covered: boolean;
+    secondary_requires_primary_corroboration: boolean;
   };
 };
 
 function money(value?: number | null): string {
   if (value === undefined || value === null || Number.isNaN(value)) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function countOrUnknown(value: number | null | undefined): string {
+  return value === null || value === undefined ? "UNKNOWN" : value.toLocaleString();
+}
+
+function tierLabel(value?: string): string {
+  return (value ?? "NO_SUCCESSFUL_SOURCE").replaceAll("_", " ");
 }
 
 function InsiderOwnershipPanel() {
@@ -86,7 +106,7 @@ function InsiderOwnershipPanel() {
       if (data.status === "provider_error") {
         setMessage(`Insider providers unavailable: ${data.error ?? "unknown provider error"}. This is recorded as a provider gap, not as “no insider activity.”`);
       } else if (data.status === "secondary_fallback_ok") {
-        setMessage(`Secondary public insider fallback used: ${data.records_fetched ?? 0} transaction record(s) parsed, ${data.records_added ?? 0} new ledger record(s) added. ${data.provider_note ?? "These records are context-only and require primary-source corroboration."}`);
+        setMessage(`Secondary public insider fallback used: ${data.records_fetched ?? 0} corporate-insider transaction record(s) parsed, ${data.records_added ?? 0} new ledger record(s) added. ${data.provider_note ?? "These records are context-only and require primary-source corroboration."}`);
       } else if (data.status === "fallback_ok") {
         setMessage(`Official Micron IR fallback used: ${data.records_fetched ?? 0} public filing record(s) parsed, ${data.records_added ?? 0} new ledger record(s) added. ${data.provider_note ?? "Form 4 direction is not inferred without transaction detail."}`);
       } else {
@@ -115,16 +135,17 @@ function InsiderOwnershipPanel() {
     textTransform: "uppercase" as const,
   };
   const summary = status?.summary;
+  const coverage = status?.coverage;
 
   return (
     <section style={{ margin: "0 28px 28px", color: "#f2f5f8", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
       <div style={{ ...panel, borderColor: "#4a5876" }}>
-        <div style={small}>INSIDER & OWNERSHIP INTELLIGENCE · PUBLIC FILINGS / CONTEXT</div>
+        <div style={small}>INSIDER & OWNERSHIP INTELLIGENCE · CORPORATE INSIDERS ONLY</div>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "18px", alignItems: "start", flexWrap: "wrap" }}>
           <div>
-            <h2 style={{ margin: "7px 0 5px" }}>Separate genuine insider activity from compensation mechanics</h2>
-            <div style={{ color: "#8c99a8", fontSize: "13px", maxWidth: "900px", lineHeight: 1.5 }}>
-              SEC EDGAR is primary; Micron IR is the official fallback. If both are unavailable locally, a secondary public source may populate context-only transactions that require primary-source corroboration. No insider source can independently authorize a trade.
+            <h2 style={{ margin: "7px 0 5px" }}>Separate genuine company-insider activity from unrelated public trades</h2>
+            <div style={{ color: "#8c99a8", fontSize: "13px", maxWidth: "920px", lineHeight: 1.5 }}>
+              SEC EDGAR is primary; Micron IR is the official fallback. If both are unavailable locally, a secondary public source may populate corporate-insider context only. Congressional/political trades are excluded from this panel, counts, and research evidence.
             </div>
           </div>
           <button onClick={() => void autoCapture()} disabled={busy} style={{ border: "1px solid #5d6e96", background: "#141d31", color: "#dce5ff", borderRadius: "8px", padding: "12px 16px", fontWeight: 900 }}>
@@ -134,18 +155,26 @@ function InsiderOwnershipPanel() {
 
         <div style={{ marginTop: "13px", color: "#9ba8b6", fontSize: "12px", lineHeight: 1.5 }}>{message}</div>
 
+        {status && (
+          <div style={{ marginTop: "10px", color: "#7f8c9c", fontSize: "11px", lineHeight: 1.5 }}>
+            SOURCE TIER: <strong style={{ color: "#c6d0dc" }}>{tierLabel(coverage?.active_source_tier)}</strong>
+            {summary?.excluded_non_corporate_records ? ` · ${summary.excluded_non_corporate_records} non-corporate/political row(s) excluded from the governed view` : ""}
+            {coverage?.secondary_requires_primary_corroboration ? " · secondary records require primary corroboration" : ""}
+          </div>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(120px, 1fr))", gap: "8px", marginTop: "16px" }}>
           <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>Open-market buys</div><div style={{ marginTop: "7px", fontSize: "20px", fontWeight: 900 }}>{summary?.open_market_buys ?? 0}</div></div>
           <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>Open-market sales</div><div style={{ marginTop: "7px", fontSize: "20px", fontWeight: 900 }}>{summary?.open_market_sales ?? 0}</div></div>
-          <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>10b5-1 sales</div><div style={{ marginTop: "7px", fontSize: "20px", fontWeight: 900 }}>{summary?.planned_10b5_1_sales ?? 0}</div></div>
-          <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>13D / 13G</div><div style={{ marginTop: "7px", fontSize: "20px", fontWeight: 900 }}>{summary?.beneficial_ownership_filings ?? 0}</div></div>
+          <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>10b5-1 sales</div><div style={{ marginTop: "7px", fontSize: "15px", fontWeight: 900 }}>{countOrUnknown(summary?.planned_10b5_1_sales)}</div><div style={{ marginTop: "3px", color: "#6f7d8d", fontSize: "10px" }}>{coverage?.plan_10b5_1_covered ? "covered" : "not covered by active source"}</div></div>
+          <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>13D / 13G</div><div style={{ marginTop: "7px", fontSize: "15px", fontWeight: 900 }}>{countOrUnknown(summary?.beneficial_ownership_filings)}</div><div style={{ marginTop: "3px", color: "#6f7d8d", fontSize: "10px" }}>{coverage?.beneficial_ownership_covered ? "covered" : "not covered by active source"}</div></div>
           <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>Buy value</div><div style={{ marginTop: "7px", fontSize: "15px", fontWeight: 900 }}>{money(summary?.buy_dollar_value)}</div></div>
           <div style={{ ...panel, padding: "12px", background: "#080d11" }}><div style={small}>30d cluster</div><div style={{ marginTop: "7px", fontSize: "12px", fontWeight: 900 }}>{(summary?.cluster_signal_30d ?? "NONE").replaceAll("_", " ")}</div></div>
         </div>
 
         {status && status.records.length > 0 && (
           <div style={{ ...panel, marginTop: "15px", padding: "16px", background: "#080c11" }}>
-            <div style={small}>RECENT PUBLIC INSIDER / OWNERSHIP RECORDS</div>
+            <div style={small}>RECENT CORPORATE INSIDER / OWNERSHIP RECORDS</div>
             {status.records.slice(0, 14).map((record) => (
               <div key={record.insider_activity_id} style={{ borderTop: "1px solid #1e2731", padding: "10px 0", marginTop: "8px", fontSize: "12px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
@@ -170,7 +199,7 @@ function InsiderOwnershipPanel() {
         )}
 
         <div style={{ marginTop: "12px", color: "#758294", fontSize: "11px", lineHeight: 1.5 }}>
-          Insider activity is a contextual signal, not a standalone BUY/SELL rule. Absence of a successful source response is never interpreted as absence of insider activity.
+          Insider activity is a contextual signal, not a standalone BUY/SELL rule. Unknown coverage is shown as UNKNOWN rather than zero. Raw excluded rows remain in the audit ledger for provenance but cannot enter governed research.
         </div>
       </div>
     </section>
