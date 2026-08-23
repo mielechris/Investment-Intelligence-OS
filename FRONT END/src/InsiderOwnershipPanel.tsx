@@ -81,7 +81,9 @@ function tierLabel(value?: string): string {
 function dateLabel(value?: string | null): string {
   if (!value) return "UNKNOWN";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString();
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleDateString(undefined, { timeZone: "UTC" });
 }
 
 function InsiderOwnershipPanel() {
