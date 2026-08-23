@@ -7,6 +7,7 @@ import EvidenceGapHunterPanel from './EvidenceGapHunterPanel.tsx'
 import HardDataPanel from './HardDataPanel.tsx'
 import InsiderOwnershipPanel from './InsiderOwnershipPanel.tsx'
 import InstitutionalIntelligencePanel from './InstitutionalIntelligencePanel.tsx'
+import PrimaryEvidencePanel from './PrimaryEvidencePanel.tsx'
 import InterviewPortalPanel from './InterviewPortalPanel.tsx'
 
 createRoot(document.getElementById('root')!).render(
@@ -17,6 +18,7 @@ createRoot(document.getElementById('root')!).render(
     <HardDataPanel />
     <InsiderOwnershipPanel />
     <InstitutionalIntelligencePanel />
+    <PrimaryEvidencePanel />
     <InterviewPortalPanel />
   </StrictMode>,
 )
