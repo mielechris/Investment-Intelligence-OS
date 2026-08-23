@@ -80,15 +80,31 @@ class EvidenceGapHunterTests(unittest.TestCase):
             "agents": agents,
         }
         risk = {"decision": "WATCH_ONLY", "triggered_rules": []}
-        result = self.hunter._qualification_assessment(committee, risk)
+        resolution = [
+            {
+                "requirement": "Current Micron inventory and capex evidence",
+                "resolved": True,
+            },
+            {
+                "requirement": "Downside risk and valuation context",
+                "resolved": True,
+            },
+        ]
+        result = self.hunter._qualification_assessment(committee, risk, resolution)
         self.assertTrue(result["qualified_buy_candidate"])
         self.assertEqual(result["stage"], "QUALIFIED_BUY_CANDIDATE")
         self.assertFalse(result["paper_buy_enabled"])
 
         committee["required_evidence"] = ["Need one more item"]
-        result = self.hunter._qualification_assessment(committee, risk)
+        result = self.hunter._qualification_assessment(committee, risk, resolution)
         self.assertFalse(result["qualified_buy_candidate"])
         self.assertIn("required_evidence_resolved", result["unmet_requirements"])
+
+        committee["required_evidence"] = []
+        resolution[0]["resolved"] = False
+        result = self.hunter._qualification_assessment(committee, risk, resolution)
+        self.assertFalse(result["qualified_buy_candidate"])
+        self.assertIn("gap_resolution_matrix_clear", result["unmet_requirements"])
 
 
 if __name__ == "__main__":
