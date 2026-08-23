@@ -84,6 +84,38 @@ class GapQualityTests(unittest.TestCase):
         self.assertFalse(matrix[0]["resolved"])
         self.assertIn("INSUFFICIENT_SOURCE_DIVERSITY", matrix[0]["blockers"])
 
+    def test_context_only_signals_can_inform_but_cannot_resolve_gap(self):
+        requirement = "Current valuation consensus options positioning and short interest"
+        context = [
+            {
+                "source": "Secondary Market Context A",
+                "source_type": "market_data",
+                "evidence_type": "market_context",
+                "url": "https://context-a.example/mu",
+                "claim": "Analyst estimates revised higher",
+                "timestamp": NOW,
+                "reliability_score": 0.90,
+                "gap_requirement": requirement,
+                "gap_resolution_eligible": False,
+            },
+            {
+                "source": "Secondary Market Context B",
+                "source_type": "market_data",
+                "evidence_type": "market_context",
+                "url": "https://context-b.example/mu",
+                "claim": "Options positioning changed materially",
+                "timestamp": NOW,
+                "reliability_score": 0.90,
+                "gap_requirement": requirement,
+                "gap_resolution_eligible": False,
+            },
+        ]
+        matrix = build_resolution_matrix([requirement], context)
+        self.assertFalse(matrix[0]["resolved"])
+        self.assertEqual(matrix[0]["supporting_items"], 0)
+        self.assertEqual(matrix[0]["context_only_supporting_items"], 2)
+        self.assertIn("ONLY_CONTEXT_NOT_RESOLUTION_ELIGIBLE", matrix[0]["blockers"])
+
 
 if __name__ == "__main__":
     unittest.main()
