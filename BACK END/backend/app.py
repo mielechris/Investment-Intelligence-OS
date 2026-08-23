@@ -36,6 +36,11 @@ def monitoring_dashboard_live(limit: int = 25):
         if "average_quality_score" in summary:
             row["evidence_quality"] = summary.get("average_quality_score")
             row["latest_evidence_count"] = summary.get("evidence_count")
+        reunderwrite = latest_object("full_reunderwrite", case_id=case_id) if case_id else None
+        if reunderwrite:
+            row["latest_reunderwrite_id"] = reunderwrite.get("full_reunderwrite_id")
+            row["latest_reunderwrite_disposition"] = (reunderwrite.get("committee") or {}).get("disposition")
+            row["latest_reunderwrite_confidence"] = (reunderwrite.get("committee") or {}).get("confidence")
     return dashboard
 
 
