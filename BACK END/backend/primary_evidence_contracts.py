@@ -7,6 +7,7 @@ CONTRACTS = {
     "memory_pricing": {
         "label": "Memory Pricing",
         "match_terms": ("hbm", "dram", "nand", "prices"),
+        "match_min": 3,
         "minimum_fraction": 0.75,
         "facts": [
             {"key": "hbm_pricing", "label": "HBM pricing", "terms": ("hbm", "price", "pricing")},
@@ -18,6 +19,7 @@ CONTRACTS = {
     "supply_inventory": {
         "label": "Supply / Inventory",
         "match_terms": ("inventory days", "bit shipments", "wafer starts", "utilization", "capacity additions"),
+        "match_min": 2,
         "minimum_fraction": 0.75,
         "facts": [
             {"key": "inventory", "label": "Inventory", "terms": ("inventory",)},
@@ -31,6 +33,7 @@ CONTRACTS = {
     "hyperscaler_demand": {
         "label": "Hyperscaler Demand",
         "match_terms": ("hyperscaler", "ai-capex", "server shipments", "backlog", "cancellations"),
+        "match_min": 2,
         "minimum_fraction": 0.70,
         "facts": [
             {"key": "ai_capex", "label": "AI capex plans", "terms": ("ai", "capex", "capital expenditure")},
@@ -43,6 +46,7 @@ CONTRACTS = {
     "micron_financials": {
         "label": "Micron Filing Financials",
         "match_terms": ("micron", "filing-based", "revenue mix", "free cash flow", "debt and cash"),
+        "match_min": 2,
         "minimum_fraction": 0.75,
         "facts": [
             {"key": "revenue", "label": "Revenue / revenue mix", "terms": ("revenue",)},
@@ -58,6 +62,7 @@ CONTRACTS = {
     "valuation_market": {
         "label": "MU Valuation / Market",
         "match_terms": ("current mu price", "diluted shares", "consensus revenue", "valuation multiples", "short interest"),
+        "match_min": 2,
         "minimum_fraction": 0.70,
         "facts": [
             {"key": "market_price", "label": "Current MU price", "terms": ("mu.us", "market price", "current price")},
@@ -71,6 +76,7 @@ CONTRACTS = {
     "policy": {
         "label": "Policy / Regulation",
         "match_terms": ("semiconductor incentives", "export controls", "tariffs", "permitting", "effective dates"),
+        "match_min": 2,
         "minimum_fraction": 0.70,
         "facts": [
             {"key": "incentives", "label": "Semiconductor incentives", "terms": ("incentive", "chips", "award")},
@@ -95,7 +101,7 @@ def contract_for_requirement(requirement: str) -> tuple[str, dict[str, Any]] | t
     ranked: list[tuple[int, str, dict[str, Any]]] = []
     for key, contract in CONTRACTS.items():
         score = sum(1 for term in contract["match_terms"] if term in lowered)
-        if score:
+        if score >= int(contract.get("match_min", 1)):
             ranked.append((score, key, contract))
     if not ranked:
         return None, None
@@ -112,7 +118,6 @@ def fact_matches(item: dict[str, Any], fact: dict[str, Any]) -> bool:
     terms = tuple(str(term).lower() for term in fact.get("terms") or ())
     if not terms:
         return False
-    # One very specific phrase is enough; otherwise require at least two term hits.
     hits = sum(1 for term in terms if term in text)
     return hits >= (1 if len(terms) == 1 else 2)
 
