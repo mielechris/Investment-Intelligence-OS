@@ -71,6 +71,7 @@ def normalize_secondary_institutional_record(record: dict[str, Any]) -> dict[str
 def install_institutional_integrity_guard(module: Any) -> None:
     prior_auto = module.auto_capture_institutional
     prior_status = module.institutional_status
+    prior_evidence = module.institutional_evidence
 
     def _persist(record: dict[str, Any]) -> None:
         record_id = str(record.get("institutional_signal_id") or "")
@@ -119,5 +120,28 @@ def install_institutional_integrity_guard(module: Any) -> None:
             lanes[lane_key] = lane_copy
         return {**result, "lanes": lanes}
 
+    def evidence_with_integrity(case_id: str) -> list[dict[str, Any]]:
+        """Protect Gap Hunter from legacy pre-v0.11.2 fallback rows already in ledger."""
+        output: list[dict[str, Any]] = []
+        for item in prior_evidence(case_id):
+            source = str(item.get("source") or "").lower()
+            lane = str(item.get("institutional_lane") or "")
+            if "marketbeat" not in source:
+                output.append(item)
+                continue
+            # Unknown 13F report dates cannot be treated as fresh present-tense evidence.
+            if lane == "institutional_ownership":
+                continue
+            normalized = dict(item)
+            if lane == "analyst_revisions":
+                direction = str(normalized.get("directional_context") or "")
+                if direction == "REVISION_BIAS_POSITIVE":
+                    normalized["directional_context"] = "RATING_TARGET_BIAS_POSITIVE"
+                elif direction == "REVISION_BIAS_NEGATIVE":
+                    normalized["directional_context"] = "RATING_TARGET_BIAS_NEGATIVE"
+            output.append(normalized)
+        return output
+
     module.auto_capture_institutional = auto_capture_with_integrity
     module.institutional_status = status_with_integrity
+    module.institutional_evidence = evidence_with_integrity
