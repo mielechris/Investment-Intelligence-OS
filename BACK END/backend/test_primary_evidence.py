@@ -1,9 +1,13 @@
 import unittest
 
+import primary_evidence
 from gap_quality import build_resolution_matrix
 from primary_evidence import _fact_from_sec_title
 from primary_evidence_contracts import contract_for_requirement, coverage_for_requirement
+from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
 
+
+install_primary_evidence_semantic_guard(primary_evidence)
 
 FINANCIAL_REQUIREMENT = (
     "Micron's latest filing-based revenue mix, HBM volumes and margins, inventory, free cash flow, "
@@ -27,6 +31,12 @@ class PrimaryEvidenceTests(unittest.TestCase):
             _fact_from_sec_title("Micron Technology WeightedAverageNumberOfDilutedSharesOutstanding"),
             ("valuation_market", "diluted_shares"),
         )
+
+    def test_bare_hbm_does_not_prove_margin_or_packaging_yield(self):
+        self.assertIsNone(primary_evidence._fact_from_keyword("micron_financials", "HBM"))
+        self.assertIsNone(primary_evidence._fact_from_keyword("supply_inventory", "HBM"))
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", "HBM volume and margin"), "hbm_margin")
+        self.assertEqual(primary_evidence._fact_from_keyword("supply_inventory", "HBM packaging capacity"), "capacity")
 
     def test_fact_coverage_uses_explicit_primary_fact_keys(self):
         items = [
@@ -60,7 +70,7 @@ class PrimaryEvidenceTests(unittest.TestCase):
                 "source_type": "company",
                 "evidence_type": "fundamental",
                 "url": "https://investors.micron.com/a",
-                "claim": "Micron HBM demand remains strong",
+                "claim": "Micron HBM volume and margin detail",
                 "timestamp": "2026-08-22T00:00:00+00:00",
                 "reliability_score": 0.95,
                 "gap_requirement": FINANCIAL_REQUIREMENT,
