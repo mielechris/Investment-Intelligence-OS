@@ -4,6 +4,10 @@ os.environ.setdefault(
     "IIOS_USER_AGENT",
     "Investment-Intelligence-OS/0.7 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
+os.environ.setdefault(
+    "IIOS_SEC_USER_AGENT",
+    "Investment-Intelligence-OS/0.7 research mielechris@users.noreply.github.com",
+)
 
 try:
     import certifi
@@ -15,14 +19,26 @@ except ImportError:
 from main import app
 from learning_loop import router as learning_router
 from ledger import latest_object
+import monitoring_engine
+import public_case_router
+import source_ingestion
 from monitoring_engine import (
     build_dashboard,
     router as monitoring_router,
     start_scheduler,
     stop_scheduler,
 )
-from public_case_router import router as public_case_router
+from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
+from public_case_router import router as public_case_router_api
 from semiconductor_intelligence import router as semiconductor_router
+
+
+# Provider hardening is installed centrally so every route and background refresh
+# uses the same pacing, retry, SEC identification, SSL, and market-data fallback logic.
+source_ingestion.FETCHERS["gdelt_news"] = fetch_gdelt_news
+source_ingestion.FETCHERS["sec_companyfacts"] = fetch_sec_companyfacts
+monitoring_engine._fetch_stooq_quote = fetch_market_quote
+public_case_router._fetch_stooq_quote = fetch_market_quote
 
 
 @app.get("/monitoring/dashboard")
@@ -46,9 +62,9 @@ def monitoring_dashboard_live(limit: int = 25):
 
 app.include_router(learning_router)
 app.include_router(monitoring_router)
-app.include_router(public_case_router)
+app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.7.0"
+app.version = "0.7.1"
 
 
 @app.on_event("startup")
@@ -66,7 +82,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.7.0",
+        "version": "0.7.1",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -76,5 +92,6 @@ def system_status():
         "automatic_monitoring": True,
         "factory_dashboard": True,
         "semiconductor_memory_intelligence": True,
+        "provider_hardening": True,
         "automatic_ssl_cert_bundle": bool(os.getenv("SSL_CERT_FILE")),
     }
