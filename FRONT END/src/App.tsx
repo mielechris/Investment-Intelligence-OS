@@ -7,6 +7,7 @@ type SystemStatus = {
   version: string;
   paper_mode: boolean;
   automatic_monitoring: boolean;
+  semiconductor_memory_intelligence?: boolean;
 };
 
 type Agent = {
@@ -85,6 +86,30 @@ type FactoryBootstrap = {
   } | null;
 };
 
+type MemoryReunderwriteResult = {
+  case_id: string;
+  evidence_summary: {
+    evidence_count?: number;
+    average_quality_score?: number;
+  };
+  committee: {
+    headline: string;
+    summary: string;
+    confidence: number;
+    disposition: string;
+  };
+  risk: {
+    decision: string;
+  };
+  execution: {
+    execution: string;
+  };
+  quote?: {
+    current_price?: number | null;
+    status?: string;
+  };
+};
+
 async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, options);
   if (!response.ok) {
@@ -132,6 +157,7 @@ function App() {
     window.localStorage.getItem(ACTIVE_CASE_KEY)
   );
   const [factoryResult, setFactoryResult] = useState<FactoryBootstrap | null>(null);
+  const [memoryResult, setMemoryResult] = useState<MemoryReunderwriteResult | null>(null);
 
   const activeCase = useMemo(
     () => cases.find((item) => item.case_id === activeCaseId) ?? null,
@@ -204,6 +230,7 @@ function App() {
         }),
       });
       setFactoryResult(result);
+      setMemoryResult(null);
       selectCase(result.factory.case.case_id);
       setNotice(
         `Case ${result.factory.case.case_id.slice(-8)} entered AUTO WATCH. ${result.ingestion.successful_sources} public sources responded.`
@@ -226,6 +253,27 @@ function App() {
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? `Monitoring error: ${error.message}` : "Monitoring refresh failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runMemoryReunderwrite = async () => {
+    if (!activeCaseId) return;
+    setBusy(true);
+    setNotice("Loading Micron filings, memory-market signals, hyperscaler capex, rates, and MU market data; then rerunning all eight desks...");
+    try {
+      const result = await apiJson<MemoryReunderwriteResult>(
+        `/intelligence/semiconductor-memory/${activeCaseId}/reunderwrite`,
+        { method: "POST" }
+      );
+      setMemoryResult(result);
+      setNotice(
+        `Memory re-underwrite complete: ${result.evidence_summary.evidence_count ?? 0} items at ${pct(result.evidence_summary.average_quality_score)} quality. Committee ${result.committee.disposition} ${pct(result.committee.confidence)}; Risk ${result.risk.decision}; Execution ${result.execution.execution}.`
+      );
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? `Memory intelligence error: ${error.message}` : "Memory re-underwrite failed.");
     } finally {
       setBusy(false);
     }
@@ -363,6 +411,21 @@ function App() {
           >
             REFRESH ACTIVE CASE NOW
           </button>
+          <button
+            onClick={() => void runMemoryReunderwrite()}
+            disabled={busy || !activeCaseId || system?.semiconductor_memory_intelligence !== true}
+            style={{
+              border: "1px solid #765fa8",
+              background: "#211936",
+              color: activeCaseId ? "#e6dcff" : "#625a70",
+              borderRadius: "7px",
+              padding: "12px 16px",
+              fontWeight: 800,
+              cursor: busy || !activeCaseId ? "default" : "pointer",
+            }}
+          >
+            MEMORY INTEL + 8-DESK REUNDERWRITE
+          </button>
           <span style={{ color: "#8d9aaa", fontSize: "13px" }}>{notice}</span>
         </div>
       </section>
@@ -451,7 +514,18 @@ function App() {
 
         <section style={panel}>
           <div style={smallLabel}>LAST FACTORY PASS</div>
-          {factoryResult ? (
+          {memoryResult ? (
+            <>
+              <h2 style={{ margin: "7px 0 8px" }}>{memoryResult.committee.headline}</h2>
+              <p style={{ color: "#aab5c1", lineHeight: 1.5 }}>{memoryResult.committee.summary}</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px", marginTop: "12px" }}>
+                <div><span style={smallLabel}>Committee</span><div>{memoryResult.committee.disposition} · {pct(memoryResult.committee.confidence)}</div></div>
+                <div><span style={smallLabel}>Risk</span><div>{memoryResult.risk.decision}</div></div>
+                <div><span style={smallLabel}>Execution</span><div>{memoryResult.execution.execution}</div></div>
+                <div><span style={smallLabel}>Evidence</span><div>{pct(memoryResult.evidence_summary.average_quality_score)} · {memoryResult.evidence_summary.evidence_count ?? 0} items</div></div>
+              </div>
+            </>
+          ) : factoryResult ? (
             <>
               <h2 style={{ margin: "7px 0 8px" }}>{factoryResult.factory.committee.headline}</h2>
               <p style={{ color: "#aab5c1", lineHeight: 1.5 }}>{factoryResult.factory.committee.summary}</p>
