@@ -20,26 +20,31 @@ LANES = {
         "label": "Memory Pricing",
         "evidence_type": "market_data",
         "keywords": ("dram", "hbm", "nand", "price", "pricing", "spot", "contract"),
+        "strong_terms": ("dram", "hbm", "nand", "spot", "contract pricing", "memory price"),
     },
     "supply_inventory": {
         "label": "Supply / Inventory",
         "evidence_type": "fundamental",
         "keywords": ("inventory", "bit shipment", "wafer", "utilization", "capacity", "supply", "starts"),
+        "strong_terms": ("inventory", "bit shipment", "wafer", "utilization", "capacity additions", "wafer starts"),
     },
     "hyperscaler_demand": {
         "label": "Hyperscaler Demand",
         "evidence_type": "fundamental",
         "keywords": ("hyperscaler", "order", "customer agreement", "ai-capex", "capex", "shipment", "qualification"),
+        "strong_terms": ("hyperscaler", "server order", "customer agreement", "strategic customer", "ai-capex", "qualification"),
     },
     "valuation_positioning": {
         "label": "Valuation / Positioning",
         "evidence_type": "market_data",
         "keywords": ("mu price", "valuation", "multiple", "consensus", "volume", "options", "portfolio", "positioning"),
+        "strong_terms": ("mu price", "valuation", "valuation multiples", "consensus", "options positioning", "portfolio exposure"),
     },
     "policy": {
         "label": "Policy",
         "evidence_type": "policy",
         "keywords": ("policy", "export control", "tariff", "incentive", "procurement", "government", "chips"),
+        "strong_terms": ("export control", "tariff", "incentive", "public-sector", "government", "chips"),
     },
 }
 
@@ -95,17 +100,75 @@ def _validate_timestamp(value: str | None) -> str:
     return parsed.astimezone(timezone.utc).isoformat()
 
 
+def _requirement_score(requirement: str, lane: str) -> int:
+    config = LANES.get(lane) or {}
+    lowered = requirement.lower()
+    score = 0
+    for term in config.get("keywords", ()):
+        if term in lowered:
+            score += 1
+    for term in config.get("strong_terms", ()):
+        if term in lowered:
+            score += 4
+    return score
+
+
+def _auto_match_requirement(case_id: str, lane: str) -> str | None:
+    decision = latest_object("committee_decision", case_id=case_id) or {}
+    requirements = [str(item).strip() for item in decision.get("required_evidence") or [] if str(item).strip()]
+    ranked = sorted(
+        (( _requirement_score(requirement, lane), index, requirement) for index, requirement in enumerate(requirements)),
+        key=lambda row: (-row[0], row[1]),
+    )
+    if not ranked or ranked[0][0] <= 0:
+        return None
+    return ranked[0][2]
+
+
 def _match_requirement(case_id: str, lane: str, explicit: str | None = None) -> str | None:
     if explicit and explicit.strip():
         return explicit.strip()
-    decision = latest_object("committee_decision", case_id=case_id) or {}
-    requirements = [str(item).strip() for item in decision.get("required_evidence") or [] if str(item).strip()]
-    keywords = LANES.get(lane, {}).get("keywords", ())
-    for requirement in requirements:
-        lowered = requirement.lower()
-        if any(keyword in lowered for keyword in keywords):
-            return requirement
-    return None
+    return _auto_match_requirement(case_id, lane)
+
+
+def _repair_auto_gap_mappings(case_id: str) -> list[dict[str, Any]]:
+    records = list_objects(case_id, "hard_data_record")
+    repaired: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("gap_mapping_mode") == "EXPLICIT":
+            repaired.append(record)
+            continue
+        lane = str(record.get("lane") or "")
+        desired = _auto_match_requirement(case_id, lane) if lane in LANES else record.get("gap_requirement")
+        if desired != record.get("gap_requirement") or record.get("gap_mapping_mode") != "AUTO":
+            previous = record.get("gap_requirement")
+            updated = {
+                **record,
+                "gap_requirement": desired,
+                "gap_mapping_mode": "AUTO",
+                "gap_mapping_repaired_at": utc_now(),
+            }
+            record_object(
+                str(updated.get("hard_data_id")),
+                "hard_data_record",
+                case_id,
+                updated,
+                topic=updated.get("topic"),
+            )
+            record_event(
+                case_id,
+                "HARD_DATA_GAP_REMAPPED",
+                entity_id=str(updated.get("hard_data_id")),
+                payload={
+                    "lane": lane,
+                    "previous_gap_requirement": previous,
+                    "gap_requirement": desired,
+                },
+            )
+            repaired.append(updated)
+        else:
+            repaired.append(record)
+    return repaired
 
 
 def create_hard_data(case_id: str, request: HardDataCreateRequest) -> dict[str, Any]:
@@ -128,6 +191,7 @@ def create_hard_data(case_id: str, request: HardDataCreateRequest) -> dict[str, 
 
     source_config = SOURCE_KINDS[source_kind]
     admitted = bool(source_config["admissible"])
+    explicit_gap = (request.gap_requirement or "").strip() or None
     record_id = f"hard_data_{uuid4().hex}"
     record = {
         "hard_data_id": record_id,
@@ -146,7 +210,8 @@ def create_hard_data(case_id: str, request: HardDataCreateRequest) -> dict[str, 
         "source_type": source_config["source_type"],
         "reliability_score": source_config["reliability"],
         "notes": (request.notes or "").strip() or None,
-        "gap_requirement": _match_requirement(case_id, lane, request.gap_requirement),
+        "gap_requirement": _match_requirement(case_id, lane, explicit_gap),
+        "gap_mapping_mode": "EXPLICIT" if explicit_gap else "AUTO",
         "verified_against_source": True,
         "permitted_use": True,
         "admission_status": "ADMITTED" if admitted else "CONTEXT_ONLY",
@@ -182,7 +247,7 @@ def _claim(record: dict[str, Any]) -> str:
 
 
 def hard_data_evidence(case_id: str) -> list[dict[str, Any]]:
-    records = list_objects(case_id, "hard_data_record")
+    records = _repair_auto_gap_mappings(case_id)
     output: list[dict[str, Any]] = []
     for record in records:
         if record.get("admission_status") != "ADMITTED":
@@ -212,7 +277,7 @@ def hard_data_evidence(case_id: str) -> list[dict[str, Any]]:
 
 def hard_data_status(case_id: str) -> dict[str, Any]:
     _require_case(case_id)
-    records = list_objects(case_id, "hard_data_record")
+    records = _repair_auto_gap_mappings(case_id)
     lanes = {}
     for key, config in LANES.items():
         lane_records = [item for item in records if item.get("lane") == key]
@@ -227,7 +292,7 @@ def hard_data_status(case_id: str) -> dict[str, Any]:
         "case_id": case_id,
         "lanes": lanes,
         "records": list(reversed(records[-30:])),
-        "admitted_evidence_count": len(hard_data_evidence(case_id)),
+        "admitted_evidence_count": len([item for item in records if item.get("admission_status") == "ADMITTED"]),
         "paper_mode": True,
     }
 
