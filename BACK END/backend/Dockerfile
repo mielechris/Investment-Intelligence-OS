@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN pip install --no-cache-dir fastapi uvicorn openai python-dotenv
+RUN pip install --no-cache-dir fastapi uvicorn openai python-dotenv certifi
 
 EXPOSE 8000
 
