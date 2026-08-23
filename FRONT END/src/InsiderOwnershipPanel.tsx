@@ -79,9 +79,11 @@ function InsiderOwnershipPanel() {
     try {
       const response = await fetch(`${API}/insider/${caseId}/auto-capture`, { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
-      const data = await response.json() as { status?: string; records_fetched?: number; records_added?: number; error?: string };
+      const data = await response.json() as { status?: string; records_fetched?: number; records_added?: number; error?: string; provider?: string; provider_note?: string };
       if (data.status === "provider_error") {
-        setMessage(`SEC provider unavailable: ${data.error ?? "unknown provider error"}. This is recorded as a provider gap, not as “no insider activity.”`);
+        setMessage(`Insider providers unavailable: ${data.error ?? "unknown provider error"}. This is recorded as a provider gap, not as “no insider activity.”`);
+      } else if (data.status === "fallback_ok") {
+        setMessage(`Official Micron IR fallback used: ${data.records_fetched ?? 0} public filing record(s) parsed, ${data.records_added ?? 0} new ledger record(s) added. ${data.provider_note ?? "Form 4 direction is not inferred without transaction detail."}`);
       } else {
         setMessage(`SEC capture complete: ${data.records_fetched ?? 0} public records parsed, ${data.records_added ?? 0} new ledger records added.`);
       }
@@ -121,7 +123,7 @@ function InsiderOwnershipPanel() {
             </div>
           </div>
           <button onClick={() => void autoCapture()} disabled={busy} style={{ border: "1px solid #5d6e96", background: "#141d31", color: "#dce5ff", borderRadius: "8px", padding: "12px 16px", fontWeight: 900 }}>
-            {busy ? "CHECKING SEC..." : "AUTO CAPTURE PUBLIC INSIDER FILINGS"}
+            {busy ? "CHECKING PUBLIC FILINGS..." : "AUTO CAPTURE PUBLIC INSIDER FILINGS"}
           </button>
         </div>
 
@@ -162,7 +164,7 @@ function InsiderOwnershipPanel() {
         )}
 
         <div style={{ marginTop: "12px", color: "#758294", fontSize: "11px", lineHeight: 1.5 }}>
-          Insider activity is a contextual signal, not a standalone BUY/SELL rule. Absence of a successful SEC response is never interpreted as absence of insider activity.
+          Insider activity is a contextual signal, not a standalone BUY/SELL rule. Absence of a successful public-filing response is never interpreted as absence of insider activity.
         </div>
       </div>
     </section>
