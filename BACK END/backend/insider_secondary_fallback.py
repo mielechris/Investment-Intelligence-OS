@@ -59,6 +59,10 @@ def _number(text: str) -> float | None:
         return None
 
 
+def _is_transaction_date(text: str) -> bool:
+    return bool(re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", str(text or "").strip()))
+
+
 def _date_iso(text: str) -> str:
     value = str(text or "").strip()
     match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", value)
@@ -103,7 +107,10 @@ def parse_marketbeat_insider_rows(html: str, *, ticker: str = "MU") -> list[dict
             continue
         date, insider, side, shares_text, avg_price_text, total_text = cells[:6]
         side_upper = side.upper()
-        # Header and unrelated-table guardrails.
+        # Header and unrelated-table guardrails. A governed transaction must have an
+        # actual transaction date; labels such as "Transaction Date" cannot pass.
+        if not _is_transaction_date(date):
+            continue
         if "BUY" not in side_upper and "SELL" not in side_upper:
             continue
         if _is_political_trade_label(insider):
@@ -203,7 +210,7 @@ def install_secondary_insider_fallback(module: Any) -> None:
                     "status": "secondary_fallback_ok",
                     "provider": "MARKETBEAT_PUBLIC_SECONDARY",
                     "transaction_detail_complete": True,
-                    "provider_note": "Direct SEC and official Micron IR were unavailable locally. A secondary public insider source was used for corporate-insider context only; congressional/political trades are excluded. These records require primary-source corroboration and cannot resolve qualification gaps by themselves.",
+                    "provider_note": "Direct SEC and official Micron IR were unavailable locally. A secondary public insider source was used for corporate-insider context only; congressional/political trades and non-transaction table rows are excluded. These records require primary-source corroboration and cannot resolve qualification gaps by themselves.",
                 }
         return result
 
