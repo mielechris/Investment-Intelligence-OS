@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.5 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.10.6 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.5 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.10.6 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -22,9 +22,10 @@ import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
 from hard_data import hard_data_evidence, router as hard_data_router
 import insider_intelligence
-from insider_intelligence import insider_evidence, router as insider_router
+from insider_intelligence import router as insider_router
 from insider_ir_fallback import install_insider_fallback
 from insider_secondary_fallback import install_secondary_insider_fallback
+from insider_scope_guard import install_insider_scope_guard
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -56,10 +57,12 @@ public_case_router._fetch_stooq_quote = fetch_market_quote
 # 1) direct SEC EDGAR,
 # 2) official Micron IR filing index,
 # 3) secondary public insider source for context only.
-# Secondary records require primary corroboration and cannot independently resolve a
-# qualification gap or authorize a trade.
+# The scope guard runs last so congressional/political trades from mixed aggregator
+# pages are excluded from corporate-insider counts and evidence. Existing raw rows stay
+# in the audit ledger but disappear from the governed insider view.
 install_insider_fallback(insider_intelligence)
 install_secondary_insider_fallback(insider_intelligence)
+install_insider_scope_guard(insider_intelligence)
 
 
 # Hard Data and Insider/Ownership records remain separate governed ledger classes. The
@@ -73,7 +76,7 @@ def _gap_packet_items_with_governed_data(packet):
     case_id = str((packet or {}).get("case_id") or "")
     if case_id:
         items.extend(hard_data_evidence(case_id))
-        items.extend(insider_evidence(case_id))
+        items.extend(insider_intelligence.insider_evidence(case_id))
     return items
 
 
@@ -112,7 +115,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.10.5"
+app.version = "0.10.6"
 
 
 @app.on_event("startup")
@@ -130,7 +133,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.10.5",
+        "version": "0.10.6",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -156,6 +159,9 @@ def system_status():
         "insider_official_company_fallback": "MICRON_IR_SEC_FILINGS_STATIC_TABLE",
         "insider_secondary_public_fallback": "MARKETBEAT_CONTEXT_ONLY",
         "insider_secondary_requires_primary_corroboration": True,
+        "insider_scope_filter": "CORPORATE_INSIDERS_ONLY",
+        "insider_political_trade_exclusion": True,
+        "insider_coverage_aware_summary": True,
         "insider_fallback_transaction_inference": False,
         "insider_auto_trade_authority": False,
         "qualified_buy_candidate_gate": True,
