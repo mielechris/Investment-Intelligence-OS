@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.2 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.10.3 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.2 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.10.3 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -21,7 +21,9 @@ from decision_history import router as history_router
 import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
 from hard_data import hard_data_evidence, router as hard_data_router
+import insider_intelligence
 from insider_intelligence import insider_evidence, router as insider_router
+from insider_ir_fallback import install_insider_fallback
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -48,6 +50,12 @@ source_ingestion.FETCHERS["official_web"] = fetch_official_web
 source_ingestion.FETCHERS["google_news_rss"] = fetch_google_news_rss
 monitoring_engine._fetch_stooq_quote = fetch_market_quote
 public_case_router._fetch_stooq_quote = fetch_market_quote
+
+# Direct SEC EDGAR remains primary for insider data. If it is blocked locally, the
+# official Micron Investor Relations SEC-filings index is used as a conservative
+# fallback. Filing presence is captured, but transaction direction is never inferred
+# when the underlying Form 4 transaction detail is unavailable.
+install_insider_fallback(insider_intelligence)
 
 
 # Hard Data and Insider/Ownership records remain separate governed ledger classes. The
@@ -100,7 +108,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.10.2"
+app.version = "0.10.3"
 
 
 @app.on_event("startup")
@@ -118,7 +126,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.10.2",
+        "version": "0.10.3",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -140,7 +148,9 @@ def system_status():
         "hard_data_mapping_repair": True,
         "hard_data_auto_trade_evidence": False,
         "insider_ownership_intelligence": True,
-        "insider_source": "SEC_EDGAR_PUBLIC_FILINGS",
+        "insider_primary_source": "SEC_EDGAR_PUBLIC_FILINGS",
+        "insider_official_company_fallback": "MICRON_IR_SEC_FILINGS",
+        "insider_fallback_transaction_inference": False,
         "insider_auto_trade_authority": False,
         "qualified_buy_candidate_gate": True,
         "paper_buy_enabled": False,
