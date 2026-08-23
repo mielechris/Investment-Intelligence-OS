@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.11.2 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.11.2 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -44,6 +44,7 @@ from monitoring_engine import (
     stop_scheduler,
 )
 from official_sources import fetch_google_news_rss, fetch_official_web
+from primary_evidence import primary_evidence_evidence, router as primary_evidence_router
 from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
 from public_case_router import router as public_case_router_api
 from semiconductor_intelligence import router as semiconductor_router
@@ -77,11 +78,10 @@ install_institutional_secondary_fallback(institutional_intelligence)
 install_institutional_integrity_guard(institutional_intelligence)
 
 
-# Hard Data, Insider/Ownership, and Institutional Expectations remain separate governed
-# ledger classes. The Gap Hunter can see fresh admitted/context records, but the Quality
-# Firewall and Resolution Matrix decide what can actually resolve a gap. Institutional
-# records explicitly carry gap_resolution_eligible=False, so they inform the Committee
-# without becoming a shortcut through primary-evidence requirements.
+# Hard Data, Insider/Ownership, Institutional Expectations, and Primary Evidence remain
+# separate governed ledger classes. The Gap Hunter can see all of them, but only records
+# that are resolution-eligible can satisfy a gap; v0.12 also requires the requirement's
+# fact contract to reach its minimum coverage before the Resolution Matrix turns green.
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
 
@@ -92,6 +92,7 @@ def _gap_packet_items_with_governed_data(packet):
         items.extend(hard_data_evidence(case_id))
         items.extend(insider_intelligence.insider_evidence(case_id))
         items.extend(institutional_intelligence.institutional_evidence(case_id))
+        items.extend(primary_evidence_evidence(case_id))
     return items
 
 
@@ -139,12 +140,13 @@ app.include_router(gap_hunter_router)
 app.include_router(hard_data_router)
 app.include_router(insider_router)
 app.include_router(institutional_router)
+app.include_router(primary_evidence_router)
 app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.11.2"
+app.version = "0.12.0"
 
 
 @app.on_event("startup")
@@ -162,7 +164,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.11.2",
+        "version": "0.12.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -180,6 +182,8 @@ def system_status():
         "evidence_gap_hunter": True,
         "gap_quality_firewall": True,
         "gap_resolution_matrix": True,
+        "primary_fact_contracts": True,
+        "primary_fact_coverage_required_for_resolution": True,
         "hard_data_acquisition": True,
         "hard_data_best_match_mapping": True,
         "hard_data_mapping_repair": True,
@@ -215,6 +219,17 @@ def system_status():
         "institutional_primary_corroboration_required": True,
         "institutional_gap_resolution_eligible": False,
         "institutional_auto_trade_authority": False,
+        "primary_evidence_acquisition": True,
+        "primary_evidence_lanes": [
+            "MEMORY_PRICING",
+            "SUPPLY_INVENTORY",
+            "HYPERSCALER_DEMAND",
+            "MICRON_FILING_FINANCIALS",
+            "VALUATION_MARKET",
+            "POLICY_REGULATION",
+        ],
+        "primary_evidence_sources": ["SEC_COMPANYFACTS", "COMPANY_IR", "OFFICIAL_GOVERNMENT", "HARD_MARKET_DATA"],
+        "primary_memory_pricing_auto_provider": False,
         "qualified_buy_candidate_gate": True,
         "paper_buy_enabled": False,
         "professional_interview_portal": True,
