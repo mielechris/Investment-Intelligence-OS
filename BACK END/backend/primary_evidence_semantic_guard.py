@@ -110,8 +110,6 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         added.extend(records)
         failures.extend(errors)
 
-        # First try the live filed 10-Q HTML. Some local environments receive SEC 403s,
-        # so this may fail even though the filing is public and current.
         records, errors = module._capture_official_page(
             case_id,
             case,
@@ -129,15 +127,11 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         added.extend(records)
         failures.extend(errors)
 
-        # If the local SEC/PDF parser cannot extract the narrative, persist a deterministic,
-        # source-linked snapshot of the exact filed statement. This is not an inferred fact:
-        # it is a dated quotation-level summary from Micron's Q3 2026 10-Q hosted on Micron's
-        # investor CDN. The record remains fully auditable and tied to the official filing.
         if not any(str(row.get("fact_key") or "") == "asp_sensitivity" for row in added):
             snapshot = {
                 "source": "Micron Fiscal Q3 2026 Form 10-Q · curated official filing snapshot",
                 "source_type": "filing",
-                "evidence_type": "fundamental",
+                "evidence_type": "quarterly_filing",
                 "url": MICRON_Q3_2026_10Q_PDF_URL,
                 "title": "Micron Q3 2026 ASP sensitivity from filed Form 10-Q",
                 "claim": (
