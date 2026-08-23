@@ -11,7 +11,7 @@ WHITE_HOUSE_SEMICONDUCTOR_232_URL = (
 
 
 def policy_transmission_supported(text: str) -> bool:
-    """Require an explicit policy mechanism tied to supply/capacity before crediting transmission."""
+    """Require an explicit policy mechanism tied to supply/capacity before crediting ingestion."""
     value = str(text or "").lower()
     policy_mechanism = any(term in value for term in ("tariff", "duty", "export control", "incentive", "offset program"))
     supply_mechanism = any(term in value for term in ("supply chain", "manufacturing capacity", "domestic manufacturing", "capacity", "supply"))
@@ -19,9 +19,10 @@ def policy_transmission_supported(text: str) -> bool:
 
 
 def install_primary_evidence_semantic_guard(module: Any) -> None:
-    """Prevent broad mentions from satisfying narrow primary-evidence facts and add targeted policy capture."""
+    """Prevent broad mentions from satisfying narrow facts, add targeted policy capture, and keep UI labels honest."""
     prior_fact = module._fact_from_keyword
     prior_capture_policy = module._capture_policy
+    prior_lane_status = module._lane_status
 
     def guarded(lane: str, text: str):
         value = str(text or "").lower()
@@ -51,5 +52,32 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         failures.extend(errors)
         return added, failures
 
+    def lane_status_guarded(case_id: str, lane: str, records: list[dict[str, Any]]):
+        result = prior_lane_status(case_id, lane, records)
+        covered = int(result.get("covered_facts") or 0)
+        total = int(result.get("total_facts") or 0)
+        pct = int(result.get("coverage_pct") or 0)
+        requirement = str(result.get("requirement") or "").lower()
+        facts = result.get("facts") or []
+        transmission_open = any(
+            str(row.get("key") or "") == "transmission" and not bool(row.get("covered"))
+            for row in facts
+            if isinstance(row, dict)
+        )
+        transmission_required = lane == "policy" and any(
+            term in requirement for term in ("measurable", "transmission", "substitution", "supply-chain")
+        )
+
+        if total and covered == total:
+            result["status"] = "COMPLETE_FACT_COVERAGE"
+        elif transmission_required and transmission_open:
+            result["status"] = "PARTIAL_CRITICAL_FACT_OPEN"
+        elif pct:
+            result["status"] = "PARTIAL"
+        else:
+            result["status"] = "OPEN"
+        return result
+
     module._fact_from_keyword = guarded
     module._capture_policy = capture_policy_targeted
+    module._lane_status = lane_status_guarded
