@@ -43,23 +43,7 @@ class LearningLoopTests(unittest.TestCase):
             "created_at": self.ledger.utc_now(),
         }
         self.ledger.record_object(self.case_id, "case", self.case_id, case, topic=case["topic"])
-        decision = {
-            "decision_id": "decision_learning",
-            "case_id": self.case_id,
-            "topic": case["topic"],
-            "disposition": "WATCH",
-            "confidence": 0.70,
-            "paper_mode": True,
-            "created_at": self.ledger.utc_now(),
-        }
-        self.ledger.record_object(
-            decision["decision_id"],
-            "committee_decision",
-            self.case_id,
-            decision,
-            parent_id=self.case_id,
-            topic=case["topic"],
-        )
+        agents = {}
         for index, key in enumerate(AGENT_KEYS):
             disposition = "WATCH" if index < 4 else "NO_TRADE"
             agent = {
@@ -73,14 +57,29 @@ class LearningLoopTests(unittest.TestCase):
                 "missing_evidence": [],
                 "created_at": self.ledger.utc_now(),
             }
+            agents[key] = agent
             self.ledger.record_object(
-                agent["agent_result_id"],
-                "agent_result",
-                self.case_id,
-                agent,
-                parent_id=decision["decision_id"],
-                topic=case["topic"],
+                agent["agent_result_id"], "agent_result", self.case_id, agent,
+                parent_id=self.case_id, topic=case["topic"],
             )
+        decision = {
+            "decision_id": "decision_learning",
+            "case_id": self.case_id,
+            "topic": case["topic"],
+            "disposition": "WATCH",
+            "confidence": 0.70,
+            "agents": agents,
+            "paper_mode": True,
+            "created_at": self.ledger.utc_now(),
+        }
+        self.ledger.record_object(
+            decision["decision_id"],
+            "committee_decision",
+            self.case_id,
+            decision,
+            parent_id=self.case_id,
+            topic=case["topic"],
+        )
 
     def test_shadow_position_and_broken_thesis_exit(self):
         position = self.loop.record_position_monitor({
