@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.11.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.11.1 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.11.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.11.1 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -29,6 +29,7 @@ from insider_secondary_fallback import install_secondary_insider_fallback
 from insider_scope_guard import install_insider_scope_guard
 import institutional_intelligence
 from institutional_intelligence import router as institutional_router
+from institutional_secondary_fallback import install_institutional_secondary_fallback
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -66,6 +67,13 @@ public_case_router._fetch_stooq_quote = fetch_market_quote
 install_insider_fallback(insider_intelligence)
 install_secondary_insider_fallback(insider_intelligence)
 install_insider_scope_guard(insider_intelligence)
+
+# Institutional source precedence:
+# 1) Yahoo public market-data modules/options when locally accessible,
+# 2) secondary public MarketBeat context for missing lanes.
+# Secondary institutional records are never gap-resolution eligible and always require
+# primary corroboration before they can be treated as hard evidence.
+install_institutional_secondary_fallback(institutional_intelligence)
 
 
 # Hard Data, Insider/Ownership, and Institutional Expectations remain separate governed
@@ -135,7 +143,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.11.0"
+app.version = "0.11.1"
 
 
 @app.on_event("startup")
@@ -153,7 +161,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.11.0",
+        "version": "0.11.1",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -197,6 +205,8 @@ def system_status():
             "OPTIONS_POSITIONING",
             "CATALYST_CALENDAR",
         ],
+        "institutional_primary_source": "YAHOO_PUBLIC_MARKET_DATA_WHEN_AVAILABLE",
+        "institutional_secondary_public_fallback": "MARKETBEAT_CONTEXT_ONLY",
         "institutional_primary_corroboration_required": True,
         "institutional_gap_resolution_eligible": False,
         "institutional_auto_trade_authority": False,
