@@ -97,7 +97,9 @@ def _supports_requirement(raw: dict[str, Any], requirement: str) -> bool:
 def build_resolution_matrix(requirements: list[str], admitted_raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
     matrix: list[dict[str, Any]] = []
     for requirement in requirements:
-        supporting = [item for item in admitted_raw if _supports_requirement(item, requirement)]
+        all_supporting = [item for item in admitted_raw if _supports_requirement(item, requirement)]
+        supporting = [item for item in all_supporting if item.get("gap_resolution_eligible") is not False]
+        context_only_count = len(all_supporting) - len(supporting)
         packet = build_packet(supporting)
         normalized = packet.get("items") or []
         identities = {_source_identity(item.get("raw") if isinstance(item.get("raw"), dict) else item) for item in normalized}
@@ -108,8 +110,9 @@ def build_resolution_matrix(requirements: list[str], admitted_raw: list[dict[str
         ]
         average_quality = float((packet.get("summary") or {}).get("average_quality_score") or 0.0)
 
-        # Resolution requires quality plus independent corroboration. An official/company/market
-        # source can anchor a gap, but still needs at least one independent high-quality corroborator.
+        # Resolution requires quality plus independent corroboration. Explicitly context-only
+        # records (for example lagged 13F, analyst, short-interest, or options context) may inform
+        # the Committee but can never resolve a Committee evidence requirement by themselves.
         resolved = (
             average_quality >= RESOLUTION_MIN_QUALITY
             and len(high_quality) >= 2
@@ -125,11 +128,14 @@ def build_resolution_matrix(requirements: list[str], admitted_raw: list[dict[str
             blockers.append("INSUFFICIENT_SOURCE_DIVERSITY")
         if not official_like and len(high_quality) < 3:
             blockers.append("NO_PRIMARY_OR_THREE_SOURCE_CORROBORATION")
+        if context_only_count and not supporting:
+            blockers.append("ONLY_CONTEXT_NOT_RESOLUTION_ELIGIBLE")
 
         matrix.append({
             "requirement": requirement,
             "resolved": resolved,
             "supporting_items": len(normalized),
+            "context_only_supporting_items": context_only_count,
             "high_quality_items": len(high_quality),
             "independent_sources": len(identities),
             "official_or_market_items": len(official_like),
