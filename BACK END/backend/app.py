@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.9.1 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.10 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.9.1 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.10 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -18,7 +18,9 @@ except ImportError:
 
 from main import app
 from decision_history import router as history_router
+import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
+from hard_data import hard_data_evidence, router as hard_data_router
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -47,6 +49,23 @@ monitoring_engine._fetch_stooq_quote = fetch_market_quote
 public_case_router._fetch_stooq_quote = fetch_market_quote
 
 
+# Hard Data records remain a separate governed ledger class. The Gap Hunter sees
+# admitted hard data through its prior-evidence loader; the existing quality firewall
+# and resolution matrix still decide whether those records can resolve a Committee gap.
+_original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
+
+
+def _gap_packet_items_with_hard_data(packet):
+    items = _original_gap_packet_items(packet)
+    case_id = str((packet or {}).get("case_id") or "")
+    if case_id:
+        items.extend(hard_data_evidence(case_id))
+    return items
+
+
+evidence_gap_hunter._raw_items_from_packet = _gap_packet_items_with_hard_data
+
+
 @app.get("/monitoring/dashboard")
 def monitoring_dashboard_live(limit: int = 25):
     """Return dashboard rows using the newest monitoring evidence when available."""
@@ -72,12 +91,13 @@ def monitoring_dashboard_live(limit: int = 25):
 
 app.include_router(history_router)
 app.include_router(gap_hunter_router)
+app.include_router(hard_data_router)
 app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.9.1"
+app.version = "0.10.0"
 
 
 @app.on_event("startup")
@@ -95,7 +115,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.9.1",
+        "version": "0.10.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -112,6 +132,8 @@ def system_status():
         "evidence_gap_hunter": True,
         "gap_quality_firewall": True,
         "gap_resolution_matrix": True,
+        "hard_data_acquisition": True,
+        "hard_data_auto_trade_evidence": False,
         "qualified_buy_candidate_gate": True,
         "paper_buy_enabled": False,
         "professional_interview_portal": True,
