@@ -4,7 +4,7 @@ import primary_evidence
 from gap_quality import build_resolution_matrix
 from primary_evidence import _fact_from_sec_title
 from primary_evidence_contracts import contract_for_requirement, coverage_for_requirement
-from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
+from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard, policy_transmission_supported
 
 
 install_primary_evidence_semantic_guard(primary_evidence)
@@ -37,6 +37,15 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertIsNone(primary_evidence._fact_from_keyword("supply_inventory", "HBM"))
         self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", "HBM volume and margin"), "hbm_margin")
         self.assertEqual(primary_evidence._fact_from_keyword("supply_inventory", "HBM packaging capacity"), "capacity")
+
+    def test_policy_transmission_requires_policy_and_supply_mechanism(self):
+        self.assertFalse(policy_transmission_supported("Domestic semiconductor supply capacity is expanding."))
+        self.assertFalse(policy_transmission_supported("A 25 percent tariff applies to covered chips."))
+        self.assertTrue(
+            policy_transmission_supported(
+                "A 25 percent tariff does not apply to imports used to strengthen the United States technology supply chain and domestic manufacturing capacity."
+            )
+        )
 
     def test_fact_coverage_uses_explicit_primary_fact_keys(self):
         items = [
