@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.3 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.10.4 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.3 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.10.4 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -108,7 +108,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.10.3"
+app.version = "0.10.4"
 
 
 @app.on_event("startup")
@@ -126,7 +126,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.10.3",
+        "version": "0.10.4",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -149,7 +149,7 @@ def system_status():
         "hard_data_auto_trade_evidence": False,
         "insider_ownership_intelligence": True,
         "insider_primary_source": "SEC_EDGAR_PUBLIC_FILINGS",
-        "insider_official_company_fallback": "MICRON_IR_SEC_FILINGS",
+        "insider_official_company_fallback": "MICRON_IR_SEC_FILINGS_STATIC_TABLE",
         "insider_fallback_transaction_inference": False,
         "insider_auto_trade_authority": False,
         "qualified_buy_candidate_gate": True,
