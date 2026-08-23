@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.7 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.10.8 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.10.7 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.10.8 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -17,6 +17,7 @@ except ImportError:
     pass
 
 from main import app
+from dashboard_lineage import apply_latest_decision_lineage
 from decision_history import router as history_router
 import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
@@ -85,24 +86,37 @@ evidence_gap_hunter._raw_items_from_packet = _gap_packet_items_with_governed_dat
 
 @app.get("/monitoring/dashboard")
 def monitoring_dashboard_live(limit: int = 25):
-    """Return dashboard rows using the newest monitoring evidence when available."""
+    """Return one coherent latest-research state per case.
+
+    Monitor snapshots remain useful surveillance data, but the Committee decision and
+    its locked evidence summary are authoritative for the current research disposition.
+    This prevents an older 25-item monitor snapshot from being displayed beside a newer
+    17-item Gap Hunter Committee decision.
+    """
     dashboard = build_dashboard(limit)
+    coherent_rows = []
     for row in dashboard.get("cases", []):
         case_id = str(row.get("case_id", ""))
         snapshot = latest_object("monitor_snapshot", case_id=case_id) if case_id else None
-        summary = ((snapshot or {}).get("evidence_packet") or {}).get("summary") or {}
-        if "average_quality_score" in summary:
-            row["evidence_quality"] = summary.get("average_quality_score")
-            row["latest_evidence_count"] = summary.get("evidence_count")
+        decision = latest_object("committee_decision", case_id=case_id) if case_id else None
+        qualification = latest_object("qualification_assessment", case_id=case_id) if case_id else None
+
+        coherent = apply_latest_decision_lineage(
+            row,
+            decision=decision,
+            snapshot=snapshot,
+            qualification=qualification,
+        )
+
         reunderwrite = latest_object("full_reunderwrite", case_id=case_id) if case_id else None
         if reunderwrite:
-            row["latest_reunderwrite_id"] = reunderwrite.get("full_reunderwrite_id")
-            row["latest_reunderwrite_disposition"] = (reunderwrite.get("committee") or {}).get("disposition")
-            row["latest_reunderwrite_confidence"] = (reunderwrite.get("committee") or {}).get("confidence")
-        qualification = latest_object("qualification_assessment", case_id=case_id) if case_id else None
-        if qualification:
-            row["qualification_stage"] = qualification.get("stage")
-            row["qualified_buy_candidate"] = qualification.get("qualified_buy_candidate")
+            coherent["latest_reunderwrite_id"] = reunderwrite.get("full_reunderwrite_id")
+            coherent["latest_reunderwrite_disposition"] = (reunderwrite.get("committee") or {}).get("disposition")
+            coherent["latest_reunderwrite_confidence"] = (reunderwrite.get("committee") or {}).get("confidence")
+
+        coherent_rows.append(coherent)
+
+    dashboard["cases"] = coherent_rows
     return dashboard
 
 
@@ -115,7 +129,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.10.7"
+app.version = "0.10.8"
 
 
 @app.on_event("startup")
@@ -133,7 +147,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.10.7",
+        "version": "0.10.8",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -142,6 +156,7 @@ def system_status():
         "judgment_bank": True,
         "automatic_monitoring": True,
         "factory_dashboard": True,
+        "dashboard_latest_decision_lineage": True,
         "semiconductor_memory_intelligence": True,
         "provider_hardening": True,
         "official_company_fallbacks": True,
@@ -165,6 +180,7 @@ def system_status():
         "insider_freshness_window_days": 90,
         "insider_stale_history_current_signal": False,
         "insider_stale_history_research_admission": False,
+        "insider_date_display_utc": True,
         "insider_fallback_transaction_inference": False,
         "insider_auto_trade_authority": False,
         "qualified_buy_candidate_gate": True,
