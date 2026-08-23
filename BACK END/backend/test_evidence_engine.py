@@ -31,6 +31,21 @@ class EvidenceEngineTests(unittest.TestCase):
         self.assertTrue(item["stale"])
         self.assertEqual(item["freshness_score"], 0.0)
 
+    def test_current_quarterly_filing_remains_high_quality(self):
+        now = datetime.now(timezone.utc)
+        item = normalize_item({
+            "claim": "Filed quarterly results quantify average selling price sensitivity",
+            "source": "Micron Form 10-Q",
+            "url": "https://investors.micron.com/q3-10q.pdf",
+            "source_type": "filing",
+            "evidence_type": "quarterly_filing",
+            "observed_at": (now - timedelta(days=60)).isoformat(),
+            "reliability_score": 0.995,
+        }, now=now)
+        self.assertFalse(item["stale"])
+        self.assertEqual(item["freshness_window_hours"], 24 * 180)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
     def test_conflicting_packet_is_detected(self):
         now = datetime.now(timezone.utc).isoformat()
         packet = build_packet([
