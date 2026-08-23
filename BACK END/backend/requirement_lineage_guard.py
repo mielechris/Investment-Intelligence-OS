@@ -11,8 +11,28 @@ def _norm(value: Any) -> str:
 
 
 def _lane(requirement: str) -> str | None:
+    """Map requirement lineage broadly without weakening evidence qualification.
+
+    The strict contract matcher intentionally needs multiple exact concepts before it
+    activates a fact contract. Lineage has a different job: recognize that a rewritten
+    Committee sentence belongs to the same research lane even when wording changes.
+    """
     lane, _ = contract_for_requirement(requirement)
-    return lane
+    if lane:
+        return lane
+    value = _norm(requirement)
+    heuristics = [
+        ("policy", ("tariff", "export control", "semiconductor incentive", "permitting", "policy", "section 232")),
+        ("memory_pricing", ("hbm price", "dram price", "nand price", "memory pricing", "spot price", "contract price")),
+        ("supply_inventory", ("inventory days", "wafer starts", "bit shipments", "utilization", "packaging capacity", "yields")),
+        ("hyperscaler_demand", ("hyperscaler", "ai-capex", "ai capex", "server shipments", "backlog", "cancellations", "strategic-agreement")),
+        ("micron_financials", ("micron", "revenue mix", "hbm volumes", "free cash flow", "debt", "capex", "asp sensitivity")),
+        ("valuation_market", ("current mu price", "diluted shares", "consensus revenue", "eps", "valuation", "short interest", "options positioning")),
+    ]
+    for key, terms in heuristics:
+        if any(term in value for term in terms):
+            return key
+    return None
 
 
 def build_requirement_lineage(prior_matrix: list[dict[str, Any]], current_requirements: list[str]) -> dict[str, Any]:
