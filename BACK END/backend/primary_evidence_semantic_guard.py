@@ -38,6 +38,7 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
     prior_capture_policy = module._capture_policy
     prior_capture_micron_ir = module._capture_micron_ir
     prior_lane_status = module._lane_status
+    prior_persist_record = module._persist_record
 
     def guarded(lane: str, text: str):
         value = str(text or "").lower()
@@ -65,6 +66,28 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             if not policy_transmission_supported(value):
                 value = value.replace("supply", " ").replace("demand", " ").replace("capacity", " ")
         return prior_fact(lane, value)
+
+    def persist_record_guarded(case_id: str, case: dict[str, Any], lane: str, fact_key: str, item: dict[str, Any]):
+        record = prior_persist_record(case_id, case, lane, fact_key, item)
+        requested_type = str(item.get("evidence_type") or "").strip().lower()
+        if record and requested_type == "quarterly_filing" and str(record.get("evidence_type") or "").lower() != "quarterly_filing":
+            repaired = {
+                **record,
+                "evidence_type": "quarterly_filing",
+                "classification_repaired_at": module.utc_now(),
+                "classification_repair": "LATEST_QUARTERLY_FILING_FRESHNESS_CLASS",
+            }
+            record_id = str(repaired.get("primary_evidence_id") or "")
+            if record_id:
+                module.record_object(record_id, "primary_evidence_record", case_id, repaired, topic=case.get("topic"))
+                module.record_event(
+                    case_id,
+                    "PRIMARY_EVIDENCE_CLASSIFICATION_REPAIRED",
+                    entity_id=record_id,
+                    payload={"lane": lane, "fact_key": fact_key, "evidence_type": "quarterly_filing"},
+                )
+            return repaired
+        return record
 
     def capture_policy_targeted(case_id: str, case: dict[str, Any]):
         added, failures = prior_capture_policy(case_id, case)
@@ -127,7 +150,7 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         added.extend(records)
         failures.extend(errors)
 
-        if not any(str(row.get("fact_key") or "") == "asp_sensitivity" for row in added):
+        if not any(str(row.get("fact_key") or "") == "asp_sensitivity" and str(row.get("evidence_type") or "") == "quarterly_filing" for row in added):
             snapshot = {
                 "source": "Micron Fiscal Q3 2026 Form 10-Q · curated official filing snapshot",
                 "source_type": "filing",
@@ -176,6 +199,7 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         return result
 
     module._fact_from_keyword = guarded
+    module._persist_record = persist_record_guarded
     module._capture_policy = capture_policy_targeted
     module._capture_micron_ir = capture_micron_financials_static
     module._lane_status = lane_status_guarded
