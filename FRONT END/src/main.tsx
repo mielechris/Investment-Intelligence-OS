@@ -3,10 +3,14 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import DecisionHistoryPanel from './DecisionHistoryPanel.tsx'
+import EvidenceGapHunterPanel from './EvidenceGapHunterPanel.tsx'
+import InterviewPortalPanel from './InterviewPortalPanel.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
     <DecisionHistoryPanel />
+    <EvidenceGapHunterPanel />
+    <InterviewPortalPanel />
   </StrictMode>,
 )
