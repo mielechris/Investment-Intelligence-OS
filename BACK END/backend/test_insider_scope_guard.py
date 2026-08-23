@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 import insider_scope_guard as guard
 
@@ -35,6 +36,35 @@ class InsiderScopeGuardTests(unittest.TestCase):
         self.assertFalse(coverage["plan_10b5_1_covered"])
         self.assertFalse(coverage["beneficial_ownership_covered"])
         self.assertTrue(coverage["secondary_requires_primary_corroboration"])
+
+    def test_stale_dataset_does_not_claim_current_activity(self):
+        now = datetime(2026, 8, 23, tzinfo=timezone.utc)
+        freshness = guard._freshness(
+            [{"transaction_date": "2025-10-20", "secondary_source": True}],
+            now=now,
+        )
+        self.assertFalse(freshness["recent_activity_covered"])
+        self.assertTrue(freshness["historical_only"])
+        self.assertGreater(freshness["latest_record_age_days"], 90)
+
+    def test_recent_dataset_can_support_current_window(self):
+        now = datetime(2026, 8, 23, tzinfo=timezone.utc)
+        freshness = guard._freshness(
+            [{"transaction_date": "2026-08-01", "secondary_source": True}],
+            now=now,
+        )
+        self.assertTrue(freshness["recent_activity_covered"])
+        self.assertFalse(freshness["historical_only"])
+        self.assertLess(freshness["latest_record_age_days"], 90)
+
+    def test_records_sort_by_transaction_date_descending(self):
+        rows = guard._sorted_records([
+            {"transaction_date": "2025-09-02"},
+            {"transaction_date": "2026-07-24"},
+            {"transaction_date": "2026-01-10"},
+        ])
+        self.assertEqual(rows[0]["transaction_date"], "2026-07-24")
+        self.assertEqual(rows[-1]["transaction_date"], "2025-09-02")
 
 
 if __name__ == "__main__":
