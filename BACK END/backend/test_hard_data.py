@@ -34,8 +34,9 @@ class HardDataTests(unittest.TestCase):
             "case_id": self.case_id,
             "topic": case["topic"],
             "required_evidence": [
+                "Micron's latest filing-based revenue mix, HBM volumes and margins, inventory, free cash flow, debt, cash, capex commitments, and sensitivity to memory ASPs",
                 "Current independent DRAM, HBM, and NAND spot and contract pricing by product and quarter",
-                "Current MU price, valuation multiples, consensus estimates, volume and trend data",
+                "Current MU price, valuation multiples, consensus estimates, volume and trend data, options positioning, and portfolio exposure overlap",
             ],
             "created_at": self.ledger.utc_now(),
         }
@@ -78,6 +79,52 @@ class HardDataTests(unittest.TestCase):
         self.assertTrue(evidence[0]["hard_data_verified"])
         self.assertEqual(evidence[0]["source_type"], "market_data")
         self.assertEqual(evidence[0]["gap_requirement"], record["gap_requirement"])
+
+    def test_valuation_lane_uses_best_requirement_not_first_volume_match(self):
+        record = self.hard.create_hard_data(
+            self.case_id,
+            self._request(
+                lane="valuation_positioning",
+                metric="MU.US market price",
+                value_text="966.78",
+                unit="USD/share",
+                source_name="Yahoo Finance",
+                source_url="https://finance.yahoo.com/quote/MU/",
+                source_kind="market_data",
+            ),
+        )
+        self.assertIn("Current MU price", record["gap_requirement"])
+        self.assertNotIn("filing-based revenue mix", record["gap_requirement"])
+        self.assertEqual(record["gap_mapping_mode"], "AUTO")
+
+    def test_existing_auto_mapping_is_repaired(self):
+        wrong = self.hard.create_hard_data(
+            self.case_id,
+            self._request(
+                lane="valuation_positioning",
+                metric="MU.US market price",
+                value_text="966.78",
+                unit="USD/share",
+                source_name="Yahoo Finance",
+                source_url="https://finance.yahoo.com/quote/MU/",
+                source_kind="market_data",
+                gap_requirement="Micron's latest filing-based revenue mix, HBM volumes and margins, inventory, free cash flow, debt, cash, capex commitments, and sensitivity to memory ASPs",
+            ),
+        )
+        # Simulate a pre-v0.10.1 auto-mapped record: remove the explicit marker while
+        # leaving the wrong stored requirement in place.
+        legacy = {**wrong, "gap_mapping_mode": None}
+        self.ledger.record_object(
+            legacy["hard_data_id"],
+            "hard_data_record",
+            self.case_id,
+            legacy,
+            topic=legacy["topic"],
+        )
+        status = self.hard.hard_data_status(self.case_id)
+        repaired = status["records"][0]
+        self.assertIn("Current MU price", repaired["gap_requirement"])
+        self.assertEqual(repaired["gap_mapping_mode"], "AUTO")
 
     def test_unverified_record_is_rejected(self):
         with self.assertRaises(HTTPException) as ctx:
