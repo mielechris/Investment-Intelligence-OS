@@ -8,6 +8,7 @@ from typing import Any, Callable
 from provider_hardening import _request_bytes
 
 MARKETBEAT_INSIDER_URL = "https://www.marketbeat.com/stocks/NASDAQ/MU/insider-trades/"
+DATE_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}$")
 
 
 class _TableParser(HTMLParser):
@@ -76,10 +77,12 @@ def parse_marketbeat_insider_rows(html: str, *, ticker: str = "MU") -> list[dict
         if len(cells) < 6:
             continue
         date, insider, side, shares_text, avg_price_text, total_text = cells[:6]
-        side_upper = side.upper()
-        if "BUY" not in side_upper and "SELL" not in side_upper:
+        if not DATE_RE.match(date.strip()):
             continue
-        nature = "OPEN_MARKET_PURCHASE" if "BUY" in side_upper else "OPEN_MARKET_SALE"
+        side_upper = side.upper().strip()
+        if side_upper not in {"BUY", "SELL"}:
+            continue
+        nature = "OPEN_MARKET_PURCHASE" if side_upper == "BUY" else "OPEN_MARKET_SALE"
         shares = _number(shares_text)
         price = _number(avg_price_text)
         total = _number(total_text)
