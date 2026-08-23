@@ -3,7 +3,7 @@ import unittest
 import primary_evidence
 from gap_quality import build_resolution_matrix
 from primary_evidence import _fact_from_sec_title
-from primary_evidence_contracts import contract_for_requirement, coverage_for_requirement
+from primary_evidence_contracts import contract_for_requirement, coverage_for_requirement, fact_matches
 from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard, policy_transmission_supported
 
 
@@ -38,7 +38,7 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", "HBM volume and margin"), "hbm_margin")
         self.assertEqual(primary_evidence._fact_from_keyword("supply_inventory", "HBM packaging capacity"), "capacity")
 
-    def test_policy_transmission_requires_policy_and_supply_mechanism(self):
+    def test_policy_transmission_requires_policy_and_supply_mechanism_at_ingestion(self):
         self.assertFalse(policy_transmission_supported("Domestic semiconductor supply capacity is expanding."))
         self.assertFalse(policy_transmission_supported("A 25 percent tariff applies to covered chips."))
         self.assertTrue(
@@ -46,6 +46,23 @@ class PrimaryEvidenceTests(unittest.TestCase):
                 "A 25 percent tariff does not apply to imports used to strengthen the United States technology supply chain and domestic manufacturing capacity."
             )
         )
+
+    def test_policy_text_alone_cannot_prove_measured_transmission(self):
+        transmission_fact = {"key": "transmission", "label": "Measured supply-demand transmission", "terms": ("imports", "shipments", "production")}
+        white_house = {
+            "primary_fact_key": "transmission",
+            "source": "White House",
+            "url": "https://www.whitehouse.gov/presidential-actions/example",
+            "claim": "A 25 percent tariff supports domestic manufacturing capacity and the technology supply chain.",
+        }
+        measured_market = {
+            "primary_fact_key": "transmission",
+            "source": "Independent Trade Data",
+            "url": "https://trade.example/semiconductors",
+            "claim": "Following implementation, covered semiconductor imports fell 18 percent and domestic production volume rose 7 percent.",
+        }
+        self.assertFalse(fact_matches(white_house, transmission_fact))
+        self.assertTrue(fact_matches(measured_market, transmission_fact))
 
     def test_fact_coverage_uses_explicit_primary_fact_keys(self):
         items = [
