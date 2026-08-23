@@ -56,6 +56,7 @@ class PrimaryEvidenceTests(unittest.TestCase):
             "Long-term debt": "debt",
             "capital expenditures": "capex",
             "prices increased in the low-60s percentage range": "asp_sensitivity",
+            "Margins improved primarily due to increases in average selling prices": "asp_sensitivity",
             "HBM4 volume shipment": "hbm_margin",
         }
         for text, expected in cases.items():
