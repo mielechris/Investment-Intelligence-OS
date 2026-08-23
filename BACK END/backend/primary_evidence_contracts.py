@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -83,7 +84,7 @@ CONTRACTS = {
             {"key": "export_controls", "label": "Export controls", "terms": ("export control", "bis", "advanced computing")},
             {"key": "tariffs", "label": "Tariffs", "terms": ("tariff",)},
             {"key": "effective_dates", "label": "Effective dates", "terms": ("effective date", "effective", "publication date")},
-            {"key": "transmission", "label": "Supply-demand transmission", "terms": ("supply", "demand", "capacity", "procurement")},
+            {"key": "transmission", "label": "Measured supply-demand transmission", "terms": ("imports", "shipments", "production", "utilization", "market share", "prices", "volume", "inventory", "substitution")},
         ],
     },
 }
@@ -92,7 +93,7 @@ CONTRACTS = {
 def _blob(item: dict[str, Any]) -> str:
     return " ".join(
         str(item.get(key) or "")
-        for key in ("claim", "title", "source", "primary_fact_key", "metric")
+        for key in ("claim", "title", "source", "url", "primary_fact_key", "metric")
     ).lower()
 
 
@@ -110,8 +111,31 @@ def contract_for_requirement(requirement: str) -> tuple[str, dict[str, Any]] | t
     return key, contract
 
 
+def _measured_transmission_match(item: dict[str, Any]) -> bool:
+    """Policy text proves a rule exists; it does not prove the rule changed the market.
+
+    Measured transmission needs a quantitative outcome observation from a source other
+    than the policy-issuing pages themselves. Examples include imports, shipments,
+    production, utilization, market share, prices, volume, inventory, or substitution.
+    """
+    text = _blob(item)
+    policy_only_hosts = ("whitehouse.gov", "bis.gov", "federalregister.gov", "nist.gov")
+    if any(host in text for host in policy_only_hosts):
+        return False
+    outcome_terms = (
+        "imports", "shipments", "production", "output", "utilization", "market share",
+        "prices", "price", "volume", "inventory", "substitution", "sourcing", "capacity",
+    )
+    if not any(term in text for term in outcome_terms):
+        return False
+    # Require a quantitative observation, not a purely narrative statement.
+    return bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:%|percent|million|billion|thousand|units|bps)?\b", text))
+
+
 def fact_matches(item: dict[str, Any], fact: dict[str, Any]) -> bool:
     explicit = str(item.get("primary_fact_key") or "").strip()
+    if fact.get("key") == "transmission":
+        return _measured_transmission_match(item)
     if explicit and explicit == fact["key"]:
         return True
     text = _blob(item)
