@@ -130,9 +130,9 @@ def _latest_date(text: str) -> str | None:
 
 def parse_marketbeat_ownership(html: str, text: str) -> dict[str, Any] | None:
     ownership = re.search(r"Current\s+Institutional\s+Ownership\s+Percentage\s*([0-9.]+)%", text, re.I | re.S)
-    buyers = re.search(r"Number\s+of\s+Institutional\s+Buyers.*?([0-9][0-9,]*)", text, re.I | re.S)
+    buyers = re.search(r"Number\s+of\s+Institutional\s+Buyers(?:\s*\(last\s+12\s+months\))?\s*([0-9][0-9,]*)", text, re.I | re.S)
     inflows = re.search(r"Total\s+Institutional\s+Inflows.*?(\$[0-9.,]+\s*[KMBT]?)", text, re.I | re.S)
-    sellers = re.search(r"Number\s+of\s+Institutional\s+Sellers.*?([0-9][0-9,]*)", text, re.I | re.S)
+    sellers = re.search(r"Number\s+of\s+Institutional\s+Sellers(?:\s*\(last\s+12\s+months\))?\s*([0-9][0-9,]*)", text, re.I | re.S)
     outflows = re.search(r"Total\s+Institutional\s+Outflows.*?(\$[0-9.,]+\s*[KMBT]?)", text, re.I | re.S)
     values = {
         "institutional_ownership_pct": _num(ownership.group(1)) if ownership else None,
