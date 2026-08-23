@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ledger import get_object, list_objects
+from ledger import get_object, latest_object, list_objects
 
 
 router = APIRouter()
@@ -74,6 +74,24 @@ def _agent_changes(
     return changes
 
 
+def _qualification_requirements(assessment: dict[str, Any] | None) -> list[str]:
+    if not assessment:
+        return []
+    mapping = {
+        "committee_watch": "Committee must remain WATCH",
+        "committee_confidence": "Committee confidence must reach 80%",
+        "evidence_quality": "Evidence quality must reach 65%",
+        "evidence_count": "At least 12 evidence items are required",
+        "no_critical_flags": "Evidence packet must have no critical flags",
+        "required_evidence_resolved": "Committee required-evidence list must be resolved",
+        "risk_clear_for_watch": "Deterministic Risk must clear all research blockers",
+        "watch_desk_quorum": "At least 6 of 8 desks must be WATCH",
+        "fundamentals_watch": "Fundamentals desk must be WATCH",
+        "skeptic_watch": "Skeptic / Red Team must be WATCH",
+    }
+    return [mapping.get(key, key.replace("_", " ")) for key in assessment.get("unmet_requirements") or []]
+
+
 def build_case_history(case_id: str) -> dict[str, Any]:
     case = get_object(case_id)
     if not case or not case_id.startswith("case_"):
@@ -83,9 +101,15 @@ def build_case_history(case_id: str) -> dict[str, Any]:
     risks = list_objects(case_id, "risk_authorization")
     executions = list_objects(case_id, "execution")
     reunderwrites = list_objects(case_id, "full_reunderwrite")
+    gap_hunts = list_objects(case_id, "gap_hunt")
     reunderwrite_decision_ids = {
         str((item.get("committee") or {}).get("decision_id"))
         for item in reunderwrites
+        if (item.get("committee") or {}).get("decision_id")
+    }
+    gap_hunt_decision_ids = {
+        str((item.get("committee") or {}).get("decision_id"))
+        for item in gap_hunts
         if (item.get("committee") or {}).get("decision_id")
     }
 
@@ -97,7 +121,12 @@ def build_case_history(case_id: str) -> dict[str, Any]:
         execution = _find_by_decision(executions, decision_id) or {}
         summary = decision.get("evidence_summary") or {}
         agents = decision.get("agents") or {}
-        round_type = "REUNDERWRITE" if decision_id in reunderwrite_decision_ids else ("INITIAL" if index == 1 else "REVIEW")
+        if decision_id in gap_hunt_decision_ids:
+            round_type = "GAP_HUNT"
+        elif decision_id in reunderwrite_decision_ids:
+            round_type = "REUNDERWRITE"
+        else:
+            round_type = "INITIAL" if index == 1 else "REVIEW"
         rounds.append(
             {
                 "round_number": index,
@@ -135,29 +164,35 @@ def build_case_history(case_id: str) -> dict[str, Any]:
         previous = decision
 
     latest = rounds[-1] if rounds else None
-    current_stage = ((latest or {}).get("committee") or {}).get("disposition") or "NO_TRADE"
+    assessment = latest_object("qualification_assessment", case_id=case_id)
+    qualified = bool((assessment or {}).get("qualified_buy_candidate"))
+    current_stage = "QUALIFIED_BUY_CANDIDATE" if qualified else (((latest or {}).get("committee") or {}).get("disposition") or "NO_TRADE")
     evidence_quality = float((latest or {}).get("evidence_quality") or 0.0)
     committee_confidence = float((((latest or {}).get("committee") or {}).get("confidence")) or 0.0)
     risk_rules = ((latest or {}).get("risk") or {}).get("triggered_rules") or []
-    next_requirements = []
-    if committee_confidence < 0.65:
-        next_requirements.append("Committee confidence must reach at least 65%")
-    if evidence_quality < 0.55:
-        next_requirements.append("Evidence quality must reach at least 55%")
-    if "OPEN_EVIDENCE_REQUIREMENTS" in risk_rules:
-        next_requirements.append("Committee required-evidence list must be resolved")
-    if not next_requirements and current_stage == "WATCH":
-        next_requirements.append("Current build can only advance to WATCH_ONLY; QUALIFIED BUY CANDIDATE is a future research gate")
+    next_requirements = _qualification_requirements(assessment)
+    if not assessment:
+        if committee_confidence < 0.65:
+            next_requirements.append("Committee confidence must reach at least 65%")
+        if evidence_quality < 0.55:
+            next_requirements.append("Evidence quality must reach at least 55%")
+        if "OPEN_EVIDENCE_REQUIREMENTS" in risk_rules:
+            next_requirements.append("Committee required-evidence list must be resolved")
+        if not next_requirements and current_stage == "WATCH":
+            next_requirements.append("Run Evidence Gap Hunter to evaluate the governed QUALIFIED BUY CANDIDATE gate")
+    elif qualified:
+        next_requirements = ["Qualified research candidate reached; PAPER BUY remains disabled until a separate paper-risk tier is governed and approved"]
 
     return {
         "case_id": case_id,
         "topic": case.get("topic"),
         "rounds": rounds,
         "round_count": len(rounds),
+        "latest_qualification": assessment,
         "signal_ladder": {
             "current_stage": current_stage,
             "stages": ["NO_TRADE", "WATCH", "QUALIFIED_BUY_CANDIDATE", "PAPER_BUY"],
-            "qualified_buy_candidate_enabled": False,
+            "qualified_buy_candidate_enabled": qualified,
             "paper_buy_enabled": False,
             "next_requirements": next_requirements,
         },
