@@ -8,7 +8,6 @@ from typing import Any, Callable
 from provider_hardening import _request_bytes
 
 MARKETBEAT_INSIDER_URL = "https://www.marketbeat.com/stocks/NASDAQ/MU/insider-trades/"
-DATE_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}$")
 
 
 class _TableParser(HTMLParser):
@@ -69,6 +68,32 @@ def _date_iso(text: str) -> str:
     return value
 
 
+def _is_political_trade_label(value: str) -> bool:
+    """Reject congressional/political-trading rows from a corporate-insider feed.
+
+    Some public aggregator pages place company insider transactions and congressional
+    trades on the same page. Those are different datasets and must never be mixed.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    upper = text.upper()
+    political_terms = (
+        " SENATE ",
+        " HOUSE ",
+        " SENATOR ",
+        " REPRESENTATIVE ",
+        " CONGRESS ",
+        " CONGRESSMAN ",
+        " CONGRESSWOMAN ",
+    )
+    padded = f" {upper} "
+    if any(term in padded for term in political_terms):
+        return True
+    # Typical aggregator labels: "Name House (D-CA)" or "Name Senate (R-AR)".
+    if re.search(r"\b(?:HOUSE|SENATE)\s*\([RID]-[A-Z]{2}\)", upper):
+        return True
+    return False
+
+
 def parse_marketbeat_insider_rows(html: str, *, ticker: str = "MU") -> list[dict[str, Any]]:
     parser = _TableParser()
     parser.feed(html)
@@ -77,19 +102,25 @@ def parse_marketbeat_insider_rows(html: str, *, ticker: str = "MU") -> list[dict
         if len(cells) < 6:
             continue
         date, insider, side, shares_text, avg_price_text, total_text = cells[:6]
-        if not DATE_RE.match(date.strip()):
+        side_upper = side.upper()
+        # Header and unrelated-table guardrails.
+        if "BUY" not in side_upper and "SELL" not in side_upper:
             continue
-        side_upper = side.upper().strip()
-        if side_upper not in {"BUY", "SELL"}:
+        if _is_political_trade_label(insider):
             continue
-        nature = "OPEN_MARKET_PURCHASE" if side_upper == "BUY" else "OPEN_MARKET_SALE"
+
+        nature = "OPEN_MARKET_PURCHASE" if "BUY" in side_upper else "OPEN_MARKET_SALE"
         shares = _number(shares_text)
         price = _number(avg_price_text)
         total = _number(total_text)
         owner = insider.strip()
         role = None
         # MarketBeat often renders name and title in the same cell.
-        role_terms = ("CEO", "CFO", "COO", "DIRECTOR", "VP", "SVP", "EVP", "PRESIDENT", "OFFICER")
+        role_terms = (
+            "CEO", "CFO", "COO", "CTO", "CAO", "CLO", "CMO",
+            "DIRECTOR", "VP", "SVP", "EVP", "PRESIDENT", "OFFICER",
+            "GENERAL", "COUNSEL", "CHAIR", "CHAIRMAN",
+        )
         words = owner.split()
         for index, word in enumerate(words):
             if word.upper().strip(".,") in role_terms:
@@ -118,6 +149,7 @@ def parse_marketbeat_insider_rows(html: str, *, ticker: str = "MU") -> list[dict
                 "reliability_score": 0.72,
                 "admission_status": "CONTEXT_ONLY",
                 "secondary_source": True,
+                "subject_scope": "CORPORATE_INSIDER",
                 "requires_primary_corroboration": True,
                 "transaction_detail_complete": True,
                 "paper_mode": True,
@@ -141,7 +173,7 @@ def fetch_marketbeat_insider_records(ticker: str) -> list[dict[str, Any]]:
     ).decode("utf-8", errors="ignore")
     records = parse_marketbeat_insider_rows(html, ticker=symbol)
     if not records:
-        raise RuntimeError("Secondary public insider page returned no transaction rows")
+        raise RuntimeError("Secondary public insider page returned no corporate-insider transaction rows")
     return records
 
 
@@ -164,14 +196,14 @@ def install_secondary_insider_fallback(module: Any) -> None:
         result = prior_auto(case_id)
         if result.get("status") in {"ok", "fallback_ok"}:
             records = module.list_objects(case_id, "insider_activity_record")
-            secondary_records = [row for row in records if row.get("secondary_source")]
+            secondary_records = [row for row in records if row.get("secondary_source") and row.get("subject_scope") != "EXCLUDED_NON_CORPORATE"]
             if secondary_records:
                 return {
                     **result,
                     "status": "secondary_fallback_ok",
                     "provider": "MARKETBEAT_PUBLIC_SECONDARY",
                     "transaction_detail_complete": True,
-                    "provider_note": "Direct SEC and official Micron IR were unavailable locally. A secondary public insider source was used for context only; these records require primary-source corroboration and cannot resolve qualification gaps by themselves.",
+                    "provider_note": "Direct SEC and official Micron IR were unavailable locally. A secondary public insider source was used for corporate-insider context only; congressional/political trades are excluded. These records require primary-source corroboration and cannot resolve qualification gaps by themselves.",
                 }
         return result
 
