@@ -16,6 +16,9 @@ MICRON_HBM4_VOLUME_URL = (
     "https://investors.micron.com/news/press-release/2026/"
     "Micron-in-High-Volume-Production-of-HBM4-Designed-for-NVIDIA-Vera-Rubin-PCIe-Gen6-SSD-and-SOCAMM2-03-16-2026/default.aspx"
 )
+MICRON_Q3_2026_10Q_URL = (
+    "https://www.sec.gov/Archives/edgar/data/723125/000072312526000015/mu-20260528.htm"
+)
 
 
 def policy_transmission_supported(text: str) -> bool:
@@ -100,6 +103,26 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             "Micron HBM4 Volume Production",
             ["HBM4", "volume shipment", "high-volume production"],
             0.96,
+        )
+        added.extend(records)
+        failures.extend(errors)
+        # The filed Q3 2026 10-Q explicitly quantifies DRAM/NAND ASP changes and says
+        # gross-margin improvement was primarily driven by higher average selling prices.
+        # This is the required primary evidence for ASP sensitivity, not a generic
+        # narrative statement that pricing was favorable.
+        records, errors = module._capture_official_page(
+            case_id,
+            case,
+            "micron_financials",
+            MICRON_Q3_2026_10Q_URL,
+            "Micron Fiscal Q3 2026 Form 10-Q",
+            [
+                "average selling prices",
+                "Margins improved primarily due to increases in average selling prices",
+                "Sales of DRAM products increased",
+                "Sales of NAND products increased",
+            ],
+            0.995,
         )
         added.extend(records)
         failures.extend(errors)
