@@ -1,3 +1,12 @@
+import os
+
+try:
+    import certifi
+
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+except ImportError:
+    pass
+
 from main import app
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -8,6 +17,7 @@ from monitoring_engine import (
     stop_scheduler,
 )
 from public_case_router import router as public_case_router
+from semiconductor_intelligence import router as semiconductor_router
 
 
 @app.get("/monitoring/dashboard")
@@ -27,7 +37,8 @@ def monitoring_dashboard_live(limit: int = 25):
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router)
-app.version = "0.6.1"
+app.include_router(semiconductor_router)
+app.version = "0.7.0"
 
 
 @app.on_event("startup")
@@ -45,7 +56,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.6.1",
+        "version": "0.7.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -54,4 +65,6 @@ def system_status():
         "judgment_bank": True,
         "automatic_monitoring": True,
         "factory_dashboard": True,
+        "semiconductor_memory_intelligence": True,
+        "automatic_ssl_cert_bundle": bool(os.getenv("SSL_CERT_FILE")),
     }
