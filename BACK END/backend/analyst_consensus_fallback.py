@@ -48,7 +48,7 @@ def _scaled_number(value: str | None, suffix: str | None) -> float | None:
     except (TypeError, ValueError):
         return None
     multiplier = {"": 1.0, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}.get(str(suffix or "").upper(), 1.0)
-    return number * multiplier
+    return round(number * multiplier, 4)
 
 
 def parse_stockanalysis_consensus(html: str, *, current_year: int | None = None) -> dict[str, Any] | None:
@@ -145,9 +145,6 @@ def install_analyst_consensus_fallback(module: Any) -> None:
         if lane != "valuation_market" or fact_key != "consensus":
             return record
 
-        # The base writer intentionally treats unknown source classes as context-only.
-        # Promote this one narrow source/fact combination after persistence so consensus
-        # can resolve only the consensus fact, while retaining zero execution authority.
         governed = {
             **record,
             "source_type": "consensus_data",
