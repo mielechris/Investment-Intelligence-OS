@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.3 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.4 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.3 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.4 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -53,8 +53,6 @@ from requirement_lineage_guard import install_requirement_lineage_guard
 from semiconductor_intelligence import router as semiconductor_router
 
 
-# Provider hardening/fallbacks are installed centrally so every route and background
-# refresh uses the same pacing, retry, SSL, official-company, news, and market logic.
 source_ingestion.FETCHERS["gdelt_news"] = fetch_gdelt_news
 source_ingestion.FETCHERS["sec_companyfacts"] = fetch_sec_companyfacts
 source_ingestion.FETCHERS["official_web"] = fetch_official_web
@@ -62,36 +60,15 @@ source_ingestion.FETCHERS["google_news_rss"] = fetch_google_news_rss
 monitoring_engine._fetch_stooq_quote = fetch_market_quote
 public_case_router._fetch_stooq_quote = fetch_market_quote
 
-# Insider source precedence:
-# 1) direct SEC EDGAR,
-# 2) official Micron IR filing index,
-# 3) secondary public insider source for context only.
-# The scope/freshness guard runs last so congressional/political rows and stale insider
-# history cannot contaminate current corporate-insider research. Raw history remains in
-# the audit ledger for provenance.
 install_insider_fallback(insider_intelligence)
 install_secondary_insider_fallback(insider_intelligence)
 install_insider_scope_guard(insider_intelligence)
 
-# Institutional source precedence:
-# 1) Yahoo public market-data modules/options when locally accessible,
-# 2) secondary public MarketBeat context for missing lanes,
-# 3) integrity normalization so secondary units/semantics cannot masquerade as primary.
 install_institutional_secondary_fallback(institutional_intelligence)
 install_institutional_integrity_guard(institutional_intelligence)
 
-# Primary-evidence semantics are stricter than keyword presence. Broad product mentions
-# such as "HBM" cannot satisfy narrow HBM-margin or HBM-yield facts unless the supporting
-# language actually contains the required operational concept. Tightened HBM economics
-# is a separate all-six-facts contract so completed broad Financials work is preserved
-# without pretending the narrower Committee question is already answered.
 install_primary_evidence_semantic_guard(primary_evidence)
 
-
-# Hard Data, Insider/Ownership, Institutional Expectations, and Primary Evidence remain
-# separate governed ledger classes. The Gap Hunter can see all of them, but only records
-# that are resolution-eligible can satisfy a gap; v0.12+ also requires the requirement's
-# fact contract to reach its required coverage before the Resolution Matrix turns green.
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
 
@@ -107,22 +84,11 @@ def _gap_packet_items_with_governed_data(packet):
 
 
 evidence_gap_hunter._raw_items_from_packet = _gap_packet_items_with_governed_data
-
-# A Gap Hunt adjudicates the prior Committee requirements and then the new Committee may
-# tighten or rewrite them. Preserve that lineage explicitly so a prior green row is not
-# presented as a currently closed gap when the new Committee reopens the same evidence lane.
 install_requirement_lineage_guard(evidence_gap_hunter)
 
 
 @app.get("/monitoring/dashboard")
 def monitoring_dashboard_live(limit: int = 25):
-    """Return one coherent latest-research state per case.
-
-    Monitor snapshots remain useful surveillance data, but the Committee decision and
-    its locked evidence summary are authoritative for the current research disposition.
-    This prevents an older monitor snapshot from being displayed beside a newer Gap
-    Hunter Committee decision.
-    """
     dashboard = build_dashboard(limit)
     coherent_rows = []
     for row in dashboard.get("cases", []):
@@ -161,7 +127,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.3"
+app.version = "0.12.4"
 
 
 @app.on_event("startup")
@@ -176,10 +142,9 @@ def stop_iios_monitoring() -> None:
 
 @app.get("/system/status")
 def system_status():
-    """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.3",
+        "version": "0.12.4",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -204,7 +169,10 @@ def system_status():
         "policy_measured_transmission_required": True,
         "micron_hbm_economics_contract": True,
         "micron_hbm_economics_all_six_facts_required": True,
-        "quarterly_evidence_freshness_floor": True,
+        "micron_hbm_margin_direct_annual_filing_support": True,
+        "micron_hbm_customer_concentration_inference_allowed": False,
+        "periodic_evidence_freshness_floor": True,
+        "annual_filing_freshness_class": True,
         "hard_data_acquisition": True,
         "hard_data_best_match_mapping": True,
         "hard_data_mapping_repair": True,
