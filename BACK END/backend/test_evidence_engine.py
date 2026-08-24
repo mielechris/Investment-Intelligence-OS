@@ -62,6 +62,22 @@ class EvidenceEngineTests(unittest.TestCase):
         self.assertGreaterEqual(item["freshness_score"], 0.75)
         self.assertGreaterEqual(item["quality_score"], 0.65)
 
+    def test_latest_annual_filing_remains_high_quality_until_next_cycle(self):
+        now = datetime.now(timezone.utc)
+        item = normalize_item({
+            "claim": "Micron Form 10-K identifies HBM as a higher-margin product contributing to DRAM margin improvement",
+            "source": "Micron Form 10-K",
+            "url": "https://www.sec.gov/Archives/edgar/data/723125/example.htm",
+            "source_type": "filing",
+            "evidence_type": "annual_filing",
+            "observed_at": (now - timedelta(days=330)).isoformat(),
+            "reliability_score": 0.995,
+        }, now=now)
+        self.assertFalse(item["stale"])
+        self.assertEqual(item["freshness_window_hours"], 24 * 400)
+        self.assertGreaterEqual(item["freshness_score"], 0.75)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
     def test_quarterly_evidence_expires_after_window(self):
         now = datetime.now(timezone.utc)
         item = normalize_item({
