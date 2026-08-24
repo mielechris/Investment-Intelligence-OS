@@ -15,6 +15,14 @@ from orchestration_resilience import (
     router as orchestration_resilience_router,
 )
 from orchestration_speed import install_orchestration_speed
+from cross_case_memory import (
+    install_cross_case_memory,
+    router as cross_case_memory_router,
+)
+from agent_calibration_weighting import (
+    install_calibration_context,
+    router as agent_calibration_router,
+)
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
 import opportunity_acquisition
@@ -37,6 +45,14 @@ install_orchestration_resilience(eight_agent_orchestrator)
 # worker-pool modules import the run function.
 install_orchestration_speed(eight_agent_orchestrator)
 
+# Cross-case memory is specialist context only. It never enters qualification
+# evidence counts, fact resolution, sizing, authorization, or execution gates.
+install_cross_case_memory(eight_agent_orchestrator)
+
+# Calibration remains neutral until every desk reaches the governed sample-size
+# threshold. Even when mature, it cannot bypass committee guards.
+install_calibration_context(eight_agent_orchestrator)
+
 # Install research-only evidence hardening before dispatch/scheduler modules import
 # the opportunity scan function. This changes only scanner evidence acquisition;
 # it does not touch sizing, authorization, paper execution, or live execution.
@@ -47,14 +63,19 @@ install_opportunity_evidence_hardening(opportunity_acquisition)
 install_research_source_cache(source_ingestion)
 
 # Import modules that capture the installed orchestrator only after runtime,
-# resilience, and timing layers are in place.
+# resilience, timing, memory, and calibration layers are in place.
 from adaptive_research_queue import router as adaptive_research_queue_router
+from evidence_depth_engine import router as evidence_depth_router
+from historical_regime_memory import router as historical_regime_memory_router
+from intelligence_safety_manifest import router as intelligence_safety_manifest_router
 from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
 from opportunity_scheduler import router as opportunity_scheduler_router
 from orchestration_worker_pool import router as orchestration_worker_pool_router
+from portfolio_intelligence import router as portfolio_intelligence_router
 from production_safety_freeze import router as production_safety_freeze_router
 from source_ingestion import ingest_sources
+from thesis_lifecycle_intelligence import router as thesis_lifecycle_router
 
 
 router = APIRouter()
@@ -68,6 +89,13 @@ router.include_router(orchestration_resilience_router)
 router.include_router(research_source_cache_router)
 router.include_router(orchestration_worker_pool_router)
 router.include_router(production_safety_freeze_router)
+router.include_router(evidence_depth_router)
+router.include_router(historical_regime_memory_router)
+router.include_router(cross_case_memory_router)
+router.include_router(agent_calibration_router)
+router.include_router(thesis_lifecycle_router)
+router.include_router(portfolio_intelligence_router)
+router.include_router(intelligence_safety_manifest_router)
 router.include_router(orchestration_router)
 
 
