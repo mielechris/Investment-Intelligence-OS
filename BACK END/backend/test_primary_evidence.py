@@ -13,6 +13,10 @@ FINANCIAL_REQUIREMENT = (
     "Micron's latest filing-based revenue mix, HBM volumes and margins, inventory, free cash flow, "
     "debt and cash, capex commitments, and sensitivity to memory ASP changes."
 )
+HBM_ECONOMICS_REQUIREMENT = (
+    "Verified Micron HBM revenue, shipment volumes, margins, customer concentration, "
+    "capacity allocation, and ASP sensitivity."
+)
 POLICY_CURRENT_REQUIREMENT = (
     "Final tariff scope, effective dates, implementation guidance, and measurable evidence of "
     "supply-chain substitution or memory-market transmission."
@@ -25,6 +29,26 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertEqual(lane, "micron_financials")
         self.assertEqual(contract["label"], "Micron Filing Financials")
         self.assertGreaterEqual(len(contract["facts"]), 8)
+
+    def test_tightened_hbm_requirement_maps_to_dedicated_contract(self):
+        lane, contract = contract_for_requirement(HBM_ECONOMICS_REQUIREMENT)
+        self.assertEqual(lane, "micron_hbm_economics")
+        self.assertEqual(contract["label"], "Micron HBM Economics")
+        self.assertEqual(len(contract["facts"]), 6)
+        self.assertEqual(contract["minimum_fraction"], 1.0)
+
+    def test_hbm_economics_does_not_close_with_only_four_carried_forward_facts(self):
+        items = [
+            {"primary_fact_key": "hbm_revenue", "claim": "HBM4 revenue over $1 billion"},
+            {"primary_fact_key": "hbm_shipments", "claim": "HBM4 high-volume shipments"},
+            {"primary_fact_key": "capacity_allocation", "claim": "HBM wafer and supply allocation"},
+            {"primary_fact_key": "hbm_asp_sensitivity", "claim": "HBM pricing premium"},
+        ]
+        coverage = coverage_for_requirement(HBM_ECONOMICS_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 4)
+        self.assertEqual(set(coverage["missing_fact_keys"]), {"hbm_margin", "customer_concentration"})
+        self.assertFalse(coverage["coverage_gate_passed"])
 
     def test_current_policy_wording_maps_to_policy_contract(self):
         lane, contract = contract_for_requirement(POLICY_CURRENT_REQUIREMENT)
@@ -46,6 +70,13 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertIsNone(primary_evidence._fact_from_keyword("supply_inventory", "HBM"))
         self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", "HBM volume and margin"), "hbm_margin")
         self.assertEqual(primary_evidence._fact_from_keyword("supply_inventory", "HBM packaging capacity"), "capacity")
+
+    def test_hbm_specific_keyword_mapping_remains_narrow(self):
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM4 revenue exceeded $1 billion"), "hbm_revenue")
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM4 high-volume shipments"), "hbm_shipments")
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM capacity allocation uses more wafers"), "capacity_allocation")
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM pricing premium"), "hbm_asp_sensitivity")
+        self.assertIsNone(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM product leadership"))
 
     def test_static_micron_financial_keywords_map_to_specific_facts(self):
         cases = {
