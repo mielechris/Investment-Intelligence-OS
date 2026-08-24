@@ -141,6 +141,32 @@ def build_evidence_depth_plan(case_id: str) -> dict[str, Any]:
     return plan
 
 
+def run_evidence_depth_acquisition(case_id: str) -> dict[str, Any]:
+    plan = build_evidence_depth_plan(case_id)
+    # Reuse the already-governed Gap Hunter for actual retrieval, quality firewall,
+    # reconciliation, and re-underwrite rather than creating a parallel research path.
+    from evidence_gap_hunter import run_gap_hunt
+
+    gap_hunt = run_gap_hunt(case_id)
+    return {
+        "case_id": case_id,
+        "depth_plan": plan,
+        "gap_hunt": gap_hunt,
+        "acquisition_path": "GOVERNED_GAP_HUNTER",
+        "research_only": True,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+    }
+
+
 @router.get("/intelligence/evidence-depth/{case_id}")
 def evidence_depth(case_id: str):
     return build_evidence_depth_plan(case_id)
+
+
+@router.post("/intelligence/evidence-depth/{case_id}/run")
+def evidence_depth_run(case_id: str):
+    return run_evidence_depth_acquisition(case_id)
