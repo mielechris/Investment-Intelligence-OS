@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hyperscaler_contract_context import install_hyperscaler_contract_context
+
 
 MICROSOFT_FY26_Q3_URL = "https://www.microsoft.com/en-us/investor/events/fy-2026/earnings-fy-2026-q3"
 META_Q2_2026_URL = "https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Second-Quarter-2026-Results/default.aspx"
@@ -115,3 +117,8 @@ def install_hyperscaler_primary_fallback(module: Any) -> None:
 
     module._capture_hyperscalers = capture_hyperscalers_governed
     module._lane_status = lane_status_governed
+
+    # Supplier-side take-or-pay memory contracts are useful corroboration, but because the
+    # counterparties are not publicly identified as specific hyperscalers, they remain
+    # context-only and cannot close the hyperscaler-specific memory-terms fact.
+    install_hyperscaler_contract_context(module)
