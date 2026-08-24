@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from eight_agent_orchestrator import router as orchestration_router
+from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
 from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
@@ -16,6 +17,7 @@ router = APIRouter()
 router.include_router(opportunity_router)
 router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
+router.include_router(market_event_radar_router)
 router.include_router(orchestration_router)
 
 
