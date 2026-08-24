@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.3 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.13.4 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.3 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.13.4 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -22,6 +22,7 @@ from dashboard_lineage import apply_latest_decision_lineage
 from decision_history import router as history_router
 import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
+from finra_short_interest_fallback import install_finra_short_interest_fallback
 from hard_data import hard_data_evidence, router as hard_data_router
 from hyperscaler_primary_fallback import install_hyperscaler_primary_fallback
 import insider_intelligence
@@ -76,6 +77,7 @@ install_valuation_market_primary_fallback(primary_evidence)
 install_micron_valuation_filing_fallback(primary_evidence)
 install_analyst_consensus_fallback(primary_evidence)
 install_short_interest_fallback(primary_evidence)
+install_finra_short_interest_fallback(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
@@ -127,7 +129,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.13.3"
+app.version = "0.13.4"
 
 
 @app.on_event("startup")
@@ -144,7 +146,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.13.3",
+        "version": "0.13.4",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -184,7 +186,7 @@ def system_status():
         "supply_inventory_utilization_inference_allowed": False,
         "valuation_market_primary_engine": True,
         "valuation_market_dynamic_by_ticker": True,
-        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "NASDAQ_SHORT_INTEREST", "FIRST_PARTY_PORTFOLIO"],
+        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "NASDAQ_SHORT_INTEREST", "FINRA_CONSOLIDATED_SHORT_INTEREST", "FIRST_PARTY_PORTFOLIO"],
         "valuation_market_micron_sec_fallback": True,
         "valuation_market_filing_backed_ttm_pe": True,
         "valuation_market_portfolio_overlap_required_when_requested": True,
@@ -196,8 +198,8 @@ def system_status():
         "analyst_consensus_fact_scope": "VALUATION_MARKET_CONSENSUS_ONLY",
         "analyst_consensus_auto_trade_authority": False,
         "governed_short_interest_engine": True,
-        "short_interest_primary_source": "NASDAQ_SHORT_INTEREST_REPORT",
-        "short_interest_provider_order": ["NASDAQ_EXCHANGE_API", "USER_VERIFIED_NASDAQ"],
+        "short_interest_primary_source": "NASDAQ_OR_FINRA_REGULATORY_SHORT_INTEREST",
+        "short_interest_provider_order": ["NASDAQ_EXCHANGE_API", "FINRA_CONSOLIDATED_SHORT_INTEREST", "USER_VERIFIED_NASDAQ"],
         "short_interest_fact_scope": "VALUATION_MARKET_SHORT_INTEREST_ONLY",
         "short_interest_auto_trade_authority": False,
         "governed_portfolio_snapshot": True,
@@ -262,6 +264,7 @@ def system_status():
             "YAHOO_PUBLIC_MARKET_DATA",
             "STOCKANALYSIS_GOVERNED_CONSENSUS",
             "NASDAQ_SHORT_INTEREST_REPORT",
+            "FINRA_CONSOLIDATED_SHORT_INTEREST",
             "FIRST_PARTY_PORTFOLIO",
         ],
         "primary_memory_pricing_auto_provider": False,
