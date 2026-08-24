@@ -53,7 +53,7 @@ def _bool_env(name: str, default: bool) -> bool:
 def default_config() -> dict[str, Any]:
     return {
         "opportunity_automation_config_id": CONFIG_ID,
-        "enabled": _bool_env("IIOS_OPPORTUNITY_AUTO_SCAN", True),
+        "enabled": _bool_env("IIOS_OPPORTUNITY_AUTO_SCAN", False),
         "auto_dispatch_enabled": _bool_env("IIOS_OPPORTUNITY_AUTO_DISPATCH", False),
         "interval_minutes": DEFAULT_INTERVAL_MINUTES,
         "news_limit": DEFAULT_NEWS_LIMIT,
@@ -90,7 +90,7 @@ def normalize_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         **existing,
         "opportunity_automation_config_id": CONFIG_ID,
-        "enabled": bool(payload.get("enabled", existing.get("enabled", True))),
+        "enabled": bool(payload.get("enabled", existing.get("enabled", False))),
         "auto_dispatch_enabled": bool(payload.get("auto_dispatch_enabled", existing.get("auto_dispatch_enabled", False))),
         "interval_minutes": interval,
         "news_limit": news_limit,
