@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import statistics
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +17,15 @@ SPEED_PROFILE = "speed_trial"
 DEFAULT_RUNS_PER_PROFILE = 2
 MAX_RUNS_PER_PROFILE = 3
 CHILD_MARKER = "IIOS_AB_RESULT="
+DEFAULT_DB_PATH = Path(__file__).resolve().parent / "iios_ledger.db"
 
 _CHILD_CODE = r'''
 import json
 import sys
 
 # Importing the public router installs runtime routing + timing layers before
-# the orchestrator is called. The process inherits the profile from its env.
+# the orchestrator is called. The process inherits the profile and isolated
+# ledger path from its environment.
 import public_case_router  # noqa: F401
 import eight_agent_orchestrator as orch
 
@@ -45,6 +49,28 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _source_db_path() -> Path:
+    return Path(os.getenv("IIOS_DB_PATH", str(DEFAULT_DB_PATH))).expanduser().resolve()
+
+
+def snapshot_ledger(source: Path, destination: Path) -> None:
+    """Create a consistent SQLite snapshot, including committed WAL state."""
+    source = Path(source).expanduser().resolve()
+    destination = Path(destination).expanduser().resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"IIOS ledger not found: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    source_connection = sqlite3.connect(source, timeout=30)
+    destination_connection = sqlite3.connect(destination, timeout=30)
+    try:
+        source_connection.backup(destination_connection)
+        destination_connection.commit()
+    finally:
+        destination_connection.close()
+        source_connection.close()
+
+
 def quality_signature(result: dict[str, Any]) -> dict[str, Any]:
     orchestration = result.get("orchestration") or {}
     committee = result.get("committee") or {}
@@ -54,21 +80,18 @@ def quality_signature(result: dict[str, Any]) -> dict[str, Any]:
 
     agent_rows = [row for row in agents.values() if isinstance(row, dict)]
     error_count = sum(1 for row in agent_rows if row.get("status") != "complete")
-    safety_ok = all(
-        value is False
-        for value in (
-            committee.get("paper_order_permission"),
-            committee.get("trade_execution_permission"),
-            committee.get("live_execution"),
-            orchestration.get("paper_order_permission"),
-            orchestration.get("trade_execution_permission"),
-            orchestration.get("live_execution"),
-            performance.get("paper_order_permission"),
-            performance.get("trade_execution_permission"),
-            performance.get("live_execution"),
-        )
-        if value is not None
+    safety_values = (
+        committee.get("paper_order_permission"),
+        committee.get("trade_execution_permission"),
+        committee.get("live_execution"),
+        orchestration.get("paper_order_permission"),
+        orchestration.get("trade_execution_permission"),
+        orchestration.get("live_execution"),
+        performance.get("paper_order_permission"),
+        performance.get("trade_execution_permission"),
+        performance.get("live_execution"),
     )
+    safety_ok = all(value is False for value in safety_values)
 
     required = committee.get("required_evidence")
     required = required if isinstance(required, list) else []
@@ -199,7 +222,12 @@ def _parse_child_result(stdout: str) -> dict[str, Any]:
     raise RuntimeError("Benchmark child returned no IIOS result marker")
 
 
-def run_profile_once(case_id: str, profile: str) -> dict[str, Any]:
+def run_profile_once(
+    case_id: str,
+    profile: str,
+    *,
+    isolated_db_path: Path,
+) -> dict[str, Any]:
     if profile not in {BASELINE_PROFILE, SPEED_PROFILE}:
         raise ValueError("Unknown benchmark profile")
     if not str(case_id).startswith("case_"):
@@ -208,6 +236,7 @@ def run_profile_once(case_id: str, profile: str) -> dict[str, Any]:
     env = os.environ.copy()
     env["IIOS_ORCHESTRATION_PROFILE"] = profile
     env["IIOS_PROMPT_CACHE_ENABLED"] = "0"
+    env["IIOS_DB_PATH"] = str(Path(isolated_db_path).resolve())
 
     completed = subprocess.run(
         [sys.executable, "-c", _CHILD_CODE, case_id],
@@ -229,17 +258,43 @@ def run_ab_benchmark(case_id: str, runs_per_profile: int = DEFAULT_RUNS_PER_PROF
     runs = normalize_runs(runs_per_profile)
     baseline_signatures: list[dict[str, Any]] = []
     speed_signatures: list[dict[str, Any]] = []
+    source_db = _source_db_path()
 
-    # Alternate profiles to reduce time-of-day/provider effects. Each run occurs in
-    # its own process, so profile env settings cannot leak into the live server.
-    for _ in range(runs):
-        baseline_signatures.append(quality_signature(run_profile_once(case_id, BASELINE_PROFILE)))
-        speed_signatures.append(quality_signature(run_profile_once(case_id, SPEED_PROFILE)))
+    # Every benchmark run gets a fresh SQLite snapshot of the live research ledger.
+    # The benchmark can read the same case, but its agent/committee writes never
+    # pollute the live Factory history.
+    with tempfile.TemporaryDirectory(prefix="iios_ab_") as tempdir:
+        temp_root = Path(tempdir)
+        for index in range(runs):
+            baseline_db = temp_root / f"baseline_{index}.db"
+            snapshot_ledger(source_db, baseline_db)
+            baseline_signatures.append(
+                quality_signature(
+                    run_profile_once(
+                        case_id,
+                        BASELINE_PROFILE,
+                        isolated_db_path=baseline_db,
+                    )
+                )
+            )
+
+            speed_db = temp_root / f"speed_{index}.db"
+            snapshot_ledger(source_db, speed_db)
+            speed_signatures.append(
+                quality_signature(
+                    run_profile_once(
+                        case_id,
+                        SPEED_PROFILE,
+                        isolated_db_path=speed_db,
+                    )
+                )
+            )
 
     comparison = compare_profiles(baseline_signatures, speed_signatures)
     return {
         "case_id": case_id,
         "runs_per_profile": runs,
+        "ledger_isolation": "temporary_snapshot_per_run",
         "baseline_runs": baseline_signatures,
         "speed_trial_runs": speed_signatures,
         "comparison": comparison,
@@ -262,6 +317,7 @@ def _print_report(result: dict[str, Any]) -> None:
     print("------------------------------")
     print("Case:", result["case_id"])
     print("Runs per profile:", result["runs_per_profile"])
+    print("Ledger isolation:", result["ledger_isolation"])
     print()
     print("BASELINE median latency:", baseline["median_latency_ms"], "ms")
     print("SPEED median latency:", speed["median_latency_ms"], "ms")
