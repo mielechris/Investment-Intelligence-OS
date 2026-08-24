@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from automatic_paper_sizing import calculate_automatic_paper_sizing
 from cycle_normalized_valuation import (
     build_live_cycle_stress,
 )
@@ -300,6 +301,35 @@ def refresh_capital_entry_watch(
         previous=previous,
     )
 
+    # Sizing may run only after the deterministic
+    # Capital Gate reaches APPROVED.
+    if (
+        classified.get("stage")
+        == "READY_FOR_POSITION_SIZING"
+    ):
+        automatic_sizing = (
+            calculate_automatic_paper_sizing(
+                case_id=case_id,
+                capital_gate=capital,
+            )
+        )
+    else:
+        automatic_sizing = {
+            "decision": "NOT_RUN",
+            "reason":
+                "ENTRY_GATE_NOT_REACHED",
+            "proposed_shares": 0,
+            "proposed_notional": 0.0,
+            "paper_authorization_ready":
+                False,
+            "paper_order_permission":
+                False,
+            "trade_execution_permission":
+                False,
+            "live_execution":
+                False,
+        }
+
     watch_id = (
         f"capital_entry_watch_"
         f"{uuid4().hex}"
@@ -342,6 +372,9 @@ def refresh_capital_entry_watch(
                 "failed_hard_checks"
             )
             or [],
+
+        "automatic_sizing":
+            automatic_sizing,
 
         "created_at":
             utc_now(),
