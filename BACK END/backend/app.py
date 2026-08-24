@@ -50,6 +50,7 @@ import primary_evidence
 import public_case_router
 import source_ingestion
 from monitoring_engine import build_dashboard, router as monitoring_router, start_scheduler, stop_scheduler
+from opportunity_scheduler import start_opportunity_scheduler, stop_opportunity_scheduler
 from memory_pricing_primary_fallback import install_memory_pricing_primary_fallback
 from official_sources import fetch_google_news_rss, fetch_official_web
 from open_evidence_watch import install_open_evidence_watch
@@ -156,10 +157,12 @@ app.version = "0.13.5"
 @app.on_event("startup")
 def start_iios_monitoring() -> None:
     start_scheduler()
+    start_opportunity_scheduler()
 
 
 @app.on_event("shutdown")
 def stop_iios_monitoring() -> None:
+    stop_opportunity_scheduler()
     stop_scheduler()
 
 
@@ -175,6 +178,11 @@ def system_status():
         "post_decision_learning": True,
         "judgment_bank": True,
         "automatic_monitoring": True,
+        "automatic_opportunity_scanning": True,
+        "opportunity_scan_interval_floor_minutes": 240,
+        "opportunity_auto_dispatch_default": False,
+        "opportunity_auto_trade_authority": False,
+        "peer_aware_eight_agent_orchestration": True,
         "factory_dashboard": True,
         "dashboard_latest_decision_lineage": True,
         "semiconductor_memory_intelligence": True,
