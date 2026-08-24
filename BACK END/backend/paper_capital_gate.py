@@ -103,6 +103,7 @@ def assess_paper_capital(
     qualification: dict[str, Any],
     risk: dict[str, Any],
     stress: dict[str, Any],
+    thesis_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Capital-underwriting gate.
@@ -195,6 +196,31 @@ def assess_paper_capital(
         or ""
     )
 
+    thesis_status = (
+        thesis_status
+        if isinstance(thesis_status, dict)
+        else {}
+    )
+
+    thesis_state = str(
+        thesis_status.get("status")
+        or ""
+    )
+
+    thesis_governance = (
+        thesis_status.get("governance")
+        or {}
+    )
+
+    thesis_breached_rules = [
+        str(rule)
+        for rule in (
+            thesis_status.get("breached_rules")
+            or []
+        )
+        if str(rule).strip()
+    ]
+
     checks = {
         "qualified_buy_candidate": bool(
             qualification.get(
@@ -239,6 +265,36 @@ def assess_paper_capital(
             len(watch_obligations)
             <= MAX_WATCH_OBLIGATIONS
         ),
+
+        # Thesis validity is a separate hard gate.
+        "thesis_status_present": bool(
+            thesis_status
+        ),
+        "thesis_mapper_deterministic": (
+            thesis_governance.get(
+                "deterministic_mapper"
+            )
+            is True
+            and thesis_governance.get(
+                "llm_can_trigger_rule"
+            )
+            is False
+        ),
+        "thesis_status_allowed": (
+            thesis_state
+            in {
+                "ACTIVE_CLEAR",
+                "ACTIVE_WITH_WATCHES",
+            }
+        ),
+        "thesis_not_invalidated": (
+            thesis_status.get(
+                "thesis_invalidated"
+            )
+            is False
+            and not thesis_breached_rules
+        ),
+
         "positive_upside": (
             upside_value > current_price
         ),
@@ -256,6 +312,10 @@ def assess_paper_capital(
         "governed_scope_clear",
         "quote_lineage_current",
         "watch_burden_within_policy",
+        "thesis_status_present",
+        "thesis_mapper_deterministic",
+        "thesis_status_allowed",
+        "thesis_not_invalidated",
     )
 
     hard_failed = [
@@ -305,6 +365,21 @@ def assess_paper_capital(
             len(watch_obligations),
         "watch_obligations":
             watch_obligations,
+
+        "thesis_status":
+            thesis_state,
+        "thesis_invalidated":
+            thesis_status.get(
+                "thesis_invalidated"
+            ),
+        "thesis_breached_rules":
+            thesis_breached_rules,
+        "thesis_watching_rules":
+            thesis_status.get(
+                "watching_rules"
+            )
+            or [],
+
         "model_policy": {
             "upside_method":
                 "NORMALIZED_MID_EPS_X_18",

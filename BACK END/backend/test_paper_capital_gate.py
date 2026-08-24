@@ -42,6 +42,37 @@ def risk():
     }
 
 
+def thesis(
+    status="ACTIVE_WITH_WATCHES",
+):
+    invalidated = status == "INVALIDATED"
+
+    return {
+        "status": status,
+        "thesis_invalidated": invalidated,
+        "breached_rules": (
+            ["MEMORY_PRICING_BREAK"]
+            if invalidated
+            else []
+        ),
+        "watching_rules": (
+            [
+                "SUPPLY_DEMAND_REVERSAL",
+                "HYPERSCALER_DEMAND_BREAK",
+            ]
+            if status == "ACTIVE_WITH_WATCHES"
+            else []
+        ),
+        "governance": {
+            "deterministic_mapper": True,
+            "llm_can_trigger_rule": False,
+            "automatic_sell_order": False,
+            "paper_order_permission": False,
+            "trade_execution_permission": False,
+        },
+    }
+
+
 def stress(price=914.44):
     return {
         "baseline": {
@@ -71,6 +102,7 @@ class PaperCapitalGateTests(unittest.TestCase):
             qualification=qualification(),
             risk=risk(),
             stress=stress(),
+            thesis_status=thesis(),
         )
 
         self.assertEqual(
@@ -92,6 +124,7 @@ class PaperCapitalGateTests(unittest.TestCase):
             qualification=qualification(),
             risk=risk(),
             stress=stress(price=800.0),
+            thesis_status=thesis(),
         )
 
         self.assertEqual(
@@ -114,6 +147,7 @@ class PaperCapitalGateTests(unittest.TestCase):
             qualification=qualification(False),
             risk=risk(),
             stress=stress(price=800.0),
+            thesis_status=thesis(),
         )
 
         self.assertEqual(
@@ -134,6 +168,7 @@ class PaperCapitalGateTests(unittest.TestCase):
             qualification=qualification(),
             risk=r,
             stress=stress(price=800.0),
+            thesis_status=thesis(),
         )
 
         self.assertEqual(
@@ -152,12 +187,99 @@ class PaperCapitalGateTests(unittest.TestCase):
             qualification=qualification(),
             risk=risk(),
             stress=s,
+            thesis_status=thesis(),
         )
 
         self.assertEqual(
             result["decision"],
             "REJECTED",
         )
+
+    def test_invalidated_thesis_rejects_even_at_good_entry(self):
+        result = assess_paper_capital(
+            qualification=qualification(),
+            risk=risk(),
+            stress=stress(price=800.0),
+            thesis_status=thesis(
+                "INVALIDATED"
+            ),
+        )
+
+        self.assertEqual(
+            result["decision"],
+            "REJECTED",
+        )
+
+        self.assertIn(
+            "thesis_status_allowed",
+            result["failed_hard_checks"],
+        )
+
+        self.assertIn(
+            "thesis_not_invalidated",
+            result["failed_hard_checks"],
+        )
+
+    def test_active_clear_thesis_can_continue(self):
+        result = assess_paper_capital(
+            qualification=qualification(),
+            risk=risk(),
+            stress=stress(price=800.0),
+            thesis_status=thesis(
+                "ACTIVE_CLEAR"
+            ),
+        )
+
+        self.assertEqual(
+            result["decision"],
+            "APPROVED",
+        )
+
+        self.assertFalse(
+            result["paper_order_permission"]
+        )
+
+    def test_missing_thesis_status_rejects(self):
+        result = assess_paper_capital(
+            qualification=qualification(),
+            risk=risk(),
+            stress=stress(price=800.0),
+            thesis_status=None,
+        )
+
+        self.assertEqual(
+            result["decision"],
+            "REJECTED",
+        )
+
+        self.assertIn(
+            "thesis_status_present",
+            result["failed_hard_checks"],
+        )
+
+    def test_non_deterministic_thesis_mapper_rejects(self):
+        t = thesis()
+        t["governance"][
+            "deterministic_mapper"
+        ] = False
+
+        result = assess_paper_capital(
+            qualification=qualification(),
+            risk=risk(),
+            stress=stress(price=800.0),
+            thesis_status=t,
+        )
+
+        self.assertEqual(
+            result["decision"],
+            "REJECTED",
+        )
+
+        self.assertIn(
+            "thesis_mapper_deterministic",
+            result["failed_hard_checks"],
+        )
+
 
     def test_required_entry_math(self):
         entry = required_entry_for_reward_risk(
