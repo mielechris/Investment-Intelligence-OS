@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from ledger import latest_object, record_event, record_object, utc_now
+from market_event_radar import run_market_event_radar
 from opportunity_acquisition import OPPORTUNITY_LEDGER_CASE, scan_universe
 from opportunity_dispatch import dispatch_ranked_queue
 
@@ -52,9 +53,7 @@ def _bool_env(name: str, default: bool) -> bool:
 def default_config() -> dict[str, Any]:
     return {
         "opportunity_automation_config_id": CONFIG_ID,
-        # User asked for unattended hunting. Scanning is public-data-only and bounded.
         "enabled": _bool_env("IIOS_OPPORTUNITY_AUTO_SCAN", True),
-        # LLM dispatch stays opt-in. Scanning may rank candidates but does not run agents automatically.
         "auto_dispatch_enabled": _bool_env("IIOS_OPPORTUNITY_AUTO_DISPATCH", False),
         "interval_minutes": DEFAULT_INTERVAL_MINUTES,
         "news_limit": DEFAULT_NEWS_LIMIT,
@@ -88,13 +87,11 @@ def normalize_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     max_candidates = max(1, min(max_candidates, DEFAULT_MAX_CANDIDATES))
     dispatch_limit = max(1, min(dispatch_limit, MAX_AUTO_DISPATCH))
 
-    config = {
+    return {
         **existing,
         "opportunity_automation_config_id": CONFIG_ID,
         "enabled": bool(payload.get("enabled", existing.get("enabled", True))),
-        "auto_dispatch_enabled": bool(
-            payload.get("auto_dispatch_enabled", existing.get("auto_dispatch_enabled", False))
-        ),
+        "auto_dispatch_enabled": bool(payload.get("auto_dispatch_enabled", existing.get("auto_dispatch_enabled", False))),
         "interval_minutes": interval,
         "news_limit": news_limit,
         "max_candidates": max_candidates,
@@ -106,7 +103,6 @@ def normalize_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         "trade_execution_permission": False,
         "live_execution": False,
     }
-    return config
 
 
 def save_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -155,6 +151,7 @@ def run_automation_cycle(config: dict[str, Any] | None = None) -> dict[str, Any]
         }
 
     try:
+        radar = run_market_event_radar()
         scan = scan_universe(
             news_limit=config["news_limit"],
             max_candidates=config["max_candidates"],
@@ -185,6 +182,7 @@ def run_automation_cycle(config: dict[str, Any] | None = None) -> dict[str, Any]
             "OPPORTUNITY_AUTOMATION_CYCLE_COMPLETE",
             entity_id=scan.get("opportunity_scan_id"),
             payload={
+                "radar_event_count": radar.get("event_count", 0),
                 "scanned_count": scan.get("scanned_count"),
                 "queued_count": scan.get("queued_count"),
                 "auto_dispatch_enabled": updated["auto_dispatch_enabled"],
@@ -195,6 +193,7 @@ def run_automation_cycle(config: dict[str, Any] | None = None) -> dict[str, Any]
         )
         return {
             "status": "complete",
+            "radar": radar,
             "scan": scan,
             "dispatch": dispatch,
             "config": updated,
