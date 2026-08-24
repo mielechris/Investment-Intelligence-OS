@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.8 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.9 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.8 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.9 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -39,12 +39,7 @@ import monitoring_engine
 import primary_evidence
 import public_case_router
 import source_ingestion
-from monitoring_engine import (
-    build_dashboard,
-    router as monitoring_router,
-    start_scheduler,
-    stop_scheduler,
-)
+from monitoring_engine import build_dashboard, router as monitoring_router, start_scheduler, stop_scheduler
 from official_sources import fetch_google_news_rss, fetch_official_web
 from primary_evidence import primary_evidence_evidence, router as primary_evidence_router
 from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
@@ -54,6 +49,7 @@ from requirement_lineage_guard import install_requirement_lineage_guard
 from semiconductor_intelligence import router as semiconductor_router
 from supply_inventory_primary_fallback import install_supply_inventory_primary_fallback
 from valuation_market_primary_fallback import install_valuation_market_primary_fallback
+from valuation_market_micron_filing_fallback import install_micron_valuation_filing_fallback
 
 
 source_ingestion.FETCHERS["gdelt_news"] = fetch_gdelt_news
@@ -74,6 +70,7 @@ install_primary_evidence_semantic_guard(primary_evidence)
 install_hyperscaler_primary_fallback(primary_evidence)
 install_supply_inventory_primary_fallback(primary_evidence)
 install_valuation_market_primary_fallback(primary_evidence)
+install_micron_valuation_filing_fallback(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
@@ -102,22 +99,13 @@ def monitoring_dashboard_live(limit: int = 25):
         snapshot = latest_object("monitor_snapshot", case_id=case_id) if case_id else None
         decision = latest_object("committee_decision", case_id=case_id) if case_id else None
         qualification = latest_object("qualification_assessment", case_id=case_id) if case_id else None
-
-        coherent = apply_latest_decision_lineage(
-            row,
-            decision=decision,
-            snapshot=snapshot,
-            qualification=qualification,
-        )
-
+        coherent = apply_latest_decision_lineage(row, decision=decision, snapshot=snapshot, qualification=qualification)
         reunderwrite = latest_object("full_reunderwrite", case_id=case_id) if case_id else None
         if reunderwrite:
             coherent["latest_reunderwrite_id"] = reunderwrite.get("full_reunderwrite_id")
             coherent["latest_reunderwrite_disposition"] = (reunderwrite.get("committee") or {}).get("disposition")
             coherent["latest_reunderwrite_confidence"] = (reunderwrite.get("committee") or {}).get("confidence")
-
         coherent_rows.append(coherent)
-
     dashboard["cases"] = coherent_rows
     return dashboard
 
@@ -133,7 +121,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.8"
+app.version = "0.12.9"
 
 
 @app.on_event("startup")
@@ -150,7 +138,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.8",
+        "version": "0.12.9",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -191,8 +179,11 @@ def system_status():
         "valuation_market_primary_engine": True,
         "valuation_market_dynamic_by_ticker": True,
         "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA"],
+        "valuation_market_micron_sec_fallback": True,
+        "valuation_market_filing_backed_ttm_pe": True,
         "valuation_market_portfolio_overlap_required_when_requested": True,
         "market_session_weekend_freshness": True,
+        "cboe_delayed_page_auto_scraping": False,
         "secondary_institutional_data_can_resolve_valuation_gap": False,
         "periodic_evidence_freshness_floor": True,
         "annual_filing_freshness_class": True,
