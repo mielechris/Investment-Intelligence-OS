@@ -51,6 +51,7 @@ from primary_evidence_semantic_guard import install_primary_evidence_semantic_gu
 from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
 from public_case_router import router as public_case_router_api
 from requirement_lineage_guard import install_requirement_lineage_guard
+from required_evidence_risk_guard import install_required_evidence_risk_guard
 from semiconductor_intelligence import router as semiconductor_router
 from short_interest_fallback import install_short_interest_fallback
 from supply_inventory_primary_fallback import install_supply_inventory_primary_fallback
@@ -82,6 +83,7 @@ install_analyst_consensus_fallback(primary_evidence)
 install_short_interest_fallback(primary_evidence)
 install_finra_short_interest_fallback(primary_evidence)
 install_open_evidence_watch(primary_evidence, monitoring_engine)
+install_required_evidence_risk_guard(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 

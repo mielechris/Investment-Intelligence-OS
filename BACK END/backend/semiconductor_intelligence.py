@@ -11,7 +11,7 @@ from monitoring_engine import configure_profile, refresh_profile
 
 router = APIRouter()
 PAPER_MODE = True
-PROFILE_VERSION = "0.7.2"
+PROFILE_VERSION = "0.7.4"
 
 MICRON_CIK = "723125"
 HYPERSCALER_CIKS = {
@@ -99,6 +99,86 @@ def build_memory_source_requests(topic: str = "") -> list[dict[str, Any]]:
         {
             "source": "fred_series",
             "params": {"series_id": "DGS10", "limit": 4},
+        },
+        {
+            "source": "fred_series",
+            "params": {
+                "series_id": "BAMLC0A0CM",
+                "limit": 4,
+                "freshness_window_hours": 24 * 14,
+            },
+        },
+        {
+            "source": "fred_series",
+            "params": {
+                "series_id": "BAMLH0A0HYM2",
+                "limit": 4,
+                "freshness_window_hours": 24 * 14,
+            },
+        },
+        {
+            "source": "official_web",
+            "params": {
+                "url": "https://investors.delltechnologies.com/news-releases/news-release-details/dell-technologies-delivers-first-quarter-fiscal-2027-financial",
+                "label": "Dell Technologies Q1 FY2027 Results",
+                "keywords": [
+                    "AI orders",
+                    "AI server revenue",
+                    "AI backlog",
+                    "memory",
+                ],
+                "limit": 4,
+                "evidence_type": "fundamental",
+                "reliability_score": 0.97,
+            },
+        },
+        {
+            "source": "official_web",
+            "params": {
+                "url": "https://ir.supermicro.com/news/news-details/2026/Supermicro-Announces-Fourth-Quarter-and-Full-Fiscal-Year-2026-Financial-Results/default.aspx",
+                "label": "Supermicro FY2026 Results",
+                "keywords": [
+                    "new orders",
+                    "record backlog",
+                    "AI",
+                    "demand",
+                ],
+                "limit": 4,
+                "evidence_type": "fundamental",
+                "reliability_score": 0.97,
+            },
+        },
+        {
+            "source": "official_web",
+            "params": {
+                "url": "https://news.skhynix.com/en/q2-2026-business-results/",
+                "label": "SK hynix Q2 2026 Results",
+                "keywords": [
+                    "AI demand",
+                    "AI servers",
+                    "long-term agreements",
+                    "HBM",
+                ],
+                "limit": 4,
+                "evidence_type": "fundamental",
+                "reliability_score": 0.97,
+            },
+        },
+        {
+            "source": "official_web",
+            "params": {
+                "url": "https://news.samsung.com/global/samsung-electronics-announces-second-quarter-2026-results",
+                "label": "Samsung Q2 2026 Results",
+                "keywords": [
+                    "AI demand",
+                    "server products",
+                    "HBM",
+                    "supply constraints",
+                ],
+                "limit": 4,
+                "evidence_type": "fundamental",
+                "reliability_score": 0.97,
+            },
         },
     ]
 
