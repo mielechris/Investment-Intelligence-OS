@@ -10,6 +10,10 @@ from orchestration_runtime import (
     install_orchestration_runtime,
     router as orchestration_runtime_router,
 )
+from orchestration_resilience import (
+    install_orchestration_resilience,
+    router as orchestration_resilience_router,
+)
 from orchestration_speed import install_orchestration_speed
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
@@ -21,13 +25,16 @@ from research_source_cache import (
     router as research_source_cache_router,
 )
 
-# Runtime routing is installed before timing so telemetry measures the actual
-# configured model/effort profile. Baseline preserves Luna + medium reasoning.
+# Install model/effort routing and request deadlines first.
 install_orchestration_runtime(eight_agent_orchestrator)
 
-# Install bounded orchestration throughput/timing before dispatch or worker-pool
-# modules import the run function. This changes only research orchestration speed
-# and telemetry.
+# Add bounded retries/circuit breaking before timing so telemetry measures the
+# resilient path. Persistent failures still fall into the existing fail-closed
+# agent/committee guards.
+install_orchestration_resilience(eight_agent_orchestrator)
+
+# Install bounded orchestration throughput/timing before dispatch, queue, or
+# worker-pool modules import the run function.
 install_orchestration_speed(eight_agent_orchestrator)
 
 # Install research-only evidence hardening before dispatch/scheduler modules import
@@ -39,10 +46,14 @@ install_opportunity_evidence_hardening(opportunity_acquisition)
 # never caches model judgments or market-quote decisions.
 install_research_source_cache(source_ingestion)
 
+# Import modules that capture the installed orchestrator only after runtime,
+# resilience, and timing layers are in place.
+from adaptive_research_queue import router as adaptive_research_queue_router
 from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
 from opportunity_scheduler import router as opportunity_scheduler_router
 from orchestration_worker_pool import router as orchestration_worker_pool_router
+from production_safety_freeze import router as production_safety_freeze_router
 from source_ingestion import ingest_sources
 
 
@@ -50,10 +61,13 @@ router = APIRouter()
 router.include_router(opportunity_router)
 router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
+router.include_router(adaptive_research_queue_router)
 router.include_router(market_event_radar_router)
 router.include_router(orchestration_runtime_router)
+router.include_router(orchestration_resilience_router)
 router.include_router(research_source_cache_router)
 router.include_router(orchestration_worker_pool_router)
+router.include_router(production_safety_freeze_router)
 router.include_router(orchestration_router)
 
 
