@@ -271,6 +271,16 @@ def stop_opportunity_scheduler() -> None:
     _scheduler_stop.set()
 
 
+@router.on_event("startup")
+def start_router_opportunity_scheduler() -> None:
+    start_opportunity_scheduler()
+
+
+@router.on_event("shutdown")
+def stop_router_opportunity_scheduler() -> None:
+    stop_opportunity_scheduler()
+
+
 @router.get("/opportunities/automation")
 def opportunity_automation_status():
     return {
