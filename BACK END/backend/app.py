@@ -45,6 +45,7 @@ from portfolio_context import router as portfolio_context_router
 from paper_capital_api import router as paper_capital_router
 from paper_sizing_profile import router as paper_sizing_profile_router
 from paper_authorization_api import router as paper_authorization_router
+from governed_paper_execution_api import router as governed_paper_execution_router
 import primary_evidence
 import public_case_router
 import source_ingestion
@@ -143,6 +144,7 @@ app.include_router(portfolio_context_router)
 app.include_router(paper_capital_router)
 app.include_router(paper_sizing_profile_router)
 app.include_router(paper_authorization_router)
+app.include_router(governed_paper_execution_router)
 app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
