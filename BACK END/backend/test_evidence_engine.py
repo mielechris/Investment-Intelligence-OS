@@ -107,6 +107,23 @@ class EvidenceEngineTests(unittest.TestCase):
         self.assertGreaterEqual(item["freshness_score"], 0.75)
         self.assertGreaterEqual(item["quality_score"], 0.65)
 
+    def test_governed_options_fact_overrides_generic_market_data_freshness(self):
+        now = datetime(2026, 8, 24, 5, 23, tzinfo=timezone.utc)
+        item = normalize_item({
+            "claim": "MU OCC options positioning as of 2026-08-21: call OI=1682816; put OI=1965042; put/call OI=1.1677; bias=BALANCED.",
+            "source": "OCC options open interest · user verified",
+            "url": "https://www.theocc.com/market-data/market-data-reports/series-and-trading-data/series-search?symbol=mu&symbolType=U",
+            "source_type": "market_data",
+            "evidence_type": "market_data",
+            "primary_fact_key": "options",
+            "observed_at": "2026-08-21",
+            "reliability_score": 0.97,
+        }, now=now)
+        self.assertEqual(item["evidence_type"], "options")
+        self.assertFalse(item["stale"])
+        self.assertEqual(item["freshness_window_hours"], 24 * 4)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
     def test_conflicting_packet_is_detected(self):
         now = datetime.now(timezone.utc).isoformat()
         packet = build_packet([
