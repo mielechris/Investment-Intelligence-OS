@@ -6,11 +6,19 @@ from fastapi import APIRouter, Body, HTTPException
 
 import eight_agent_orchestrator
 from eight_agent_orchestrator import router as orchestration_router
+from orchestration_runtime import (
+    install_orchestration_runtime,
+    router as orchestration_runtime_router,
+)
 from orchestration_speed import install_orchestration_speed
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
 import opportunity_acquisition
 from opportunity_evidence_hardening import install_opportunity_evidence_hardening
+
+# Runtime routing is installed before timing so telemetry measures the actual
+# configured model/effort profile. Baseline preserves Luna + medium reasoning.
+install_orchestration_runtime(eight_agent_orchestrator)
 
 # Install bounded orchestration throughput/timing before dispatch or worker-pool
 # modules import the run function. This changes only research orchestration speed
@@ -34,9 +42,7 @@ router.include_router(opportunity_router)
 router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
 router.include_router(market_event_radar_router)
-
-# Static batch routes must be registered before the dynamic case-id route.
-# Otherwise /orchestration/batch/run can be captured as case_id="batch".
+router.include_router(orchestration_runtime_router)
 router.include_router(orchestration_worker_pool_router)
 router.include_router(orchestration_router)
 
