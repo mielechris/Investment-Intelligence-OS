@@ -93,18 +93,23 @@ def _agent_targets(row: dict[str, Any]) -> list[str]:
 
 def _relevance(case_topic: str, row: dict[str, Any]) -> int:
     case_tokens = _tokens(case_topic)
-    judgment_tokens = _tokens(
+    primary_tokens = _tokens(
         " ".join(
             str(value or "")
             for value in (
                 row.get("claim"),
                 row.get("applicability"),
-                row.get("professional_role"),
                 row.get("category"),
             )
         )
     )
-    return len(case_tokens & judgment_tokens)
+    primary_overlap = case_tokens & primary_tokens
+    if not primary_overlap:
+        # A professional title/role alone can never make a judgment applicable.
+        return 0
+
+    role_overlap = case_tokens & _tokens(row.get("professional_role"))
+    return (len(primary_overlap) * 2) + min(1, len(role_overlap))
 
 
 def _advisory_item(row: dict[str, Any], relevance_score: int) -> dict[str, Any]:
