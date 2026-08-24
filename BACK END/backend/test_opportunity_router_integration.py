@@ -1,7 +1,5 @@
 import unittest
 
-from fastapi import FastAPI
-
 import eight_agent_orchestrator
 import opportunity_acquisition
 import opportunity_dispatch
@@ -42,20 +40,15 @@ class OpportunityRouterIntegrationTests(unittest.TestCase):
         self.assertIn("/opportunities/automation", scheduler_paths)
         self.assertIn("/orchestration/plan", orchestration_paths)
         self.assertIn("/orchestration/{case_id}/run", orchestration_paths)
-        self.assertIn("/orchestration/batch/run", batch_paths)
+        self.assertIn("/orchestration-batch/run", batch_paths)
+        self.assertIn("/orchestration-batch/plan", batch_paths)
 
-    def test_batch_static_route_precedes_dynamic_case_route(self):
-        app = FastAPI()
-        app.include_router(public_case_router.router)
-        paths = [
-            route.path
-            for route in app.routes
-            if hasattr(route, "path")
-        ]
-        self.assertLess(
-            paths.index("/orchestration/batch/run"),
-            paths.index("/orchestration/{case_id}/run"),
-        )
+    def test_batch_route_cannot_be_captured_as_dynamic_case_id(self):
+        orchestration_paths = {route.path for route in eight_agent_orchestrator.router.routes}
+        batch_paths = {route.path for route in orchestration_worker_pool.router.routes}
+        self.assertIn("/orchestration/{case_id}/run", orchestration_paths)
+        self.assertIn("/orchestration-batch/run", batch_paths)
+        self.assertNotIn("/orchestration/batch/run", batch_paths)
 
     def test_new_research_routes_do_not_expose_execution(self):
         research_paths = {
