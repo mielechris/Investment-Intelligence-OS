@@ -16,6 +16,7 @@ class OpportunitySchedulerTests(unittest.TestCase):
             "news_limit": 8,
             "max_candidates": 10,
             "dispatch_limit": 1,
+            "dispatch_mode": "BOUNDED_RESEARCH_QUEUE",
             "last_scan_at": None,
             "last_scan_status": None,
             "last_error": None,
@@ -34,6 +35,7 @@ class OpportunitySchedulerTests(unittest.TestCase):
         self.assertFalse(config["enabled"])
         self.assertFalse(config["auto_dispatch_enabled"])
         self.assertEqual(config["interval_minutes"], 240)
+        self.assertEqual(config["dispatch_mode"], "BOUNDED_RESEARCH_QUEUE")
         self.assertFalse(config["auto_trade_authority"])
         self.assertFalse(config["paper_order_permission"])
         self.assertFalse(config["trade_execution_permission"])
@@ -52,6 +54,7 @@ class OpportunitySchedulerTests(unittest.TestCase):
         self.assertEqual(config["news_limit"], scheduler.MAX_NEWS_LIMIT)
         self.assertEqual(config["max_candidates"], scheduler.DEFAULT_MAX_CANDIDATES)
         self.assertEqual(config["dispatch_limit"], scheduler.MAX_AUTO_DISPATCH)
+        self.assertEqual(config["dispatch_mode"], "BOUNDED_RESEARCH_QUEUE")
         self.assertFalse(config["enabled"])
 
     def test_disabled_config_is_never_due(self):
@@ -68,12 +71,12 @@ class OpportunitySchedulerTests(unittest.TestCase):
 
     @patch("opportunity_scheduler.record_event")
     @patch("opportunity_scheduler.record_object")
-    @patch("opportunity_scheduler.dispatch_ranked_queue")
+    @patch("opportunity_scheduler.enqueue_ranked_opportunities")
     @patch("opportunity_scheduler.scan_universe")
     @patch("opportunity_scheduler.run_market_event_radar")
     @patch("opportunity_scheduler.normalize_config")
     def test_cycle_scans_radar_without_agent_dispatch_when_explicitly_enabled(
-        self, normalize, radar, scan, dispatch, record_object, record_event
+        self, normalize, radar, scan, enqueue, record_object, record_event
     ):
         normalize.return_value = self.base_config(auto_dispatch_enabled=False)
         radar.return_value = {
@@ -90,8 +93,9 @@ class OpportunitySchedulerTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["radar"]["event_count"], 12)
         self.assertEqual(result["dispatch"]["reason"], "AUTO_DISPATCH_DISABLED")
+        self.assertEqual(result["dispatch"]["agents_started"], 0)
         radar.assert_called_once_with()
-        dispatch.assert_not_called()
+        enqueue.assert_not_called()
         self.assertFalse(result["auto_trade_authority"])
         self.assertFalse(result["paper_order_permission"])
         self.assertFalse(result["trade_execution_permission"])
@@ -99,12 +103,12 @@ class OpportunitySchedulerTests(unittest.TestCase):
 
     @patch("opportunity_scheduler.record_event")
     @patch("opportunity_scheduler.record_object")
-    @patch("opportunity_scheduler.dispatch_ranked_queue")
+    @patch("opportunity_scheduler.enqueue_ranked_opportunities")
     @patch("opportunity_scheduler.scan_universe")
     @patch("opportunity_scheduler.run_market_event_radar")
     @patch("opportunity_scheduler.normalize_config")
-    def test_opt_in_dispatch_is_still_capped_at_one_candidate(
-        self, normalize, radar, scan, dispatch, record_object, record_event
+    def test_opt_in_dispatch_queues_one_candidate_without_starting_agents(
+        self, normalize, radar, scan, enqueue, record_object, record_event
     ):
         normalize.return_value = self.base_config(auto_dispatch_enabled=True, dispatch_limit=1)
         radar.return_value = {
@@ -116,7 +120,8 @@ class OpportunitySchedulerTests(unittest.TestCase):
             "scanned_count": 16,
             "queued_count": 3,
         }
-        dispatch.return_value = {
+        enqueue.return_value = {
+            "status": "complete",
             "selected": 1,
             "results": [],
             "paper_mode": True,
@@ -124,8 +129,10 @@ class OpportunitySchedulerTests(unittest.TestCase):
             "live_execution": False,
         }
         result = scheduler.run_automation_cycle(self.base_config(auto_dispatch_enabled=True))
-        dispatch.assert_called_once_with(limit=1)
+        enqueue.assert_called_once_with(limit=1)
         self.assertEqual(result["dispatch"]["selected"], 1)
+        self.assertEqual(result["dispatch"]["mode"], "BOUNDED_RESEARCH_QUEUE")
+        self.assertEqual(result["dispatch"]["agents_started"], 0)
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
 
