@@ -28,13 +28,14 @@ class OpportunitySchedulerTests(unittest.TestCase):
         value.update(overrides)
         return value
 
-    def test_defaults_scan_but_do_not_auto_dispatch(self):
+    def test_defaults_are_disabled_and_never_auto_dispatch(self):
         with patch.object(scheduler, "_bool_env", side_effect=lambda name, default: default):
             config = scheduler.default_config()
-        self.assertTrue(config["enabled"])
+        self.assertFalse(config["enabled"])
         self.assertFalse(config["auto_dispatch_enabled"])
         self.assertEqual(config["interval_minutes"], 240)
         self.assertFalse(config["auto_trade_authority"])
+        self.assertFalse(config["paper_order_permission"])
         self.assertFalse(config["trade_execution_permission"])
         self.assertFalse(config["live_execution"])
 
@@ -51,6 +52,11 @@ class OpportunitySchedulerTests(unittest.TestCase):
         self.assertEqual(config["news_limit"], scheduler.MAX_NEWS_LIMIT)
         self.assertEqual(config["max_candidates"], scheduler.DEFAULT_MAX_CANDIDATES)
         self.assertEqual(config["dispatch_limit"], scheduler.MAX_AUTO_DISPATCH)
+        self.assertFalse(config["enabled"])
+
+    def test_disabled_config_is_never_due(self):
+        now = datetime(2026, 8, 24, 19, 0, tzinfo=timezone.utc)
+        self.assertFalse(scheduler._is_due(self.base_config(enabled=False, last_scan_at=None), now))
 
     def test_due_logic_respects_four_hour_floor(self):
         now = datetime(2026, 8, 24, 19, 0, tzinfo=timezone.utc)
@@ -66,7 +72,7 @@ class OpportunitySchedulerTests(unittest.TestCase):
     @patch("opportunity_scheduler.scan_universe")
     @patch("opportunity_scheduler.run_market_event_radar")
     @patch("opportunity_scheduler.normalize_config")
-    def test_cycle_scans_radar_without_agent_dispatch_by_default(
+    def test_cycle_scans_radar_without_agent_dispatch_when_explicitly_enabled(
         self, normalize, radar, scan, dispatch, record_object, record_event
     ):
         normalize.return_value = self.base_config(auto_dispatch_enabled=False)
