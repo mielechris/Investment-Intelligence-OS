@@ -4,11 +4,15 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from eight_agent_orchestrator import router as orchestration_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
+from opportunity_acquisition import router as opportunity_router
 from source_ingestion import ingest_sources
 
 
 router = APIRouter()
+router.include_router(opportunity_router)
+router.include_router(orchestration_router)
 
 
 @router.post("/factory/run-public")
