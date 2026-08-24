@@ -6,6 +6,7 @@ from hyperscaler_contract_context import install_hyperscaler_contract_context
 
 
 MICROSOFT_FY26_Q3_URL = "https://www.microsoft.com/en-us/investor/events/fy-2026/earnings-fy-2026-q3"
+MICROSOFT_MAIA_200_URL = "https://blogs.microsoft.com/blog/2026/01/26/maia-200-the-ai-accelerator-built-for-inference/"
 META_Q2_2026_URL = "https://investor.atmeta.com/investor-news/press-release-details/2026/Meta-Reports-Second-Quarter-2026-Results/default.aspx"
 AMAZON_Q2_2026_URL = "https://ir.aboutamazon.com/news-release/news-release-details/2026/Amazon-com-Announces-Second-Quarter-Results/default.aspx"
 ALPHABET_Q2_2026_URL = "https://blog.google/company-news/inside-google/message-ceo/alphabet-earnings-q2-2026/"
@@ -69,6 +70,21 @@ HYPERSCALER_PRIMARY_SNAPSHOTS: tuple[dict[str, Any], ...] = (
         "reliability_score": 0.99,
     },
     {
+        "fact_key": "memory_terms",
+        "source": "Microsoft Maia 200 Official Architecture Disclosure",
+        "source_type": "company",
+        "evidence_type": "product_spec",
+        "url": MICROSOFT_MAIA_200_URL,
+        "timestamp": "2026-01-26T00:00:00+00:00",
+        "claim": (
+            "Microsoft directly discloses that its Maia 200 AI accelerator uses "
+            "216 GB of HBM3e memory delivering 7 TB/s of HBM bandwidth. "
+            "This is hyperscaler-specific memory-content evidence and does not "
+            "depend on inferring the identity of any memory supplier."
+        ),
+        "reliability_score": 0.995,
+    },
+    {
         "fact_key": "backlog",
         "source": "Alphabet Q2 2026 CEO Earnings Remarks",
         "source_type": "company",
@@ -109,10 +125,24 @@ def install_hyperscaler_primary_fallback(module: Any) -> None:
     def lane_status_governed(case_id: str, lane: str, records: list[dict[str, Any]]):
         result = prior_lane_status(case_id, lane, records)
         if lane == "hyperscaler_demand":
-            result["note"] = (
-                "Current primary hyperscaler disclosures can verify AI capex, deployment/capacity activity and backlog/committed demand. "
-                "Cancellations/pushouts and memory-content or enforceable memory-purchasing terms remain open unless directly disclosed; no inference is allowed."
-            )
+            facts = {
+                str(row.get("key")): bool(row.get("covered"))
+                for row in result.get("facts") or []
+                if isinstance(row, dict)
+            }
+            if facts.get("memory_terms"):
+                result["note"] = (
+                    "Current primary hyperscaler disclosures verify AI capex, deployment/capacity activity, "
+                    "backlog/committed demand and direct hyperscaler memory content. Microsoft directly "
+                    "discloses 216 GB of HBM3e in Maia 200. Cancellations/pushouts remain OPEN unless "
+                    "directly disclosed; no inference is allowed."
+                )
+            else:
+                result["note"] = (
+                    "Current primary hyperscaler disclosures can verify AI capex, deployment/capacity activity "
+                    "and backlog/committed demand. Cancellations/pushouts and hyperscaler-specific memory content "
+                    "remain open unless directly disclosed; no inference is allowed."
+                )
         return result
 
     module._capture_hyperscalers = capture_hyperscalers_governed

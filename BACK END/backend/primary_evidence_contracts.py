@@ -35,7 +35,7 @@ CONTRACTS = {
         "label": "Hyperscaler Demand",
         "match_terms": ("hyperscaler", "ai-capex", "server shipments", "backlog", "cancellations"),
         "match_min": 2,
-        "minimum_fraction": 0.70,
+        "minimum_fraction": 1.0,
         "facts": [
             {"key": "ai_capex", "label": "AI capex plans", "terms": ("ai", "capex", "capital expenditure")},
             {"key": "server_activity", "label": "Server shipments / utilization", "terms": ("server", "shipment", "utilization")},
