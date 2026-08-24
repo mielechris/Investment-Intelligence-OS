@@ -31,9 +31,12 @@ FRESHNESS_WINDOWS_HOURS = {
     "fundamental": 24 * 120,
     "weather": 6,
     "research": 24 * 30,
+    # OCC open interest is a prior-settlement periodic dataset. The latest
+    # Friday settlement must remain admissible through weekends/holidays.
+    "options": 24 * 4,
     "other": 24 * 7,
 }
-PERIODIC_EVIDENCE_TYPES = {"quarterly_filing", "quarterly_company", "annual_filing"}
+PERIODIC_EVIDENCE_TYPES = {"quarterly_filing", "quarterly_company", "annual_filing", "options"}
 PERIODIC_FRESHNESS_FLOOR = 0.75
 
 
