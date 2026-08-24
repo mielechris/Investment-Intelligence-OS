@@ -26,13 +26,14 @@ FRESHNESS_WINDOWS_HOURS = {
     "filing": 24 * 14,
     "quarterly_filing": 24 * 180,
     "quarterly_company": 24 * 180,
+    "annual_filing": 24 * 400,
     "macro": 24 * 45,
     "fundamental": 24 * 120,
     "weather": 6,
     "research": 24 * 30,
     "other": 24 * 7,
 }
-PERIODIC_EVIDENCE_TYPES = {"quarterly_filing", "quarterly_company"}
+PERIODIC_EVIDENCE_TYPES = {"quarterly_filing", "quarterly_company", "annual_filing"}
 PERIODIC_FRESHNESS_FLOOR = 0.75
 
 
