@@ -92,6 +92,18 @@ def _peer_context_items(results: dict[str, dict[str, Any]]) -> list[dict[str, An
     return items
 
 
+def second_wave_evidence(
+    base_evidence: list[dict[str, Any]],
+    completed_results: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Second-wave desks see the raw governed evidence plus every desk that has
+    completed before them. This means Skeptic sees all six first-wave desks,
+    and Portfolio sees those six plus Skeptic's challenge.
+    """
+    return list(base_evidence) + _peer_context_items(completed_results)
+
+
 def _persist_agent_result(
     *,
     case_id: str,
@@ -219,7 +231,7 @@ Rules:
 - Preserve dissent and name the strongest disagreement.
 - Separate evidence from inference and unknowns.
 - Penalize stale, conflicting, missing, or low-quality evidence.
-- The Skeptic and Portfolio desks reviewed peer context and deserve explicit treatment.
+- The Skeptic reviewed all six first-wave desks; Portfolio reviewed those desks plus the Skeptic challenge.
 - Never recommend or execute a real-money trade.
 - Final disposition must be WATCH or NO_TRADE only.
 - Confidence must be 0.0 to 1.0.
@@ -312,10 +324,14 @@ def run_eight_agent_orchestration(case_id: str) -> dict[str, Any]:
                 wave=1,
             )
 
-    peer_context = _peer_context_items(results)
-    second_wave_evidence = list(evidence_items) + peer_context
+    # Second wave is intentionally sequential: Skeptic challenges the six first-wave
+    # desks, then Portfolio sees the same evidence plus the Skeptic's challenge.
     for key in SECOND_WAVE:
-        result = _run_one(key, topic, second_wave_evidence)
+        result = _run_one(
+            key,
+            topic,
+            second_wave_evidence(evidence_items, results),
+        )
         results[key] = _persist_agent_result(
             case_id=case_id,
             topic=topic,
