@@ -84,6 +84,13 @@ def infer_source_type(item: dict[str, Any]) -> str:
 
 
 def infer_evidence_type(item: dict[str, Any]) -> str:
+    # Governed primary-fact classification is authoritative for narrow market
+    # facts. This prevents an older/generic adapter label such as market_data
+    # from making a verified OCC options record expire on the 1-hour quote window.
+    primary_fact_key = str(item.get("primary_fact_key") or "").strip().lower()
+    if primary_fact_key == "options":
+        return "options"
+
     explicit = str(item.get("evidence_type", "")).strip().lower()
     if explicit:
         return explicit
