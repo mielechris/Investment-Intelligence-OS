@@ -4,11 +4,17 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+import eight_agent_orchestrator
 from eight_agent_orchestrator import router as orchestration_router
+from orchestration_speed import install_orchestration_speed
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
 import opportunity_acquisition
 from opportunity_evidence_hardening import install_opportunity_evidence_hardening
+
+# Install bounded orchestration throughput/timing before dispatch imports the run
+# function. This changes only research orchestration speed and telemetry.
+install_orchestration_speed(eight_agent_orchestrator)
 
 # Install research-only evidence hardening before dispatch/scheduler modules import
 # the opportunity scan function. This changes only scanner evidence acquisition;
