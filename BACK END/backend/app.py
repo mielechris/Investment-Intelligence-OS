@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.9 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.13.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.9 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.13.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -36,6 +36,7 @@ from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
 import monitoring_engine
+from portfolio_context import router as portfolio_context_router
 import primary_evidence
 import public_case_router
 import source_ingestion
@@ -116,12 +117,13 @@ app.include_router(hard_data_router)
 app.include_router(insider_router)
 app.include_router(institutional_router)
 app.include_router(primary_evidence_router)
+app.include_router(portfolio_context_router)
 app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.9"
+app.version = "0.13.0"
 
 
 @app.on_event("startup")
@@ -138,7 +140,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.9",
+        "version": "0.13.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -178,13 +180,18 @@ def system_status():
         "supply_inventory_utilization_inference_allowed": False,
         "valuation_market_primary_engine": True,
         "valuation_market_dynamic_by_ticker": True,
-        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA"],
+        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "FIRST_PARTY_PORTFOLIO"],
         "valuation_market_micron_sec_fallback": True,
         "valuation_market_filing_backed_ttm_pe": True,
         "valuation_market_portfolio_overlap_required_when_requested": True,
         "market_session_weekend_freshness": True,
         "cboe_delayed_page_auto_scraping": False,
         "secondary_institutional_data_can_resolve_valuation_gap": False,
+        "governed_portfolio_snapshot": True,
+        "portfolio_factor_overlap_engine": True,
+        "portfolio_overlap_first_party_evidence": True,
+        "portfolio_snapshot_freshness_days": 7,
+        "portfolio_overlap_auto_trade_authority": False,
         "periodic_evidence_freshness_floor": True,
         "annual_filing_freshness_class": True,
         "hard_data_acquisition": True,
@@ -240,6 +247,7 @@ def system_status():
             "SHANGHAI_STOCK_EXCHANGE",
             "STOOQ",
             "YAHOO_PUBLIC_MARKET_DATA",
+            "FIRST_PARTY_PORTFOLIO",
         ],
         "primary_memory_pricing_auto_provider": False,
         "qualified_buy_candidate_gate": True,
