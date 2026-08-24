@@ -34,8 +34,11 @@ router.include_router(opportunity_router)
 router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
 router.include_router(market_event_radar_router)
-router.include_router(orchestration_router)
+
+# Static batch routes must be registered before the dynamic case-id route.
+# Otherwise /orchestration/batch/run can be captured as case_id="batch".
 router.include_router(orchestration_worker_pool_router)
+router.include_router(orchestration_router)
 
 
 @router.post("/factory/run-public")
