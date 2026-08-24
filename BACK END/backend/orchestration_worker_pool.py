@@ -104,7 +104,7 @@ def run_case_batch(case_ids: Any) -> dict[str, Any]:
     }
 
 
-@router.get("/orchestration/batch/plan")
+@router.get("/orchestration-batch/plan")
 def batch_plan():
     return {
         "case_workers": MAX_CASE_WORKERS,
@@ -118,7 +118,7 @@ def batch_plan():
     }
 
 
-@router.post("/orchestration/batch/run")
+@router.post("/orchestration-batch/run")
 def run_batch(request: dict[str, Any] = Body(...)):
     try:
         return run_case_batch(request.get("case_ids"))
