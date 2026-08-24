@@ -102,6 +102,21 @@ SUPPLY_PRIMARY_SNAPSHOTS: tuple[dict[str, Any], ...] = (
         "reliability_score": 0.99,
     },
     {
+        "fact_key": "utilization",
+        "supplier": "CXMT",
+        "source": "Shanghai Stock Exchange · CXMT Prospectus",
+        "source_type": "regulatory",
+        "evidence_type": "annual_filing",
+        "url": CXMT_SSE_PROSPECTUS_URL,
+        "timestamp": "2025-12-29T00:00:00+00:00",
+        "claim": (
+            "CXMT's Shanghai Stock Exchange prospectus directly reports utilization of its "
+            "12-inch DRAM wafer-manufacturing lines rising across the disclosed periods from "
+            "85.45% to 87.06%, 92.46%, and 94.63%."
+        ),
+        "reliability_score": 0.995,
+    },
+    {
         "fact_key": "capacity",
         "supplier": "CXMT",
         "source": "Shanghai Stock Exchange · CXMT Prospectus",
@@ -212,7 +227,7 @@ def install_supply_inventory_primary_fallback(module: Any) -> None:
             "Supplier coverage: "
             + " · ".join(f"{supplier} {'✓' if supplier in suppliers else 'OPEN'}" for supplier in REQUIRED_SUPPLIERS)
             + ". Current primary evidence can verify inventory, bit shipments, capacity expansion and HBM packaging/yield evidence. "
-            "CXMT coverage is sourced to its Shanghai Stock Exchange prospectus. Wafer starts and utilization remain open unless directly quantified; "
+            "CXMT coverage is sourced to its Shanghai Stock Exchange prospectus, which also directly supports utilization. Wafer starts remain open unless directly quantified; "
             "supplier coverage cannot substitute for those missing operational facts."
         )
         return result

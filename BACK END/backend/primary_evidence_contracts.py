@@ -21,7 +21,7 @@ CONTRACTS = {
         "label": "Supply / Inventory",
         "match_terms": ("inventory days", "bit shipments", "wafer starts", "utilization", "capacity additions"),
         "match_min": 2,
-        "minimum_fraction": 0.75,
+        "minimum_fraction": 1.0,
         "facts": [
             {"key": "inventory", "label": "Inventory", "terms": ("inventory",)},
             {"key": "bit_shipments", "label": "Bit shipments", "terms": ("bit shipment", "shipments")},
