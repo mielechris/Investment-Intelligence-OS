@@ -14,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 from openai import OpenAI
 
 from evidence_engine import build_packet
+from capital_entry_watch import refresh_capital_entry_watch
 from learning_loop import record_position_monitor, record_thesis_monitor
 from ledger import DB_PATH, get_object, latest_object, list_objects, record_event, record_object
 from source_ingestion import ingest_sources
@@ -226,10 +227,26 @@ def refresh_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "notes": surveillance["summary"],
     })
 
+    # Reuse the exact quote already fetched by the
+    # monitor. No second market-data request is needed.
+    capital_entry_watch = (
+        refresh_capital_entry_watch(
+            case_id,
+            quote=quote,
+        )
+    )
+
     updated = {**profile, "last_refresh_at": utc_now(), "last_refresh_status": "complete", "updated_at": utc_now()}
     record_object(updated["monitor_profile_id"], "monitor_profile", case_id, updated, parent_id=case_id, topic=case.get("topic"))
     record_event(case_id, "AUTO_MONITOR_COMPLETE", entity_id=snapshot_id, payload={"thesis_status": thesis.get("thesis_status"), "return_pct": position.get("return_pct")})
-    return {"profile": updated, "snapshot": snapshot, "position": position, "thesis": thesis, "surveillance": surveillance}
+    return {
+        "profile": updated,
+        "snapshot": snapshot,
+        "position": position,
+        "thesis": thesis,
+        "surveillance": surveillance,
+        "capital_entry_watch": capital_entry_watch,
+    }
 
 
 def _is_due(profile: dict[str, Any], now: datetime | None = None) -> bool:
