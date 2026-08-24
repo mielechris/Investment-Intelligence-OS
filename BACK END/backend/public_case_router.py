@@ -12,8 +12,9 @@ from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_pr
 import opportunity_acquisition
 from opportunity_evidence_hardening import install_opportunity_evidence_hardening
 
-# Install bounded orchestration throughput/timing before dispatch imports the run
-# function. This changes only research orchestration speed and telemetry.
+# Install bounded orchestration throughput/timing before dispatch or worker-pool
+# modules import the run function. This changes only research orchestration speed
+# and telemetry.
 install_orchestration_speed(eight_agent_orchestrator)
 
 # Install research-only evidence hardening before dispatch/scheduler modules import
@@ -24,6 +25,7 @@ install_opportunity_evidence_hardening(opportunity_acquisition)
 from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
 from opportunity_scheduler import router as opportunity_scheduler_router
+from orchestration_worker_pool import router as orchestration_worker_pool_router
 from source_ingestion import ingest_sources
 
 
@@ -33,6 +35,7 @@ router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
 router.include_router(market_event_radar_router)
 router.include_router(orchestration_router)
+router.include_router(orchestration_worker_pool_router)
 
 
 @router.post("/factory/run-public")
