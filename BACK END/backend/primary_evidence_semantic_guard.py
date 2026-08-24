@@ -19,6 +19,9 @@ MICRON_HBM4_VOLUME_URL = (
 MICRON_Q3_2026_PREPARED_REMARKS_URL = (
     "https://investors.micron.com/static-files/631b1a32-5537-46ae-8f40-82e42fc79dfe"
 )
+MICRON_Q4_2025_PREPARED_REMARKS_URL = (
+    "https://investors.micron.com/static-files/5ea95475-639b-4cfc-91fd-b9b4a2bb5e63"
+)
 MICRON_Q3_2026_EARNINGS_DECK_URL = (
     "https://investors.micron.com/static-files/2354ecda-77a0-4ddd-8462-a631eb491356"
 )
@@ -236,6 +239,15 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
                 "filing",
             ),
             (
+                "customer_concentration",
+                "Micron Fiscal Q4 2025 Prepared Remarks",
+                MICRON_Q4_2025_PREPARED_REMARKS_URL,
+                "Micron states that its HBM customer base expanded to six customers and that it had pricing agreements with almost all customers for the vast majority of its calendar 2026 HBM3E supply.",
+                "annual_company",
+                "2025-09-23T00:00:00+00:00",
+                "company",
+            ),
+            (
                 "capacity_allocation",
                 "Micron Fiscal Q3 2026 Form 10-Q",
                 MICRON_Q3_2026_10Q_PDF_URL,
@@ -286,10 +298,23 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             result["status"] = "OPEN"
 
         if lane == "micron_hbm_economics":
-            result["note"] = (
-                "HBM revenue, shipment/ramp, margin-mix contribution, capacity allocation and pricing structure are supported by current official filings/materials. "
-                "HBM-specific customer-concentration disclosure remains open unless Micron explicitly provides it; no inference is allowed."
+            customer_concentration_covered = any(
+                str(row.get("key") or "") == "customer_concentration"
+                and bool(row.get("covered"))
+                for row in facts
+                if isinstance(row, dict)
             )
+            if customer_concentration_covered:
+                result["note"] = (
+                    "HBM revenue, shipment/ramp, margin-mix contribution, customer-base disclosure, "
+                    "capacity allocation and pricing structure are supported by official Micron filings/materials. "
+                    "Micron directly disclosed that its HBM customer base expanded to six customers; no inference was used."
+                )
+            else:
+                result["note"] = (
+                    "HBM revenue, shipment/ramp, margin-mix contribution, capacity allocation and pricing structure are supported by current official filings/materials. "
+                    "HBM-specific customer-concentration disclosure remains open unless Micron explicitly provides it; no inference is allowed."
+                )
         return result
 
     module._fact_from_keyword = guarded

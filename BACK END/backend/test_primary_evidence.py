@@ -76,6 +76,13 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM4 high-volume shipments"), "hbm_shipments")
         self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM capacity allocation uses more wafers"), "capacity_allocation")
         self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM pricing premium"), "hbm_asp_sensitivity")
+        self.assertEqual(
+            primary_evidence._fact_from_keyword(
+                "micron_hbm_economics",
+                "Micron HBM customer base expanded to six customers",
+            ),
+            "customer_concentration",
+        )
         self.assertIsNone(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM product leadership"))
 
     def test_static_micron_financial_keywords_map_to_specific_facts(self):

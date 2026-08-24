@@ -78,6 +78,21 @@ class EvidenceEngineTests(unittest.TestCase):
         self.assertGreaterEqual(item["freshness_score"], 0.75)
         self.assertGreaterEqual(item["quality_score"], 0.65)
 
+    def test_current_annual_company_disclosure_remains_high_quality(self):
+        now = datetime(2026, 8, 24, 6, 0, tzinfo=timezone.utc)
+        item = normalize_item({
+            "claim": "Micron states its HBM customer base expanded to six customers.",
+            "source": "Micron Fiscal Q4 2025 Prepared Remarks",
+            "url": "https://investors.micron.com/static-files/5ea95475-639b-4cfc-91fd-b9b4a2bb5e63",
+            "source_type": "company",
+            "evidence_type": "annual_company",
+            "observed_at": "2025-09-23T00:00:00+00:00",
+            "reliability_score": 0.99,
+        }, now=now)
+        self.assertFalse(item["stale"])
+        self.assertEqual(item["freshness_window_hours"], 24 * 400)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
     def test_quarterly_evidence_expires_after_window(self):
         now = datetime.now(timezone.utc)
         item = normalize_item({
