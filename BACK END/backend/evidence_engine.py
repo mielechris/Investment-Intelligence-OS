@@ -32,6 +32,8 @@ FRESHNESS_WINDOWS_HOURS = {
     "research": 24 * 30,
     "other": 24 * 7,
 }
+PERIODIC_EVIDENCE_TYPES = {"quarterly_filing", "quarterly_company"}
+PERIODIC_FRESHNESS_FLOOR = 0.75
 
 
 def utc_now() -> datetime:
@@ -110,8 +112,12 @@ def normalize_item(item: dict[str, Any], now: datetime | None = None) -> dict[st
     if observed_at:
         age_hours = max(0.0, (now - observed_at).total_seconds() / 3600)
         window = freshness_window_hours(evidence_type)
-        freshness_score = max(0.0, min(1.0, 1 - (age_hours / window)))
         stale = age_hours > window
+        linear_freshness = max(0.0, min(1.0, 1 - (age_hours / window)))
+        if evidence_type in PERIODIC_EVIDENCE_TYPES and not stale:
+            freshness_score = max(PERIODIC_FRESHNESS_FLOOR, linear_freshness)
+        else:
+            freshness_score = linear_freshness
 
     reliability_default = RELIABILITY_DEFAULTS.get(source_type, RELIABILITY_DEFAULTS["unknown"])
     reliability_score = clamp_score(item.get("reliability_score"), reliability_default)
