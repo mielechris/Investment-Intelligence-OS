@@ -7,10 +7,10 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from adaptive_research_queue import enqueue_ranked_opportunities
 from ledger import latest_object, record_event, record_object, utc_now
 from market_event_radar import run_market_event_radar
 from opportunity_acquisition import OPPORTUNITY_LEDGER_CASE, scan_universe
-from opportunity_dispatch import dispatch_ranked_queue
 
 
 router = APIRouter()
@@ -62,6 +62,7 @@ def default_config() -> dict[str, Any]:
         "last_scan_at": None,
         "last_scan_status": None,
         "last_error": None,
+        "dispatch_mode": "BOUNDED_RESEARCH_QUEUE",
         "paper_mode": True,
         "auto_trade_authority": False,
         "paper_order_permission": False,
@@ -96,6 +97,7 @@ def normalize_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         "news_limit": news_limit,
         "max_candidates": max_candidates,
         "dispatch_limit": dispatch_limit,
+        "dispatch_mode": "BOUNDED_RESEARCH_QUEUE",
         "updated_at": utc_now(),
         "paper_mode": True,
         "auto_trade_authority": False,
@@ -117,6 +119,7 @@ def save_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             "auto_dispatch_enabled": config["auto_dispatch_enabled"],
             "interval_minutes": config["interval_minutes"],
             "dispatch_limit": config["dispatch_limit"],
+            "dispatch_mode": config["dispatch_mode"],
             "auto_trade_authority": False,
         },
     )
@@ -157,13 +160,20 @@ def run_automation_cycle(config: dict[str, Any] | None = None) -> dict[str, Any]
             max_candidates=config["max_candidates"],
         )
         if config.get("auto_dispatch_enabled"):
-            dispatch = dispatch_ranked_queue(limit=config["dispatch_limit"])
+            queued = enqueue_ranked_opportunities(limit=config["dispatch_limit"])
+            dispatch = {
+                **queued,
+                "mode": "BOUNDED_RESEARCH_QUEUE",
+                "agents_started": 0,
+            }
         else:
             dispatch = {
                 "status": "NOT_RUN",
                 "reason": "AUTO_DISPATCH_DISABLED",
+                "mode": "BOUNDED_RESEARCH_QUEUE",
                 "requested": 0,
                 "selected": 0,
+                "agents_started": 0,
                 "results": [],
                 "paper_mode": True,
                 "trade_execution_permission": False,
@@ -186,7 +196,9 @@ def run_automation_cycle(config: dict[str, Any] | None = None) -> dict[str, Any]
                 "scanned_count": scan.get("scanned_count"),
                 "queued_count": scan.get("queued_count"),
                 "auto_dispatch_enabled": updated["auto_dispatch_enabled"],
+                "dispatch_mode": "BOUNDED_RESEARCH_QUEUE",
                 "dispatch_selected": dispatch.get("selected", 0),
+                "agents_started": 0,
                 "auto_trade_authority": False,
                 "trade_execution_permission": False,
             },
