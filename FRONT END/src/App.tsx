@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import PaperCapitalControlPanel from "./PaperCapitalControlPanel";
 
 const API = "http://localhost:8000";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
@@ -541,6 +542,10 @@ function App() {
           )}
         </section>
       </div>
+
+      <PaperCapitalControlPanel
+        caseId={activeCaseId}
+      />
 
       <section style={panel}>
         <div style={smallLabel}>JUDGMENT BANK</div>
