@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import OpportunityFloor from "./OpportunityFloor";
 import PaperCapitalControlPanel from "./PaperCapitalControlPanel";
 
 const API = "http://localhost:8000";
@@ -430,6 +431,8 @@ function App() {
           <span style={{ color: "#8d9aaa", fontSize: "13px" }}>{notice}</span>
         </div>
       </section>
+
+      <OpportunityFloor />
 
       <section style={{ marginBottom: "22px" }}>
         <div style={{ ...smallLabel, marginBottom: "10px" }}>SPECIALIST FLOOR · 8 DESKS</div>
