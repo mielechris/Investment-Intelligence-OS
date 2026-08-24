@@ -1,11 +1,15 @@
 import unittest
+from unittest.mock import patch
 
 import opportunity_dispatch as dispatch
 
 
 class OpportunityDispatchTests(unittest.TestCase):
 
-    def test_batch_dispatch_is_hard_capped(self):
+    @patch("opportunity_dispatch.record_event")
+    @patch("opportunity_dispatch.opportunity_queue")
+    def test_batch_dispatch_is_hard_capped(self, queue, record_event):
+        queue.return_value = []
         self.assertEqual(dispatch.MAX_BATCH_DISPATCH, 3)
         result = dispatch.dispatch_ranked_queue(limit=99)
         self.assertLessEqual(result["requested"], 3)
