@@ -28,6 +28,9 @@ MICRON_Q3_2026_10Q_URL = (
 MICRON_Q3_2026_10Q_PDF_URL = (
     "https://s25.q4cdn.com/621799436/files/doc_financials/2026/q3/0000723125-26-000015.pdf"
 )
+MICRON_2025_10K_URL = (
+    "https://www.sec.gov/Archives/edgar/data/723125/000072312525000028/mu-20250828.htm"
+)
 
 
 def policy_transmission_supported(text: str) -> bool:
@@ -204,10 +207,6 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             if record:
                 added.append(record)
 
-        # Carry the completed broad-financial work forward into the tightened Committee question,
-        # but only with HBM-specific primary facts. We deliberately leave HBM-specific margin and
-        # customer-concentration facts open because current official materials do not separately
-        # quantify them strongly enough for resolution.
         hbm_snapshots = [
             (
                 "hbm_revenue",
@@ -226,6 +225,15 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
                 "quarterly_company",
                 "2026-06-24T00:00:00+00:00",
                 "company",
+            ),
+            (
+                "hbm_margin",
+                "Micron Fiscal 2025 Form 10-K",
+                MICRON_2025_10K_URL,
+                "Micron's fiscal 2025 Form 10-K states that DRAM margins improved in part from an increased mix of higher-margin products, including HBM, directly identifying HBM as a positive margin-mix contributor.",
+                "annual_filing",
+                "2025-10-03T14:42:25+00:00",
+                "filing",
             ),
             (
                 "capacity_allocation",
@@ -279,8 +287,8 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
 
         if lane == "micron_hbm_economics":
             result["note"] = (
-                "HBM revenue, shipment/ramp, capacity allocation and pricing structure may be verified from current official materials. "
-                "HBM-specific margin and customer-concentration disclosure remain open unless Micron explicitly provides them; no inference is allowed."
+                "HBM revenue, shipment/ramp, margin-mix contribution, capacity allocation and pricing structure are supported by current official filings/materials. "
+                "HBM-specific customer-concentration disclosure remains open unless Micron explicitly provides it; no inference is allowed."
             )
         return result
 
