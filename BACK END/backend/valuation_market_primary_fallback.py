@@ -288,7 +288,7 @@ def install_valuation_market_primary_fallback(module: Any) -> None:
             "market_session": 24 * 5,
             "analyst_consensus": 24 * 14,
             "short_interest": 24 * 45,
-            "options": 24 * 3,
+            "options": 24 * 4,
         }
     )
     evidence_engine.PERIODIC_EVIDENCE_TYPES.update({"market_session", "analyst_consensus", "short_interest"})
