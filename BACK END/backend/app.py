@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.4 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.5 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.4 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.5 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -22,6 +22,7 @@ from decision_history import router as history_router
 import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
 from hard_data import hard_data_evidence, router as hard_data_router
+from hyperscaler_primary_fallback import install_hyperscaler_primary_fallback
 import insider_intelligence
 from insider_intelligence import router as insider_router
 from insider_ir_fallback import install_insider_fallback
@@ -68,6 +69,7 @@ install_institutional_secondary_fallback(institutional_intelligence)
 install_institutional_integrity_guard(institutional_intelligence)
 
 install_primary_evidence_semantic_guard(primary_evidence)
+install_hyperscaler_primary_fallback(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
@@ -127,7 +129,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.4"
+app.version = "0.12.5"
 
 
 @app.on_event("startup")
@@ -144,7 +146,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.4",
+        "version": "0.12.5",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -171,6 +173,10 @@ def system_status():
         "micron_hbm_economics_all_six_facts_required": True,
         "micron_hbm_margin_direct_annual_filing_support": True,
         "micron_hbm_customer_concentration_inference_allowed": False,
+        "hyperscaler_demand_primary_engine": True,
+        "hyperscaler_primary_sources": ["MICROSOFT_IR", "META_IR", "AMAZON_IR", "ALPHABET_OFFICIAL"],
+        "hyperscaler_cancellation_inference_allowed": False,
+        "hyperscaler_memory_terms_inference_allowed": False,
         "periodic_evidence_freshness_floor": True,
         "annual_filing_freshness_class": True,
         "hard_data_acquisition": True,
