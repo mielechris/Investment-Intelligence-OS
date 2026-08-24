@@ -1,6 +1,12 @@
 import unittest
 
-from primary_evidence_contracts import fact_matches
+from primary_evidence_contracts import coverage_for_requirement, fact_matches
+
+
+HBM_ECONOMICS_REQUIREMENT = (
+    "Verified Micron HBM revenue, shipment volumes, margins, customer concentration, "
+    "capacity allocation, and ASP sensitivity."
+)
 
 
 class PrimaryEvidenceSingleFactTests(unittest.TestCase):
@@ -34,6 +40,20 @@ class PrimaryEvidenceSingleFactTests(unittest.TestCase):
             "terms": ("hbm", "customer", "concentration", "customer base"),
         }
         self.assertTrue(fact_matches(item, concentration_fact))
+
+    def test_five_hbm_facts_still_leave_customer_concentration_open(self):
+        items = [
+            {"primary_fact_key": "hbm_revenue", "claim": "HBM revenue"},
+            {"primary_fact_key": "hbm_shipments", "claim": "HBM shipments"},
+            {"primary_fact_key": "hbm_margin", "claim": "HBM higher-margin mix contribution"},
+            {"primary_fact_key": "capacity_allocation", "claim": "HBM capacity allocation"},
+            {"primary_fact_key": "hbm_asp_sensitivity", "claim": "HBM pricing premium"},
+        ]
+        coverage = coverage_for_requirement(HBM_ECONOMICS_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 5)
+        self.assertEqual(coverage["missing_fact_keys"], ["customer_concentration"])
+        self.assertFalse(coverage["coverage_gate_passed"])
 
 
 if __name__ == "__main__":
