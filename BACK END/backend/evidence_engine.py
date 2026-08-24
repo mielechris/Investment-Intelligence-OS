@@ -25,6 +25,7 @@ FRESHNESS_WINDOWS_HOURS = {
     "policy": 72,
     "filing": 24 * 14,
     "quarterly_filing": 24 * 180,
+    "quarterly_company": 24 * 180,
     "macro": 24 * 45,
     "fundamental": 24 * 120,
     "weather": 6,
