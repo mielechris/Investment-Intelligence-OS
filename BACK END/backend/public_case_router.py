@@ -15,6 +15,11 @@ from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
 import opportunity_acquisition
 from opportunity_evidence_hardening import install_opportunity_evidence_hardening
+import source_ingestion
+from research_source_cache import (
+    install_research_source_cache,
+    router as research_source_cache_router,
+)
 
 # Runtime routing is installed before timing so telemetry measures the actual
 # configured model/effort profile. Baseline preserves Luna + medium reasoning.
@@ -30,6 +35,10 @@ install_orchestration_speed(eight_agent_orchestrator)
 # it does not touch sizing, authorization, paper execution, or live execution.
 install_opportunity_evidence_hardening(opportunity_acquisition)
 
+# Reuse successful exact-match public source responses within bounded TTLs. This
+# never caches model judgments or market-quote decisions.
+install_research_source_cache(source_ingestion)
+
 from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
 from opportunity_scheduler import router as opportunity_scheduler_router
@@ -43,6 +52,7 @@ router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
 router.include_router(market_event_radar_router)
 router.include_router(orchestration_runtime_router)
+router.include_router(research_source_cache_router)
 router.include_router(orchestration_worker_pool_router)
 router.include_router(orchestration_router)
 
