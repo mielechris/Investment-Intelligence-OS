@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
+from uuid import uuid4
+
+from fastapi import HTTPException
 
 from provider_hardening import _request_bytes
 
@@ -51,13 +54,13 @@ def _scaled_number(value: str | None, suffix: str | None) -> float | None:
     return round(number * multiplier, 4)
 
 
-def parse_stockanalysis_consensus(html: str, *, current_year: int | None = None) -> dict[str, Any] | None:
-    """Parse only explicit forecast averages from StockAnalysis' public forecast page.
+def _valid_public_url(value: str) -> bool:
+    parsed = urlparse(str(value or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
-    StockAnalysis attributes these forecast tables to S&P Global Market Intelligence and
-    TipRanks. This parser intentionally ignores rating/price-target prose and extracts only
-    revenue/EPS consensus values plus the page's update date.
-    """
+
+def parse_stockanalysis_consensus(html: str, *, current_year: int | None = None) -> dict[str, Any] | None:
+    """Parse only explicit forecast averages from StockAnalysis' public forecast page."""
     parser = _TextParser()
     parser.feed(html)
     text = parser.text()
@@ -85,18 +88,14 @@ def parse_stockanalysis_consensus(html: str, *, current_year: int | None = None)
 
     revenue = avg_from_block(revenue_block, money_scale=True)
     eps = avg_from_block(eps_block, money_scale=False)
-
     updated_match = re.search(r"Last\s+updated\s*:?\s*([A-Za-z]{3,9}\.?\s+\d{1,2},\s+\d{4})", flat, re.I)
     updated_at = _iso_date(updated_match.group(1)) if updated_match else None
-
     attribution = None
     source_match = re.search(r"Data\s+Sources?\s*:?\s*([^\n]{1,180})", text, re.I)
     if source_match:
         attribution = re.sub(r"\s+", " ", source_match.group(1)).strip()
-
     if revenue is None and eps is None:
         return None
-
     return {
         "year": year,
         "revenue_consensus": revenue,
@@ -111,8 +110,6 @@ def _fetch_stockanalysis(symbol: str) -> tuple[dict[str, Any], str]:
     if not normalized:
         raise ValueError("Ticker is required")
     url = f"https://stockanalysis.com/stocks/{quote_plus(normalized)}/forecast/"
-    # Keep the client identifiable while using a standards-compatible browser-shaped UA.
-    # StockAnalysis robots.txt permits /stocks/.../forecast/; this is not an anti-bot bypass.
     user_agent = (
         "Mozilla/5.0 (compatible; Investment-Intelligence-OS/0.13.2; "
         "+https://github.com/mielechris/Investment-Intelligence-OS)"
@@ -133,12 +130,7 @@ def _fetch_stockanalysis(symbol: str) -> tuple[dict[str, Any], str]:
 
 
 def install_analyst_consensus_fallback(module: Any) -> None:
-    """Add a ticker-driven consensus fallback after direct market-data providers fail.
-
-    Consensus is inherently aggregated market data. The record is therefore classified as
-    GOVERNED_CONSENSUS rather than PRIMARY_OFFICIAL/HARD_MARKET_DATA, is eligible only for
-    the valuation-market `consensus` fact, and never carries execution authority.
-    """
+    """Add governed automatic + user-verified consensus paths."""
     prior_capture = module._capture_market
     prior_lane_status = module._lane_status
     prior_persist = module._persist_record
@@ -151,7 +143,6 @@ def install_analyst_consensus_fallback(module: Any) -> None:
             return record
         if lane != "valuation_market" or fact_key != "consensus":
             return record
-
         governed = {
             **record,
             "source_type": "consensus_data",
@@ -180,20 +171,16 @@ def install_analyst_consensus_fallback(module: Any) -> None:
     def capture_market_with_consensus(case_id: str, case: dict[str, Any]):
         added, failures = prior_capture(case_id, case)
         existing = [
-            row
-            for row in module.list_objects(case_id, "primary_evidence_record")
+            row for row in module.list_objects(case_id, "primary_evidence_record")
             if row.get("lane") == "valuation_market"
             and row.get("fact_key") == "consensus"
             and row.get("gap_resolution_eligible") is True
         ]
         if existing:
             return added, failures
-
         symbol = _symbol(module, case_id)
         try:
             parsed, url = _fetch_stockanalysis(symbol)
-            revenue = parsed.get("revenue_consensus")
-            eps = parsed.get("eps_consensus")
             item = {
                 "source": "StockAnalysis analyst forecast aggregation",
                 "source_type": "consensus_data",
@@ -201,8 +188,8 @@ def install_analyst_consensus_fallback(module: Any) -> None:
                 "url": url,
                 "title": f"{symbol} governed revenue / EPS consensus",
                 "claim": (
-                    f"{symbol} analyst consensus for {parsed['year']}: "
-                    f"revenue={revenue}; EPS={eps}; underlying forecast attribution={parsed['attribution']}."
+                    f"{symbol} analyst consensus for {parsed['year']}: revenue={parsed.get('revenue_consensus')}; "
+                    f"EPS={parsed.get('eps_consensus')}; underlying forecast attribution={parsed['attribution']}."
                 ),
                 "timestamp": parsed.get("updated_at") or module.utc_now(),
                 "reliability_score": 0.84,
@@ -220,8 +207,7 @@ def install_analyst_consensus_fallback(module: Any) -> None:
             facts = {str(row.get("key")): bool(row.get("covered")) for row in result.get("facts") or [] if isinstance(row, dict)}
             base = str(result.get("note") or "").strip()
             suffix = (
-                " Revenue/EPS consensus is covered by a governed consensus aggregator because consensus is inherently aggregated market data; "
-                "the record has no execution authority and cannot satisfy any other market fact."
+                " Revenue/EPS consensus is covered by governed consensus data; the record has no execution authority and cannot satisfy any other market fact."
                 if facts.get("consensus")
                 else " Revenue/EPS consensus remains OPEN unless a governed consensus provider or user-verified consensus snapshot returns current forecast values."
             )
@@ -230,3 +216,89 @@ def install_analyst_consensus_fallback(module: Any) -> None:
 
     module._capture_market = capture_market_with_consensus
     module._lane_status = lane_status_with_consensus
+
+    @module.router.get("/consensus-verification/{case_id}")
+    def consensus_verification_status(case_id: str):
+        case = module.get_object(case_id)
+        if not case or not case_id.startswith("case_"):
+            raise HTTPException(status_code=404, detail="Unknown case_id")
+        ticker = _symbol(module, case_id)
+        latest = module.latest_object("user_verified_consensus_snapshot", case_id=case_id)
+        return {
+            "case_id": case_id,
+            "ticker": ticker,
+            "suggested_source_url": f"https://stockanalysis.com/stocks/{ticker.lower()}/forecast/" if ticker else None,
+            "latest_snapshot": latest,
+            "paper_mode": True,
+            "live_execution": False,
+        }
+
+    @module.router.post("/consensus-verification/{case_id}")
+    def record_verified_consensus(case_id: str, payload: dict[str, Any]):
+        case = module.get_object(case_id)
+        if not case or not case_id.startswith("case_"):
+            raise HTTPException(status_code=404, detail="Unknown case_id")
+        if payload.get("verified_against_source") is not True:
+            raise HTTPException(status_code=422, detail="Verify the values against the cited public source before saving")
+        source_url = str(payload.get("source_url") or "").strip()
+        if not _valid_public_url(source_url):
+            raise HTTPException(status_code=422, detail="Provide a valid http/https public source URL")
+        try:
+            fiscal_year = int(payload.get("fiscal_year"))
+            revenue_billion = float(payload.get("revenue_consensus_billion"))
+            eps = float(payload.get("eps_consensus"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Fiscal year, revenue consensus, and EPS consensus must be numeric")
+        if fiscal_year < 2000 or fiscal_year > 2100 or revenue_billion <= 0:
+            raise HTTPException(status_code=422, detail="Consensus values are outside the supported range")
+
+        ticker = _symbol(module, case_id)
+        observed_at = str(payload.get("observed_at") or module.utc_now()).strip()
+        revenue = round(revenue_billion * 1_000_000_000.0, 2)
+        source_name = str(payload.get("source_name") or "User-verified public analyst consensus").strip()
+        snapshot_id = f"user_verified_consensus_{uuid4().hex}"
+        snapshot = {
+            "user_verified_consensus_snapshot_id": snapshot_id,
+            "case_id": case_id,
+            "ticker": ticker,
+            "fiscal_year": fiscal_year,
+            "revenue_consensus": revenue,
+            "eps_consensus": eps,
+            "source_name": source_name,
+            "source_url": source_url,
+            "observed_at": observed_at,
+            "verified_against_source": True,
+            "source_class": "USER_VERIFIED_GOVERNED_CONSENSUS",
+            "paper_mode": True,
+            "trade_execution_permission": False,
+            "created_at": module.utc_now(),
+        }
+        module.record_object(snapshot_id, "user_verified_consensus_snapshot", case_id, snapshot, topic=case.get("topic"))
+        item = {
+            "source": source_name,
+            "source_type": "consensus_data",
+            "evidence_type": "analyst_consensus",
+            "url": source_url,
+            "title": f"{ticker} user-verified revenue / EPS consensus",
+            "claim": f"{ticker} analyst consensus for {fiscal_year}: revenue={revenue}; EPS={eps}; user verified values against cited public source.",
+            "timestamp": observed_at,
+            "reliability_score": 0.86,
+        }
+        record = module._persist_record(case_id, case, "valuation_market", "consensus", item)
+        if not record:
+            raise HTTPException(status_code=500, detail="Consensus evidence could not be persisted")
+        module.record_event(
+            case_id,
+            "USER_VERIFIED_CONSENSUS_RECORDED",
+            entity_id=snapshot_id,
+            payload={"ticker": ticker, "fiscal_year": fiscal_year, "primary_evidence_id": record.get("primary_evidence_id")},
+        )
+        return {
+            "case_id": case_id,
+            "snapshot": snapshot,
+            "primary_evidence_id": record.get("primary_evidence_id"),
+            "source_grade": record.get("source_grade"),
+            "gap_resolution_eligible": record.get("gap_resolution_eligible"),
+            "paper_mode": True,
+            "live_execution": False,
+        }
