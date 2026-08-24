@@ -36,17 +36,18 @@ jobs:
           insider_secondary_fallback.py insider_scope_guard.py institutional_intelligence.py
           institutional_secondary_fallback.py institutional_integrity_guard.py source_ingestion.py
           provider_hardening.py official_sources.py public_factory.py public_case_router.py
-          market_event_radar.py opportunity_acquisition.py eight_agent_orchestrator.py
-          opportunity_dispatch.py opportunity_scheduler.py learning_loop.py monitoring_engine.py
-          semiconductor_intelligence.py decision_history.py evidence_gap_hunter.py interview_portal.py
-          chain_verifier.py governed_paper_execution_api.py governed_paper_execution_bridge.py
+          market_event_radar.py opportunity_acquisition.py opportunity_evidence.py
+          opportunity_evidence_hardening.py eight_agent_orchestrator.py opportunity_dispatch.py
+          opportunity_scheduler.py learning_loop.py monitoring_engine.py semiconductor_intelligence.py
+          decision_history.py evidence_gap_hunter.py interview_portal.py chain_verifier.py
+          governed_paper_execution_api.py governed_paper_execution_bridge.py
           paper_authorization_api.py governed_paper_authorization.py automatic_paper_sizing.py
           paper_sizing_profile.py paper_position_sizing.py capital_entry_watch.py paper_capital_gate.py
           paper_capital_api.py live_invalidation_mapper.py thesis_invalidation_contract.py
       - name: Run opportunity and orchestration safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
-          test_market_event_radar.py test_opportunity_acquisition.py
+          test_market_event_radar.py test_opportunity_acquisition.py test_opportunity_evidence.py
           test_eight_agent_orchestrator.py test_opportunity_router_integration.py
           test_opportunity_dispatch.py test_opportunity_scheduler.py
       - name: Run governed paper-chain safety tests
