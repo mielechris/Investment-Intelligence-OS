@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,17 @@ class OrchestrationWorkerPoolTests(unittest.TestCase):
         self.assertEqual(len(result), pool.MAX_BATCH_CASES)
         self.assertEqual(len(result), len(set(result)))
 
+    def test_case_worker_configuration_defaults_to_two_and_caps_at_four(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("IIOS_CASE_WORKERS", None)
+            self.assertEqual(pool.configured_case_workers(), 2)
+        with patch.dict(os.environ, {"IIOS_CASE_WORKERS": "3"}):
+            self.assertEqual(pool.configured_case_workers(), 3)
+        with patch.dict(os.environ, {"IIOS_CASE_WORKERS": "99"}):
+            self.assertEqual(pool.configured_case_workers(), 4)
+        with patch.dict(os.environ, {"IIOS_CASE_WORKERS": "0"}):
+            self.assertEqual(pool.configured_case_workers(), 1)
+
     def test_batch_is_bounded_and_paper_only(self):
         def fake_run(case_id):
             return {
@@ -20,12 +32,15 @@ class OrchestrationWorkerPoolTests(unittest.TestCase):
                 "performance": {"total_latency_ms": 10.0},
             }
 
-        with patch.object(pool, "run_eight_agent_orchestration", side_effect=fake_run):
+        with patch.object(pool, "run_eight_agent_orchestration", side_effect=fake_run), \
+             patch.dict(os.environ, {"IIOS_CASE_WORKERS": "2"}):
             result = pool.run_case_batch(["case_a", "case_b", "case_c"])
 
         self.assertEqual(result["requested_case_count"], 3)
         self.assertEqual(result["completed_case_count"], 3)
         self.assertEqual(result["case_workers"], 2)
+        self.assertEqual(result["configured_case_workers"], 2)
+        self.assertEqual(result["max_case_workers"], 4)
         self.assertLessEqual(result["case_workers"], pool.MAX_CASE_WORKERS)
         self.assertFalse(result["auto_trade_authority"])
         self.assertFalse(result["paper_order_permission"])
@@ -74,7 +89,11 @@ class OrchestrationWorkerPoolTests(unittest.TestCase):
                 for path in paths
             )
         )
-        plan = pool.batch_plan()
+        with patch.dict(os.environ, {"IIOS_CASE_WORKERS": "3"}):
+            plan = pool.batch_plan()
+        self.assertEqual(plan["configured_case_workers"], 3)
+        self.assertEqual(plan["default_case_workers"], 2)
+        self.assertEqual(plan["max_case_workers"], 4)
         self.assertTrue(plan["manual_only"])
         self.assertFalse(plan["auto_trade_authority"])
         self.assertFalse(plan["trade_execution_permission"])
