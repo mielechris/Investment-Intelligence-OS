@@ -16,6 +16,11 @@ BASELINE_PROFILE = "baseline"
 SPEED_TRIAL_PROFILE = "speed_trial"
 ALLOWED_PROFILES = {BASELINE_PROFILE, SPEED_TRIAL_PROFILE}
 ALLOWED_EFFORTS = {"none", "low", "medium", "high", "xhigh", "max"}
+DEFAULT_FIRST_WAVE_TIMEOUT_SECONDS = 45.0
+DEFAULT_CRITICAL_TIMEOUT_SECONDS = 60.0
+DEFAULT_COMMITTEE_TIMEOUT_SECONDS = 60.0
+MIN_TIMEOUT_SECONDS = 5.0
+MAX_TIMEOUT_SECONDS = 90.0
 
 _context = threading.local()
 
@@ -42,6 +47,15 @@ def _model_env(name: str, default: str = DEFAULT_MODEL) -> str:
     return value or default
 
 
+def _timeout_env(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(MIN_TIMEOUT_SECONDS, min(value, MAX_TIMEOUT_SECONDS))
+
+
 def runtime_policy() -> dict[str, Any]:
     profile = selected_profile()
     first_wave_default = "low" if profile == SPEED_TRIAL_PROFILE else "medium"
@@ -62,6 +76,18 @@ def runtime_policy() -> dict[str, Any]:
         "committee_reasoning_effort": _effort_env(
             "IIOS_COMMITTEE_REASONING_EFFORT",
             "medium",
+        ),
+        "first_wave_timeout_seconds": _timeout_env(
+            "IIOS_FIRST_WAVE_TIMEOUT_SECONDS",
+            DEFAULT_FIRST_WAVE_TIMEOUT_SECONDS,
+        ),
+        "critical_timeout_seconds": _timeout_env(
+            "IIOS_CRITICAL_TIMEOUT_SECONDS",
+            DEFAULT_CRITICAL_TIMEOUT_SECONDS,
+        ),
+        "committee_timeout_seconds": _timeout_env(
+            "IIOS_COMMITTEE_TIMEOUT_SECONDS",
+            DEFAULT_COMMITTEE_TIMEOUT_SECONDS,
         ),
         "prompt_cache_enabled": _bool_env("IIOS_PROMPT_CACHE_ENABLED", True),
         "prompt_cache_ttl": "30m",
@@ -84,13 +110,21 @@ def _exact_prompt_cache_key(role: str, model: str, input_value: Any) -> str | No
 
 
 @contextmanager
-def _request_context(*, role: str, model: str, effort: str, cache_enabled: bool):
+def _request_context(
+    *,
+    role: str,
+    model: str,
+    effort: str,
+    cache_enabled: bool,
+    timeout_seconds: float | None = None,
+):
     previous = getattr(_context, "request", None)
     _context.request = {
         "role": role,
         "model": model,
         "effort": effort,
         "cache_enabled": cache_enabled,
+        "timeout_seconds": timeout_seconds,
     }
     try:
         yield
@@ -109,6 +143,10 @@ class _RoutedResponses:
             reasoning = dict(kwargs.get("reasoning") or {})
             reasoning["effort"] = request["effort"]
             kwargs["reasoning"] = reasoning
+
+            timeout_seconds = request.get("timeout_seconds")
+            if timeout_seconds:
+                kwargs.setdefault("timeout", float(timeout_seconds))
 
             if request.get("cache_enabled"):
                 cache_key = _exact_prompt_cache_key(
@@ -136,14 +174,12 @@ def _routed_openai_factory(original_openai):
 
 
 def install_orchestration_runtime(module) -> None:
-    """Install thread-safe model/effort routing and prompt caching.
+    """Install thread-safe model/effort routing, deadlines, and prompt caching.
 
-    Baseline preserves the existing Luna + medium-reasoning behavior. The optional
-    speed_trial changes only the six first-wave desks to low reasoning. Skeptic,
-    Portfolio, and Committee remain at medium unless explicitly configured.
-
-    Prompt caching uses an exact request hash. It only caches prompt processing;
-    prior agent judgments are never reused as outputs.
+    Baseline preserves Luna + medium reasoning. The optional speed_trial changes
+    only the six first-wave desks to low reasoning. Request deadlines are bounded
+    and role-specific. Prompt caching only reuses prompt processing; prior agent
+    judgments are never reused as outputs.
     """
     if getattr(module, "_runtime_layer_installed", False):
         return
@@ -153,9 +189,6 @@ def install_orchestration_runtime(module) -> None:
     original_openai = module.OpenAI
     routed_openai = _routed_openai_factory(original_openai)
 
-    # run_specialist was imported from main.py. Updating that function's global
-    # OpenAI reference lets direct specialist calls participate in routing without
-    # editing the already-governed core specialist implementation.
     module.run_specialist.__globals__["OpenAI"] = routed_openai
     module.OpenAI = routed_openai
 
@@ -171,11 +204,17 @@ def install_orchestration_runtime(module) -> None:
             if critical
             else policy["first_wave_reasoning_effort"]
         )
+        timeout_seconds = (
+            policy["critical_timeout_seconds"]
+            if critical
+            else policy["first_wave_timeout_seconds"]
+        )
         with _request_context(
             role=agent_key,
             model=model,
             effort=effort,
             cache_enabled=bool(policy["prompt_cache_enabled"]),
+            timeout_seconds=timeout_seconds,
         ):
             result = original_run_specialist(agent_key, topic, evidence)
         return {
@@ -183,6 +222,7 @@ def install_orchestration_runtime(module) -> None:
             "runtime_profile": policy["profile"],
             "model_used": model,
             "reasoning_effort": effort,
+            "request_timeout_seconds": timeout_seconds,
             "prompt_cache_enabled": bool(policy["prompt_cache_enabled"]),
         }
 
@@ -193,6 +233,7 @@ def install_orchestration_runtime(module) -> None:
             model=policy["committee_model"],
             effort=policy["committee_reasoning_effort"],
             cache_enabled=bool(policy["prompt_cache_enabled"]),
+            timeout_seconds=policy["committee_timeout_seconds"],
         ):
             result = original_synthesize(*args, **kwargs)
         return {
@@ -200,6 +241,7 @@ def install_orchestration_runtime(module) -> None:
             "runtime_profile": policy["profile"],
             "committee_model_used": policy["committee_model"],
             "committee_reasoning_effort": policy["committee_reasoning_effort"],
+            "committee_timeout_seconds": policy["committee_timeout_seconds"],
             "prompt_cache_enabled": bool(policy["prompt_cache_enabled"]),
         }
 
