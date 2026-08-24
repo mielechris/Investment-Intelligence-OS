@@ -192,22 +192,139 @@ def _qualification_assessment(
     evidence_quality = float(summary.get("average_quality_score") or 0.0)
     evidence_count = int(summary.get("evidence_count") or 0)
     confidence = float(committee.get("confidence") or 0.0)
-    required_evidence = [str(item) for item in committee.get("required_evidence") or [] if str(item).strip()]
-    watch_desks = sum(1 for key in AGENT_ORDER if (agents.get(key) or {}).get("disposition") == "WATCH")
-    prior_gaps_resolved = bool(resolution_matrix) and all(bool(item.get("resolved")) for item in resolution_matrix)
+    required_evidence = [
+        str(item)
+        for item in committee.get("required_evidence") or []
+        if str(item).strip()
+    ]
+
+    watch_desks = sum(
+        1
+        for key in AGENT_ORDER
+        if (agents.get(key) or {}).get("disposition") == "WATCH"
+    )
+
+    reconciliation = (
+        risk.get("required_evidence_reconciliation")
+        if isinstance(
+            risk.get("required_evidence_reconciliation"),
+            dict,
+        )
+        else {}
+    )
+
+    reconciliation_present = bool(reconciliation)
+
+    blocking_count = int(
+        reconciliation.get("blocking_count") or 0
+    )
+    watching_count = int(
+        reconciliation.get("watching_count") or 0
+    )
+    ungoverned_count = int(
+        reconciliation.get("ungoverned_new_scope_count") or 0
+    )
+
+    expected_watch_targets = {
+        (
+            str(target.get("lane") or ""),
+            str(target.get("fact_key") or ""),
+        )
+        for row in reconciliation.get("requirements") or []
+        if isinstance(row, dict)
+        for target in row.get("targets") or []
+        if isinstance(target, dict)
+        and target.get("state") == "WATCHING"
+    }
+
+    recorded_watch_targets = {
+        (
+            str(row.get("lane") or ""),
+            str(row.get("fact_key") or ""),
+        )
+        for row in risk.get("watch_obligations") or []
+        if isinstance(row, dict)
+    }
+
+    watch_obligations_tracked = (
+        expected_watch_targets
+        <= recorded_watch_targets
+    )
+
+    required_evidence_reconciled = (
+        not required_evidence
+        or (
+            risk.get("risk_required_evidence_mode")
+            == "RECONCILED_NONBLOCKING"
+            and bool(
+                reconciliation.get(
+                    "risk_can_ignore_raw_required_evidence"
+                )
+            )
+        )
+    )
 
     checks = {
-        "committee_watch": committee.get("disposition") == "WATCH",
-        "committee_confidence": confidence >= QUALIFIED_MIN_COMMITTEE_CONFIDENCE,
-        "evidence_quality": evidence_quality >= QUALIFIED_MIN_EVIDENCE_QUALITY,
-        "evidence_count": evidence_count >= QUALIFIED_MIN_EVIDENCE_COUNT,
-        "no_critical_flags": not bool(summary.get("critical_flags")),
-        "gap_resolution_matrix_clear": prior_gaps_resolved,
-        "required_evidence_resolved": prior_gaps_resolved and len(required_evidence) == 0,
-        "risk_clear_for_watch": risk.get("decision") == "WATCH_ONLY" and not (risk.get("triggered_rules") or []),
-        "watch_desk_quorum": watch_desks >= QUALIFIED_MIN_WATCH_DESKS,
-        "fundamentals_watch": (agents.get("fundamentals") or {}).get("disposition") == "WATCH",
-        "skeptic_watch": (agents.get("skeptic") or {}).get("disposition") == "WATCH",
+        "committee_watch": (
+            committee.get("disposition") == "WATCH"
+        ),
+        "committee_confidence": (
+            confidence
+            >= QUALIFIED_MIN_COMMITTEE_CONFIDENCE
+        ),
+        "evidence_quality": (
+            evidence_quality
+            >= QUALIFIED_MIN_EVIDENCE_QUALITY
+        ),
+        "evidence_count": (
+            evidence_count
+            >= QUALIFIED_MIN_EVIDENCE_COUNT
+        ),
+        "no_critical_flags": not bool(
+            summary.get("critical_flags")
+        ),
+
+        # Governed reconciliation replaces the older requirement-string
+        # resolution matrix as the qualification authority.
+        "governed_reconciliation_present": (
+            reconciliation_present
+        ),
+        "governed_blockers_clear": (
+            reconciliation_present
+            and blocking_count == 0
+        ),
+        "governed_ungoverned_scope_clear": (
+            reconciliation_present
+            and ungoverned_count == 0
+        ),
+        "governed_watch_obligations_tracked": (
+            reconciliation_present
+            and watch_obligations_tracked
+        ),
+        "required_evidence_reconciled": (
+            required_evidence_reconciled
+        ),
+
+        "risk_clear_for_watch": (
+            risk.get("decision") == "WATCH_ONLY"
+            and not (risk.get("triggered_rules") or [])
+        ),
+        "watch_desk_quorum": (
+            watch_desks
+            >= QUALIFIED_MIN_WATCH_DESKS
+        ),
+        "fundamentals_watch": (
+            (agents.get("fundamentals") or {}).get(
+                "disposition"
+            )
+            == "WATCH"
+        ),
+        "skeptic_watch": (
+            (agents.get("skeptic") or {}).get(
+                "disposition"
+            )
+            == "WATCH"
+        ),
     }
     unmet = [key for key, passed in checks.items() if not passed]
     qualified = not unmet
@@ -230,8 +347,22 @@ def _qualification_assessment(
             "evidence_count": evidence_count,
             "watch_desks": watch_desks,
             "remaining_required_evidence": required_evidence,
-            "resolved_gap_count": sum(1 for item in resolution_matrix if item.get("resolved")),
-            "gap_count": len(resolution_matrix),
+            "governed_blocking_count": blocking_count,
+            "governed_watching_count": watching_count,
+            "governed_ungoverned_scope_count": ungoverned_count,
+            "expected_watch_obligations": sorted(
+                expected_watch_targets
+            ),
+            "recorded_watch_obligations": sorted(
+                recorded_watch_targets
+            ),
+            "legacy_resolved_gap_count": sum(
+                1
+                for item in resolution_matrix
+                if item.get("resolved")
+            ),
+            "legacy_gap_count": len(resolution_matrix),
+            "legacy_resolution_matrix_authoritative": False,
             "skeptic_disposition": skeptic.get("disposition"),
             "skeptic_confidence": skeptic.get("confidence"),
             "skeptic_missing_evidence": skeptic.get("missing_evidence") or [],
@@ -299,7 +430,52 @@ def run_gap_hunt(case_id: str) -> dict[str, Any]:
                     "gap_requirement": quote_gap or "market quote",
                 }
             )
-    new_raw = list(ingestion.get("evidence_items") or []) + quote_items
+    # The cycle/downside model must be synchronized to the exact
+    # market quote being shown to this committee run. Never carry a
+    # prior cycle-stress snapshot forward as though it were current.
+    prior_raw = [
+        item
+        for item in prior_raw
+        if str(item.get("analysis_type") or "")
+        != "MU_CYCLE_NORMALIZED_DOWNSIDE_STRESS_V1"
+    ]
+
+    cycle_items: list[dict[str, Any]] = []
+
+    if ticker_upper in {"MU", "MU.US"}:
+        try:
+            from cycle_normalized_valuation import (
+                build_live_cycle_stress,
+                cycle_normalized_evidence,
+            )
+
+            build_live_cycle_stress(
+                case_id,
+                quote_override=quote,
+            )
+
+            cycle_items = cycle_normalized_evidence(
+                case_id
+            )
+
+        except Exception as exc:
+            record_event(
+                case_id,
+                "GAP_HUNTER_CYCLE_STRESS_REFRESH_FAILED",
+                payload={
+                    "error": (
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    "trade_execution_permission": False,
+                },
+            )
+
+    new_raw = (
+        list(ingestion.get("evidence_items") or [])
+        + quote_items
+        + cycle_items
+    )
+
     combined = _dedupe(prior_raw + new_raw)
 
     firewall = curate_gap_evidence(combined)

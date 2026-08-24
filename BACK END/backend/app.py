@@ -18,6 +18,9 @@ except ImportError:
 
 from main import app
 from analyst_consensus_fallback import install_analyst_consensus_fallback
+from cycle_normalized_valuation import cycle_normalized_evidence, router as cycle_valuation_router
+from consensus_revision_history import consensus_revision_evidence
+from demand_quality_watch import demand_quality_evidence
 from dashboard_lineage import apply_latest_decision_lineage
 from decision_history import router as history_router
 import evidence_gap_hunter
@@ -96,6 +99,9 @@ def _gap_packet_items_with_governed_data(packet):
         items.extend(insider_intelligence.insider_evidence(case_id))
         items.extend(institutional_intelligence.institutional_evidence(case_id))
         items.extend(primary_evidence_evidence(case_id))
+        items.extend(cycle_normalized_evidence(case_id))
+        items.extend(consensus_revision_evidence(case_id))
+        items.extend(demand_quality_evidence(case_id))
     return items
 
 
@@ -123,6 +129,7 @@ def monitoring_dashboard_live(limit: int = 25):
     return dashboard
 
 
+app.include_router(cycle_valuation_router)
 app.include_router(history_router)
 app.include_router(gap_hunter_router)
 app.include_router(hard_data_router)

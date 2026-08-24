@@ -180,5 +180,176 @@ class RequiredEvidenceReconcilerTests(unittest.TestCase):
         )
 
 
+    def test_cycle_request_maps_to_governed_analysis(self):
+        from required_evidence_reconciler import canonical_targets
+
+        rows = canonical_targets(
+            "Current forward EPS revisions, normalized-cycle earnings "
+            "estimates, validated share count, and valuation sensitivity "
+            "under lower memory ASPs."
+        )
+
+        keys = {
+            (r["lane"], r["fact_key"])
+            for r in rows
+        }
+
+        self.assertIn(
+            ("valuation_market", "diluted_shares"),
+            keys,
+        )
+        self.assertIn(
+            ("valuation_market", "consensus"),
+            keys,
+        )
+        self.assertIn(
+            ("institutional_context", "analyst_revisions"),
+            keys,
+        )
+        self.assertIn(
+            (
+                "cycle_valuation_context",
+                "normalized_cycle_stress",
+            ),
+            keys,
+        )
+
+    def test_cycle_analysis_satisfies_analytical_not_primary_scope(self):
+        from required_evidence_reconciler import _cycle_valuation_state
+
+        items = [
+            {
+                "analysis_type":
+                    "MU_CYCLE_NORMALIZED_DOWNSIDE_STRESS_V1",
+                "verified_inputs_complete": True,
+                "assumptions_explicit": True,
+                "may_resolve_primary_fact": False,
+                "may_authorize_trade": False,
+            }
+        ]
+
+        result = _cycle_valuation_state(
+            items,
+            "normalized_cycle_stress",
+        )
+
+        self.assertEqual(
+            result["state"],
+            "SATISFIED",
+        )
+        self.assertTrue(result["covered"])
+        self.assertTrue(result["analysis_only"])
+
+    def test_missing_cycle_analysis_remains_open(self):
+        from required_evidence_reconciler import _cycle_valuation_state
+
+        result = _cycle_valuation_state(
+            [],
+            "normalized_cycle_stress",
+        )
+
+        self.assertEqual(result["state"], "OPEN")
+        self.assertFalse(result["covered"])
+
+
+    def test_rating_target_context_does_not_satisfy_eps_revisions(self):
+        from required_evidence_reconciler import _institutional_state
+
+        items = [
+            {
+                "institutional_lane": "analyst_revisions",
+                "details": {
+                    "analyst_feed_kind":
+                        "RATINGS_AND_TARGET_ACTIONS",
+                    "true_eps_revision_series": False,
+                },
+            }
+        ]
+
+        result = _institutional_state(
+            items,
+            "analyst_revisions",
+        )
+
+        self.assertEqual(result["state"], "OPEN")
+        self.assertFalse(result["covered"])
+
+    def test_governed_consensus_history_satisfies_revision_requirement(self):
+        from required_evidence_reconciler import _institutional_state
+
+        items = [
+            {
+                "analysis_type":
+                    "GOVERNED_CONSENSUS_REVISION_HISTORY_V1",
+                "verified_revision_history": True,
+            }
+        ]
+
+        result = _institutional_state(
+            items,
+            "analyst_revisions",
+        )
+
+        self.assertEqual(
+            result["state"],
+            "SATISFIED",
+        )
+        self.assertTrue(result["covered"])
+
+
+    def test_restocking_requirement_maps_to_demand_quality_watch(self):
+        from required_evidence_reconciler import canonical_targets
+
+        rows = canonical_targets(
+            "Current channel and supplier inventory data "
+            "sufficient to distinguish genuine end consumption "
+            "from precautionary restocking."
+        )
+
+        keys = {
+            (r["lane"], r["fact_key"])
+            for r in rows
+        }
+
+        self.assertIn(
+            (
+                "demand_quality_context",
+                "restocking_discrimination",
+            ),
+            keys,
+        )
+
+    def test_demand_quality_missing_channel_data_is_watching(self):
+        from required_evidence_reconciler import _demand_quality_state
+
+        items = [
+            {
+                "analysis_type":
+                    "DEMAND_QUALITY_RESTOCKING_ASSESSMENT_V1",
+                "state": "WATCHING",
+                "supplier_inventory_supported": True,
+                "end_demand_supported": True,
+                "direct_channel_inventory_supported": False,
+            }
+        ]
+
+        result = _demand_quality_state(
+            items,
+            "restocking_discrimination",
+        )
+
+        self.assertEqual(
+            result["state"],
+            "WATCHING",
+        )
+
+        self.assertFalse(result["covered"])
+
+        self.assertEqual(
+            result["missing_fact"],
+            "channel_inventory",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

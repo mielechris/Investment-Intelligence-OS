@@ -32,9 +32,15 @@ FACT_PATTERNS = (
 
     # Valuation / market
     ("valuation_market", "market_price", ("current mu price",)),
-    ("valuation_market", "consensus", ("consensus revision", "earnings expectations")),
+    ("valuation_market", "diluted_shares", ("validated share count", "diluted share count", "diluted shares")),
+    ("valuation_market", "consensus", ("consensus revision", "earnings expectations", "forward eps")),
     ("valuation_market", "valuation", ("current valuation", "valuation multiple")),
     ("valuation_market", "portfolio_overlap", ("factor overlap", "portfolio holdings")),
+
+    # Governed analytical context
+    ("institutional_context", "analyst_revisions", ("forward eps revisions", "earnings revisions", "estimate revisions")),
+    ("cycle_valuation_context", "normalized_cycle_stress", ("normalized-cycle earnings", "normalized cycle earnings", "valuation sensitivity", "lower memory asps", "lower memory asp")),
+    ("demand_quality_context", "restocking_discrimination", ("end consumption", "restocking", "channel inventory", "supplier inventory")),
 
     # Policy
     ("policy", "export_controls", ("export control",)),
@@ -279,6 +285,241 @@ def _external_demand_state(
     }
 
 
+def _institutional_state(
+    packet_items: list[dict[str, Any]],
+    fact_key: str,
+) -> dict[str, Any]:
+    if fact_key != "analyst_revisions":
+        return {"state": "OPEN", "covered": False}
+
+    for item in packet_items:
+        if not isinstance(item, dict):
+            continue
+
+        raw = (
+            item.get("raw")
+            if isinstance(item.get("raw"), dict)
+            else item
+        )
+
+        if item.get("stale"):
+            continue
+
+        analysis_type = str(
+            raw.get("analysis_type")
+            or item.get("analysis_type")
+            or ""
+        )
+
+        # Our own governed time-series comparison is allowed.
+        if analysis_type == "GOVERNED_CONSENSUS_REVISION_HISTORY_V1":
+            if bool(
+                raw.get("verified_revision_history")
+                or item.get("verified_revision_history")
+            ):
+                return {
+                    "state": "SATISFIED",
+                    "covered": True,
+                    "source_type":
+                        "GOVERNED_CONSENSUS_REVISION_HISTORY",
+                }
+
+        lane = str(
+            raw.get("institutional_lane")
+            or item.get("institutional_lane")
+            or ""
+        )
+
+        if lane != "analyst_revisions":
+            continue
+
+        details = raw.get("details") or {}
+
+        # Secondary rating/target actions are explicitly NOT
+        # a true EPS revision series.
+        true_series = bool(
+            details.get("true_eps_revision_series")
+            or raw.get("true_eps_revision_series")
+            or item.get("true_eps_revision_series")
+        )
+
+        if true_series:
+            return {
+                "state": "SATISFIED",
+                "covered": True,
+                "source_type":
+                    "TRUE_EPS_REVISION_SERIES",
+            }
+
+    return {
+        "state": "OPEN",
+        "covered": False,
+    }
+
+
+def _cycle_valuation_state(
+    packet_items: list[dict[str, Any]],
+    fact_key: str,
+) -> dict[str, Any]:
+    if fact_key != "normalized_cycle_stress":
+        return {"state": "OPEN", "covered": False}
+
+    for item in packet_items:
+        if not isinstance(item, dict):
+            continue
+
+        raw = (
+            item.get("raw")
+            if isinstance(item.get("raw"), dict)
+            else item
+        )
+
+        analysis_type = str(
+            raw.get("analysis_type")
+            or item.get("analysis_type")
+            or ""
+        )
+
+        if (
+            analysis_type
+            != "MU_CYCLE_NORMALIZED_DOWNSIDE_STRESS_V1"
+        ):
+            continue
+
+        verified = bool(
+            raw.get("verified_inputs_complete")
+            or item.get("verified_inputs_complete")
+        )
+
+        explicit = bool(
+            raw.get("assumptions_explicit")
+            or item.get("assumptions_explicit")
+        )
+
+        may_trade = bool(
+            raw.get("may_authorize_trade")
+            or item.get("may_authorize_trade")
+        )
+
+        may_resolve = bool(
+            raw.get("may_resolve_primary_fact")
+            or item.get("may_resolve_primary_fact")
+        )
+
+        passed = (
+            verified
+            and explicit
+            and not may_trade
+            and not may_resolve
+        )
+
+        return {
+            "state": (
+                "SATISFIED"
+                if passed
+                else "OPEN"
+            ),
+            "covered": passed,
+            "analysis_only": True,
+        }
+
+    return {
+        "state": "OPEN",
+        "covered": False,
+    }
+
+
+def _demand_quality_state(
+    packet_items: list[dict[str, Any]],
+    fact_key: str,
+) -> dict[str, Any]:
+    if fact_key != "restocking_discrimination":
+        return {
+            "state": "OPEN",
+            "covered": False,
+        }
+
+    for item in packet_items:
+        if not isinstance(item, dict):
+            continue
+
+        raw = (
+            item.get("raw")
+            if isinstance(item.get("raw"), dict)
+            else item
+        )
+
+        analysis_type = str(
+            raw.get("analysis_type")
+            or item.get("analysis_type")
+            or ""
+        )
+
+        if (
+            analysis_type
+            != "DEMAND_QUALITY_RESTOCKING_ASSESSMENT_V1"
+        ):
+            continue
+
+        state = str(
+            raw.get("state")
+            or item.get("state")
+            or ""
+        )
+
+        direct = bool(
+            raw.get(
+                "direct_channel_inventory_supported"
+            )
+            or item.get(
+                "direct_channel_inventory_supported"
+            )
+        )
+
+        supplier = bool(
+            raw.get("supplier_inventory_supported")
+            or item.get("supplier_inventory_supported")
+        )
+
+        demand = bool(
+            raw.get("end_demand_supported")
+            or item.get("end_demand_supported")
+        )
+
+        if (
+            state == "SATISFIED"
+            and direct
+            and supplier
+            and demand
+        ):
+            return {
+                "state": "SATISFIED",
+                "covered": True,
+                "analysis_only": True,
+            }
+
+        if (
+            state == "WATCHING"
+            and supplier
+            and demand
+            and not direct
+        ):
+            return {
+                "state": "WATCHING",
+                "covered": False,
+                "watch_state":
+                    "WATCHING_PUBLIC_PRIMARY_SOURCES",
+                "missing_fact":
+                    "channel_inventory",
+                "analysis_only": True,
+            }
+
+    return {
+        "state": "OPEN",
+        "covered": False,
+    }
+
+
 def _macro_state(packet_items: list[dict[str, Any]], fact_key: str) -> dict[str, Any]:
     current = [
         item for item in packet_items
@@ -345,8 +586,27 @@ def reconcile_requirement(
                 live_floor,
                 packet_items,
             )
+        elif lane == "institutional_context":
+            state = _institutional_state(
+                packet_items,
+                fact_key,
+            )
+        elif lane == "cycle_valuation_context":
+            state = _cycle_valuation_state(
+                packet_items,
+                fact_key,
+            )
+        elif lane == "demand_quality_context":
+            state = _demand_quality_state(
+                packet_items,
+                fact_key,
+            )
         else:
-            state = _fact_state(live_floor, lane, fact_key)
+            state = _fact_state(
+                live_floor,
+                lane,
+                fact_key,
+            )
 
         results.append({**target, **state})
 
