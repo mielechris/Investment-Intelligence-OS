@@ -44,6 +44,23 @@ CONTRACTS = {
             {"key": "memory_terms", "label": "Memory content / enforceable terms", "terms": ("memory content", "customer agreement", "strategic agreement", "enforceable")},
         ],
     },
+    "micron_hbm_economics": {
+        "label": "Micron HBM Economics",
+        "match_terms": (
+            "micron hbm", "hbm revenue", "shipment volumes", "margins",
+            "customer concentration", "capacity allocation", "asp sensitivity",
+        ),
+        "match_min": 3,
+        "minimum_fraction": 1.0,
+        "facts": [
+            {"key": "hbm_revenue", "label": "HBM revenue", "terms": ("hbm", "revenue")},
+            {"key": "hbm_shipments", "label": "HBM shipment / volume ramp", "terms": ("hbm", "shipment", "volume ramp", "high-volume")},
+            {"key": "hbm_margin", "label": "HBM margin / economic contribution", "terms": ("hbm", "margin", "gross margin", "higher-margin")},
+            {"key": "customer_concentration", "label": "HBM customer concentration", "terms": ("hbm", "customer", "concentration", "customer base")},
+            {"key": "capacity_allocation", "label": "HBM capacity allocation", "terms": ("hbm", "capacity", "allocation", "wafer", "supply")},
+            {"key": "hbm_asp_sensitivity", "label": "HBM pricing / ASP sensitivity", "terms": ("hbm", "price", "pricing", "premium", "average selling price")},
+        ],
+    },
     "micron_financials": {
         "label": "Micron Filing Financials",
         "match_terms": ("micron", "filing-based", "revenue mix", "free cash flow", "debt and cash"),
@@ -154,6 +171,8 @@ def _critical_fact_keys(requirement: str, lane: str) -> set[str]:
     critical: set[str] = set()
     if lane == "policy" and any(term in lowered for term in ("measurable", "transmission", "substitution", "supply-chain")):
         critical.add("transmission")
+    if lane == "micron_hbm_economics":
+        critical.update(fact["key"] for fact in CONTRACTS[lane]["facts"])
     return critical
 
 
