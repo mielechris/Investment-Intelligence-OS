@@ -58,6 +58,33 @@ type PaperCapitalStatus = {
     live_execution: boolean;
   };
 
+  sizing?: {
+    profile_present: boolean;
+    profile_enabled: boolean;
+    inputs_complete: boolean;
+    portfolio_nav?: number;
+    invalidation_price?: number;
+    invalidation_basis?: string;
+    portfolio_snapshot_present: boolean;
+    portfolio_snapshot_id?: string;
+    combined_overlap_weight_pct?: number;
+    concentration_level?: string;
+
+    automatic: {
+      decision?: string;
+      reason?: string;
+      proposed_shares?: number;
+      proposed_notional?: number;
+      proposed_position_pct?: number;
+      proposed_portfolio_risk_pct?: number;
+      binding_constraint?: string;
+      paper_authorization_ready: boolean;
+      paper_order_permission: boolean;
+      trade_execution_permission: boolean;
+      live_execution: boolean;
+    };
+  };
+
   permissions: {
     qualified_research: boolean;
     thesis_valid: boolean;
@@ -72,8 +99,14 @@ type PaperCapitalStatus = {
   paper_mode: boolean;
 };
 
-function money(value?: number): string {
-  if (value === undefined || Number.isNaN(value)) return "—";
+function money(value?: number | null): string {
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value)
+  ) {
+    return "—";
+  }
 
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -245,6 +278,7 @@ export default function PaperCapitalControlPanel({
   const p = status.permissions;
   const capital = status.capital;
   const entryWatch = status.entry_watch;
+  const sizing = status.sizing;
 
   const displayedPrice =
     entryWatch?.current_price ??
@@ -585,6 +619,238 @@ export default function PaperCapitalControlPanel({
           </div>
         </div>
       )}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "1fr 1fr",
+          gap: "16px",
+          marginTop: "18px",
+        }}
+      >
+        <div
+          style={{
+            border: "1px solid #293440",
+            borderRadius: "9px",
+            padding: "15px",
+            background: "#080c11",
+          }}
+        >
+          <div style={label}>
+            GOVERNED SIZING INPUTS
+          </div>
+
+          <div
+            style={{
+              marginTop: "8px",
+              color:
+                sizing?.profile_present &&
+                sizing?.inputs_complete
+                  ? "#59c68c"
+                  : "#e6bd5c",
+              fontWeight: 900,
+            }}
+          >
+            {sizing?.profile_present
+              ? sizing.inputs_complete
+                ? "CONFIGURED"
+                : "INCOMPLETE"
+              : "INPUTS REQUIRED"}
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "1fr 1fr",
+              gap: "9px",
+              marginTop: "13px",
+              fontSize: "12px",
+            }}
+          >
+            <div>
+              <div style={label}>
+                Portfolio NAV
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {money(
+                  sizing?.portfolio_nav,
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div style={label}>
+                Invalidation
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {money(
+                  sizing?.invalidation_price,
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div style={label}>
+                Portfolio Overlap
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {sizing
+                  ?.combined_overlap_weight_pct !==
+                undefined
+                  ? `${sizing.combined_overlap_weight_pct.toFixed(
+                      1,
+                    )}%`
+                  : "—"}
+              </div>
+            </div>
+
+            <div>
+              <div style={label}>
+                Concentration
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {sizing?.concentration_level ||
+                  "—"}
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: "12px",
+              color: "#7f8c9c",
+              fontSize: "11px",
+              lineHeight: 1.5,
+            }}
+          >
+            {sizing?.invalidation_basis ||
+              "No explicit governed invalidation basis has been configured."}
+          </div>
+        </div>
+
+        <div
+          style={{
+            border: "1px solid #293440",
+            borderRadius: "9px",
+            padding: "15px",
+            background: "#080c11",
+          }}
+        >
+          <div style={label}>
+            AUTOMATIC POSITION SIZING
+          </div>
+
+          <div
+            style={{
+              marginTop: "8px",
+              color:
+                sizing?.automatic
+                  ?.decision === "SIZE_READY"
+                  ? "#59c68c"
+                  : sizing?.automatic
+                      ?.decision === "NOT_RUN"
+                    ? "#e6bd5c"
+                    : "#ff6379",
+              fontWeight: 900,
+            }}
+          >
+            {stageLabel(
+              sizing?.automatic?.decision ||
+                "NOT CONFIGURED",
+            )}
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "1fr 1fr",
+              gap: "9px",
+              marginTop: "13px",
+              fontSize: "12px",
+            }}
+          >
+            <div>
+              <div style={label}>
+                Proposed Shares
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {sizing?.automatic
+                  ?.proposed_shares ?? 0}
+              </div>
+            </div>
+
+            <div>
+              <div style={label}>
+                Proposed Notional
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {money(
+                  sizing?.automatic
+                    ?.proposed_notional,
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div style={label}>
+                Portfolio Risk
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {sizing?.automatic
+                  ?.proposed_portfolio_risk_pct !==
+                undefined
+                  ? `${(
+                      sizing.automatic
+                        .proposed_portfolio_risk_pct *
+                      100
+                    ).toFixed(2)}%`
+                  : "—"}
+              </div>
+            </div>
+
+            <div>
+              <div style={label}>
+                Binding Constraint
+              </div>
+              <div style={{ marginTop: "5px" }}>
+                {stageLabel(
+                  sizing?.automatic
+                    ?.binding_constraint,
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: "12px",
+              color: "#8d99a8",
+              fontSize: "11px",
+            }}
+          >
+            Reason:{" "}
+            {stageLabel(
+              sizing?.automatic?.reason ||
+                "NONE",
+            )}
+          </div>
+
+          <div
+            style={{
+              marginTop: "10px",
+              color: "#ff6379",
+              fontSize: "11px",
+              fontWeight: 800,
+            }}
+          >
+            AUTHORIZATION LOCKED · PAPER
+            EXECUTION LOCKED
+          </div>
+        </div>
+      </div>
 
       <div
         style={{
