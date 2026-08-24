@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.13.1 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.13.1 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -17,6 +17,7 @@ except ImportError:
     pass
 
 from main import app
+from analyst_consensus_fallback import install_analyst_consensus_fallback
 from dashboard_lineage import apply_latest_decision_lineage
 from decision_history import router as history_router
 import evidence_gap_hunter
@@ -72,6 +73,7 @@ install_hyperscaler_primary_fallback(primary_evidence)
 install_supply_inventory_primary_fallback(primary_evidence)
 install_valuation_market_primary_fallback(primary_evidence)
 install_micron_valuation_filing_fallback(primary_evidence)
+install_analyst_consensus_fallback(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
@@ -123,7 +125,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.13.0"
+app.version = "0.13.1"
 
 
 @app.on_event("startup")
@@ -140,7 +142,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.13.0",
+        "version": "0.13.1",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -180,13 +182,17 @@ def system_status():
         "supply_inventory_utilization_inference_allowed": False,
         "valuation_market_primary_engine": True,
         "valuation_market_dynamic_by_ticker": True,
-        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "FIRST_PARTY_PORTFOLIO"],
+        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "FIRST_PARTY_PORTFOLIO"],
         "valuation_market_micron_sec_fallback": True,
         "valuation_market_filing_backed_ttm_pe": True,
         "valuation_market_portfolio_overlap_required_when_requested": True,
         "market_session_weekend_freshness": True,
         "cboe_delayed_page_auto_scraping": False,
         "secondary_institutional_data_can_resolve_valuation_gap": False,
+        "governed_analyst_consensus_engine": True,
+        "analyst_consensus_provider_order": ["YAHOO_PUBLIC_MARKET_DATA", "STOCKANALYSIS_GOVERNED_CONSENSUS"],
+        "analyst_consensus_fact_scope": "VALUATION_MARKET_CONSENSUS_ONLY",
+        "analyst_consensus_auto_trade_authority": False,
         "governed_portfolio_snapshot": True,
         "portfolio_factor_overlap_engine": True,
         "portfolio_overlap_first_party_evidence": True,
@@ -247,6 +253,7 @@ def system_status():
             "SHANGHAI_STOCK_EXCHANGE",
             "STOOQ",
             "YAHOO_PUBLIC_MARKET_DATA",
+            "STOCKANALYSIS_GOVERNED_CONSENSUS",
             "FIRST_PARTY_PORTFOLIO",
         ],
         "primary_memory_pricing_auto_provider": False,
