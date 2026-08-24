@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.4 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.13.5 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.4 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.13.5 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -129,7 +129,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.13.4"
+app.version = "0.13.5"
 
 
 @app.on_event("startup")
@@ -146,7 +146,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.13.4",
+        "version": "0.13.5",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -186,7 +186,7 @@ def system_status():
         "supply_inventory_utilization_inference_allowed": False,
         "valuation_market_primary_engine": True,
         "valuation_market_dynamic_by_ticker": True,
-        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "NASDAQ_SHORT_INTEREST", "FINRA_CONSOLIDATED_SHORT_INTEREST", "FIRST_PARTY_PORTFOLIO"],
+        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "NASDAQ_SHORT_INTEREST", "FINRA_CONSOLIDATED_SHORT_INTEREST", "OCC_DAILY_OPEN_INTEREST", "FIRST_PARTY_PORTFOLIO"],
         "valuation_market_micron_sec_fallback": True,
         "valuation_market_filing_backed_ttm_pe": True,
         "valuation_market_portfolio_overlap_required_when_requested": True,
@@ -202,6 +202,11 @@ def system_status():
         "short_interest_provider_order": ["NASDAQ_EXCHANGE_API", "FINRA_CONSOLIDATED_SHORT_INTEREST", "USER_VERIFIED_NASDAQ"],
         "short_interest_fact_scope": "VALUATION_MARKET_SHORT_INTEREST_ONLY",
         "short_interest_auto_trade_authority": False,
+        "governed_options_positioning_engine": True,
+        "options_positioning_primary_source": "OCC_DAILY_OPEN_INTEREST",
+        "options_positioning_fact_scope": "VALUATION_MARKET_OPTIONS_ONLY",
+        "options_positioning_put_call_is_directional_trade_signal": False,
+        "options_positioning_auto_trade_authority": False,
         "governed_portfolio_snapshot": True,
         "portfolio_factor_overlap_engine": True,
         "portfolio_overlap_first_party_evidence": True,
@@ -265,6 +270,7 @@ def system_status():
             "STOCKANALYSIS_GOVERNED_CONSENSUS",
             "NASDAQ_SHORT_INTEREST_REPORT",
             "FINRA_CONSOLIDATED_SHORT_INTEREST",
+            "OCC_DAILY_OPEN_INTEREST",
             "FIRST_PARTY_PORTFOLIO",
         ],
         "primary_memory_pricing_auto_provider": False,
