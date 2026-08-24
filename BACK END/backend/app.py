@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.1 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.13.3 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.1 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.13.3 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -49,6 +49,7 @@ from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_c
 from public_case_router import router as public_case_router_api
 from requirement_lineage_guard import install_requirement_lineage_guard
 from semiconductor_intelligence import router as semiconductor_router
+from short_interest_fallback import install_short_interest_fallback
 from supply_inventory_primary_fallback import install_supply_inventory_primary_fallback
 from valuation_market_primary_fallback import install_valuation_market_primary_fallback
 from valuation_market_micron_filing_fallback import install_micron_valuation_filing_fallback
@@ -74,6 +75,7 @@ install_supply_inventory_primary_fallback(primary_evidence)
 install_valuation_market_primary_fallback(primary_evidence)
 install_micron_valuation_filing_fallback(primary_evidence)
 install_analyst_consensus_fallback(primary_evidence)
+install_short_interest_fallback(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
@@ -125,7 +127,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.13.1"
+app.version = "0.13.3"
 
 
 @app.on_event("startup")
@@ -142,7 +144,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.13.1",
+        "version": "0.13.3",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -182,7 +184,7 @@ def system_status():
         "supply_inventory_utilization_inference_allowed": False,
         "valuation_market_primary_engine": True,
         "valuation_market_dynamic_by_ticker": True,
-        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "FIRST_PARTY_PORTFOLIO"],
+        "valuation_market_sources": ["SEC_COMPANYFACTS", "STOOQ", "YAHOO_PUBLIC_MARKET_DATA", "GOVERNED_CONSENSUS", "NASDAQ_SHORT_INTEREST", "FIRST_PARTY_PORTFOLIO"],
         "valuation_market_micron_sec_fallback": True,
         "valuation_market_filing_backed_ttm_pe": True,
         "valuation_market_portfolio_overlap_required_when_requested": True,
@@ -190,9 +192,14 @@ def system_status():
         "cboe_delayed_page_auto_scraping": False,
         "secondary_institutional_data_can_resolve_valuation_gap": False,
         "governed_analyst_consensus_engine": True,
-        "analyst_consensus_provider_order": ["YAHOO_PUBLIC_MARKET_DATA", "STOCKANALYSIS_GOVERNED_CONSENSUS"],
+        "analyst_consensus_provider_order": ["YAHOO_PUBLIC_MARKET_DATA", "STOCKANALYSIS_GOVERNED_CONSENSUS", "USER_VERIFIED_GOVERNED_CONSENSUS"],
         "analyst_consensus_fact_scope": "VALUATION_MARKET_CONSENSUS_ONLY",
         "analyst_consensus_auto_trade_authority": False,
+        "governed_short_interest_engine": True,
+        "short_interest_primary_source": "NASDAQ_SHORT_INTEREST_REPORT",
+        "short_interest_provider_order": ["NASDAQ_EXCHANGE_API", "USER_VERIFIED_NASDAQ"],
+        "short_interest_fact_scope": "VALUATION_MARKET_SHORT_INTEREST_ONLY",
+        "short_interest_auto_trade_authority": False,
         "governed_portfolio_snapshot": True,
         "portfolio_factor_overlap_engine": True,
         "portfolio_overlap_first_party_evidence": True,
@@ -254,6 +261,7 @@ def system_status():
             "STOOQ",
             "YAHOO_PUBLIC_MARKET_DATA",
             "STOCKANALYSIS_GOVERNED_CONSENSUS",
+            "NASDAQ_SHORT_INTEREST_REPORT",
             "FIRST_PARTY_PORTFOLIO",
         ],
         "primary_memory_pricing_auto_provider": False,
