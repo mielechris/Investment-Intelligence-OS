@@ -2,6 +2,8 @@ import unittest
 
 import eight_agent_orchestrator
 import opportunity_acquisition
+import opportunity_dispatch
+import opportunity_scheduler
 import public_case_router
 
 
@@ -20,19 +22,32 @@ class OpportunityRouterIntegrationTests(unittest.TestCase):
             if route.__class__.__name__ == "_IncludedRouter"
         ]
         self.assertIn("/factory/run-public", paths)
-        self.assertGreaterEqual(len(included), 2)
+        self.assertGreaterEqual(len(included), 4)
 
         opportunity_paths = {route.path for route in opportunity_acquisition.router.routes}
+        dispatch_paths = {route.path for route in opportunity_dispatch.router.routes}
+        scheduler_paths = {
+            route.path
+            for route in opportunity_scheduler.router.routes
+            if hasattr(route, "path")
+        }
         orchestration_paths = {route.path for route in eight_agent_orchestrator.router.routes}
         self.assertIn("/opportunities/scan", opportunity_paths)
         self.assertIn("/opportunities/queue", opportunity_paths)
+        self.assertIn("/opportunities/dispatch-queue", dispatch_paths)
+        self.assertIn("/opportunities/automation", scheduler_paths)
         self.assertIn("/orchestration/plan", orchestration_paths)
         self.assertIn("/orchestration/{case_id}/run", orchestration_paths)
 
     def test_new_research_routes_do_not_expose_execution(self):
         research_paths = {
             route.path.lower()
-            for child in (opportunity_acquisition.router, eight_agent_orchestrator.router)
+            for child in (
+                opportunity_acquisition.router,
+                opportunity_dispatch.router,
+                opportunity_scheduler.router,
+                eight_agent_orchestrator.router,
+            )
             for route in child.routes
             if hasattr(route, "path")
         }
