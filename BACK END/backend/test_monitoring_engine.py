@@ -133,13 +133,24 @@ class MonitoringEngineTests(unittest.TestCase):
             "catalyst_status": "ON_TRACK",
             "summary": "No stored falsifier triggered.",
         }
+        safe_capital_watch = {
+            "case_id": self.case["case_id"],
+            "stage": "RESEARCH_NOT_QUALIFIED",
+            "position_sizing_ready": False,
+            "paper_authorization_ready": False,
+            "paper_order_permission": False,
+            "trade_execution_permission": False,
+            "live_execution": False,
+        }
         with patch.object(self.monitoring, "ingest_sources", return_value=fake_ingestion), \
              patch.object(self.monitoring, "_fetch_stooq_quote", return_value=fake_quote), \
-             patch.object(self.monitoring, "_falsifier_review", return_value=surveillance):
+             patch.object(self.monitoring, "_falsifier_review", return_value=surveillance), \
+             patch.object(self.monitoring, "refresh_capital_entry_watch", return_value=safe_capital_watch):
             result = self.monitoring.refresh_profile(profile)
 
         self.assertEqual(result["position"]["return_pct"], -5.0)
         self.assertEqual(result["thesis"]["thesis_status"], "REUNDERWRITE_REQUIRED")
+        self.assertEqual(result["capital_entry_watch"]["stage"], "RESEARCH_NOT_QUALIFIED")
         self.assertEqual(len(self.ledger.list_objects(self.case["case_id"], "monitor_snapshot")), 1)
         self.assertEqual(len(self.ledger.list_objects(self.case["case_id"], "position_monitor")), 1)
         self.assertEqual(len(self.ledger.list_objects(self.case["case_id"], "thesis_monitor")), 1)
