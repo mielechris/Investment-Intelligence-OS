@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.2 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.3 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.2 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.3 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -82,15 +82,16 @@ install_institutional_integrity_guard(institutional_intelligence)
 
 # Primary-evidence semantics are stricter than keyword presence. Broad product mentions
 # such as "HBM" cannot satisfy narrow HBM-margin or HBM-yield facts unless the supporting
-# language actually contains the required operational concept. Policy mechanism text also
-# cannot prove measured market transmission without quantitative outcome evidence.
+# language actually contains the required operational concept. Tightened HBM economics
+# is a separate all-six-facts contract so completed broad Financials work is preserved
+# without pretending the narrower Committee question is already answered.
 install_primary_evidence_semantic_guard(primary_evidence)
 
 
 # Hard Data, Insider/Ownership, Institutional Expectations, and Primary Evidence remain
 # separate governed ledger classes. The Gap Hunter can see all of them, but only records
-# that are resolution-eligible can satisfy a gap; v0.12 also requires the requirement's
-# fact contract to reach its minimum coverage before the Resolution Matrix turns green.
+# that are resolution-eligible can satisfy a gap; v0.12+ also requires the requirement's
+# fact contract to reach its required coverage before the Resolution Matrix turns green.
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
 
@@ -160,7 +161,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.2"
+app.version = "0.12.3"
 
 
 @app.on_event("startup")
@@ -178,7 +179,7 @@ def system_status():
     """Return the active governed-factory feature level."""
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.2",
+        "version": "0.12.3",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -201,6 +202,9 @@ def system_status():
         "primary_fact_coverage_required_for_resolution": True,
         "primary_evidence_semantic_guard": True,
         "policy_measured_transmission_required": True,
+        "micron_hbm_economics_contract": True,
+        "micron_hbm_economics_all_six_facts_required": True,
+        "quarterly_evidence_freshness_floor": True,
         "hard_data_acquisition": True,
         "hard_data_best_match_mapping": True,
         "hard_data_mapping_repair": True,
@@ -242,6 +246,7 @@ def system_status():
             "SUPPLY_INVENTORY",
             "HYPERSCALER_DEMAND",
             "MICRON_FILING_FINANCIALS",
+            "MICRON_HBM_ECONOMICS",
             "VALUATION_MARKET",
             "POLICY_REGULATION",
         ],
