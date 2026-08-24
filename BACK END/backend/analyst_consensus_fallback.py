@@ -111,11 +111,18 @@ def _fetch_stockanalysis(symbol: str) -> tuple[dict[str, Any], str]:
     if not normalized:
         raise ValueError("Ticker is required")
     url = f"https://stockanalysis.com/stocks/{quote_plus(normalized)}/forecast/"
+    # Keep the client identifiable while using a standards-compatible browser-shaped UA.
+    # StockAnalysis robots.txt permits /stocks/.../forecast/; this is not an anti-bot bypass.
+    user_agent = (
+        "Mozilla/5.0 (compatible; Investment-Intelligence-OS/0.13.2; "
+        "+https://github.com/mielechris/Investment-Intelligence-OS)"
+    )
     html = _request_bytes(
         url,
         accept="text/html,application/xhtml+xml",
+        user_agent=user_agent,
         provider="stockanalysis_consensus",
-        minimum_interval_seconds=0.6,
+        minimum_interval_seconds=0.8,
         retries=2,
         cache_ttl_seconds=30 * 60,
     ).decode("utf-8", errors="ignore")
@@ -216,7 +223,7 @@ def install_analyst_consensus_fallback(module: Any) -> None:
                 " Revenue/EPS consensus is covered by a governed consensus aggregator because consensus is inherently aggregated market data; "
                 "the record has no execution authority and cannot satisfy any other market fact."
                 if facts.get("consensus")
-                else " Revenue/EPS consensus remains OPEN unless a governed consensus provider returns current forecast values."
+                else " Revenue/EPS consensus remains OPEN unless a governed consensus provider or user-verified consensus snapshot returns current forecast values."
             )
             result["note"] = (base + suffix).strip()
         return result
