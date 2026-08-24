@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.6 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.12.7 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.12.6 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.12.7 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -131,7 +131,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.12.6"
+app.version = "0.12.7"
 
 
 @app.on_event("startup")
@@ -148,7 +148,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.12.6",
+        "version": "0.12.7",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -182,6 +182,8 @@ def system_status():
         "supply_inventory_primary_engine": True,
         "supply_inventory_required_suppliers": ["MICRON", "SK_HYNIX", "SAMSUNG", "CXMT"],
         "supply_inventory_supplier_coverage_required_for_resolution": True,
+        "supply_inventory_cxmt_primary_source": "SHANGHAI_STOCK_EXCHANGE_PROSPECTUS",
+        "supply_inventory_cxmt_primary_coverage": True,
         "supply_inventory_wafer_start_inference_allowed": False,
         "supply_inventory_utilization_inference_allowed": False,
         "periodic_evidence_freshness_floor": True,
@@ -231,7 +233,7 @@ def system_status():
             "VALUATION_MARKET",
             "POLICY_REGULATION",
         ],
-        "primary_evidence_sources": ["SEC_COMPANYFACTS", "COMPANY_IR", "OFFICIAL_GOVERNMENT", "HARD_MARKET_DATA"],
+        "primary_evidence_sources": ["SEC_COMPANYFACTS", "COMPANY_IR", "OFFICIAL_GOVERNMENT", "HARD_MARKET_DATA", "SHANGHAI_STOCK_EXCHANGE"],
         "primary_memory_pricing_auto_provider": False,
         "qualified_buy_candidate_gate": True,
         "paper_buy_enabled": False,
