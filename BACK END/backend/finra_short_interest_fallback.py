@@ -8,6 +8,8 @@ from urllib.request import Request, urlopen
 
 import certifi
 
+from options_positioning_occ import install_occ_options_positioning
+
 
 FINRA_DATA_URL = "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest"
 FINRA_PUBLIC_URL = "https://www.finra.org/finra-data/browse-catalog/equity-short-interest/data"
@@ -133,7 +135,7 @@ def _fetch_finra(symbol: str) -> tuple[dict[str, Any], str, str]:
 
 
 def install_finra_short_interest_fallback(module: Any) -> None:
-    """Try FINRA consolidated short interest after Nasdaq and before leaving the fact open."""
+    """Try FINRA consolidated short interest after Nasdaq, then install OCC options positioning."""
     prior_capture = module._capture_market
     prior_lane_status = module._lane_status
 
@@ -194,3 +196,7 @@ def install_finra_short_interest_fallback(module: Any) -> None:
 
     module._capture_market = capture_market_with_finra
     module._lane_status = lane_status_with_finra
+
+    # OCC is installed last so options positioning is independent of the Nasdaq/FINRA
+    # short-interest provider chain and sees the final market-capture result.
+    install_occ_options_positioning(module)
