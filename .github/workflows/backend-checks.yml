@@ -44,8 +44,9 @@ jobs:
           opportunity_scheduler.py learning_loop.py monitoring_engine.py
           semiconductor_intelligence.py decision_history.py evidence_gap_hunter.py
           interview_portal.py chain_verifier.py evidence_depth_engine.py
-          historical_regime_memory.py cross_case_memory.py agent_calibration_weighting.py
-          thesis_lifecycle_intelligence.py portfolio_intelligence.py intelligence_safety_manifest.py
+          historical_regime_memory.py cross_case_memory.py judgment_bank_integration.py
+          agent_calibration_weighting.py thesis_lifecycle_intelligence.py
+          portfolio_intelligence.py intelligence_safety_manifest.py
           governed_paper_execution_api.py governed_paper_execution_bridge.py
           paper_authorization_api.py governed_paper_authorization.py automatic_paper_sizing.py
           paper_sizing_profile.py paper_position_sizing.py capital_entry_watch.py paper_capital_gate.py
@@ -60,13 +61,13 @@ jobs:
           test_orchestration_worker_pool.py test_orchestration_ab_benchmark.py
           test_opportunity_router_integration.py test_opportunity_dispatch.py
           test_opportunity_scheduler.py
-      - name: Run autonomous intelligence learning safety tests
+      - name: Run Intelligence and Learning v1 freeze tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
           test_evidence_depth_engine.py test_historical_regime_memory.py
-          test_cross_case_memory.py test_agent_calibration_weighting.py
-          test_thesis_lifecycle_intelligence.py test_portfolio_intelligence.py
-          test_intelligence_safety_manifest.py
+          test_cross_case_memory.py test_judgment_bank_integration.py
+          test_agent_calibration_weighting.py test_thesis_lifecycle_intelligence.py
+          test_portfolio_intelligence.py test_intelligence_safety_manifest.py
       - name: Run governed paper-chain safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
@@ -80,7 +81,8 @@ jobs:
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
           test_production_safety_stress.py test_adaptive_research_queue.py
-          test_orchestration_resilience.py test_governed_chain_end_to_end.py
+          test_orchestration_resilience.py test_judgment_bank_integration.py
+          test_intelligence_safety_manifest.py test_governed_chain_end_to_end.py
           test_governed_paper_execution_bridge.py test_governed_paper_authorization.py
       - name: Run backend regression tests
         run: >-
