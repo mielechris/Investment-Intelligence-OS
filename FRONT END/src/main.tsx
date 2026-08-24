@@ -8,6 +8,7 @@ import HardDataPanel from './HardDataPanel.tsx'
 import InsiderOwnershipPanel from './InsiderOwnershipPanel.tsx'
 import InstitutionalIntelligencePanel from './InstitutionalIntelligencePanel.tsx'
 import PrimaryEvidencePanel from './PrimaryEvidencePanel.tsx'
+import PortfolioContextPanel from './PortfolioContextPanel.tsx'
 import InterviewPortalPanel from './InterviewPortalPanel.tsx'
 
 createRoot(document.getElementById('root')!).render(
@@ -19,6 +20,7 @@ createRoot(document.getElementById('root')!).render(
     <InsiderOwnershipPanel />
     <InstitutionalIntelligencePanel />
     <PrimaryEvidencePanel />
+    <PortfolioContextPanel />
     <InterviewPortalPanel />
   </StrictMode>,
 )
