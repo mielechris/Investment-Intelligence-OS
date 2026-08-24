@@ -42,6 +42,7 @@ from learning_loop import router as learning_router
 from ledger import latest_object
 import monitoring_engine
 from portfolio_context import router as portfolio_context_router
+from paper_capital_api import router as paper_capital_router
 import primary_evidence
 import public_case_router
 import source_ingestion
@@ -137,6 +138,7 @@ app.include_router(insider_router)
 app.include_router(institutional_router)
 app.include_router(primary_evidence_router)
 app.include_router(portfolio_context_router)
+app.include_router(paper_capital_router)
 app.include_router(interview_portal_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
@@ -288,6 +290,12 @@ def system_status():
         ],
         "primary_memory_pricing_auto_provider": False,
         "qualified_buy_candidate_gate": True,
+        "paper_capital_gate": True,
+        "thesis_invalidation_gate": True,
+        "governed_position_sizing": True,
+        "one_time_paper_authorization": True,
+        "governed_paper_execution_bridge": True,
+        "paper_capital_status_api": True,
         "paper_buy_enabled": False,
         "professional_interview_portal": True,
         "interview_auto_publish_to_trade_evidence": False,

@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+
+from ledger import latest_object
+from live_invalidation_mapper import (
+    build_live_invalidation_status,
+)
+from paper_capital_gate import (
+    assess_paper_capital,
+)
+
+
+router = APIRouter()
+
+
+def _require_latest(
+    object_type: str,
+    case_id: str,
+) -> dict[str, Any]:
+    obj = latest_object(
+        object_type,
+        case_id=case_id,
+    )
+
+    if not obj:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Required governed object missing: "
+                f"{object_type}"
+            ),
+        )
+
+    return obj
+
+
+@router.get(
+    "/paper-capital/{case_id}/status"
+)
+def paper_capital_status(
+    case_id: str,
+) -> dict[str, Any]:
+    """
+    Read-only governed capital-control status.
+
+    This endpoint:
+      - does NOT create an authorization,
+      - does NOT create a paper order,
+      - does NOT consume a token,
+      - has zero live-money authority.
+    """
+
+    qualification = _require_latest(
+        "qualification_assessment",
+        case_id,
+    )
+
+    hunt = _require_latest(
+        "gap_hunt",
+        case_id,
+    )
+
+    risk = hunt.get("risk") or {}
+
+    if not risk:
+        raise HTTPException(
+            status_code=409,
+            detail="Latest Gap Hunter result has no Risk state",
+        )
+
+    stress = _require_latest(
+        "cycle_valuation_stress",
+        case_id,
+    )
+
+    thesis = (
+        build_live_invalidation_status(
+            case_id
+        )
+    )
+
+    capital = assess_paper_capital(
+        qualification=qualification,
+        risk=risk,
+        stress=stress,
+        thesis_status=thesis,
+    )
+
+    qualification_ok = (
+        qualification.get(
+            "qualified_buy_candidate"
+        )
+        is True
+    )
+
+    thesis_ok = (
+        thesis.get("status")
+        in {
+            "ACTIVE_CLEAR",
+            "ACTIVE_WITH_WATCHES",
+        }
+        and thesis.get(
+            "thesis_invalidated"
+        )
+        is False
+    )
+
+    capital_decision = str(
+        capital.get("decision") or ""
+    )
+
+    if not qualification_ok:
+        stage = "RESEARCH_NOT_QUALIFIED"
+
+    elif not thesis_ok:
+        stage = "THESIS_INVALIDATED"
+
+    elif capital_decision == "WAIT_FOR_ENTRY":
+        stage = "WAIT_FOR_ENTRY"
+
+    elif capital_decision == "REJECTED":
+        stage = "CAPITAL_REJECTED"
+
+    elif capital_decision == "APPROVED":
+        stage = "READY_FOR_POSITION_SIZING"
+
+    else:
+        stage = "CAPITAL_STATE_UNKNOWN"
+
+    return {
+        "case_id": case_id,
+
+        "stage": stage,
+
+        "research": {
+            "stage":
+                qualification.get(
+                    "stage"
+                ),
+            "qualified_buy_candidate":
+                qualification_ok,
+            "unmet_requirements":
+                qualification.get(
+                    "unmet_requirements"
+                )
+                or [],
+        },
+
+        "thesis": {
+            "status":
+                thesis.get("status"),
+            "invalidated":
+                thesis.get(
+                    "thesis_invalidated"
+                ),
+            "breached_rules":
+                thesis.get(
+                    "breached_rules"
+                )
+                or [],
+            "watching_rules":
+                thesis.get(
+                    "watching_rules"
+                )
+                or [],
+        },
+
+        "capital": {
+            "decision":
+                capital_decision,
+            "current_price":
+                capital.get(
+                    "current_price"
+                ),
+            "upside_reference":
+                capital.get(
+                    "upside_reference_value"
+                ),
+            "downside_reference":
+                capital.get(
+                    "downside_reference_value"
+                ),
+            "reward_risk":
+                capital.get(
+                    "reward_risk"
+                ),
+            "minimum_reward_risk":
+                capital.get(
+                    "minimum_reward_risk"
+                ),
+            "maximum_qualifying_entry":
+                capital.get(
+                    "maximum_qualifying_entry"
+                ),
+            "failed_hard_checks":
+                capital.get(
+                    "failed_hard_checks"
+                )
+                or [],
+        },
+
+        "watch_obligations":
+            capital.get(
+                "watch_obligations"
+            )
+            or [],
+
+        "permissions": {
+            "qualified_research":
+                qualification_ok,
+            "thesis_valid":
+                thesis_ok,
+            "capital_approved":
+                capital_decision
+                == "APPROVED",
+
+            # Explicitly locked.
+            "position_sizing_ready":
+                capital_decision
+                == "APPROVED",
+            "paper_authorization_ready":
+                False,
+            "paper_order_permission":
+                False,
+            "trade_execution_permission":
+                False,
+            "live_execution":
+                False,
+        },
+
+        "paper_mode": True,
+    }
