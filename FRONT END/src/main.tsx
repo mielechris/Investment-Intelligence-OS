@@ -10,6 +10,7 @@ import InstitutionalIntelligencePanel from './InstitutionalIntelligencePanel.tsx
 import PrimaryEvidencePanel from './PrimaryEvidencePanel.tsx'
 import ConsensusVerificationPanel from './ConsensusVerificationPanel.tsx'
 import ShortInterestVerificationPanel from './ShortInterestVerificationPanel.tsx'
+import OptionsPositioningVerificationPanel from './OptionsPositioningVerificationPanel.tsx'
 import PortfolioContextPanel from './PortfolioContextPanel.tsx'
 import InterviewPortalPanel from './InterviewPortalPanel.tsx'
 
@@ -24,6 +25,7 @@ createRoot(document.getElementById('root')!).render(
     <PrimaryEvidencePanel />
     <ConsensusVerificationPanel />
     <ShortInterestVerificationPanel />
+    <OptionsPositioningVerificationPanel />
     <PortfolioContextPanel />
     <InterviewPortalPanel />
   </StrictMode>,
