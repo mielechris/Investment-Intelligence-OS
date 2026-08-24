@@ -16,6 +16,12 @@ MICRON_HBM4_VOLUME_URL = (
     "https://investors.micron.com/news/press-release/2026/"
     "Micron-in-High-Volume-Production-of-HBM4-Designed-for-NVIDIA-Vera-Rubin-PCIe-Gen6-SSD-and-SOCAMM2-03-16-2026/default.aspx"
 )
+MICRON_Q3_2026_PREPARED_REMARKS_URL = (
+    "https://investors.micron.com/static-files/631b1a32-5537-46ae-8f40-82e42fc79dfe"
+)
+MICRON_Q3_2026_EARNINGS_DECK_URL = (
+    "https://investors.micron.com/static-files/2354ecda-77a0-4ddd-8462-a631eb491356"
+)
 MICRON_Q3_2026_10Q_URL = (
     "https://www.sec.gov/Archives/edgar/data/723125/000072312526000015/mu-20260528.htm"
 )
@@ -59,6 +65,19 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
                 return "capex"
             if "prices increased" in value or "higher pricing" in value or "average selling price" in value:
                 return "asp_sensitivity"
+        if lane == "micron_hbm_economics":
+            if "hbm" in value and "revenue" in value:
+                return "hbm_revenue"
+            if "hbm" in value and any(term in value for term in ("shipment", "volume ramp", "high-volume")):
+                return "hbm_shipments"
+            if "hbm" in value and any(term in value for term in ("gross margin", "margin", "higher-margin")):
+                return "hbm_margin"
+            if "hbm" in value and any(term in value for term in ("customer concentration", "customer base")):
+                return "customer_concentration"
+            if "hbm" in value and any(term in value for term in ("capacity allocation", "wafer", "supply allocation", "manufacturing priorit")):
+                return "capacity_allocation"
+            if "hbm" in value and any(term in value for term in ("price premium", "pricing", "higher priced", "average selling price")):
+                return "hbm_asp_sensitivity"
         if lane == "supply_inventory" and "hbm" in value:
             if not any(term in value for term in ("packaging", "yield", "capacity")):
                 value = value.replace("hbm", " ")
@@ -103,6 +122,20 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         added.extend(records)
         failures.extend(errors)
         return added, failures
+
+    def _persist_hbm_snapshot(case_id: str, case: dict[str, Any], fact_key: str, source: str, url: str, claim: str, evidence_type: str, timestamp: str, source_type: str = "company"):
+        snapshot = {
+            "source": source,
+            "source_type": source_type,
+            "evidence_type": evidence_type,
+            "url": url,
+            "title": f"Micron HBM economics · {fact_key}",
+            "claim": claim,
+            "timestamp": timestamp,
+            "reliability_score": 0.995 if source_type == "filing" else 0.99,
+            "capture_method": "CURATED_SOURCE_LINKED_PRIMARY_SNAPSHOT",
+        }
+        return module._persist_record(case_id, case, "micron_hbm_economics", fact_key, snapshot)
 
     def capture_micron_financials_static(case_id: str, case: dict[str, Any]):
         added, failures = prior_capture_micron_ir(case_id, case)
@@ -170,6 +203,53 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             record = module._persist_record(case_id, case, "micron_financials", "asp_sensitivity", snapshot)
             if record:
                 added.append(record)
+
+        # Carry the completed broad-financial work forward into the tightened Committee question,
+        # but only with HBM-specific primary facts. We deliberately leave HBM-specific margin and
+        # customer-concentration facts open because current official materials do not separately
+        # quantify them strongly enough for resolution.
+        hbm_snapshots = [
+            (
+                "hbm_revenue",
+                "Micron Fiscal Q3 2026 Earnings Deck",
+                MICRON_Q3_2026_EARNINGS_DECK_URL,
+                "Micron reports that HBM4 12-high volume ramp is tracking twice as fast as HBM3E 12-high and that it has already shipped over $1 billion in HBM4 revenue.",
+                "quarterly_company",
+                "2026-06-24T00:00:00+00:00",
+                "company",
+            ),
+            (
+                "hbm_shipments",
+                "Micron Fiscal Q3 2026 Results",
+                MICRON_Q3_2026_PRESS_RELEASE_URL,
+                "Micron reports HBM4 is in high-volume shipments for its lead customer's platform and that qualification samples have been shipped to multiple end-customers.",
+                "quarterly_company",
+                "2026-06-24T00:00:00+00:00",
+                "company",
+            ),
+            (
+                "capacity_allocation",
+                "Micron Fiscal Q3 2026 Form 10-Q",
+                MICRON_Q3_2026_10Q_PDF_URL,
+                "Micron states HBM requires more wafers and cleanroom space per bit than conventional DRAM and that constrained supply requires manufacturing-priority and customer/market supply-allocation decisions; strategic customer agreements include binding multi-year volume commitments.",
+                "quarterly_filing",
+                "2026-06-25T00:00:00+00:00",
+                "filing",
+            ),
+            (
+                "hbm_asp_sensitivity",
+                "Micron Fiscal Q3 2026 Prepared Remarks",
+                MICRON_Q3_2026_PREPARED_REMARKS_URL,
+                "Micron states newer generations of HBM carry rising bit costs and that its strategic customer agreements provide for appropriate price premiums for new products to be negotiated in the future.",
+                "quarterly_company",
+                "2026-06-24T00:00:00+00:00",
+                "company",
+            ),
+        ]
+        for fact_key, source, url, claim, evidence_type, timestamp, source_type in hbm_snapshots:
+            record = _persist_hbm_snapshot(case_id, case, fact_key, source, url, claim, evidence_type, timestamp, source_type)
+            if record:
+                added.append(record)
         return added, failures
 
     def lane_status_guarded(case_id: str, lane: str, records: list[dict[str, Any]]):
@@ -196,6 +276,12 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
             result["status"] = "PARTIAL"
         else:
             result["status"] = "OPEN"
+
+        if lane == "micron_hbm_economics":
+            result["note"] = (
+                "HBM revenue, shipment/ramp, capacity allocation and pricing structure may be verified from current official materials. "
+                "HBM-specific margin and customer-concentration disclosure remain open unless Micron explicitly provides them; no inference is allowed."
+            )
         return result
 
     module._fact_from_keyword = guarded
