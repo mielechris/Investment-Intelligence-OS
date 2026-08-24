@@ -7,6 +7,14 @@ from fastapi import APIRouter, Body, HTTPException
 from eight_agent_orchestrator import router as orchestration_router
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
+import opportunity_acquisition
+from opportunity_evidence_hardening import install_opportunity_evidence_hardening
+
+# Install research-only evidence hardening before dispatch/scheduler modules import
+# the opportunity scan function. This changes only scanner evidence acquisition;
+# it does not touch sizing, authorization, paper execution, or live execution.
+install_opportunity_evidence_hardening(opportunity_acquisition)
+
 from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
 from opportunity_scheduler import router as opportunity_scheduler_router
