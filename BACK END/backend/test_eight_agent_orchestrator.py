@@ -10,6 +10,7 @@ class EightAgentOrchestratorTests(unittest.TestCase):
         return {
             key: {
                 "agent_key": key,
+                "agent": key,
                 "status": status,
                 "disposition": "WATCH",
                 "confidence": 0.7,
@@ -37,6 +38,19 @@ class EightAgentOrchestratorTests(unittest.TestCase):
             self.assertFalse(item["gap_resolution_eligible"])
             self.assertFalse(item["trade_signal"])
             self.assertFalse(item["trade_execution_permission"])
+
+    def test_portfolio_evidence_can_include_skeptic_challenge(self):
+        specialists = self._specialists()
+        completed = {key: specialists[key] for key in orch.FIRST_WAVE}
+        skeptic_evidence = orch.second_wave_evidence([], completed)
+        self.assertEqual(len(skeptic_evidence), 6)
+        self.assertFalse(any("skeptic" in str(item.get("url") or "") for item in skeptic_evidence))
+
+        completed["skeptic"] = specialists["skeptic"]
+        portfolio_evidence = orch.second_wave_evidence([], completed)
+        self.assertEqual(len(portfolio_evidence), 7)
+        self.assertTrue(any("skeptic" in str(item.get("url") or "") for item in portfolio_evidence))
+        self.assertTrue(all(item.get("gap_resolution_eligible") is False for item in portfolio_evidence))
 
     def test_committee_guard_allows_watch_only_when_all_desks_complete(self):
         result = orch.committee_guard(
