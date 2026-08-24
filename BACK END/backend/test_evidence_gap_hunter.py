@@ -63,7 +63,7 @@ class EvidenceGapHunterTests(unittest.TestCase):
         self.assertIn("skeptic", plan["targeted_desks"])
         self.assertEqual(plan["ticker"], "MU.US")
 
-    def test_qualified_candidate_requires_every_gate(self):
+    def test_qualified_candidate_requires_governed_reconciliation(self):
         agents = {
             key: {"disposition": "WATCH"}
             for key in self.hunter.AGENT_ORDER
@@ -79,32 +79,49 @@ class EvidenceGapHunterTests(unittest.TestCase):
             },
             "agents": agents,
         }
-        risk = {"decision": "WATCH_ONLY", "triggered_rules": []}
-        resolution = [
-            {
-                "requirement": "Current Micron inventory and capex evidence",
-                "resolved": True,
+        risk = {
+            "decision": "WATCH_ONLY",
+            "triggered_rules": [],
+            "risk_required_evidence_mode": "RECONCILED_NONBLOCKING",
+            "required_evidence_reconciliation": {
+                "blocking_count": 0,
+                "watching_count": 0,
+                "ungoverned_new_scope_count": 0,
+                "requirements": [],
+                "risk_can_ignore_raw_required_evidence": True,
             },
-            {
-                "requirement": "Downside risk and valuation context",
-                "resolved": True,
-            },
+            "watch_obligations": [],
+        }
+        legacy_resolution = [
+            {"requirement": "Current Micron inventory and capex evidence", "resolved": True},
+            {"requirement": "Downside risk and valuation context", "resolved": True},
         ]
-        result = self.hunter._qualification_assessment(committee, risk, resolution)
+
+        result = self.hunter._qualification_assessment(committee, risk, legacy_resolution)
         self.assertTrue(result["qualified_buy_candidate"])
         self.assertEqual(result["stage"], "QUALIFIED_BUY_CANDIDATE")
         self.assertFalse(result["paper_buy_enabled"])
+        self.assertTrue(result["checks"]["governed_reconciliation_present"])
+        self.assertTrue(result["checks"]["governed_blockers_clear"])
 
+        # Raw committee requirements may remain nonblocking only when governed
+        # reconciliation explicitly permits that treatment.
         committee["required_evidence"] = ["Need one more item"]
-        result = self.hunter._qualification_assessment(committee, risk, resolution)
+        risk["risk_required_evidence_mode"] = "BLOCKING"
+        risk["required_evidence_reconciliation"]["risk_can_ignore_raw_required_evidence"] = False
+        result = self.hunter._qualification_assessment(committee, risk, legacy_resolution)
         self.assertFalse(result["qualified_buy_candidate"])
-        self.assertIn("required_evidence_resolved", result["unmet_requirements"])
+        self.assertIn("required_evidence_reconciled", result["unmet_requirements"])
 
+        # The legacy string-resolution matrix is audit context only; changing it
+        # cannot override a clear governed reconciliation.
         committee["required_evidence"] = []
-        resolution[0]["resolved"] = False
-        result = self.hunter._qualification_assessment(committee, risk, resolution)
-        self.assertFalse(result["qualified_buy_candidate"])
-        self.assertIn("gap_resolution_matrix_clear", result["unmet_requirements"])
+        risk["risk_required_evidence_mode"] = "RECONCILED_NONBLOCKING"
+        risk["required_evidence_reconciliation"]["risk_can_ignore_raw_required_evidence"] = True
+        legacy_resolution[0]["resolved"] = False
+        result = self.hunter._qualification_assessment(committee, risk, legacy_resolution)
+        self.assertTrue(result["qualified_buy_candidate"])
+        self.assertFalse(result["observed"]["legacy_resolution_matrix_authoritative"])
 
 
 if __name__ == "__main__":
