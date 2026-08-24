@@ -211,7 +211,27 @@ def coverage_for_requirement(requirement: str, items: list[dict[str, Any]]) -> d
     missing: list[str] = []
     fact_rows: list[dict[str, Any]] = []
     for fact in contract["facts"]:
-        matches = [item for item in items if fact_matches(item, fact)]
+        if lane == "memory_pricing" and fact["key"] == "independent_sources":
+            pricing_items = [
+                item
+                for item in items
+                if str(item.get("primary_fact_key") or "")
+                in {"hbm_pricing", "dram_pricing", "nand_pricing"}
+            ]
+            source_identities = {
+                (
+                    str(item.get("url") or "").split("/")[2].lower()
+                    if str(item.get("url") or "").startswith("http")
+                    and len(str(item.get("url") or "").split("/")) > 2
+                    else str(item.get("source") or "").strip().lower()
+                )
+                for item in pricing_items
+                if str(item.get("source") or "").strip()
+                or str(item.get("url") or "").strip()
+            }
+            matches = pricing_items if len(source_identities) >= 2 else []
+        else:
+            matches = [item for item in items if fact_matches(item, fact)]
         if matches:
             covered.append(fact["key"])
         else:

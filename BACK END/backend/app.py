@@ -43,6 +43,7 @@ import primary_evidence
 import public_case_router
 import source_ingestion
 from monitoring_engine import build_dashboard, router as monitoring_router, start_scheduler, stop_scheduler
+from memory_pricing_primary_fallback import install_memory_pricing_primary_fallback
 from official_sources import fetch_google_news_rss, fetch_official_web
 from primary_evidence import primary_evidence_evidence, router as primary_evidence_router
 from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
@@ -71,6 +72,7 @@ install_institutional_secondary_fallback(institutional_intelligence)
 install_institutional_integrity_guard(institutional_intelligence)
 
 install_primary_evidence_semantic_guard(primary_evidence)
+install_memory_pricing_primary_fallback(primary_evidence)
 install_hyperscaler_primary_fallback(primary_evidence)
 install_supply_inventory_primary_fallback(primary_evidence)
 install_valuation_market_primary_fallback(primary_evidence)
