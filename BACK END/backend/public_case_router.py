@@ -19,6 +19,10 @@ from cross_case_memory import (
     install_cross_case_memory,
     router as cross_case_memory_router,
 )
+from judgment_bank_integration import (
+    install_judgment_bank_context,
+    router as judgment_bank_router,
+)
 from agent_calibration_weighting import (
     install_calibration_context,
     router as agent_calibration_router,
@@ -49,6 +53,11 @@ install_orchestration_speed(eight_agent_orchestrator)
 # evidence counts, fact resolution, sizing, authorization, or execution gates.
 install_cross_case_memory(eight_agent_orchestrator)
 
+# Human Judgment Bank context is injected only after explicit human approval,
+# LOW restriction-risk screening, and case relevance. It is advisory/untrusted
+# context only and cannot become qualifying evidence or capital authority.
+install_judgment_bank_context(eight_agent_orchestrator)
+
 # Calibration remains neutral until every desk reaches the governed sample-size
 # threshold. Even when mature, it cannot bypass committee guards.
 install_calibration_context(eight_agent_orchestrator)
@@ -63,7 +72,7 @@ install_opportunity_evidence_hardening(opportunity_acquisition)
 install_research_source_cache(source_ingestion)
 
 # Import modules that capture the installed orchestrator only after runtime,
-# resilience, timing, memory, and calibration layers are in place.
+# resilience, timing, memory, Judgment Bank, and calibration layers are in place.
 from adaptive_research_queue import router as adaptive_research_queue_router
 from evidence_depth_engine import router as evidence_depth_router
 from historical_regime_memory import router as historical_regime_memory_router
@@ -92,6 +101,7 @@ router.include_router(production_safety_freeze_router)
 router.include_router(evidence_depth_router)
 router.include_router(historical_regime_memory_router)
 router.include_router(cross_case_memory_router)
+router.include_router(judgment_bank_router)
 router.include_router(agent_calibration_router)
 router.include_router(thesis_lifecycle_router)
 router.include_router(portfolio_intelligence_router)
