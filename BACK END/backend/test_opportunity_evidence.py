@@ -7,27 +7,48 @@ import opportunity_evidence_hardening as hardening
 
 
 class OpportunityEvidenceTests(unittest.TestCase):
+    def test_cnbc_quote_parser_normalizes_public_quote(self):
+        payload = {
+            "FormattedQuoteResult": {
+                "FormattedQuote": [
+                    {
+                        "symbol": "NVDA",
+                        "code": 0,
+                        "last": "208.48",
+                        "last_time": "2026-08-24T16:00:00.000-0400",
+                    }
+                ]
+            }
+        }
+        with patch.object(evidence, "_json_request", return_value=payload):
+            price, timestamp, url = evidence._fetch_cnbc_quote("NVDA")
+        self.assertEqual(price, 208.48)
+        self.assertIn("2026-08-24", timestamp)
+        self.assertIn("quote.cnbc.com", url)
+
     def test_two_agreeing_quote_sources_pass(self):
-        with patch.object(evidence, "_fetch_stooq_current", return_value=(100.0, "2026-08-24T19:00:00+00:00", "https://stooq.test")), patch.object(evidence, "_fetch_yahoo_chart", return_value=(101.0, "2026-08-24T19:01:00+00:00", "https://yahoo.test")):
+        with patch.object(evidence, "_fetch_cnbc_quote", return_value=(100.0, "2026-08-24T19:00:00+00:00", "https://cnbc.test")), patch.object(evidence, "_fetch_yahoo_chart", return_value=(101.0, "2026-08-24T19:01:00+00:00", "https://yahoo.test")):
             quote = evidence.fetch_crosschecked_quote("TEST")
         self.assertEqual(quote["status"], "ok")
         self.assertTrue(quote["cross_checked"])
         self.assertEqual(quote["provider_count"], 2)
+        self.assertEqual(set(quote["providers"]), {"CNBC", "Yahoo Finance"})
         self.assertEqual(quote["current_price"], 101.0)
 
     def test_material_quote_disagreement_is_rejected(self):
-        with patch.object(evidence, "_fetch_stooq_current", return_value=(100.0, "2026-08-24T19:00:00+00:00", "https://stooq.test")), patch.object(evidence, "_fetch_yahoo_chart", return_value=(110.0, "2026-08-24T19:01:00+00:00", "https://yahoo.test")):
+        with patch.object(evidence, "_fetch_cnbc_quote", return_value=(100.0, "2026-08-24T19:00:00+00:00", "https://cnbc.test")), patch.object(evidence, "_fetch_yahoo_chart", return_value=(110.0, "2026-08-24T19:01:00+00:00", "https://yahoo.test")):
             quote = evidence.fetch_crosschecked_quote("TEST")
         self.assertEqual(quote["status"], "conflict")
         self.assertFalse(quote["cross_checked"])
         self.assertIsNone(quote["current_price"])
 
     def test_single_quote_source_does_not_count_as_crosschecked(self):
-        with patch.object(evidence, "_fetch_stooq_current", side_effect=ValueError("down")), patch.object(evidence, "_fetch_stooq_history", side_effect=ValueError("down")), patch.object(evidence, "_fetch_yahoo_chart", return_value=(101.0, "2026-08-24T19:01:00+00:00", "https://yahoo.test")):
+        with patch.object(evidence, "_fetch_cnbc_quote", side_effect=ValueError("down")), patch.object(evidence, "_fetch_yahoo_chart", return_value=(101.0, "2026-08-24T19:01:00+00:00", "https://yahoo.test")):
             quote = evidence.fetch_crosschecked_quote("TEST")
         self.assertEqual(quote["status"], "single_source")
         self.assertFalse(quote["cross_checked"])
         self.assertEqual(quote["provider_count"], 1)
+        self.assertEqual(quote["providers"], ["Yahoo Finance"])
 
     def test_two_news_feeds_are_deduplicated(self):
         gdelt = [{"source": "Reuters", "title": "Company raises guidance as AI demand grows", "claim": "Company raises guidance as AI demand grows", "url": "https://reuters.test/a"}]
