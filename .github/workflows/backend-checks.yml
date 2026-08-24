@@ -37,21 +37,24 @@ jobs:
           institutional_secondary_fallback.py institutional_integrity_guard.py source_ingestion.py
           research_source_cache.py provider_hardening.py official_sources.py public_factory.py
           public_case_router.py market_event_radar.py opportunity_acquisition.py
-          opportunity_evidence.py opportunity_evidence_hardening.py eight_agent_orchestrator.py
-          orchestration_runtime.py orchestration_speed.py orchestration_worker_pool.py
-          orchestration_ab_benchmark.py opportunity_dispatch.py opportunity_scheduler.py
-          learning_loop.py monitoring_engine.py semiconductor_intelligence.py decision_history.py
-          evidence_gap_hunter.py interview_portal.py chain_verifier.py
-          governed_paper_execution_api.py governed_paper_execution_bridge.py
-          paper_authorization_api.py governed_paper_authorization.py automatic_paper_sizing.py
-          paper_sizing_profile.py paper_position_sizing.py capital_entry_watch.py paper_capital_gate.py
+          opportunity_evidence.py opportunity_evidence_hardening.py adaptive_research_queue.py
+          eight_agent_orchestrator.py orchestration_runtime.py orchestration_resilience.py
+          orchestration_speed.py orchestration_worker_pool.py orchestration_ab_benchmark.py
+          production_safety_freeze.py production_safety_stress.py opportunity_dispatch.py
+          opportunity_scheduler.py learning_loop.py monitoring_engine.py
+          semiconductor_intelligence.py decision_history.py evidence_gap_hunter.py
+          interview_portal.py chain_verifier.py governed_paper_execution_api.py
+          governed_paper_execution_bridge.py paper_authorization_api.py
+          governed_paper_authorization.py automatic_paper_sizing.py paper_sizing_profile.py
+          paper_position_sizing.py capital_entry_watch.py paper_capital_gate.py
           paper_capital_api.py live_invalidation_mapper.py thesis_invalidation_contract.py
       - name: Run opportunity and orchestration safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
           test_market_event_radar.py test_opportunity_acquisition.py test_opportunity_evidence.py
-          test_research_source_cache.py test_eight_agent_orchestrator.py
-          test_orchestration_runtime.py test_orchestration_speed.py
+          test_research_source_cache.py test_adaptive_research_queue.py
+          test_eight_agent_orchestrator.py test_orchestration_runtime.py
+          test_orchestration_resilience.py test_orchestration_speed.py
           test_orchestration_worker_pool.py test_orchestration_ab_benchmark.py
           test_opportunity_router_integration.py test_opportunity_dispatch.py
           test_opportunity_scheduler.py
@@ -64,6 +67,12 @@ jobs:
           test_paper_sizing_profile.py test_paper_position_sizing.py
           test_capital_entry_watch.py test_paper_capital_gate.py test_paper_capital_api.py
           test_live_invalidation_mapper.py test_thesis_invalidation_contract.py
+      - name: Run production stress and safety freeze
+        run: >-
+          PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
+          test_production_safety_stress.py test_adaptive_research_queue.py
+          test_orchestration_resilience.py test_governed_chain_end_to_end.py
+          test_governed_paper_execution_bridge.py test_governed_paper_authorization.py
       - name: Run backend regression tests
         run: >-
           python -m unittest -v
