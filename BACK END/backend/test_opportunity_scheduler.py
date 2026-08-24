@@ -64,11 +64,17 @@ class OpportunitySchedulerTests(unittest.TestCase):
     @patch("opportunity_scheduler.record_object")
     @patch("opportunity_scheduler.dispatch_ranked_queue")
     @patch("opportunity_scheduler.scan_universe")
+    @patch("opportunity_scheduler.run_market_event_radar")
     @patch("opportunity_scheduler.normalize_config")
-    def test_cycle_scans_without_agent_dispatch_by_default(
-        self, normalize, scan, dispatch, record_object, record_event
+    def test_cycle_scans_radar_without_agent_dispatch_by_default(
+        self, normalize, radar, scan, dispatch, record_object, record_event
     ):
         normalize.return_value = self.base_config(auto_dispatch_enabled=False)
+        radar.return_value = {
+            "market_event_radar_id": "radar_test",
+            "event_count": 12,
+            "trade_execution_permission": False,
+        }
         scan.return_value = {
             "opportunity_scan_id": "scan_test",
             "scanned_count": 16,
@@ -76,7 +82,9 @@ class OpportunitySchedulerTests(unittest.TestCase):
         }
         result = scheduler.run_automation_cycle(self.base_config())
         self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["radar"]["event_count"], 12)
         self.assertEqual(result["dispatch"]["reason"], "AUTO_DISPATCH_DISABLED")
+        radar.assert_called_once_with()
         dispatch.assert_not_called()
         self.assertFalse(result["auto_trade_authority"])
         self.assertFalse(result["paper_order_permission"])
@@ -87,11 +95,16 @@ class OpportunitySchedulerTests(unittest.TestCase):
     @patch("opportunity_scheduler.record_object")
     @patch("opportunity_scheduler.dispatch_ranked_queue")
     @patch("opportunity_scheduler.scan_universe")
+    @patch("opportunity_scheduler.run_market_event_radar")
     @patch("opportunity_scheduler.normalize_config")
     def test_opt_in_dispatch_is_still_capped_at_one_candidate(
-        self, normalize, scan, dispatch, record_object, record_event
+        self, normalize, radar, scan, dispatch, record_object, record_event
     ):
         normalize.return_value = self.base_config(auto_dispatch_enabled=True, dispatch_limit=1)
+        radar.return_value = {
+            "market_event_radar_id": "radar_test",
+            "event_count": 12,
+        }
         scan.return_value = {
             "opportunity_scan_id": "scan_test",
             "scanned_count": 16,
