@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import quote_plus
 
 from official_sources import fetch_google_news_rss
 from provider_hardening import (
-    _fetch_stooq_current,
-    _fetch_stooq_history,
     _fetch_yahoo_chart,
+    _json_request,
     _quote_item,
     fetch_gdelt_news,
 )
@@ -18,8 +18,9 @@ MAX_NEWS_PER_PROVIDER = 12
 
 
 def _safe_price(value: Any) -> float | None:
+    text = str(value or "").strip().replace(",", "").replace("$", "")
     try:
-        price = float(value)
+        price = float(text)
     except (TypeError, ValueError):
         return None
     if price != price or price <= 0:
@@ -27,28 +28,71 @@ def _safe_price(value: Any) -> float | None:
     return price
 
 
-def _stooq_observation(symbol: str) -> tuple[dict[str, Any] | None, list[str]]:
-    errors: list[str] = []
-    for fetcher, label in (
-        (_fetch_stooq_current, "current"),
-        (_fetch_stooq_history, "history"),
-    ):
-        try:
-            price, timestamp, url = fetcher(symbol)
-            price = _safe_price(price)
-            if price is None:
-                raise ValueError("Stooq returned an invalid price")
-            return {
-                "provider": "Stooq",
-                "price": price,
-                "timestamp": timestamp,
-                "url": url,
-                "mode": label,
-                "item": _quote_item("Stooq", symbol, price, timestamp, url),
-            }, errors
-        except Exception as exc:
-            errors.append(f"Stooq {label}: {type(exc).__name__}: {exc}")
-    return None, errors
+def _cnbc_symbol(symbol: str) -> str:
+    text = str(symbol or "").strip().upper()
+    if text.endswith(".US"):
+        return text[:-3]
+    return text
+
+
+def _fetch_cnbc_quote(symbol: str) -> tuple[float, str | None, str]:
+    normalized = _cnbc_symbol(symbol)
+    if not normalized:
+        raise ValueError("Ticker is required")
+
+    url = (
+        "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol"
+        f"?symbols={quote_plus(normalized)}"
+        "&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json"
+    )
+    payload = _json_request(
+        url=url,
+        provider="cnbc_quote",
+        minimum_interval_seconds=0.25,
+        retries=2,
+        cache_ttl_seconds=2 * 60,
+    )
+    result = payload.get("FormattedQuoteResult") or {}
+    rows = result.get("FormattedQuote") or result.get("formattedQuote") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("CNBC quote returned no result")
+
+    row = next(
+        (
+            item
+            for item in rows
+            if isinstance(item, dict)
+            and str(item.get("symbol") or "").strip().upper() == normalized
+        ),
+        rows[0] if isinstance(rows[0], dict) else None,
+    )
+    if not isinstance(row, dict):
+        raise ValueError("CNBC quote returned an invalid result")
+    if row.get("code") not in (None, 0, "0"):
+        raise ValueError(f"CNBC quote returned code {row.get('code')}")
+
+    price = _safe_price(row.get("last"))
+    if price is None:
+        raise ValueError("CNBC quote returned no usable price")
+    timestamp = str(row.get("last_time") or row.get("last_timedate") or "").strip() or None
+    return price, timestamp, url
+
+
+def _cnbc_observation(symbol: str) -> tuple[dict[str, Any] | None, list[str]]:
+    try:
+        price, timestamp, url = _fetch_cnbc_quote(symbol)
+        return {
+            "provider": "CNBC",
+            "price": price,
+            "timestamp": timestamp,
+            "url": url,
+            "mode": "quote_cache",
+            "item": _quote_item("CNBC", symbol, price, timestamp, url),
+        }, []
+    except Exception as exc:
+        return None, [f"CNBC: {type(exc).__name__}: {exc}"]
 
 
 def _yahoo_observation(symbol: str) -> tuple[dict[str, Any] | None, list[str]]:
@@ -76,9 +120,9 @@ def fetch_crosschecked_quote(
 ) -> dict[str, Any]:
     """Fetch two independent public quote observations for research admission.
 
-    This function is intentionally stricter than the normal quote fallback used by
-    monitoring. A single-source price can be displayed, but it cannot satisfy the
-    opportunity-promotion quote gate. Material provider disagreement fails closed.
+    CNBC and Yahoo Finance are queried independently. A single-source price may
+    be displayed, but it cannot satisfy the opportunity-promotion quote gate.
+    Material provider disagreement fails closed.
     """
     symbol = str(symbol or "").strip()
     if not symbol:
@@ -100,10 +144,10 @@ def fetch_crosschecked_quote(
     observations: list[dict[str, Any]] = []
     errors: list[str] = []
 
-    stooq, stooq_errors = _stooq_observation(symbol)
-    errors.extend(stooq_errors)
-    if stooq:
-        observations.append(stooq)
+    cnbc, cnbc_errors = _cnbc_observation(symbol)
+    errors.extend(cnbc_errors)
+    if cnbc:
+        observations.append(cnbc)
 
     yahoo, yahoo_errors = _yahoo_observation(symbol)
     errors.extend(yahoo_errors)
@@ -176,8 +220,6 @@ def fetch_crosschecked_quote(
             ),
         }
 
-    # Prefer Yahoo's current market observation for display when both providers
-    # agree. Stooq remains an independent corroborating observation.
     preferred = next(
         (obs for obs in observations if obs["provider"] == "Yahoo Finance"),
         observations[0],
