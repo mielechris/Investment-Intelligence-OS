@@ -155,8 +155,14 @@ def fact_matches(item: dict[str, Any], fact: dict[str, Any]) -> bool:
     explicit = str(item.get("primary_fact_key") or "").strip()
     if fact.get("key") == "transmission":
         return _measured_transmission_match(item)
-    if explicit and explicit == fact["key"]:
-        return True
+
+    # Governed primary-evidence records are single-purpose once classified. Without this
+    # guard, a shipment record containing words such as "customer" could also satisfy a
+    # customer-concentration fact, creating cross-fact contamination. Unclassified/raw
+    # evidence may still use semantic term matching below.
+    if explicit:
+        return explicit == fact["key"]
+
     text = _blob(item)
     terms = tuple(str(term).lower() for term in fact.get("terms") or ())
     if not terms:
