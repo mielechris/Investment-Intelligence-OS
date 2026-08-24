@@ -39,6 +39,25 @@ type PaperCapitalStatus = {
 
   watch_obligations: WatchObligation[];
 
+  entry_watch?: {
+    armed: boolean;
+    stage?: string;
+    current_price?: number;
+    maximum_qualifying_entry?: number;
+    entry_gap?: number;
+    entry_gap_pct?: number;
+    reward_risk?: number;
+    quote_provider?: string;
+    quote_timestamp?: string;
+    checked_at?: string;
+    crossed_into_ready: boolean;
+    position_sizing_ready: boolean;
+    paper_authorization_ready: boolean;
+    paper_order_permission: boolean;
+    trade_execution_permission: boolean;
+    live_execution: boolean;
+  };
+
   permissions: {
     qualified_research: boolean;
     thesis_valid: boolean;
@@ -225,13 +244,29 @@ export default function PaperCapitalControlPanel({
 
   const p = status.permissions;
   const capital = status.capital;
+  const entryWatch = status.entry_watch;
+
+  const displayedPrice =
+    entryWatch?.current_price ??
+    capital.current_price;
+
+  const displayedMaxEntry =
+    entryWatch?.maximum_qualifying_entry ??
+    capital.maximum_qualifying_entry;
+
+  const displayedRewardRisk =
+    entryWatch?.reward_risk ??
+    capital.reward_risk;
 
   const entryGap =
-    capital.current_price !== undefined &&
-    capital.maximum_qualifying_entry !== undefined
-      ? capital.current_price -
-        capital.maximum_qualifying_entry
-      : null;
+    entryWatch?.entry_gap ??
+    (
+      displayedPrice !== undefined &&
+      displayedMaxEntry !== undefined
+        ? displayedPrice -
+          displayedMaxEntry
+        : null
+    );
 
   const stages = [
     {
@@ -425,21 +460,21 @@ export default function PaperCapitalControlPanel({
         <Metric
           label="Current Price"
           value={money(
-            capital.current_price,
+            displayedPrice,
           )}
         />
 
         <Metric
           label="Max Entry"
           value={money(
-            capital.maximum_qualifying_entry,
+            displayedMaxEntry,
           )}
         />
 
         <Metric
           label="Reward / Risk"
           value={`${ratio(
-            capital.reward_risk,
+            displayedRewardRisk,
           )}x`}
         />
 
@@ -486,6 +521,70 @@ export default function PaperCapitalControlPanel({
             reach the maximum qualifying entry.
           </div>
         )}
+
+      {entryWatch?.armed && (
+        <div
+          style={{
+            marginTop: "16px",
+            border: "1px solid #30543f",
+            background: "#09150f",
+            borderRadius: "9px",
+            padding: "13px 15px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "18px",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <div style={label}>
+              AUTOMATIC CAPITAL ENTRY WATCH
+            </div>
+
+            <div
+              style={{
+                marginTop: "6px",
+                color: "#59c68c",
+                fontWeight: 900,
+                letterSpacing: "1px",
+              }}
+            >
+              ARMED · {stageLabel(
+                entryWatch.stage,
+              )}
+            </div>
+          </div>
+
+          <div
+            style={{
+              textAlign: "right",
+              color: "#91a09a",
+              fontSize: "12px",
+              lineHeight: 1.55,
+            }}
+          >
+            <div>
+              {entryWatch.quote_provider ||
+                "Market provider"} ·{" "}
+              {entryWatch.quote_timestamp
+                ? new Date(
+                    entryWatch.quote_timestamp,
+                  ).toLocaleString()
+                : "quote time unavailable"}
+            </div>
+
+            <div>
+              Last governed check:{" "}
+              {entryWatch.checked_at
+                ? new Date(
+                    entryWatch.checked_at,
+                  ).toLocaleString()
+                : "—"}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         style={{

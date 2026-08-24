@@ -89,6 +89,11 @@ def paper_capital_status(
         thesis_status=thesis,
     )
 
+    entry_watch = latest_object(
+        "capital_entry_watch",
+        case_id=case_id,
+    ) or {}
+
     qualification_ok = (
         qualification.get(
             "qualified_buy_candidate"
@@ -207,6 +212,65 @@ def paper_capital_status(
                 "watch_obligations"
             )
             or [],
+
+        "entry_watch": {
+            "armed":
+                bool(entry_watch),
+            "stage":
+                entry_watch.get("stage"),
+            "current_price":
+                entry_watch.get(
+                    "current_price"
+                ),
+            "maximum_qualifying_entry":
+                entry_watch.get(
+                    "maximum_qualifying_entry"
+                ),
+            "entry_gap":
+                entry_watch.get(
+                    "entry_gap"
+                ),
+            "entry_gap_pct":
+                entry_watch.get(
+                    "entry_gap_pct"
+                ),
+            "reward_risk":
+                entry_watch.get(
+                    "reward_risk"
+                ),
+            "quote_provider":
+                entry_watch.get(
+                    "quote_provider"
+                ),
+            "quote_timestamp":
+                entry_watch.get(
+                    "quote_timestamp"
+                ),
+            "checked_at":
+                entry_watch.get(
+                    "created_at"
+                ),
+            "crossed_into_ready":
+                bool(
+                    entry_watch.get(
+                        "crossed_into_ready"
+                    )
+                ),
+            "position_sizing_ready":
+                bool(
+                    entry_watch.get(
+                        "position_sizing_ready"
+                    )
+                ),
+            "paper_authorization_ready":
+                False,
+            "paper_order_permission":
+                False,
+            "trade_execution_permission":
+                False,
+            "live_execution":
+                False,
+        },
 
         "permissions": {
             "qualified_research":
