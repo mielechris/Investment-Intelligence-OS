@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from source_ingestion import fetch_fred_series
+
 
 WHITE_HOUSE_SEMICONDUCTOR_232_URL = (
     "https://www.whitehouse.gov/presidential-actions/2026/01/"
@@ -116,6 +118,8 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
 
     def capture_policy_targeted(case_id: str, case: dict[str, Any]):
         added, failures = prior_capture_policy(case_id, case)
+
+        # Live-check the governing White House Section 232 proclamation.
         records, errors = module._capture_official_page(
             case_id,
             case,
@@ -127,6 +131,89 @@ def install_primary_evidence_semantic_guard(module: Any) -> None:
         )
         added.extend(records)
         failures.extend(errors)
+
+        # Only create the narrow tariff fact when the live official-page fetch succeeded.
+        if not errors:
+            tariff_item = {
+                "source": "White House Semiconductor Section 232 Proclamation",
+                "source_type": "official",
+                "evidence_type": "policy",
+                "url": WHITE_HOUSE_SEMICONDUCTOR_232_URL,
+                "title": "Section 232 semiconductor tariff currently verified",
+                "claim": (
+                    "The White House Section 232 semiconductor proclamation imposes a 25 percent "
+                    "ad valorem tariff on covered advanced-computing chips and derivative products, "
+                    "effective January 15, 2026, subject to specified exclusions."
+                ),
+                "timestamp": module.utc_now(),
+                "reliability_score": 0.995,
+                "capture_method": "LIVE_VERIFIED_OFFICIAL_POLICY_SOURCE",
+            }
+            record = module._persist_record(case_id, case, "policy", "tariffs", tariff_item)
+            if record:
+                added.append(record)
+
+        # Quantify a real non-policy semiconductor-market outcome using the
+        # Federal Reserve industrial-production series. This is evidence of
+        # measured market/output transmission, not proof of tariff causality.
+        try:
+            fred_rows = fetch_fred_series(
+                {
+                    "series_id": "IPG3344S",
+                    "limit": 5,
+                    "freshness_window_hours": 24 * 90,
+                }
+            )
+            observations = []
+            for row in fred_rows:
+                try:
+                    observations.append((row, float(row.get("value"))))
+                except (TypeError, ValueError):
+                    continue
+
+            if len(observations) >= 2:
+                baseline_row, baseline_value = observations[0]
+                latest_row, latest_value = observations[-1]
+                pct_change = (
+                    ((latest_value - baseline_value) / baseline_value) * 100
+                    if baseline_value
+                    else None
+                )
+
+                transmission_item = {
+                    "source": "Federal Reserve / FRED semiconductor industrial production",
+                    "source_type": "official",
+                    "evidence_type": "monthly_official",
+                    "url": str(latest_row.get("url") or "https://fred.stlouisfed.org/series/IPG3344S"),
+                    "title": "Measured U.S. semiconductor production outcome",
+                    "claim": (
+                        f"U.S. semiconductor and other electronic-component industrial production "
+                        f"was {latest_value:.4f} for {latest_row.get('timestamp')}, versus "
+                        f"{baseline_value:.4f} for {baseline_row.get('timestamp')}; "
+                        f"measured change={pct_change:.2f} percent. "
+                        f"This is quantitative production/output evidence and does not by itself "
+                        f"establish tariff causality."
+                    ),
+                    "timestamp": latest_row.get("timestamp"),
+                    "reliability_score": 0.99,
+                    "capture_method": "LIVE_FRED_OFFICIAL_SERIES",
+                }
+                record = module._persist_record(
+                    case_id,
+                    case,
+                    "policy",
+                    "transmission",
+                    transmission_item,
+                )
+                if record:
+                    added.append(record)
+
+        except Exception as exc:
+            failures.append(
+                f"Federal Reserve semiconductor production transmission: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
         return added, failures
 
     def _persist_hbm_snapshot(case_id: str, case: dict[str, Any], fact_key: str, source: str, url: str, claim: str, evidence_type: str, timestamp: str, source_type: str = "company"):

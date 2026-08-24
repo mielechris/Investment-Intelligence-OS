@@ -93,6 +93,21 @@ class EvidenceEngineTests(unittest.TestCase):
         self.assertEqual(item["freshness_window_hours"], 24 * 400)
         self.assertGreaterEqual(item["quality_score"], 0.65)
 
+    def test_current_monthly_official_data_remains_high_quality(self):
+        now = datetime(2026, 8, 24, 6, 0, tzinfo=timezone.utc)
+        item = normalize_item({
+            "claim": "U.S. semiconductor industrial production index=191.8973",
+            "source": "Federal Reserve / FRED",
+            "url": "https://fred.stlouisfed.org/series/IPG3344S",
+            "source_type": "official",
+            "evidence_type": "monthly_official",
+            "observed_at": "2026-07-01",
+            "reliability_score": 0.99,
+        }, now=now)
+        self.assertFalse(item["stale"])
+        self.assertEqual(item["freshness_window_hours"], 24 * 90)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
     def test_quarterly_evidence_expires_after_window(self):
         now = datetime.now(timezone.utc)
         item = normalize_item({

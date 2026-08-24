@@ -141,6 +141,29 @@ class PrimaryEvidenceTests(unittest.TestCase):
         self.assertEqual(coverage["missing_critical_fact_keys"], ["transmission"])
         self.assertFalse(coverage["coverage_gate_passed"])
 
+    def test_policy_can_reach_full_coverage_with_tariff_and_measured_transmission(self):
+        items = [
+            {"primary_fact_key": "incentives", "claim": "CHIPS semiconductor incentive award"},
+            {"primary_fact_key": "export_controls", "claim": "BIS advanced-computing export controls"},
+            {"primary_fact_key": "tariffs", "claim": "25 percent semiconductor tariff"},
+            {"primary_fact_key": "effective_dates", "claim": "Effective January 15, 2026"},
+            {
+                "primary_fact_key": "transmission",
+                "source": "Federal Reserve / FRED",
+                "url": "https://fred.stlouisfed.org/series/IPG3344S",
+                "claim": (
+                    "U.S. semiconductor industrial production was 191.8973 versus "
+                    "176.4046 previously, a measured production increase of 8.78 percent."
+                ),
+            },
+        ]
+        coverage = coverage_for_requirement(POLICY_CURRENT_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 5)
+        self.assertEqual(coverage["total_facts"], 5)
+        self.assertTrue(coverage["coverage_gate_passed"])
+        self.assertEqual(coverage["missing_critical_fact_keys"], [])
+
     def test_fact_coverage_uses_explicit_primary_fact_keys(self):
         items = [
             {"primary_fact_key": "revenue", "claim": "Revenue=1"},
