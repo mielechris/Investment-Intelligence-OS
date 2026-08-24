@@ -91,6 +91,22 @@ class EvidenceEngineTests(unittest.TestCase):
         self.assertTrue(item["stale"])
         self.assertEqual(item["freshness_score"], 0.0)
 
+    def test_occ_options_remains_high_quality_across_weekend(self):
+        now = datetime(2026, 8, 24, 5, 5, tzinfo=timezone.utc)
+        item = normalize_item({
+            "claim": "MU OCC options positioning with call and put open interest",
+            "source": "OCC options open interest · user verified",
+            "url": "https://www.theocc.com/market-data/example",
+            "source_type": "market_data",
+            "evidence_type": "options",
+            "observed_at": "2026-08-21",
+            "reliability_score": 0.97,
+        }, now=now)
+        self.assertFalse(item["stale"])
+        self.assertEqual(item["freshness_window_hours"], 24 * 4)
+        self.assertGreaterEqual(item["freshness_score"], 0.75)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
     def test_conflicting_packet_is_detected(self):
         now = datetime.now(timezone.utc).isoformat()
         packet = build_packet([
