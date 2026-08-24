@@ -110,11 +110,32 @@ CONTRACTS = {
 }
 
 
+SUPPLY_SUPPLIER_ALIASES: tuple[tuple[str, str], ...] = (
+    ("micron", "Micron"),
+    ("sk hynix", "SK hynix"),
+    ("samsung", "Samsung"),
+    ("cxmt", "CXMT"),
+)
+
+
 def _blob(item: dict[str, Any]) -> str:
     return " ".join(
         str(item.get(key) or "")
-        for key in ("claim", "title", "source", "url", "primary_fact_key", "metric")
+        for key in ("claim", "title", "source", "url", "supplier", "primary_fact_key", "metric")
     ).lower()
+
+
+def _supply_supplier_from_item(item: dict[str, Any]) -> str | None:
+    text = _blob(item)
+    for token, canonical in SUPPLY_SUPPLIER_ALIASES:
+        if token in text:
+            return canonical
+    return None
+
+
+def _required_supply_suppliers(requirement: str) -> list[str]:
+    lowered = str(requirement or "").lower()
+    return [canonical for token, canonical in SUPPLY_SUPPLIER_ALIASES if token in lowered]
 
 
 def contract_for_requirement(requirement: str) -> tuple[str, dict[str, Any]] | tuple[None, None]:
@@ -205,8 +226,21 @@ def coverage_for_requirement(requirement: str, items: list[dict[str, Any]]) -> d
     ratio = len(covered) / total if total else 0.0
     critical_keys = _critical_fact_keys(requirement, lane)
     missing_critical = sorted(key for key in critical_keys if key not in covered)
+
+    required_suppliers: list[str] = []
+    covered_suppliers: list[str] = []
+    missing_suppliers: list[str] = []
+    if lane == "supply_inventory":
+        required_suppliers = _required_supply_suppliers(requirement)
+        supplier_set = {
+            supplier for supplier in (_supply_supplier_from_item(item) for item in items)
+            if supplier
+        }
+        covered_suppliers = [supplier for supplier in required_suppliers if supplier in supplier_set]
+        missing_suppliers = [supplier for supplier in required_suppliers if supplier not in supplier_set]
+
     threshold_passed = ratio >= float(contract["minimum_fraction"])
-    coverage_gate_passed = threshold_passed and not missing_critical
+    coverage_gate_passed = threshold_passed and not missing_critical and not missing_suppliers
     return {
         "lane": lane,
         "label": contract["label"],
@@ -219,6 +253,10 @@ def coverage_for_requirement(requirement: str, items: list[dict[str, Any]]) -> d
         "threshold_passed": threshold_passed,
         "critical_fact_keys": sorted(critical_keys),
         "missing_critical_fact_keys": missing_critical,
+        "required_suppliers": required_suppliers,
+        "covered_suppliers": covered_suppliers,
+        "missing_suppliers": missing_suppliers,
+        "supplier_coverage_gate_passed": not missing_suppliers,
         "coverage_gate_passed": coverage_gate_passed,
         "all_facts_covered": len(covered) == total,
         "facts": fact_rows,
