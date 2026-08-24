@@ -77,7 +77,7 @@ function PrimaryEvidencePanel() {
   const capture = async () => {
     if (!caseId) return;
     setBusy(true);
-    setMessage("Collecting filing, company-IR, peer supply, hyperscaler, policy, and hard-market evidence...");
+    setMessage("Collecting filing, company-IR, HBM economics, peer supply, hyperscaler, policy, and hard-market evidence...");
     try {
       const response = await fetch(`${API}/primary-evidence/${caseId}/auto-capture`, { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
@@ -95,7 +95,7 @@ function PrimaryEvidencePanel() {
 
   if (!caseId) return null;
 
-  const ordered = ["memory_pricing", "supply_inventory", "hyperscaler_demand", "micron_financials", "valuation_market", "policy"];
+  const ordered = ["memory_pricing", "supply_inventory", "hyperscaler_demand", "micron_financials", "micron_hbm_economics", "valuation_market", "policy"];
   const panel = {
     background: "rgba(7, 11, 17, 0.97)",
     border: "1px solid #31424d",
@@ -117,7 +117,7 @@ function PrimaryEvidencePanel() {
           <div>
             <h2 style={{ margin: "7px 0 5px" }}>Make the Factory prove each missing fact</h2>
             <div style={{ color: "#8f9dab", fontSize: "13px", maxWidth: "930px", lineHeight: 1.5 }}>
-              Each Committee requirement is decomposed into facts. A gap cannot turn green merely because two articles mention the topic; fact coverage, quality, and independent-source rules must all pass.
+              Each Committee requirement is decomposed into facts. A gap cannot turn green merely because two articles mention the topic; fact coverage, quality, and independent-source rules must all pass. Tightened Committee questions receive their own contract instead of erasing prior completed work.
             </div>
           </div>
           <button onClick={() => void capture()} disabled={busy} style={{ border: "1px solid #397789", background: "#0b2630", color: "#d9f4f7", borderRadius: "8px", padding: "12px 16px", fontWeight: 900 }}>
@@ -172,7 +172,7 @@ function PrimaryEvidencePanel() {
         </div>
 
         <div style={{ marginTop: "13px", color: "#778698", fontSize: "11px", lineHeight: 1.5 }}>
-          RESOLUTION RULE: FACT CONTRACT + QUALITY ≥ 65% + AT LEAST TWO HIGH-QUALITY ITEMS + AT LEAST TWO INDEPENDENT SOURCES + PRIMARY/OFFICIAL SUPPORT · PAPER / SHADOW MODE ONLY
+          RESOLUTION RULE: FACT CONTRACT + QUALITY ≥ 65% + AT LEAST TWO HIGH-QUALITY ITEMS + AT LEAST TWO INDEPENDENT SOURCES + PRIMARY/OFFICIAL SUPPORT · TIGHTENED HBM ECONOMICS REQUIRES ALL SIX FACTS · PAPER / SHADOW MODE ONLY
         </div>
       </div>
     </section>
