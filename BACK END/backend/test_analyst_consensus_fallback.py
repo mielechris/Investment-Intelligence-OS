@@ -40,10 +40,28 @@ class AnalystConsensusParserTests(unittest.TestCase):
         self.assertIsNone(parse_stockanalysis_consensus(html, current_year=2026))
 
 
+class _FakeRouter:
+    def __init__(self):
+        self.routes = []
+
+    def get(self, path):
+        def decorator(func):
+            self.routes.append(("GET", path, func))
+            return func
+        return decorator
+
+    def post(self, path):
+        def decorator(func):
+            self.routes.append(("POST", path, func))
+            return func
+        return decorator
+
+
 class _FakeModule:
     def __init__(self):
         self.saved = {}
         self.events = []
+        self.router = _FakeRouter()
         self._capture_market = lambda case_id, case: ([], [])
         self._lane_status = lambda case_id, lane, records: {"facts": [], "note": ""}
         self._persist_record = self._base_persist
@@ -104,6 +122,7 @@ class AnalystConsensusScopeTests(unittest.TestCase):
         )
         self.assertEqual(short["source_grade"], "CONTEXT")
         self.assertFalse(short["gap_resolution_eligible"])
+        self.assertEqual({method for method, _, _ in module.router.routes}, {"GET", "POST"})
 
 
 if __name__ == "__main__":
