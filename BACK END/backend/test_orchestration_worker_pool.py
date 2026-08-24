@@ -63,8 +63,8 @@ class OrchestrationWorkerPoolTests(unittest.TestCase):
 
     def test_routes_are_manual_research_only(self):
         paths = {route.path.lower() for route in pool.router.routes}
-        self.assertIn("/orchestration/batch/plan", paths)
-        self.assertIn("/orchestration/batch/run", paths)
+        self.assertIn("/orchestration-batch/plan", paths)
+        self.assertIn("/orchestration-batch/run", paths)
         self.assertFalse(
             any(
                 "broker" in path
