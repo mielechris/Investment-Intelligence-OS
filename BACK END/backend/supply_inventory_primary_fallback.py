@@ -11,6 +11,9 @@ MICRON_Q3_2026_10Q_URL = (
 )
 SK_HYNIX_Q2_2026_URL = "https://news.skhynix.com/en/q2-2026-business-results/"
 SAMSUNG_Q2_2026_URL = "https://news.samsung.com/global/samsung-electronics-announces-second-quarter-2026-results"
+CXMT_SSE_PROSPECTUS_URL = (
+    "https://static.sse.com.cn/stock/disclosure/announcement/c/202512/002170_20251230_B8QS.pdf"
+)
 
 
 SUPPLY_PRIMARY_SNAPSHOTS: tuple[dict[str, Any], ...] = (
@@ -98,6 +101,20 @@ SUPPLY_PRIMARY_SNAPSHOTS: tuple[dict[str, Any], ...] = (
         ),
         "reliability_score": 0.99,
     },
+    {
+        "fact_key": "capacity",
+        "supplier": "CXMT",
+        "source": "Shanghai Stock Exchange · CXMT Prospectus",
+        "source_type": "regulatory",
+        "evidence_type": "annual_filing",
+        "url": CXMT_SSE_PROSPECTUS_URL,
+        "timestamp": "2025-12-29T00:00:00+00:00",
+        "claim": (
+            "CXMT's Shanghai Stock Exchange prospectus states that the company operates three 12-inch DRAM wafer fabs in Hefei and Beijing, "
+            "ranks first in China and fourth globally by DRAM capacity and shipment volume, and continues to expand production capacity as new lines are completed."
+        ),
+        "reliability_score": 0.995,
+    },
 )
 
 
@@ -107,9 +124,10 @@ REQUIRED_SUPPLIERS = ("Micron", "SK hynix", "Samsung", "CXMT")
 def install_supply_inventory_primary_fallback(module: Any) -> None:
     """Add current supplier-specific operational evidence to Supply / Inventory.
 
-    The first governed layer intentionally leaves wafer starts and utilization open where
-    current primary disclosures do not quantify them. CXMT remains an explicit supplier
-    coverage gap until a qualified current primary source is available.
+    v0.12.7 covers all four suppliers named by the Committee using primary/company or
+    regulatory sources. Wafer starts and utilization remain explicitly open where current
+    primary disclosures do not quantify them. Supplier coverage does not substitute for
+    missing operational facts.
     """
     prior_capture = module._capture_peer_supply
     prior_lane_status = module._lane_status
@@ -194,7 +212,8 @@ def install_supply_inventory_primary_fallback(module: Any) -> None:
             "Supplier coverage: "
             + " · ".join(f"{supplier} {'✓' if supplier in suppliers else 'OPEN'}" for supplier in REQUIRED_SUPPLIERS)
             + ". Current primary evidence can verify inventory, bit shipments, capacity expansion and HBM packaging/yield evidence. "
-            "Wafer starts and utilization remain open unless directly quantified; a Micron fact cannot stand in for peer suppliers."
+            "CXMT coverage is sourced to its Shanghai Stock Exchange prospectus. Wafer starts and utilization remain open unless directly quantified; "
+            "supplier coverage cannot substitute for those missing operational facts."
         )
         return result
 
