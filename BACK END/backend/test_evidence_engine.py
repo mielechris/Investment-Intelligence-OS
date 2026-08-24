@@ -39,12 +39,41 @@ class EvidenceEngineTests(unittest.TestCase):
             "url": "https://investors.micron.com/q3-10q.pdf",
             "source_type": "filing",
             "evidence_type": "quarterly_filing",
-            "observed_at": (now - timedelta(days=60)).isoformat(),
+            "observed_at": (now - timedelta(days=170)).isoformat(),
             "reliability_score": 0.995,
         }, now=now)
         self.assertFalse(item["stale"])
         self.assertEqual(item["freshness_window_hours"], 24 * 180)
+        self.assertGreaterEqual(item["freshness_score"], 0.75)
         self.assertGreaterEqual(item["quality_score"], 0.65)
+
+    def test_current_quarterly_company_material_remains_high_quality(self):
+        now = datetime.now(timezone.utc)
+        item = normalize_item({
+            "claim": "Micron reports HBM4 revenue and high-volume shipments",
+            "source": "Micron quarterly prepared remarks",
+            "url": "https://investors.micron.com/q3-prepared-remarks",
+            "source_type": "company",
+            "evidence_type": "quarterly_company",
+            "observed_at": (now - timedelta(days=170)).isoformat(),
+            "reliability_score": 0.99,
+        }, now=now)
+        self.assertFalse(item["stale"])
+        self.assertGreaterEqual(item["freshness_score"], 0.75)
+        self.assertGreaterEqual(item["quality_score"], 0.65)
+
+    def test_quarterly_evidence_expires_after_window(self):
+        now = datetime.now(timezone.utc)
+        item = normalize_item({
+            "claim": "Old quarterly company evidence",
+            "source": "Company IR",
+            "source_type": "company",
+            "evidence_type": "quarterly_company",
+            "observed_at": (now - timedelta(days=181)).isoformat(),
+            "reliability_score": 0.99,
+        }, now=now)
+        self.assertTrue(item["stale"])
+        self.assertEqual(item["freshness_score"], 0.0)
 
     def test_conflicting_packet_is_detected(self):
         now = datetime.now(timezone.utc).isoformat()
