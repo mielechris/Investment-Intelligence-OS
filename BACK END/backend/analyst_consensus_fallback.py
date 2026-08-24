@@ -64,9 +64,6 @@ def parse_stockanalysis_consensus(html: str, *, current_year: int | None = None)
     flat = re.sub(r"\s+", " ", text)
     year = int(current_year or datetime.now(timezone.utc).year)
 
-    # Server-rendered forecast pages expose sections such as:
-    # Revenue Forecast ... Revenue | 2026 | ... High ... Avg | 129.7B ...
-    # EPS Forecast ... EPS | 2026 | ... High ... Avg | 73.36 ...
     revenue_block = re.search(r"Revenue\s+Forecast(?P<body>.{0,4500}?)(?:Revenue\s+Growth|EPS\s+Forecast|$)", flat, re.I)
     eps_block = re.search(r"EPS\s+Forecast(?P<body>.{0,4500}?)(?:EPS\s+Growth|Revenue\s+Forecast|$)", flat, re.I)
 
@@ -74,8 +71,6 @@ def parse_stockanalysis_consensus(html: str, *, current_year: int | None = None)
         if not match:
             return None
         body = match.group("body")
-        # Require the current year to be present so we do not accidentally capture a
-        # historical table elsewhere on the page.
         if str(year) not in body:
             return None
         avg = re.search(r"\bAvg\b\s*\$?([0-9][0-9,.]*)(?:\s*([KMBT]))?", body, re.I)
@@ -139,6 +134,44 @@ def install_analyst_consensus_fallback(module: Any) -> None:
     """
     prior_capture = module._capture_market
     prior_lane_status = module._lane_status
+    prior_persist = module._persist_record
+
+    def persist_record_with_consensus(case_id: str, case: dict[str, Any], lane: str, fact_key: str, item: dict[str, Any]):
+        record = prior_persist(case_id, case, lane, fact_key, item)
+        if not record:
+            return record
+        if str(item.get("source_type") or "").lower() != "consensus_data":
+            return record
+        if lane != "valuation_market" or fact_key != "consensus":
+            return record
+
+        # The base writer intentionally treats unknown source classes as context-only.
+        # Promote this one narrow source/fact combination after persistence so consensus
+        # can resolve only the consensus fact, while retaining zero execution authority.
+        governed = {
+            **record,
+            "source_type": "consensus_data",
+            "source_grade": "GOVERNED_CONSENSUS",
+            "gap_resolution_eligible": True,
+            "verified_public_source": True,
+            "consensus_aggregator": True,
+            "primary_official_source": False,
+            "trade_execution_permission": False,
+            "classification_repaired_at": module.utc_now(),
+            "classification_repair": "CONSENSUS_SOURCE_CLASS_EXCEPTION",
+        }
+        record_id = str(governed.get("primary_evidence_id") or "")
+        if record_id:
+            module.record_object(record_id, "primary_evidence_record", case_id, governed, topic=case.get("topic"))
+            module.record_event(
+                case_id,
+                "CONSENSUS_PRIMARY_EVIDENCE_CLASSIFIED",
+                entity_id=record_id,
+                payload={"lane": lane, "fact_key": fact_key, "source_grade": "GOVERNED_CONSENSUS"},
+            )
+        return governed
+
+    module._persist_record = persist_record_with_consensus
 
     def capture_market_with_consensus(case_id: str, case: dict[str, Any]):
         added, failures = prior_capture(case_id, case)
@@ -183,8 +216,8 @@ def install_analyst_consensus_fallback(module: Any) -> None:
             facts = {str(row.get("key")): bool(row.get("covered")) for row in result.get("facts") or [] if isinstance(row, dict)}
             base = str(result.get("note") or "").strip()
             suffix = (
-                " Revenue/EPS consensus may be satisfied by a governed consensus aggregator because consensus is inherently aggregated market data; "
-                "the consensus record has no execution authority and cannot satisfy any other market fact."
+                " Revenue/EPS consensus is covered by a governed consensus aggregator because consensus is inherently aggregated market data; "
+                "the record has no execution authority and cannot satisfy any other market fact."
                 if facts.get("consensus")
                 else " Revenue/EPS consensus remains OPEN unless a governed consensus provider returns current forecast values."
             )
