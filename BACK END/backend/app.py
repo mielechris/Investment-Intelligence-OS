@@ -45,6 +45,7 @@ import source_ingestion
 from monitoring_engine import build_dashboard, router as monitoring_router, start_scheduler, stop_scheduler
 from memory_pricing_primary_fallback import install_memory_pricing_primary_fallback
 from official_sources import fetch_google_news_rss, fetch_official_web
+from open_evidence_watch import install_open_evidence_watch
 from primary_evidence import primary_evidence_evidence, router as primary_evidence_router
 from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard
 from provider_hardening import fetch_gdelt_news, fetch_market_quote, fetch_sec_companyfacts
@@ -80,6 +81,7 @@ install_micron_valuation_filing_fallback(primary_evidence)
 install_analyst_consensus_fallback(primary_evidence)
 install_short_interest_fallback(primary_evidence)
 install_finra_short_interest_fallback(primary_evidence)
+install_open_evidence_watch(primary_evidence, monitoring_engine)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
