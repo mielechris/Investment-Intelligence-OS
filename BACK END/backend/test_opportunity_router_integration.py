@@ -1,9 +1,12 @@
 import unittest
 
+from fastapi import FastAPI
+
 import eight_agent_orchestrator
 import opportunity_acquisition
 import opportunity_dispatch
 import opportunity_scheduler
+import orchestration_worker_pool
 import public_case_router
 
 
@@ -22,7 +25,7 @@ class OpportunityRouterIntegrationTests(unittest.TestCase):
             if route.__class__.__name__ == "_IncludedRouter"
         ]
         self.assertIn("/factory/run-public", paths)
-        self.assertGreaterEqual(len(included), 4)
+        self.assertGreaterEqual(len(included), 5)
 
         opportunity_paths = {route.path for route in opportunity_acquisition.router.routes}
         dispatch_paths = {route.path for route in opportunity_dispatch.router.routes}
@@ -32,12 +35,27 @@ class OpportunityRouterIntegrationTests(unittest.TestCase):
             if hasattr(route, "path")
         }
         orchestration_paths = {route.path for route in eight_agent_orchestrator.router.routes}
+        batch_paths = {route.path for route in orchestration_worker_pool.router.routes}
         self.assertIn("/opportunities/scan", opportunity_paths)
         self.assertIn("/opportunities/queue", opportunity_paths)
         self.assertIn("/opportunities/dispatch-queue", dispatch_paths)
         self.assertIn("/opportunities/automation", scheduler_paths)
         self.assertIn("/orchestration/plan", orchestration_paths)
         self.assertIn("/orchestration/{case_id}/run", orchestration_paths)
+        self.assertIn("/orchestration/batch/run", batch_paths)
+
+    def test_batch_static_route_precedes_dynamic_case_route(self):
+        app = FastAPI()
+        app.include_router(public_case_router.router)
+        paths = [
+            route.path
+            for route in app.routes
+            if hasattr(route, "path")
+        ]
+        self.assertLess(
+            paths.index("/orchestration/batch/run"),
+            paths.index("/orchestration/{case_id}/run"),
+        )
 
     def test_new_research_routes_do_not_expose_execution(self):
         research_paths = {
@@ -46,6 +64,7 @@ class OpportunityRouterIntegrationTests(unittest.TestCase):
                 opportunity_acquisition.router,
                 opportunity_dispatch.router,
                 opportunity_scheduler.router,
+                orchestration_worker_pool.router,
                 eight_agent_orchestrator.router,
             )
             for route in child.routes
