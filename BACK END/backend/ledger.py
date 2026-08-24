@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,12 +16,32 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH, timeout=30)
+@contextmanager
+def _connect():
+    """
+    Transactional SQLite connection that is always closed.
+
+    sqlite3.Connection.__exit__ commits/rolls back but does not
+    close the underlying connection, so ledger access needs an
+    explicit lifecycle wrapper.
+    """
+    connection = sqlite3.connect(
+        DB_PATH,
+        timeout=30,
+    )
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA foreign_keys=ON")
-    return connection
+    connection.execute(
+        "PRAGMA journal_mode=WAL"
+    )
+    connection.execute(
+        "PRAGMA foreign_keys=ON"
+    )
+
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def init_ledger() -> None:
@@ -46,6 +67,12 @@ def init_ledger() -> None:
                 ON ledger_objects(topic, created_at);
 
             CREATE TABLE IF NOT EXISTS risk_authorization_state (
+                authorization_id TEXT PRIMARY KEY,
+                consumed INTEGER NOT NULL DEFAULT 0,
+                consumed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS paper_authorization_state (
                 authorization_id TEXT PRIMARY KEY,
                 consumed INTEGER NOT NULL DEFAULT 0,
                 consumed_at TEXT
@@ -90,6 +117,16 @@ def record_object(
             db.execute(
                 """
                 INSERT OR IGNORE INTO risk_authorization_state
+                (authorization_id, consumed, consumed_at)
+                VALUES (?, 0, NULL)
+                """,
+                (object_id,),
+            )
+
+        if object_type == "paper_authorization":
+            db.execute(
+                """
+                INSERT OR IGNORE INTO paper_authorization_state
                 (authorization_id, consumed, consumed_at)
                 VALUES (?, 0, NULL)
                 """,
@@ -203,6 +240,68 @@ def consume_authorization(authorization_id: str) -> bool:
         )
         db.commit()
         return True
+
+
+def consume_paper_authorization(
+    authorization_id: str,
+) -> bool:
+    """
+    Atomically consume a governed paper authorization.
+
+    Separate from legacy risk_authorization consumption.
+    Paper Execution does not use this token yet.
+    """
+    with _connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+
+        row = db.execute(
+            """
+            SELECT consumed
+            FROM paper_authorization_state
+            WHERE authorization_id = ?
+            """,
+            (authorization_id,),
+        ).fetchone()
+
+        if not row or row["consumed"]:
+            db.rollback()
+            return False
+
+        db.execute(
+            """
+            UPDATE paper_authorization_state
+            SET consumed = 1,
+                consumed_at = ?
+            WHERE authorization_id = ?
+              AND consumed = 0
+            """,
+            (
+                utc_now(),
+                authorization_id,
+            ),
+        )
+
+        db.commit()
+        return True
+
+
+def paper_authorization_consumed(
+    authorization_id: str,
+) -> bool | None:
+    with _connect() as db:
+        row = db.execute(
+            """
+            SELECT consumed
+            FROM paper_authorization_state
+            WHERE authorization_id = ?
+            """,
+            (authorization_id,),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    return bool(row["consumed"])
 
 
 def authorization_consumed(authorization_id: str) -> bool | None:
