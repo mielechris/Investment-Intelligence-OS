@@ -274,10 +274,31 @@ def run_gap_hunt(case_id: str) -> dict[str, Any]:
     quote = fetch_market_quote(str(plan.get("ticker") or ""))
     quote_gap = _find_requirement(plan["requirements"], "price", "valuation", "multiple", "volume", "options")
     quote_items = [
-        {**item, "gap_requirement": quote_gap or "market quote"}
+        {
+            **item,
+            "gap_requirement": quote_gap or "market quote",
+            "primary_evidence_lane": "valuation_market",
+            "primary_fact_key": "market_price",
+            "market_role": "current_quote",
+        }
         for item in (quote.get("items") or [])
         if isinstance(item, dict)
     ]
+
+    ticker_upper = str(plan.get("ticker") or "").upper()
+    if ticker_upper in {"MU", "MU.US"}:
+        from valuation_market_micron_filing_fallback import (
+            build_current_micron_valuation_item,
+        )
+
+        current_valuation = build_current_micron_valuation_item(quote)
+        if current_valuation:
+            quote_items.append(
+                {
+                    **current_valuation,
+                    "gap_requirement": quote_gap or "market quote",
+                }
+            )
     new_raw = list(ingestion.get("evidence_items") or []) + quote_items
     combined = _dedupe(prior_raw + new_raw)
 

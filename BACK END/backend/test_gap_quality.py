@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from gap_quality import build_resolution_matrix, curate_gap_evidence
 
@@ -115,6 +115,83 @@ class GapQualityTests(unittest.TestCase):
         self.assertEqual(matrix[0]["supporting_items"], 0)
         self.assertEqual(matrix[0]["context_only_supporting_items"], 2)
         self.assertIn("ONLY_CONTEXT_NOT_RESOLUTION_ELIGIBLE", matrix[0]["blockers"])
+
+
+    def test_newest_market_snapshot_supersedes_older_values(self):
+        now = datetime.now(timezone.utc)
+
+        items = [
+            {
+                "source": "Yahoo Finance",
+                "source_type": "market_data",
+                "evidence_type": "market_data",
+                "url": "https://example.test/old",
+                "claim": "MU.US price=966.78",
+                "timestamp": (now - timedelta(minutes=30)).isoformat(),
+                "reliability_score": 0.90,
+                "primary_fact_key": "market_price",
+                "market_role": "current_quote",
+            },
+            {
+                "source": "Yahoo Finance",
+                "source_type": "market_data",
+                "evidence_type": "market_data",
+                "url": "https://example.test/new",
+                "claim": "MU.US price=910.87",
+                "timestamp": (now - timedelta(minutes=5)).isoformat(),
+                "reliability_score": 0.90,
+                "primary_fact_key": "market_price",
+                "market_role": "current_quote",
+            },
+            {
+                "source": "Derived valuation",
+                "source_type": "market_data",
+                "evidence_type": "market_session",
+                "url": "https://example.test/old-val",
+                "claim": (
+                    "MU valuation reference market-session price=966.78; "
+                    "derived trailing GAAP P/E=21.85"
+                ),
+                "timestamp": (now - timedelta(minutes=30)).isoformat(),
+                "reliability_score": 0.93,
+                "primary_fact_key": "valuation",
+                "market_role": "valuation_reference_session",
+            },
+            {
+                "source": "Current valuation",
+                "source_type": "market_data",
+                "evidence_type": "market_session",
+                "url": "https://example.test/new-val",
+                "claim": (
+                    "MU current live quote price=910.87; "
+                    "current trailing GAAP P/E=20.59"
+                ),
+                "timestamp": (now - timedelta(minutes=5)).isoformat(),
+                "reliability_score": 0.93,
+                "primary_fact_key": "valuation",
+                "market_role": "current_valuation",
+            },
+        ]
+
+        result = curate_gap_evidence(items)
+
+        admitted_claims = [
+            str(row.get("claim") or "")
+            for row in result["admitted"]
+        ]
+
+        self.assertTrue(
+            any("910.87" in claim for claim in admitted_claims)
+        )
+        self.assertFalse(
+            any("966.78" in claim for claim in admitted_claims)
+        )
+
+        superseded = [
+            row for row in result["rejected"]
+            if row["reason"] == "SUPERSEDED_MARKET_SNAPSHOT"
+        ]
+        self.assertEqual(len(superseded), 2)
 
 
 if __name__ == "__main__":

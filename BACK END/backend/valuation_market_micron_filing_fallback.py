@@ -34,6 +34,61 @@ def derive_ttm_pe(price: float) -> float:
     return round(float(price) / eps, 4)
 
 
+def build_current_micron_valuation_item(
+    quote: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build a filing-backed MU valuation from the SAME current quote seen by agents."""
+    try:
+        price = float(quote.get("current_price"))
+    except (TypeError, ValueError):
+        return None
+
+    quote_items = [
+        row for row in quote.get("items") or []
+        if isinstance(row, dict)
+    ]
+    source_row = quote_items[0] if quote_items else {}
+
+    observed_at = (
+        source_row.get("timestamp")
+        or source_row.get("observed_at")
+    )
+    url = str(
+        source_row.get("url")
+        or MICRON_Q3_2026_10Q_URL
+    )
+
+    if not observed_at:
+        return None
+
+    ttm_eps = micron_ttm_eps()
+    ttm_pe = derive_ttm_pe(price)
+
+    return {
+        "source": "Current MU quote + Micron SEC filings",
+        "source_type": "market_data",
+        "evidence_type": "market_session",
+        "url": url,
+        "title": "MU current filing-backed trailing GAAP P/E",
+        "claim": (
+            f"MU current live quote price={price} as of {observed_at}; "
+            f"filing-backed TTM diluted EPS={ttm_eps}; "
+            f"current trailing GAAP P/E={ttm_pe}. "
+            "Price role=CURRENT_LIVE_QUOTE. Earlier market-session closes "
+            "are historical valuation context, not competing current quotes. "
+            f"TTM EPS derivation: FY2025 EPS {MICRON_FY2025_DILUTED_EPS} "
+            f"- 9M FY2025 EPS {MICRON_9M_FY2025_DILUTED_EPS} "
+            f"+ 9M FY2026 EPS {MICRON_9M_FY2026_DILUTED_EPS}."
+        ),
+        "timestamp": observed_at,
+        "reliability_score": 0.93,
+        "primary_evidence_lane": "valuation_market",
+        "primary_fact_key": "valuation",
+        "market_role": "current_valuation",
+        "valuation_reference_price": price,
+    }
+
+
 def _market_price_from_claim(claim: str) -> float | None:
     text = str(claim or "")
     match = re.search(r"(?:market\s+price|current\s+price|price)\s*=\s*([0-9]+(?:\.[0-9]+)?)", text, flags=re.I)
@@ -115,7 +170,8 @@ def install_micron_valuation_filing_fallback(module: Any) -> None:
                     "url": str(price_record.get("source_url") or MICRON_Q3_2026_10Q_URL),
                     "title": "MU filing-backed trailing GAAP P/E",
                     "claim": (
-                        f"MU latest admitted market-session price={price_value}; filing-backed TTM diluted EPS={ttm_eps}; "
+                        f"MU valuation reference market-session price={price_value} as of {price_record.get('observed_at')}; "
+                        f"filing-backed TTM diluted EPS={ttm_eps}; "
                         f"derived trailing GAAP P/E={ttm_pe}. TTM EPS derivation: FY2025 EPS {MICRON_FY2025_DILUTED_EPS} "
                         f"- 9M FY2025 EPS {MICRON_9M_FY2025_DILUTED_EPS} + 9M FY2026 EPS {MICRON_9M_FY2026_DILUTED_EPS}. "
                         f"Supporting SEC filings: {MICRON_FY2025_10K_URL} and {MICRON_Q3_2026_10Q_URL}."
@@ -123,6 +179,8 @@ def install_micron_valuation_filing_fallback(module: Any) -> None:
                     "timestamp": str(price_record.get("observed_at") or module.utc_now()),
                     "reliability_score": 0.93,
                     "capture_method": "DERIVED_FROM_ADMITTED_MARKET_PRICE_AND_SEC_FILINGS",
+                    "market_role": "valuation_reference_session",
+                    "valuation_reference_price": price_value,
                 },
             )
             if valuation:

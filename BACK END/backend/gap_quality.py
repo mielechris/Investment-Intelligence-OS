@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
-from evidence_engine import build_packet
+from evidence_engine import build_packet, parse_timestamp
 from primary_evidence_contracts import coverage_for_requirement
 
 NEWS_MIN_QUALITY = 0.45
@@ -30,6 +30,36 @@ def _tokens(text: str) -> set[str]:
     return {token for token in cleaned.split() if len(token) >= 4 and token not in stop}
 
 
+def _market_snapshot_kind(item: dict[str, Any]) -> str | None:
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else item
+
+    fact_key = str(raw.get("primary_fact_key") or "").strip()
+    role = str(raw.get("market_role") or "").strip()
+    claim = str(item.get("claim") or "").lower()
+    title = str(raw.get("title") or "").lower()
+
+    if role == "current_quote" or fact_key == "market_price":
+        return "market_price"
+
+    if role in {"current_valuation", "valuation_reference_session"}:
+        return "valuation"
+
+    if fact_key == "valuation" and str(item.get("evidence_type") or "") == "market_session":
+        return "valuation"
+
+    if "market snapshot" in title and "price=" in claim:
+        return "market_price"
+
+    if (
+        "latest admitted market-session price=" in claim
+        or "valuation reference market-session price=" in claim
+        or "current trailing gaap p/e=" in claim
+    ):
+        return "valuation"
+
+    return None
+
+
 def curate_gap_evidence(raw_items: list[dict[str, Any]]) -> dict[str, Any]:
     """Admit useful evidence without allowing low-quality article volume to dilute the packet.
 
@@ -46,6 +76,25 @@ def curate_gap_evidence(raw_items: list[dict[str, Any]]) -> dict[str, Any]:
         key=lambda item: float(item.get("quality_score") or 0.0),
         reverse=True,
     )
+
+    # Current market facts are point-in-time observations. Keep only the newest
+    # observation of each semantic kind so yesterday's close cannot masquerade
+    # as a competing current quote or valuation.
+    latest_market_times: dict[str, Any] = {}
+
+    for item in ranked:
+        kind = _market_snapshot_kind(item)
+        if not kind:
+            continue
+
+        observed = parse_timestamp(item.get("observed_at"))
+        if observed is None:
+            continue
+
+        prior = latest_market_times.get(kind)
+        if prior is None or observed > prior:
+            latest_market_times[kind] = observed
+
     for item in ranked:
         raw = item.get("raw") if isinstance(item.get("raw"), dict) else item
         source_type = str(item.get("source_type") or "unknown").lower()
@@ -53,7 +102,19 @@ def curate_gap_evidence(raw_items: list[dict[str, Any]]) -> dict[str, Any]:
         minimum = NEWS_MIN_QUALITY if source_type in {"news_aggregator", "reputable_news", "unknown"} else GENERAL_MIN_QUALITY
         identity = _source_identity(raw)
         reason = None
-        if item.get("stale"):
+
+        snapshot_kind = _market_snapshot_kind(item)
+        observed = parse_timestamp(item.get("observed_at"))
+        newest = latest_market_times.get(snapshot_kind) if snapshot_kind else None
+
+        if (
+            snapshot_kind
+            and observed is not None
+            and newest is not None
+            and observed < newest
+        ):
+            reason = "SUPERSEDED_MARKET_SNAPSHOT"
+        elif item.get("stale"):
             reason = "STALE"
         elif item.get("missing_fields"):
             reason = "INCOMPLETE"
