@@ -128,6 +128,30 @@ def _compute_overlap(
     }
 
 
+def _supersede_prior_overlap(case_id: str, case: dict[str, Any], new_snapshot_id: str) -> None:
+    for row in list_objects(case_id, "primary_evidence_record"):
+        if row.get("lane") != "valuation_market" or row.get("fact_key") != "portfolio_overlap":
+            continue
+        if row.get("first_party_governed_source") is not True or row.get("gap_resolution_eligible") is not True:
+            continue
+        record_id = str(row.get("primary_evidence_id") or "")
+        if not record_id:
+            continue
+        superseded = {
+            **row,
+            "gap_resolution_eligible": False,
+            "superseded_by_portfolio_snapshot_id": new_snapshot_id,
+            "superseded_at": utc_now(),
+        }
+        record_object(record_id, "primary_evidence_record", case_id, superseded, topic=case.get("topic"))
+        record_event(
+            case_id,
+            "PORTFOLIO_OVERLAP_EVIDENCE_SUPERSEDED",
+            entity_id=record_id,
+            payload={"superseded_by_portfolio_snapshot_id": new_snapshot_id},
+        )
+
+
 def _record_primary_overlap(case_id: str, case: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     overlap = snapshot["overlap"]
     requirement = _valuation_requirement(case_id)
@@ -140,8 +164,10 @@ def _record_primary_overlap(case_id: str, case: dict[str, Any], snapshot: dict[s
         f"concentration={overlap['concentration_level']}."
     )
 
-    # One active overlap record per portfolio snapshot. Historical snapshots remain in the
-    # audit ledger but only the latest record carries the current snapshot timestamp.
+    # Historical snapshots remain auditable, but only the newest snapshot can count as
+    # current portfolio-overlap evidence.
+    _supersede_prior_overlap(case_id, case, snapshot["portfolio_snapshot_id"])
+
     record_id = f"primary_evidence_{uuid4().hex}"
     record = {
         "primary_evidence_id": record_id,
