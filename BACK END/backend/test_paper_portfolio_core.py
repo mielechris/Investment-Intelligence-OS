@@ -240,3 +240,128 @@ class PaperPortfolioPerformanceTests(unittest.TestCase):
         self.assertFalse(perf["trade_execution_permission"])
         self.assertFalse(perf["live_execution"])
         self.assertFalse(perf["paper_order_permission"])
+
+
+class PaperPortfolioRiskBenchmarkTests(unittest.TestCase):
+    def setUp(self):
+        self.original_db = ledger.DB_PATH
+        self.tempdir = tempfile.TemporaryDirectory()
+        ledger.DB_PATH = (
+            Path(self.tempdir.name)
+            / "risk_benchmark_test.db"
+        )
+        ledger.init_ledger()
+
+    def tearDown(self):
+        ledger.DB_PATH = self.original_db
+        self.tempdir.cleanup()
+
+    def _benchmark(
+        self,
+        ticker: str,
+        price: float,
+        created_at: str,
+        suffix: str,
+    ):
+        ledger.record_object(
+            f"paper_portfolio_benchmark_{suffix}",
+            "paper_portfolio_benchmark_snapshot",
+            portfolio.PORTFOLIO_CASE_ID,
+            {
+                "paper_portfolio_benchmark_snapshot_id":
+                    f"paper_portfolio_benchmark_{suffix}",
+                "paper_portfolio_account_id":
+                    portfolio.ACCOUNT_ID,
+                "benchmark": ticker,
+                "price": price,
+                "status": "COMPLETE",
+                "created_at": created_at,
+            },
+            parent_id=portfolio.ACCOUNT_ID,
+            topic=ticker,
+        )
+
+    def test_benchmark_returns_are_calculated(self):
+        self._benchmark(
+            "SPY",
+            100.0,
+            "2026-08-25T10:00:00+00:00",
+            "spy_start",
+        )
+        self._benchmark(
+            "SPY",
+            110.0,
+            "2026-08-25T11:00:00+00:00",
+            "spy_end",
+        )
+
+        self._benchmark(
+            "QQQ",
+            200.0,
+            "2026-08-25T10:00:00+00:00",
+            "qqq_start",
+        )
+        self._benchmark(
+            "QQQ",
+            190.0,
+            "2026-08-25T11:00:00+00:00",
+            "qqq_end",
+        )
+
+        result = (
+            portfolio.build_benchmark_performance()
+        )
+
+        self.assertEqual(
+            result["benchmarks"]["SPY"]["return_pct"],
+            10.0,
+        )
+        self.assertEqual(
+            result["benchmarks"]["QQQ"]["return_pct"],
+            -5.0,
+        )
+
+    def test_empty_portfolio_is_within_observation_limits(self):
+        risk = portfolio.build_portfolio_risk()
+
+        self.assertEqual(risk["cash_pct"], 100.0)
+        self.assertEqual(
+            risk["gross_exposure_pct"],
+            0.0,
+        )
+        self.assertEqual(
+            risk["largest_position_pct"],
+            0.0,
+        )
+        self.assertEqual(
+            risk["risk_status"],
+            "WITHIN_OBSERVATION_LIMITS",
+        )
+        self.assertEqual(
+            risk["observation_breaches"],
+            [],
+        )
+
+    def test_scoreboard_has_no_execution_authority(self):
+        scoreboard = (
+            portfolio.build_portfolio_scoreboard()
+        )
+
+        self.assertFalse(
+            scoreboard[
+                "capital_allocation_allowed"
+            ]
+        )
+        self.assertFalse(
+            scoreboard[
+                "position_sizing_allowed"
+            ]
+        )
+        self.assertFalse(
+            scoreboard[
+                "trade_execution_permission"
+            ]
+        )
+        self.assertFalse(
+            scoreboard["live_execution"]
+        )

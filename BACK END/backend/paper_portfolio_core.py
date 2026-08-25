@@ -701,3 +701,525 @@ def paper_portfolio_snapshots():
         "trade_execution_permission": False,
         "live_execution": False,
     }
+
+
+# ============================================================
+# Batch 8A.3 — benchmarks, exposure, risk + attribution
+# ============================================================
+
+BENCHMARKS = ("SPY", "QQQ")
+
+# Measurement guardrails only. These DO NOT size positions,
+# authorize orders, or change portfolio capital.
+MAX_GROSS_EXPOSURE_PCT = 100.0
+MAX_POSITION_CONCENTRATION_PCT = 25.0
+MAX_DRAWDOWN_OBSERVATION_PCT = 10.0
+MIN_CASH_PCT = 10.0
+
+
+def record_benchmark_snapshot(ticker: str) -> dict[str, Any]:
+    ticker = str(ticker or "").strip().upper()
+
+    if ticker not in BENCHMARKS:
+        return {
+            "status": "BLOCKED",
+            "reason": "UNSUPPORTED_BENCHMARK",
+            "ticker": ticker,
+            "paper_mode": True,
+            "trade_execution_permission": False,
+            "live_execution": False,
+        }
+
+    quote = fetch_market_quote(ticker)
+
+    if (
+        quote.get("status") != "ok"
+        or quote.get("current_price") is None
+    ):
+        return {
+            "status": "ERROR",
+            "ticker": ticker,
+            "error": quote.get("error"),
+            "paper_mode": True,
+            "trade_execution_permission": False,
+            "live_execution": False,
+        }
+
+    item = (
+        (quote.get("items") or [{}])[0]
+        if quote.get("items")
+        else {}
+    )
+
+    snapshot_id = (
+        f"paper_portfolio_benchmark_{ticker}_"
+        f"{uuid4().hex}"
+    )
+
+    snapshot = {
+        "paper_portfolio_benchmark_snapshot_id":
+            snapshot_id,
+        "paper_portfolio_account_id": ACCOUNT_ID,
+        "benchmark": ticker,
+        "price": round(
+            _safe_float(quote.get("current_price")),
+            6,
+        ),
+        "provider": quote.get("provider"),
+        "provider_timestamp": item.get("timestamp"),
+        "provider_url": item.get("url"),
+        "status": "COMPLETE",
+        "created_at": utc_now(),
+        "measurement_only": True,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+    }
+
+    record_object(
+        snapshot_id,
+        "paper_portfolio_benchmark_snapshot",
+        PORTFOLIO_CASE_ID,
+        snapshot,
+        parent_id=ACCOUNT_ID,
+        topic=ticker,
+    )
+
+    record_event(
+        PORTFOLIO_CASE_ID,
+        "PAPER_PORTFOLIO_BENCHMARK_MARKED",
+        entity_id=snapshot_id,
+        payload={
+            "benchmark": ticker,
+            "price": snapshot["price"],
+            "provider": snapshot["provider"],
+            "trade_execution_permission": False,
+        },
+    )
+
+    return snapshot
+
+
+def refresh_benchmarks() -> dict[str, Any]:
+    results = {
+        ticker: record_benchmark_snapshot(ticker)
+        for ticker in BENCHMARKS
+    }
+
+    return {
+        "status": "COMPLETE",
+        "benchmarks": results,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+    }
+
+
+def benchmark_snapshot_history(
+    ticker: str,
+) -> list[dict[str, Any]]:
+    ticker = str(ticker or "").strip().upper()
+
+    return [
+        row
+        for row in _rows_by_type(
+            "paper_portfolio_benchmark_snapshot"
+        )
+        if (
+            row.get("paper_portfolio_account_id")
+            == ACCOUNT_ID
+            and str(
+                row.get("benchmark") or ""
+            ).upper()
+            == ticker
+            and row.get("status") == "COMPLETE"
+        )
+    ]
+
+
+def build_benchmark_performance() -> dict[str, Any]:
+    output: dict[str, Any] = {}
+
+    for ticker in BENCHMARKS:
+        rows = benchmark_snapshot_history(ticker)
+
+        if not rows:
+            output[ticker] = {
+                "benchmark": ticker,
+                "snapshot_count": 0,
+                "starting_price": None,
+                "latest_price": None,
+                "return_pct": None,
+            }
+            continue
+
+        starting_price = _safe_float(
+            rows[0].get("price")
+        )
+        latest_price = _safe_float(
+            rows[-1].get("price")
+        )
+
+        return_pct = (
+            ((latest_price / starting_price) - 1.0)
+            * 100.0
+            if starting_price > 0
+            else None
+        )
+
+        output[ticker] = {
+            "benchmark": ticker,
+            "snapshot_count": len(rows),
+            "starting_price":
+                round(starting_price, 6),
+            "latest_price":
+                round(latest_price, 6),
+            "return_pct":
+                round(return_pct, 4)
+                if return_pct is not None
+                else None,
+            "starting_at":
+                rows[0].get("created_at"),
+            "latest_at":
+                rows[-1].get("created_at"),
+        }
+
+    return {
+        "policy_version":
+            "paper-portfolio-benchmark-v1",
+        "benchmarks": output,
+        "measurement_only": True,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+        "generated_at": utc_now(),
+    }
+
+
+def build_position_attribution() -> dict[str, Any]:
+    state = build_portfolio_state()
+
+    nav = _safe_float(state.get("nav"))
+    total_unrealized = _safe_float(
+        state.get("unrealized_pnl")
+    )
+
+    rows: list[dict[str, Any]] = []
+
+    for position in state.get("positions") or []:
+        market_value = _safe_float(
+            position.get("market_value")
+        )
+        unrealized = _safe_float(
+            position.get("unrealized_pnl")
+        )
+
+        portfolio_weight_pct = (
+            (market_value / nav) * 100.0
+            if nav > 0
+            else 0.0
+        )
+
+        pnl_contribution_pct = (
+            (unrealized / total_unrealized) * 100.0
+            if abs(total_unrealized) > 0.000001
+            else None
+        )
+
+        rows.append(
+            {
+                "ticker": position.get("ticker"),
+                "quantity": position.get("quantity"),
+                "market_value":
+                    round(market_value, 2),
+                "portfolio_weight_pct":
+                    round(portfolio_weight_pct, 4),
+                "unrealized_pnl":
+                    round(unrealized, 2),
+                "unrealized_return_pct":
+                    position.get(
+                        "unrealized_return_pct"
+                    ),
+                "pnl_contribution_pct":
+                    round(pnl_contribution_pct, 4)
+                    if pnl_contribution_pct
+                    is not None
+                    else None,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: abs(
+            _safe_float(
+                row.get("unrealized_pnl")
+            )
+        ),
+        reverse=True,
+    )
+
+    return {
+        "position_count": len(rows),
+        "total_unrealized_pnl":
+            round(total_unrealized, 2),
+        "attribution": rows,
+        "measurement_only": True,
+        "paper_mode": True,
+        "trade_execution_permission": False,
+        "live_execution": False,
+    }
+
+
+def build_portfolio_risk() -> dict[str, Any]:
+    state = build_portfolio_state()
+    performance = build_performance_history()
+
+    nav = _safe_float(state.get("nav"))
+    cash = _safe_float(state.get("cash"))
+    gross_exposure = _safe_float(
+        state.get("gross_exposure")
+    )
+    net_exposure = _safe_float(
+        state.get("net_exposure")
+    )
+
+    cash_pct = (
+        (cash / nav) * 100.0
+        if nav > 0
+        else 0.0
+    )
+
+    gross_exposure_pct = (
+        (gross_exposure / nav) * 100.0
+        if nav > 0
+        else 0.0
+    )
+
+    net_exposure_pct = (
+        (net_exposure / nav) * 100.0
+        if nav > 0
+        else 0.0
+    )
+
+    concentration_rows: list[dict[str, Any]] = []
+
+    for position in state.get("positions") or []:
+        market_value = _safe_float(
+            position.get("market_value")
+        )
+
+        weight_pct = (
+            (market_value / nav) * 100.0
+            if nav > 0
+            else 0.0
+        )
+
+        concentration_rows.append(
+            {
+                "ticker": position.get("ticker"),
+                "market_value":
+                    round(market_value, 2),
+                "weight_pct":
+                    round(weight_pct, 4),
+            }
+        )
+
+    concentration_rows.sort(
+        key=lambda row: row["weight_pct"],
+        reverse=True,
+    )
+
+    largest_position_pct = (
+        concentration_rows[0]["weight_pct"]
+        if concentration_rows
+        else 0.0
+    )
+
+    current_drawdown_pct = abs(
+        _safe_float(
+            performance.get(
+                "current_drawdown_pct"
+            )
+        )
+    )
+
+    breaches: list[str] = []
+
+    if (
+        gross_exposure_pct
+        > MAX_GROSS_EXPOSURE_PCT
+    ):
+        breaches.append(
+            "GROSS_EXPOSURE_OBSERVATION_LIMIT"
+        )
+
+    if (
+        largest_position_pct
+        > MAX_POSITION_CONCENTRATION_PCT
+    ):
+        breaches.append(
+            "POSITION_CONCENTRATION_OBSERVATION_LIMIT"
+        )
+
+    if cash_pct < MIN_CASH_PCT:
+        breaches.append(
+            "MINIMUM_CASH_OBSERVATION_LIMIT"
+        )
+
+    if (
+        current_drawdown_pct
+        > MAX_DRAWDOWN_OBSERVATION_PCT
+    ):
+        breaches.append(
+            "DRAWDOWN_OBSERVATION_LIMIT"
+        )
+
+    return {
+        "policy_version":
+            "paper-portfolio-risk-observation-v1",
+        "nav": round(nav, 2),
+        "cash": round(cash, 2),
+        "cash_pct": round(cash_pct, 4),
+        "gross_exposure":
+            round(gross_exposure, 2),
+        "gross_exposure_pct":
+            round(gross_exposure_pct, 4),
+        "net_exposure":
+            round(net_exposure, 2),
+        "net_exposure_pct":
+            round(net_exposure_pct, 4),
+        "largest_position_pct":
+            round(largest_position_pct, 4),
+        "current_drawdown_pct":
+            round(current_drawdown_pct, 4),
+        "position_concentration":
+            concentration_rows,
+        "observation_limits": {
+            "max_gross_exposure_pct":
+                MAX_GROSS_EXPOSURE_PCT,
+            "max_position_concentration_pct":
+                MAX_POSITION_CONCENTRATION_PCT,
+            "max_drawdown_pct":
+                MAX_DRAWDOWN_OBSERVATION_PCT,
+            "min_cash_pct":
+                MIN_CASH_PCT,
+        },
+        "observation_breaches": breaches,
+        "risk_status":
+            "OBSERVATION_BREACH"
+            if breaches
+            else "WITHIN_OBSERVATION_LIMITS",
+        "measurement_only": True,
+        "capital_allocation_allowed": False,
+        "position_sizing_allowed": False,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+        "generated_at": utc_now(),
+    }
+
+
+def build_portfolio_scoreboard() -> dict[str, Any]:
+    portfolio_perf = build_performance_history()
+    benchmark_perf = build_benchmark_performance()
+    risk = build_portfolio_risk()
+    attribution = build_position_attribution()
+
+    portfolio_return = _safe_float(
+        portfolio_perf.get(
+            "cumulative_return_pct"
+        )
+    )
+
+    benchmark_comparison: dict[str, Any] = {}
+
+    for ticker in BENCHMARKS:
+        row = (
+            benchmark_perf.get("benchmarks") or {}
+        ).get(ticker) or {}
+
+        benchmark_return = row.get("return_pct")
+
+        benchmark_comparison[ticker] = {
+            **row,
+            "excess_return_pct": (
+                round(
+                    portfolio_return
+                    - _safe_float(
+                        benchmark_return
+                    ),
+                    4,
+                )
+                if benchmark_return
+                is not None
+                else None
+            ),
+        }
+
+    return {
+        "policy_version":
+            "paper-portfolio-scoreboard-v1",
+        "portfolio": {
+            "starting_nav":
+                portfolio_perf.get("starting_nav"),
+            "latest_nav":
+                portfolio_perf.get("latest_nav"),
+            "return_pct":
+                portfolio_perf.get(
+                    "cumulative_return_pct"
+                ),
+            "max_drawdown_pct":
+                portfolio_perf.get(
+                    "max_drawdown_pct"
+                ),
+            "snapshot_count":
+                portfolio_perf.get(
+                    "snapshot_count"
+                ),
+        },
+        "benchmark_comparison":
+            benchmark_comparison,
+        "risk": risk,
+        "attribution": attribution,
+        "measurement_only": True,
+        "capital_allocation_allowed": False,
+        "position_sizing_allowed": False,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+        "generated_at": utc_now(),
+    }
+
+
+@router.post("/paper-portfolio/benchmarks/refresh")
+def paper_portfolio_benchmarks_refresh():
+    return refresh_benchmarks()
+
+
+@router.get("/paper-portfolio/benchmarks")
+def paper_portfolio_benchmarks():
+    return build_benchmark_performance()
+
+
+@router.get("/paper-portfolio/risk")
+def paper_portfolio_risk():
+    return build_portfolio_risk()
+
+
+@router.get("/paper-portfolio/attribution")
+def paper_portfolio_attribution():
+    return build_position_attribution()
+
+
+@router.get("/paper-portfolio/scoreboard")
+def paper_portfolio_scoreboard():
+    return build_portfolio_scoreboard()
