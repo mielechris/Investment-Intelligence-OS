@@ -8,11 +8,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ledger import DB_PATH, get_object, record_object, utc_now
-from provider_hardening import fetch_market_quote
+from opportunity_evidence import fetch_crosschecked_quote
 
 
 router = APIRouter()
-POLICY_VERSION = "grok-dual-arm-shadow-paper-v1"
+POLICY_VERSION = "grok-dual-arm-shadow-paper-v2"
 
 
 def _rows(object_type: str) -> list[dict[str, Any]]:
@@ -82,10 +82,17 @@ def enroll_shadow_pairs() -> dict[str, Any]:
         if not ticker:
             skipped.append({"case_id": case_id, "reason": "TICKER_UNRESOLVED"})
             continue
-        quote = fetch_market_quote(ticker)
+        quote = fetch_crosschecked_quote(ticker)
         price = _safe_float(quote.get("current_price"))
-        if quote.get("status") != "ok" or price is None or price <= 0:
-            skipped.append({"case_id": case_id, "ticker": ticker, "reason": "REFERENCE_QUOTE_UNAVAILABLE"})
+        if quote.get("status") != "ok" or quote.get("cross_checked") is not True or price is None or price <= 0:
+            skipped.append({
+                "case_id": case_id,
+                "ticker": ticker,
+                "reason": "CROSSCHECKED_REFERENCE_QUOTE_UNAVAILABLE",
+                "quote_status": quote.get("status"),
+                "quote_quality": quote.get("quote_quality"),
+                "quote_provider_count": quote.get("provider_count"),
+            })
             continue
         comparison = result.get("comparison") or {}
         baseline = comparison.get("baseline") or {}
@@ -100,6 +107,11 @@ def enroll_shadow_pairs() -> dict[str, Any]:
             "source_grok_ab_result_id": result.get("grok_ab_result_id"),
             "reference_price": price,
             "reference_quote_provider": quote.get("provider"),
+            "reference_quote_providers": list(quote.get("providers") or []),
+            "reference_quote_provider_count": quote.get("provider_count"),
+            "reference_quote_cross_checked": quote.get("cross_checked") is True,
+            "reference_quote_spread_pct": quote.get("spread_pct"),
+            "reference_quote_quality": quote.get("quote_quality"),
             "reference_at": utc_now(),
             "baseline_disposition": baseline_disposition,
             "grok_disposition": grok_disposition,
@@ -125,6 +137,7 @@ def enroll_shadow_pairs() -> dict[str, Any]:
         "skipped_count": len(skipped),
         "pairs": enrolled,
         "skipped": skipped,
+        "reference_quote_policy": "TWO_SOURCE_CROSSCHECK_REQUIRED",
         "actual_paper_orders_created": 0,
         "paper_order_permission": False,
         "trade_execution_permission": False,
@@ -137,8 +150,9 @@ def refresh_shadow_pairs() -> dict[str, Any]:
     for pair in _rows("grok_shadow_paper_pair"):
         ticker = str(pair.get("ticker") or "").strip().upper()
         case_id = str(pair.get("case_id") or "")
-        quote = fetch_market_quote(ticker)
-        current = _safe_float(quote.get("current_price"))
+        quote = fetch_crosschecked_quote(ticker)
+        quote_ok = quote.get("status") == "ok" and quote.get("cross_checked") is True
+        current = _safe_float(quote.get("current_price")) if quote_ok else None
         reference = _safe_float(pair.get("reference_price"))
         underlying_return = None
         if current is not None and reference is not None and reference > 0:
@@ -155,6 +169,12 @@ def refresh_shadow_pairs() -> dict[str, Any]:
             "ticker": ticker,
             "reference_price": reference,
             "current_price": current,
+            "current_quote_status": quote.get("status"),
+            "current_quote_quality": quote.get("quote_quality"),
+            "current_quote_providers": list(quote.get("providers") or []),
+            "current_quote_provider_count": quote.get("provider_count"),
+            "current_quote_cross_checked": quote.get("cross_checked") is True,
+            "current_quote_spread_pct": quote.get("spread_pct"),
             "underlying_return_pct": underlying_return,
             "baseline_state": baseline_state,
             "grok_state": grok_state,
@@ -162,7 +182,7 @@ def refresh_shadow_pairs() -> dict[str, Any]:
             "grok_cash_return_pct": grok_cash_return,
             "differentiated_action": pair.get("differentiated_action") is True,
             "arm_specific_pnl_available": False,
-            "interpretation": "NO_TRADE is tracked as cash/no position; WATCH remains watch-only until the governed paper chain creates a position.",
+            "interpretation": "NO_TRADE is tracked as cash/no position; WATCH remains watch-only until the governed paper chain creates a position. Underlying returns require a fresh two-source cross-checked quote.",
             "measurement_only": True,
             "paper_mode": True,
             "auto_trade_authority": False,
@@ -177,6 +197,7 @@ def refresh_shadow_pairs() -> dict[str, Any]:
         "policy_version": POLICY_VERSION,
         "snapshot_count": len(snapshots),
         "snapshots": snapshots,
+        "reference_quote_policy": "TWO_SOURCE_CROSSCHECK_REQUIRED",
         "actual_paper_orders_created": 0,
         "arm_specific_pnl_available": False,
         "paper_order_permission": False,
@@ -193,8 +214,10 @@ def shadow_paper_status() -> dict[str, Any]:
         "pair_count": len(pairs),
         "snapshot_count": len(snapshots),
         "differentiated_action_pair_count": sum(1 for row in pairs if row.get("differentiated_action") is True),
+        "crosschecked_reference_pair_count": sum(1 for row in pairs if row.get("reference_quote_cross_checked") is True),
         "arm_specific_pnl_available": False,
         "actual_paper_orders_created": 0,
+        "reference_quote_policy": "TWO_SOURCE_CROSSCHECK_REQUIRED",
         "interpretation": "This is a decision-shadow ledger only. It does not convert WATCH into a position and does not create paper or live orders.",
         "paper_mode": True,
         "auto_trade_authority": False,
