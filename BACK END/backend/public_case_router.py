@@ -43,6 +43,7 @@ import grok_opportunity_discovery
 from grok_opportunity_discovery import router as grok_opportunity_router
 from grok_paper_value import router as grok_paper_value_router
 from grok_shadow_paper import router as grok_shadow_paper_router
+from grok_value_cycle import router as grok_value_cycle_router
 from grok_value_instrumentation import install_grok_value_instrumentation
 from grok_value_probe import router as grok_value_probe_router
 from grok_value_scorecard import router as grok_value_scorecard_router
@@ -145,6 +146,7 @@ router.include_router(grok_false_positive_router)
 router.include_router(grok_paper_value_router)
 router.include_router(grok_shadow_paper_router)
 router.include_router(grok_value_probe_router)
+router.include_router(grok_value_cycle_router)
 router.include_router(grok_value_scorecard_router)
 router.include_router(grok_batch7_checkpoint_router)
 router.include_router(agent_calibration_router)
