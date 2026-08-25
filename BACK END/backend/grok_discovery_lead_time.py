@@ -12,7 +12,8 @@ from ledger import DB_PATH, utc_now
 
 
 router = APIRouter()
-POLICY_VERSION = "grok-discovery-lead-time-v3"
+POLICY_VERSION = "grok-discovery-lead-time-v4"
+MIN_PROSPECTIVE_SEPARATION_MINUTES = 10.0
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -118,6 +119,13 @@ def _lead(grok_at: datetime | None, iios_at: datetime | None) -> tuple[float | N
     return None, "UNMEASURED"
 
 
+def _cycle_id(entry: dict[str, Any]) -> str | None:
+    row = entry.get("row") if isinstance(entry.get("row"), dict) else {}
+    value = row.get("measurement_cycle_id") or (row.get("metadata") or {}).get("measurement_cycle_id")
+    text = str(value or "").strip()
+    return text or None
+
+
 def build_discovery_lead_time_report() -> dict[str, Any]:
     forward_grok = _first_forward_observations("GROK_X")
     forward_iios = _first_forward_observations("IIOS_NATIVE")
@@ -126,7 +134,8 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
     tickers = sorted(set(grok) | set(iios) | set(forward_grok) | set(forward_iios))
     rows: list[dict[str, Any]] = []
     measurable_leads: list[float] = []
-    prospective_leads: list[float] = []
+    raw_forward_leads: list[float] = []
+    eligible_prospective_leads: list[float] = []
 
     for ticker in tickers:
         grok_entry = grok.get(ticker) or {}
@@ -141,10 +150,20 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         forward_iios_entry = forward_iios.get(ticker) or {}
         prospective_grok_at = forward_grok_entry.get("observed_at")
         prospective_iios_at = forward_iios_entry.get("observed_at")
-        prospective_lead, prospective_winner = _lead(prospective_grok_at, prospective_iios_at)
-        prospective_pair = prospective_lead is not None
-        if prospective_lead is not None:
-            prospective_leads.append(prospective_lead)
+        raw_forward_lead, raw_forward_winner = _lead(prospective_grok_at, prospective_iios_at)
+        grok_cycle_id = _cycle_id(forward_grok_entry)
+        iios_cycle_id = _cycle_id(forward_iios_entry)
+        same_cycle = bool(grok_cycle_id and iios_cycle_id and grok_cycle_id == iios_cycle_id)
+        cycle_ids_present = bool(grok_cycle_id and iios_cycle_id)
+        separation_ok = bool(
+            raw_forward_lead is not None
+            and abs(raw_forward_lead) >= MIN_PROSPECTIVE_SEPARATION_MINUTES
+        )
+        prospective_pair = bool(raw_forward_lead is not None and cycle_ids_present and not same_cycle and separation_ok)
+        if raw_forward_lead is not None:
+            raw_forward_leads.append(raw_forward_lead)
+        if prospective_pair:
+            eligible_prospective_leads.append(raw_forward_lead)
 
         rows.append({
             "ticker": ticker,
@@ -156,11 +175,18 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
             "winner": winner,
             "prospective_grok_first_seen_at": prospective_grok_at.isoformat() if prospective_grok_at else None,
             "prospective_iios_first_seen_at": prospective_iios_at.isoformat() if prospective_iios_at else None,
+            "prospective_grok_cycle_id": grok_cycle_id,
+            "prospective_iios_cycle_id": iios_cycle_id,
+            "raw_forward_pair": raw_forward_lead is not None,
+            "same_cycle_pair": same_cycle,
+            "minimum_separation_minutes": MIN_PROSPECTIVE_SEPARATION_MINUTES,
+            "separation_eligible": separation_ok,
             "prospective_pair": prospective_pair,
-            "prospective_grok_lead_minutes": prospective_lead,
-            "prospective_winner": prospective_winner,
+            "prospective_grok_lead_minutes": raw_forward_lead if prospective_pair else None,
+            "raw_forward_grok_lead_minutes": raw_forward_lead,
+            "prospective_winner": raw_forward_winner if prospective_pair else "NOT_ELIGIBLE",
             "measurement_definition": "positive Grok lead minutes means Grok nomination preceded native IIOS opportunity discovery",
-            "prospective_definition": "prospective fields use only forward-instrumented first-seen observations and are never masked by older legacy ledger rows",
+            "prospective_definition": "prospective proof requires forward-instrumented first-seen observations from different measurement cycles separated by at least 10 minutes; same-cycle API latency never counts as discovery advantage",
             "trade_signal": False,
             "trade_execution_permission": False,
             "live_execution": False,
@@ -171,17 +197,21 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         "status": "MEASURING" if tickers else "NO_DISCOVERY_OBSERVATIONS_YET",
         "ticker_count": len(tickers),
         "measurable_pair_count": len(measurable_leads),
-        "prospective_pair_count": len(prospective_leads),
+        "raw_forward_pair_count": len(raw_forward_leads),
+        "prospective_pair_count": len(eligible_prospective_leads),
+        "same_cycle_pair_count": sum(1 for row in rows if row.get("same_cycle_pair") is True),
         "grok_earlier_count": sum(1 for value in measurable_leads if value > 0),
         "iios_earlier_count": sum(1 for value in measurable_leads if value < 0),
         "tie_count": sum(1 for value in measurable_leads if value == 0),
-        "prospective_grok_earlier_count": sum(1 for value in prospective_leads if value > 0),
-        "prospective_iios_earlier_count": sum(1 for value in prospective_leads if value < 0),
-        "prospective_tie_count": sum(1 for value in prospective_leads if value == 0),
+        "prospective_grok_earlier_count": sum(1 for value in eligible_prospective_leads if value > 0),
+        "prospective_iios_earlier_count": sum(1 for value in eligible_prospective_leads if value < 0),
+        "prospective_tie_count": sum(1 for value in eligible_prospective_leads if value == 0),
         "mean_grok_lead_minutes": round(statistics.mean(measurable_leads), 4) if measurable_leads else None,
         "median_grok_lead_minutes": round(statistics.median(measurable_leads), 4) if measurable_leads else None,
-        "prospective_mean_grok_lead_minutes": round(statistics.mean(prospective_leads), 4) if prospective_leads else None,
-        "prospective_median_grok_lead_minutes": round(statistics.median(prospective_leads), 4) if prospective_leads else None,
+        "raw_forward_mean_grok_lead_minutes": round(statistics.mean(raw_forward_leads), 4) if raw_forward_leads else None,
+        "prospective_mean_grok_lead_minutes": round(statistics.mean(eligible_prospective_leads), 4) if eligible_prospective_leads else None,
+        "prospective_median_grok_lead_minutes": round(statistics.median(eligible_prospective_leads), 4) if eligible_prospective_leads else None,
+        "minimum_prospective_separation_minutes": MIN_PROSPECTIVE_SEPARATION_MINUTES,
         "rows": rows,
         "automatic_promotion": False,
         "research_only": True,
