@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Body, HTTPException
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
 
@@ -20,6 +20,10 @@ router = APIRouter()
 POLICY_VERSION = "grok-social-context-v1"
 DEFAULT_MODEL = "grok-4.6"
 DEFAULT_BASE_URL = "https://api.x.ai/v1"
+DEFAULT_TIMEOUT_SECONDS = 180.0
+MIN_TIMEOUT_SECONDS = 30.0
+MAX_TIMEOUT_SECONDS = 240.0
+MAX_X_SEARCH_ATTEMPTS = 2
 MAX_CONTEXT_ITEMS = 5
 MAX_RAW_CLAIMS = 10
 MIN_ADMITTED_SOURCES = 2
@@ -71,6 +75,15 @@ def grok_base_url() -> str:
     return str(os.getenv("IIOS_GROK_BASE_URL", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
 
 
+def grok_timeout_seconds() -> float:
+    raw = os.getenv("IIOS_GROK_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = DEFAULT_TIMEOUT_SECONDS
+    return max(MIN_TIMEOUT_SECONDS, min(value, MAX_TIMEOUT_SECONDS))
+
+
 def grok_plan() -> dict[str, Any]:
     return {
         "policy_version": POLICY_VERSION,
@@ -79,6 +92,8 @@ def grok_plan() -> dict[str, Any]:
         "model": grok_model(),
         "base_url": grok_base_url(),
         "tool": "x_search",
+        "timeout_seconds": grok_timeout_seconds(),
+        "max_x_search_attempts": MAX_X_SEARCH_ATTEMPTS,
         "automatic_injection": False,
         "automatic_opportunity_promotion": False,
         "max_context_items": MAX_CONTEXT_ITEMS,
@@ -228,13 +243,9 @@ def _tokens(value: Any) -> set[str]:
 
 
 def _agent_targets(item: dict[str, Any]) -> list[str]:
-    corpus = " ".join(
-        str(item.get(key) or "")
-        for key in ("claim", "signal_type", "stance")
-    )
+    corpus = " ".join(str(item.get(key) or "") for key in ("claim", "signal_type", "stance"))
     tokens = _tokens(corpus)
     targets = [key for key, terms in _AGENT_TERMS.items() if tokens & terms]
-    # Social/narrative context always gets adversarial and portfolio scrutiny.
     for required in ("skeptic", "portfolio"):
         if required not in targets:
             targets.append(required)
@@ -248,7 +259,6 @@ def _safe_confidence(value: Any) -> float:
         score = float(value)
     except (TypeError, ValueError):
         score = 0.0
-    # Social context cannot present itself to IIOS as high-confidence hard evidence.
     return round(max(0.0, min(0.60, score)), 4)
 
 
@@ -338,6 +348,23 @@ def _search_dates(days: int = 3) -> tuple[str, str]:
     return start.isoformat(), today.isoformat()
 
 
+def _run_x_search(client: OpenAI, *, prompt: str, from_date: str, to_date: str) -> tuple[Any, int]:
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_X_SEARCH_ATTEMPTS + 1):
+        try:
+            response = client.responses.create(
+                model=grok_model(),
+                input=prompt,
+                tools=[{"type": "x_search", "from_date": from_date, "to_date": to_date}],
+            )
+            return response, attempt
+        except APITimeoutError as exc:
+            last_error = exc
+            if attempt >= MAX_X_SEARCH_ATTEMPTS:
+                raise
+    raise last_error or RuntimeError("Grok X Search failed")
+
+
 def fetch_grok_social_context(topic: str, *, ticker: str | None = None, days: int = 3) -> dict[str, Any]:
     if not grok_enabled():
         raise RuntimeError("Grok experiment is disabled. Set IIOS_GROK_ENABLED=1 to make xAI API calls.")
@@ -386,12 +413,14 @@ Return ONLY JSON:
 }}
 """
 
-    client = OpenAI(api_key=api_key, base_url=grok_base_url(), timeout=90.0)
-    response = client.responses.create(
-        model=grok_model(),
-        input=prompt,
-        tools=[{"type": "x_search", "from_date": from_date, "to_date": to_date}],
+    timeout_seconds = grok_timeout_seconds()
+    client = OpenAI(
+        api_key=api_key,
+        base_url=grok_base_url(),
+        timeout=timeout_seconds,
+        max_retries=0,
     )
+    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date)
     parsed = _parse_model_json(getattr(response, "output_text", ""))
     citations = _extract_citation_urls(response)
     filtered = filter_grok_claims(parsed.get("claims"), citations)
@@ -405,6 +434,8 @@ Return ONLY JSON:
         "ticker": ticker,
         "from_date": from_date,
         "to_date": to_date,
+        "timeout_seconds": timeout_seconds,
+        "api_attempts": api_attempts,
         "summary": str(parsed.get("summary") or "")[:2000],
         "citation_urls": sorted(citations),
         "citation_count": len(citations),
@@ -457,6 +488,7 @@ def build_case_grok_context(case_id: str, *, days: int = 3, persist: bool = True
             "admitted_count": result.get("admitted_count"),
             "quarantined_count": result.get("quarantined_count"),
             "citation_count": result.get("citation_count"),
+            "api_attempts": result.get("api_attempts"),
             "trade_execution_permission": False,
         })
     return result
@@ -486,13 +518,7 @@ def _load_context_file() -> dict[str, Any] | None:
 
 
 def install_grok_prompt_context(module) -> None:
-    """Install a dormant context hook used only by isolated Grok experiment runs.
-
-    Normal IIOS runs have no IIOS_GROK_CONTEXT_FILE and are byte-for-byte behaviorally
-    equivalent at this hook. Experiment subprocesses provide a temporary JSON context
-    file. The hook appends admitted social context to specialist prompts only; it never
-    mutates the case evidence packet or committee evidence summary.
-    """
+    """Install a dormant context hook used only by isolated Grok experiment runs."""
     if getattr(module, "_grok_prompt_context_installed", False):
         return
     module._grok_prompt_context_installed = True
