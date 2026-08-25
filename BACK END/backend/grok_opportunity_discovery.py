@@ -9,13 +9,14 @@ from fastapi import APIRouter, Body, HTTPException
 from grok_social_intelligence import fetch_grok_social_context, grok_plan
 from ledger import get_object, record_event, record_object, utc_now
 from opportunity_acquisition import OPPORTUNITY_LEDGER_CASE, score_candidate
-from provider_hardening import fetch_gdelt_news, fetch_market_quote
+from opportunity_evidence import fetch_crosschecked_quote, fetch_news_bundle
 
 
 router = APIRouter()
 GROK_EXPERIMENT_LEDGER_CASE = "grok_experiment"
 MAX_GROK_CANDIDATES = 8
 MIN_NOMINATION_SOURCES = 2
+STANDARD_REVALIDATION_EVIDENCE_POLICY = "opportunity-evidence-hardening-v1"
 
 
 def _clean_ticker(value: Any) -> str | None:
@@ -161,11 +162,23 @@ def revalidate_grok_candidate(candidate_id: str) -> dict[str, Any]:
             }
 
     ticker = str(candidate.get("ticker") or "").upper()
-    quote = fetch_market_quote(ticker)
+    quote = fetch_crosschecked_quote(ticker)
     try:
-        news = fetch_gdelt_news({"query": f"{ticker} {candidate.get('rationale') or ''}"[:300], "limit": 10, "timespan": "24h"})
-        news_error = None
+        news_bundle = fetch_news_bundle(
+            f"{ticker} {candidate.get('rationale') or ''}"[:300],
+            limit=10,
+            timespan="24h",
+        )
+        news = list(news_bundle.get("items") or [])
+        failed_news_providers = list(news_bundle.get("failed_providers") or [])
+        news_error = ", ".join(failed_news_providers) if failed_news_providers else None
     except Exception as exc:
+        news_bundle = {
+            "provider_count": 0,
+            "successful_providers": [],
+            "failed_providers": [],
+            "status": "error",
+        }
         news = []
         news_error = f"{type(exc).__name__}: {exc}"[:1000]
 
@@ -181,8 +194,17 @@ def revalidate_grok_candidate(candidate_id: str) -> dict[str, Any]:
         **scored,
         "current_price": quote.get("current_price"),
         "quote_provider": quote.get("provider"),
+        "quote_provider_count": quote.get("provider_count"),
+        "quote_providers": list(quote.get("providers") or []),
+        "quote_cross_checked": quote.get("cross_checked") is True,
+        "quote_spread_pct": quote.get("spread_pct"),
+        "quote_quality": quote.get("quote_quality"),
         "quote_error": quote.get("error"),
+        "news_provider_count": news_bundle.get("provider_count"),
+        "news_successful_providers": list(news_bundle.get("successful_providers") or []),
+        "news_failed_providers": list(news_bundle.get("failed_providers") or []),
         "news_error": news_error,
+        "standard_revalidation_evidence_policy": STANDARD_REVALIDATION_EVIDENCE_POLICY,
         "evidence": evidence,
         "evidence_count": len(evidence),
         "promoted_case_id": None,
@@ -202,6 +224,8 @@ def revalidate_grok_candidate(candidate_id: str) -> dict[str, Any]:
         "ticker": ticker,
         "standard_candidate_id": standard_id,
         "standard_score": standard_candidate.get("score"),
+        "quote_cross_checked": standard_candidate.get("quote_cross_checked") is True,
+        "news_provider_count": standard_candidate.get("news_provider_count"),
         "standard_promotion_available": standard_candidate.get("eligible_for_promotion") is True,
         "automatic_promotion": False,
         "agents_started": 0,
@@ -228,8 +252,11 @@ def grok_opportunity_plan():
         "minimum_verified_x_sources": MIN_NOMINATION_SOURCES,
         "grok_can_create_governed_case_directly": False,
         "standard_quote_required": True,
+        "standard_quote_crosscheck_required": True,
         "standard_news_required": True,
+        "standard_news_multi_provider_path": True,
         "standard_opportunity_score_required": True,
+        "standard_revalidation_evidence_policy": STANDARD_REVALIDATION_EVIDENCE_POLICY,
         "automatic_promotion": False,
         "automatic_agent_run": False,
         "research_only": True,
