@@ -6,7 +6,7 @@ from ledger import utc_now
 
 
 router = APIRouter()
-CHECKPOINT_VERSION = "batch-7c-forward-value-cycle-v1"
+CHECKPOINT_VERSION = "batch-7c-forward-value-cycle-nonblocking-v2"
 
 
 def build_batch7_checkpoint() -> dict:
@@ -14,7 +14,7 @@ def build_batch7_checkpoint() -> dict:
         "checkpoint_version": CHECKPOINT_VERSION,
         "batch": "Batch 7 — Grok Experimental Intelligence Integration",
         "stage": "7C_FORWARD_VALUE_PROOF",
-        "checkpoint": "FORWARD_VALUE_CYCLE_READY_AWAITING_TIME_SEPARATED_OBSERVATIONS",
+        "checkpoint": "FORWARD_VALUE_CYCLE_NONBLOCKING_READY_AWAITING_TIME_SEPARATED_OBSERVATIONS",
         "completed": {
             "grok_x_search_adapter": True,
             "citation_firewall": True,
@@ -34,12 +34,14 @@ def build_batch7_checkpoint() -> dict:
             "meaningful_value_sample_thresholds": True,
             "combined_value_scorecard": True,
             "single_command_forward_value_cycle": True,
+            "nonblocking_cycle_job_runner": True,
+            "single_active_cycle_backpressure": True,
         },
         "pending_value_observations": [
-            "run the first forward value cycle",
-            "repeat forward cycles over real time until at least 5 time-separated Grok-vs-IIOS discovery pairs exist",
+            "continue time-separated forward value cycles using the nonblocking job runner",
+            "accumulate at least 5 valid Grok-vs-IIOS prospective discovery pairs",
             "resolve at least 5 Grok nominations through the hardened standard IIOS gate",
-            "enroll and refresh decision-shadow pairs",
+            "refresh decision-shadow pairs over time",
             "observe at least 3 governed realized paper outcomes",
             "build true arm-specific paper P&L only when governed paper positions exist",
         ],
@@ -47,10 +49,12 @@ def build_batch7_checkpoint() -> dict:
             "same_cycle_api_latency_counts_as_information_lead": False,
             "minimum_cross_cycle_separation_minutes": 10,
             "legacy_history_can_satisfy_prospective_sample": False,
+            "blocking_http_request_required": False,
+            "concurrent_cycle_jobs_allowed": False,
             "automatic_case_promotion": False,
             "automatic_agent_run": False,
         },
-        "resume_from": "RUN_FIRST_FORWARD_VALUE_CYCLE",
+        "resume_from": "RUN_NONBLOCKING_FORWARD_VALUE_CYCLE",
         "resume_phrase": "pick up Batch 7",
         "value_proof_complete": False,
         "permanent_factory_promotion_ready": False,
