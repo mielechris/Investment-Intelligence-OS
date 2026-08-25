@@ -51,8 +51,8 @@ jobs:
           grok_social_intelligence.py grok_citation_compat.py grok_xai_sdk_adapter.py grok_status_matcher.py
           grok_ab_benchmark.py grok_ab_reuse.py grok_experiment_scorecard.py
           grok_discovery_lead_time.py grok_false_positive_tracker.py grok_paper_value.py grok_value_scorecard.py
-          grok_value_instrumentation.py grok_value_probe.py grok_value_cycle.py grok_shadow_paper.py grok_batch7_checkpoint.py
-          grok_opportunity_discovery.py grok_experiment_manifest.py
+          grok_value_instrumentation.py grok_value_probe.py grok_value_cycle.py grok_value_cycle_async.py
+          grok_shadow_paper.py grok_batch7_checkpoint.py grok_opportunity_discovery.py grok_experiment_manifest.py
           agent_calibration_weighting.py thesis_lifecycle_intelligence.py
           portfolio_intelligence.py intelligence_safety_manifest.py
           governed_paper_execution_api.py governed_paper_execution_bridge.py
@@ -89,7 +89,8 @@ jobs:
           test_grok_status_matcher.py test_grok_ab_benchmark.py test_grok_ab_reuse.py
           test_grok_experiment_scorecard.py test_grok_value_measurement.py
           test_grok_value_instrumentation.py test_grok_discovery_lead_time.py
-          test_grok_value_probe.py test_grok_value_cycle.py test_grok_shadow_paper.py test_grok_batch7_checkpoint.py
+          test_grok_value_probe.py test_grok_value_cycle.py test_grok_value_cycle_async.py
+          test_grok_shadow_paper.py test_grok_batch7_checkpoint.py
           test_grok_opportunity_discovery.py test_grok_experiment_manifest.py
           test_v1_consolidation_manifest.py test_governed_chain_end_to_end.py
       - name: Run governed paper-chain safety tests
