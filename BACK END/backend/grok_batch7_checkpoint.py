@@ -6,15 +6,15 @@ from ledger import utc_now
 
 
 router = APIRouter()
-CHECKPOINT_VERSION = "batch-7b-value-proof-infrastructure-tuned-v2"
+CHECKPOINT_VERSION = "batch-7c-forward-value-cycle-v1"
 
 
 def build_batch7_checkpoint() -> dict:
     return {
         "checkpoint_version": CHECKPOINT_VERSION,
         "batch": "Batch 7 — Grok Experimental Intelligence Integration",
-        "stage": "7B_VALUE_PROOF",
-        "checkpoint": "VALUE_PROOF_INFRASTRUCTURE_TUNED_AWAITING_FORWARD_OBSERVATIONS",
+        "stage": "7C_FORWARD_VALUE_PROOF",
+        "checkpoint": "FORWARD_VALUE_CYCLE_READY_AWAITING_TIME_SEPARATED_OBSERVATIONS",
         "completed": {
             "grok_x_search_adapter": True,
             "citation_firewall": True,
@@ -24,6 +24,8 @@ def build_batch7_checkpoint() -> dict:
             "prospective_discovery_lead_time_instrumentation": True,
             "first_seen_observation_deduplication": True,
             "prospective_metrics_isolated_from_legacy_history": True,
+            "same_cycle_latency_excluded_from_lead_time": True,
+            "minimum_cross_cycle_separation_enforced": True,
             "automatic_standard_iios_revalidation_probe": True,
             "hardened_crosschecked_revalidation_gate": True,
             "false_positive_accounting": True,
@@ -31,16 +33,24 @@ def build_batch7_checkpoint() -> dict:
             "crosschecked_shadow_quote_policy": True,
             "meaningful_value_sample_thresholds": True,
             "combined_value_scorecard": True,
+            "single_command_forward_value_cycle": True,
         },
         "pending_value_observations": [
-            "run prospective Grok value probe sample",
-            "accumulate at least 5 matching native IIOS discovery observations",
+            "run the first forward value cycle",
+            "repeat forward cycles over real time until at least 5 time-separated Grok-vs-IIOS discovery pairs exist",
             "resolve at least 5 Grok nominations through the hardened standard IIOS gate",
             "enroll and refresh decision-shadow pairs",
             "observe at least 3 governed realized paper outcomes",
             "build true arm-specific paper P&L only when governed paper positions exist",
         ],
-        "resume_from": "RUN_VALUE_PROBE_AND_SHADOW_ENROLLMENT_CHECKPOINT",
+        "measurement_integrity": {
+            "same_cycle_api_latency_counts_as_information_lead": False,
+            "minimum_cross_cycle_separation_minutes": 10,
+            "legacy_history_can_satisfy_prospective_sample": False,
+            "automatic_case_promotion": False,
+            "automatic_agent_run": False,
+        },
+        "resume_from": "RUN_FIRST_FORWARD_VALUE_CYCLE",
         "resume_phrase": "pick up Batch 7",
         "value_proof_complete": False,
         "permanent_factory_promotion_ready": False,
