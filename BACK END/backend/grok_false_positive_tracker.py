@@ -10,7 +10,7 @@ from ledger import DB_PATH, get_object, utc_now
 
 
 router = APIRouter()
-POLICY_VERSION = "grok-false-positive-tracker-v1"
+POLICY_VERSION = "grok-false-positive-tracker-v2"
 
 
 def _rows(object_type: str) -> list[dict[str, Any]]:
@@ -54,8 +54,12 @@ def build_false_positive_report() -> dict[str, Any]:
             "standard_candidate_id": standard_id or None,
             "standard_score": (standard or {}).get("score"),
             "standard_promotion_eligible": (standard or {}).get("eligible_for_promotion"),
+            "standard_revalidation_evidence_policy": (standard or {}).get("standard_revalidation_evidence_policy"),
+            "standard_quote_cross_checked": (standard or {}).get("quote_cross_checked"),
+            "standard_quote_provider_count": (standard or {}).get("quote_provider_count"),
+            "standard_news_provider_count": (standard or {}).get("news_provider_count"),
             "verdict": verdict,
-            "false_positive_definition": "Grok nomination that passed the social-source firewall but failed independent standard IIOS quote/news promotion gating",
+            "false_positive_definition": "Grok nomination that passed the social-source firewall but failed independent hardened IIOS cross-checked quote/news promotion gating",
             "automatic_promotion": False,
             "trade_signal": False,
             "trade_execution_permission": False,
@@ -75,7 +79,7 @@ def build_false_positive_report() -> dict[str, Any]:
         "pending_count": pending,
         "false_positive_rate": false_positive_rate,
         "validation_rate": validation_rate,
-        "rows": rows,
+        "standard_gate_definition": "HARDENED_CROSSCHECKED_QUOTE_PLUS_MULTI_PROVIDER_NEWS_PATH",
         "automatic_promotion": False,
         "automatic_agent_run": False,
         "research_only": True,
