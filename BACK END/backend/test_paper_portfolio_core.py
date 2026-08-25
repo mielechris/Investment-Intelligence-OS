@@ -365,3 +365,54 @@ class PaperPortfolioRiskBenchmarkTests(unittest.TestCase):
         self.assertFalse(
             scoreboard["live_execution"]
         )
+
+
+class PaperPortfolioSchedulerSafetyTests(
+    unittest.TestCase
+):
+    def test_scheduler_defaults_to_no_execution_authority(
+        self,
+    ):
+        import paper_portfolio_scheduler as scheduler
+
+        status = scheduler.automation_status()
+
+        self.assertFalse(
+            status[
+                "capital_allocation_allowed"
+            ]
+        )
+
+        self.assertFalse(
+            status[
+                "position_sizing_allowed"
+            ]
+        )
+
+        self.assertFalse(
+            status[
+                "paper_order_permission"
+            ]
+        )
+
+        self.assertFalse(
+            status[
+                "trade_execution_permission"
+            ]
+        )
+
+        self.assertFalse(
+            status[
+                "live_execution"
+            ]
+        )
+
+    def test_scheduler_interval_is_bounded(
+        self,
+    ):
+        import paper_portfolio_scheduler as scheduler
+
+        self.assertGreaterEqual(
+            scheduler._interval_minutes(),
+            scheduler.MIN_INTERVAL_MINUTES,
+        )
