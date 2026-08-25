@@ -81,7 +81,7 @@ jobs:
       - name: Run Batch 7 Grok experiment safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
-          test_grok_social_intelligence.py test_grok_ab_benchmark.py
+          test_grok_social_intelligence.py test_grok_citation_compat.py test_grok_ab_benchmark.py
           test_grok_opportunity_discovery.py test_grok_experiment_manifest.py
           test_v1_consolidation_manifest.py test_governed_chain_end_to_end.py
       - name: Run governed paper-chain safety tests
