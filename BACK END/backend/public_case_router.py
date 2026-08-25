@@ -44,6 +44,7 @@ from grok_opportunity_discovery import router as grok_opportunity_router
 from grok_paper_value import router as grok_paper_value_router
 from grok_shadow_paper import router as grok_shadow_paper_router
 from grok_value_cycle import router as grok_value_cycle_router
+from grok_value_cycle_async import router as grok_value_cycle_async_router
 from grok_value_instrumentation import install_grok_value_instrumentation
 from grok_value_probe import router as grok_value_probe_router
 from grok_value_scorecard import router as grok_value_scorecard_router
@@ -58,51 +59,17 @@ from research_source_cache import (
     router as research_source_cache_router,
 )
 
-# Install model/effort routing and request deadlines first.
 install_orchestration_runtime(eight_agent_orchestrator)
-
-# Add bounded retries/circuit breaking before timing so telemetry measures the
-# resilient path. Persistent failures still fall into the existing fail-closed
-# agent/committee guards.
 install_orchestration_resilience(eight_agent_orchestrator)
-
-# Install bounded orchestration throughput/timing before dispatch, queue, or
-# worker-pool modules import the run function.
 install_orchestration_speed(eight_agent_orchestrator)
-
-# Cross-case memory is specialist context only. It never enters qualification
-# evidence counts, fact resolution, sizing, authorization, or execution gates.
 install_cross_case_memory(eight_agent_orchestrator)
-
-# Human Judgment Bank context is injected only after explicit human approval,
-# LOW restriction-risk screening, and case relevance. It is advisory/untrusted
-# context only and cannot become qualifying evidence or capital authority.
 install_judgment_bank_context(eight_agent_orchestrator)
-
-# Batch 7 Grok hook is dormant in ordinary IIOS operation. Only isolated A/B
-# subprocesses receive IIOS_GROK_CONTEXT_FILE; the hook never mutates the case
-# evidence packet or qualifying evidence summary.
 install_grok_prompt_context(eight_agent_orchestrator)
-
-# Calibration remains neutral until every desk reaches the governed sample-size
-# threshold. Even when mature, it cannot bypass committee guards.
 install_calibration_context(eight_agent_orchestrator)
-
-# Install research-only evidence hardening before value instrumentation so every
-# native discovery timestamp refers to the hardened opportunity path.
 install_opportunity_evidence_hardening(opportunity_acquisition)
-
-# Reuse successful exact-match public source responses within bounded TTLs. This
-# never caches model judgments or market-quote decisions.
 install_research_source_cache(source_ingestion)
-
-# Forward value-proof instrumentation only records when IIOS/Grok first observed
-# a ticker. It cannot promote a case, qualify evidence, start agents, or trade.
 install_grok_value_instrumentation(opportunity_acquisition, grok_opportunity_discovery)
 
-# Import modules that capture the installed orchestrator only after runtime,
-# resilience, timing, memory, Judgment Bank, Grok experiment hook, calibration,
-# evidence hardening, caching, and value instrumentation layers are in place.
 from adaptive_research_queue import router as adaptive_research_queue_router
 from evidence_depth_engine import router as evidence_depth_router
 from historical_regime_memory import router as historical_regime_memory_router
@@ -147,6 +114,7 @@ router.include_router(grok_paper_value_router)
 router.include_router(grok_shadow_paper_router)
 router.include_router(grok_value_probe_router)
 router.include_router(grok_value_cycle_router)
+router.include_router(grok_value_cycle_async_router)
 router.include_router(grok_value_scorecard_router)
 router.include_router(grok_batch7_checkpoint_router)
 router.include_router(agent_calibration_router)
@@ -169,7 +137,6 @@ def run_public_case(request: dict[str, Any] = Body(...)):
     quote = _fetch_stooq_quote(ticker)
     evidence = list(ingestion.get("evidence_items") or []) + list(quote.get("items") or [])
 
-    # Imported lazily so app -> router imports do not create a startup cycle.
     from main import TopicRequest, run_factory
 
     factory = run_factory(TopicRequest(topic=topic, evidence=evidence))
