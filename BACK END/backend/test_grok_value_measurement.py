@@ -11,12 +11,17 @@ class GrokValueMeasurementTests(unittest.TestCase):
     @patch.object(lead, "_rows")
     def test_lead_time_positive_when_grok_is_earlier(self, rows):
         def fake(kind):
+            if kind == "grok_value_discovery_observation":
+                return []
             if kind == "grok_opportunity_candidate":
                 return [{"ticker": "ABC", "created_at": "2026-01-01T10:00:00+00:00", "eligible_for_iios_revalidation": True}]
-            return [{"ticker": "ABC", "created_at": "2026-01-01T10:30:00+00:00"}]
+            if kind == "opportunity_candidate":
+                return [{"ticker": "ABC", "created_at": "2026-01-01T10:30:00+00:00"}]
+            return []
         rows.side_effect = fake
         out = lead.build_discovery_lead_time_report()
         self.assertEqual(out["measurable_pair_count"], 1)
+        self.assertEqual(out["prospective_pair_count"], 0)
         self.assertEqual(out["grok_earlier_count"], 1)
         self.assertEqual(out["rows"][0]["grok_lead_minutes"], 30.0)
         self.assertFalse(out["trade_execution_permission"])
@@ -38,9 +43,10 @@ class GrokValueMeasurementTests(unittest.TestCase):
         self.assertEqual(out["false_positive_rate"], 1.0)
         self.assertFalse(out["automatic_promotion"])
 
+    @patch.object(paper, "_rows", return_value=[])
     @patch.object(paper, "latest_object")
     @patch.object(paper, "_valid_repeatability_results")
-    def test_paper_value_refuses_to_claim_arm_pnl(self, results, latest):
+    def test_paper_value_refuses_to_claim_arm_pnl(self, results, latest, _rows):
         results.return_value = [{
             "case_id": "case_1",
             "comparison": {"baseline_disposition": "NO_TRADE", "grok_disposition": "NO_TRADE", "committee_disposition_changed": False},
@@ -58,12 +64,32 @@ class GrokValueMeasurementTests(unittest.TestCase):
     @patch.object(value, "build_grok_scorecard")
     def test_combined_scorecard_never_auto_promotes(self, repeatability, lead_time, false_positive, paper_value):
         repeatability.return_value = {"valid_repeatability_cases": 4, "aggregate": {"mean_confidence_delta": 0.14, "median_confidence_delta": 0.13, "disposition_change_cases": 0, "all_guards_clean": True}}
-        lead_time.return_value = {"measurable_pair_count": 3, "grok_earlier_count": 2, "iios_earlier_count": 1, "median_grok_lead_minutes": 12.0}
+        lead_time.return_value = {
+            "measurable_pair_count": 3,
+            "prospective_pair_count": 1,
+            "grok_earlier_count": 2,
+            "iios_earlier_count": 1,
+            "prospective_grok_earlier_count": 1,
+            "prospective_iios_earlier_count": 0,
+            "median_grok_lead_minutes": 12.0,
+            "prospective_median_grok_lead_minutes": 8.0,
+        }
         false_positive.return_value = {"nomination_count": 4, "resolved_count": 4, "validated_count": 3, "rejected_count": 1, "false_positive_rate": 0.25}
-        paper_value.return_value = {"valid_ab_case_count": 4, "cases_with_position_monitor": 2, "cases_with_realized_return": 1, "return_comparison_ready": False}
+        paper_value.return_value = {
+            "valid_ab_case_count": 4,
+            "cases_with_position_monitor": 2,
+            "cases_with_realized_return": 1,
+            "shadow_pair_count": 4,
+            "shadow_snapshot_count": 4,
+            "differentiated_action_pair_count": 0,
+            "shadow_measurement_ledger_ready": True,
+            "return_comparison_ready": False,
+        }
         out = value.build_grok_value_scorecard()
         self.assertEqual(out["status"], "VALUE_PROOF_IN_PROGRESS")
         self.assertTrue(out["milestones"]["four_case_repeatability_sample"])
+        self.assertTrue(out["milestones"]["prospective_lead_time_pairs_measured"])
+        self.assertTrue(out["milestones"]["shadow_measurement_ledger_ready"])
         self.assertFalse(out["milestones"]["dual_arm_pnl_ready"])
         self.assertFalse(out["permanent_factory_promotion_ready"])
         self.assertFalse(out["automatic_configuration_change"])
