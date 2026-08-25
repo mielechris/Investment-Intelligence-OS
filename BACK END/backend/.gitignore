@@ -7,4 +7,9 @@
 __pycache__/
 *.pyc
 
+# Local persistent decision ledger
+*.db
+*.db-shm
+*.db-wal
+
 .DS_Store

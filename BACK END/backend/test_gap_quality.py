@@ -1,0 +1,198 @@
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from gap_quality import build_resolution_matrix, curate_gap_evidence
+
+
+NOW = datetime.now(timezone.utc).isoformat()
+
+
+class GapQualityTests(unittest.TestCase):
+    def test_quality_firewall_rejects_low_quality_news_and_caps_source(self):
+        items = [
+            {
+                "source": "weak blog",
+                "source_type": "news_aggregator",
+                "evidence_type": "news",
+                "url": f"https://weak.example/{i}",
+                "claim": f"memory rumor {i}",
+                "timestamp": NOW,
+                "reliability_score": 0.20,
+            }
+            for i in range(4)
+        ]
+        result = curate_gap_evidence(items)
+        self.assertEqual(result["admitted_count"], 0)
+        self.assertEqual(result["rejected_count"], 4)
+        self.assertTrue(all(row["reason"] == "QUALITY_BELOW_ADMISSION_FLOOR" for row in result["rejected"]))
+
+    def test_resolution_requires_quality_and_source_diversity(self):
+        requirement = "Current independent HBM and DRAM pricing evidence"
+        supporting = [
+            {
+                "source": "Primary Company",
+                "source_type": "company",
+                "evidence_type": "fundamental",
+                "url": "https://company.example/pricing",
+                "claim": "HBM and DRAM pricing increased in the current quarter",
+                "timestamp": NOW,
+                "reliability_score": 0.93,
+                "gap_requirement": requirement,
+            },
+            {
+                "source": "Independent Market Data",
+                "source_type": "market_data",
+                "evidence_type": "market_data",
+                "url": "https://market.example/dram",
+                "claim": "Current DRAM price index is higher quarter over quarter",
+                "timestamp": NOW,
+                "reliability_score": 0.90,
+                "gap_requirement": requirement,
+            },
+        ]
+        matrix = build_resolution_matrix([requirement], supporting)
+        self.assertEqual(len(matrix), 1)
+        self.assertTrue(matrix[0]["resolved"])
+        self.assertGreaterEqual(matrix[0]["independent_sources"], 2)
+        self.assertGreaterEqual(matrix[0]["high_quality_items"], 2)
+
+    def test_one_source_cannot_resolve_requirement(self):
+        requirement = "Verified hyperscaler orders and HBM qualification status"
+        supporting = [
+            {
+                "source": "One Source",
+                "source_type": "company",
+                "evidence_type": "fundamental",
+                "url": "https://one.example/a",
+                "claim": "Hyperscaler order and HBM qualification details",
+                "timestamp": NOW,
+                "reliability_score": 0.95,
+                "gap_requirement": requirement,
+            },
+            {
+                "source": "One Source",
+                "source_type": "company",
+                "evidence_type": "fundamental",
+                "url": "https://one.example/b",
+                "claim": "More hyperscaler order and HBM qualification details",
+                "timestamp": NOW,
+                "reliability_score": 0.95,
+                "gap_requirement": requirement,
+            },
+        ]
+        matrix = build_resolution_matrix([requirement], supporting)
+        self.assertFalse(matrix[0]["resolved"])
+        self.assertIn("INSUFFICIENT_SOURCE_DIVERSITY", matrix[0]["blockers"])
+
+    def test_context_only_signals_can_inform_but_cannot_resolve_gap(self):
+        requirement = "Current valuation consensus options positioning and short interest"
+        context = [
+            {
+                "source": "Secondary Market Context A",
+                "source_type": "market_data",
+                "evidence_type": "market_context",
+                "url": "https://context-a.example/mu",
+                "claim": "Analyst estimates revised higher",
+                "timestamp": NOW,
+                "reliability_score": 0.90,
+                "gap_requirement": requirement,
+                "gap_resolution_eligible": False,
+            },
+            {
+                "source": "Secondary Market Context B",
+                "source_type": "market_data",
+                "evidence_type": "market_context",
+                "url": "https://context-b.example/mu",
+                "claim": "Options positioning changed materially",
+                "timestamp": NOW,
+                "reliability_score": 0.90,
+                "gap_requirement": requirement,
+                "gap_resolution_eligible": False,
+            },
+        ]
+        matrix = build_resolution_matrix([requirement], context)
+        self.assertFalse(matrix[0]["resolved"])
+        self.assertEqual(matrix[0]["supporting_items"], 0)
+        self.assertEqual(matrix[0]["context_only_supporting_items"], 2)
+        self.assertIn("ONLY_CONTEXT_NOT_RESOLUTION_ELIGIBLE", matrix[0]["blockers"])
+
+
+    def test_newest_market_snapshot_supersedes_older_values(self):
+        now = datetime.now(timezone.utc)
+
+        items = [
+            {
+                "source": "Yahoo Finance",
+                "source_type": "market_data",
+                "evidence_type": "market_data",
+                "url": "https://example.test/old",
+                "claim": "MU.US price=966.78",
+                "timestamp": (now - timedelta(minutes=30)).isoformat(),
+                "reliability_score": 0.90,
+                "primary_fact_key": "market_price",
+                "market_role": "current_quote",
+            },
+            {
+                "source": "Yahoo Finance",
+                "source_type": "market_data",
+                "evidence_type": "market_data",
+                "url": "https://example.test/new",
+                "claim": "MU.US price=910.87",
+                "timestamp": (now - timedelta(minutes=5)).isoformat(),
+                "reliability_score": 0.90,
+                "primary_fact_key": "market_price",
+                "market_role": "current_quote",
+            },
+            {
+                "source": "Derived valuation",
+                "source_type": "market_data",
+                "evidence_type": "market_session",
+                "url": "https://example.test/old-val",
+                "claim": (
+                    "MU valuation reference market-session price=966.78; "
+                    "derived trailing GAAP P/E=21.85"
+                ),
+                "timestamp": (now - timedelta(minutes=30)).isoformat(),
+                "reliability_score": 0.93,
+                "primary_fact_key": "valuation",
+                "market_role": "valuation_reference_session",
+            },
+            {
+                "source": "Current valuation",
+                "source_type": "market_data",
+                "evidence_type": "market_session",
+                "url": "https://example.test/new-val",
+                "claim": (
+                    "MU current live quote price=910.87; "
+                    "current trailing GAAP P/E=20.59"
+                ),
+                "timestamp": (now - timedelta(minutes=5)).isoformat(),
+                "reliability_score": 0.93,
+                "primary_fact_key": "valuation",
+                "market_role": "current_valuation",
+            },
+        ]
+
+        result = curate_gap_evidence(items)
+
+        admitted_claims = [
+            str(row.get("claim") or "")
+            for row in result["admitted"]
+        ]
+
+        self.assertTrue(
+            any("910.87" in claim for claim in admitted_claims)
+        )
+        self.assertFalse(
+            any("966.78" in claim for claim in admitted_claims)
+        )
+
+        superseded = [
+            row for row in result["rejected"]
+            if row["reason"] == "SUPERSEDED_MARKET_SNAPSHOT"
+        ]
+        self.assertEqual(len(superseded), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

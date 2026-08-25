@@ -1,0 +1,234 @@
+import unittest
+
+import primary_evidence
+from gap_quality import build_resolution_matrix
+from primary_evidence import _fact_from_sec_title
+from primary_evidence_contracts import contract_for_requirement, coverage_for_requirement, fact_matches
+from primary_evidence_semantic_guard import install_primary_evidence_semantic_guard, policy_transmission_supported
+
+
+install_primary_evidence_semantic_guard(primary_evidence)
+
+FINANCIAL_REQUIREMENT = (
+    "Micron's latest filing-based revenue mix, HBM volumes and margins, inventory, free cash flow, "
+    "debt and cash, capex commitments, and sensitivity to memory ASP changes."
+)
+HBM_ECONOMICS_REQUIREMENT = (
+    "Verified Micron HBM revenue, shipment volumes, margins, customer concentration, "
+    "capacity allocation, and ASP sensitivity."
+)
+POLICY_CURRENT_REQUIREMENT = (
+    "Final tariff scope, effective dates, implementation guidance, and measurable evidence of "
+    "supply-chain substitution or memory-market transmission."
+)
+
+
+class PrimaryEvidenceTests(unittest.TestCase):
+    def test_round7_financial_requirement_maps_to_fact_contract(self):
+        lane, contract = contract_for_requirement(FINANCIAL_REQUIREMENT)
+        self.assertEqual(lane, "micron_financials")
+        self.assertEqual(contract["label"], "Micron Filing Financials")
+        self.assertGreaterEqual(len(contract["facts"]), 8)
+
+    def test_tightened_hbm_requirement_maps_to_dedicated_contract(self):
+        lane, contract = contract_for_requirement(HBM_ECONOMICS_REQUIREMENT)
+        self.assertEqual(lane, "micron_hbm_economics")
+        self.assertEqual(contract["label"], "Micron HBM Economics")
+        self.assertEqual(len(contract["facts"]), 6)
+        self.assertEqual(contract["minimum_fraction"], 1.0)
+
+    def test_hbm_economics_does_not_close_with_only_four_carried_forward_facts(self):
+        items = [
+            {"primary_fact_key": "hbm_revenue", "claim": "HBM4 revenue over $1 billion"},
+            {"primary_fact_key": "hbm_shipments", "claim": "HBM4 high-volume shipments"},
+            {"primary_fact_key": "capacity_allocation", "claim": "HBM wafer and supply allocation"},
+            {"primary_fact_key": "hbm_asp_sensitivity", "claim": "HBM pricing premium"},
+        ]
+        coverage = coverage_for_requirement(HBM_ECONOMICS_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 4)
+        self.assertEqual(set(coverage["missing_fact_keys"]), {"hbm_margin", "customer_concentration"})
+        self.assertFalse(coverage["coverage_gate_passed"])
+
+    def test_current_policy_wording_maps_to_policy_contract(self):
+        lane, contract = contract_for_requirement(POLICY_CURRENT_REQUIREMENT)
+        self.assertEqual(lane, "policy")
+        self.assertEqual(contract["label"], "Policy / Regulation")
+
+    def test_sec_tag_mapping_is_specific(self):
+        self.assertEqual(
+            _fact_from_sec_title("Micron Technology InventoryNet"),
+            ("micron_financials", "inventory"),
+        )
+        self.assertEqual(
+            _fact_from_sec_title("Micron Technology WeightedAverageNumberOfDilutedSharesOutstanding"),
+            ("valuation_market", "diluted_shares"),
+        )
+
+    def test_bare_hbm_does_not_prove_margin_or_packaging_yield(self):
+        self.assertIsNone(primary_evidence._fact_from_keyword("micron_financials", "HBM"))
+        self.assertIsNone(primary_evidence._fact_from_keyword("supply_inventory", "HBM"))
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", "HBM volume and margin"), "hbm_margin")
+        self.assertEqual(primary_evidence._fact_from_keyword("supply_inventory", "HBM packaging capacity"), "capacity")
+
+    def test_hbm_specific_keyword_mapping_remains_narrow(self):
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM4 revenue exceeded $1 billion"), "hbm_revenue")
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM4 high-volume shipments"), "hbm_shipments")
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM capacity allocation uses more wafers"), "capacity_allocation")
+        self.assertEqual(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM pricing premium"), "hbm_asp_sensitivity")
+        self.assertEqual(
+            primary_evidence._fact_from_keyword(
+                "micron_hbm_economics",
+                "Micron HBM customer base expanded to six customers",
+            ),
+            "customer_concentration",
+        )
+        self.assertIsNone(primary_evidence._fact_from_keyword("micron_hbm_economics", "HBM product leadership"))
+
+    def test_static_micron_financial_keywords_map_to_specific_facts(self):
+        cases = {
+            "Revenue": "revenue",
+            "Inventories": "inventory",
+            "net cash provided by operating activities": "cash_flow",
+            "cash and cash equivalents": "cash",
+            "Long-term debt": "debt",
+            "capital expenditures": "capex",
+            "prices increased in the low-60s percentage range": "asp_sensitivity",
+            "Margins improved primarily due to increases in average selling prices": "asp_sensitivity",
+            "HBM4 volume shipment": "hbm_margin",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(primary_evidence._fact_from_keyword("micron_financials", text), expected)
+
+    def test_policy_transmission_requires_policy_and_supply_mechanism_at_ingestion(self):
+        self.assertFalse(policy_transmission_supported("Domestic semiconductor supply capacity is expanding."))
+        self.assertFalse(policy_transmission_supported("A 25 percent tariff applies to covered chips."))
+        self.assertTrue(
+            policy_transmission_supported(
+                "A 25 percent tariff does not apply to imports used to strengthen the United States technology supply chain and domestic manufacturing capacity."
+            )
+        )
+
+    def test_policy_text_alone_cannot_prove_measured_transmission(self):
+        transmission_fact = {"key": "transmission", "label": "Measured supply-demand transmission", "terms": ("imports", "shipments", "production")}
+        white_house = {
+            "primary_fact_key": "transmission",
+            "source": "White House",
+            "url": "https://www.whitehouse.gov/presidential-actions/example",
+            "claim": "A 25 percent tariff supports domestic manufacturing capacity and the technology supply chain.",
+        }
+        measured_market = {
+            "primary_fact_key": "transmission",
+            "source": "Independent Trade Data",
+            "url": "https://trade.example/semiconductors",
+            "claim": "Following implementation, covered semiconductor imports fell 18 percent and domestic production volume rose 7 percent.",
+        }
+        self.assertFalse(fact_matches(white_house, transmission_fact))
+        self.assertTrue(fact_matches(measured_market, transmission_fact))
+
+    def test_measured_transmission_is_mandatory_when_committee_explicitly_requests_it(self):
+        items = [
+            {"primary_fact_key": "incentives", "claim": "CHIPS incentive award"},
+            {"primary_fact_key": "export_controls", "claim": "BIS export controls"},
+            {"primary_fact_key": "tariffs", "claim": "25 percent semiconductor tariff"},
+            {"primary_fact_key": "effective_dates", "claim": "effective date 2026-01-15"},
+        ]
+        coverage = coverage_for_requirement(POLICY_CURRENT_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 4)
+        self.assertTrue(coverage["threshold_passed"])
+        self.assertEqual(coverage["missing_critical_fact_keys"], ["transmission"])
+        self.assertFalse(coverage["coverage_gate_passed"])
+
+    def test_policy_can_reach_full_coverage_with_tariff_and_measured_transmission(self):
+        items = [
+            {"primary_fact_key": "incentives", "claim": "CHIPS semiconductor incentive award"},
+            {"primary_fact_key": "export_controls", "claim": "BIS advanced-computing export controls"},
+            {"primary_fact_key": "tariffs", "claim": "25 percent semiconductor tariff"},
+            {"primary_fact_key": "effective_dates", "claim": "Effective January 15, 2026"},
+            {
+                "primary_fact_key": "transmission",
+                "source": "Federal Reserve / FRED",
+                "url": "https://fred.stlouisfed.org/series/IPG3344S",
+                "claim": (
+                    "U.S. semiconductor industrial production was 191.8973 versus "
+                    "176.4046 previously, a measured production increase of 8.78 percent."
+                ),
+            },
+        ]
+        coverage = coverage_for_requirement(POLICY_CURRENT_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 5)
+        self.assertEqual(coverage["total_facts"], 5)
+        self.assertTrue(coverage["coverage_gate_passed"])
+        self.assertEqual(coverage["missing_critical_fact_keys"], [])
+
+    def test_fact_coverage_uses_explicit_primary_fact_keys(self):
+        items = [
+            {"primary_fact_key": "revenue", "claim": "Revenue=1"},
+            {"primary_fact_key": "inventory", "claim": "InventoryNet=2"},
+            {"primary_fact_key": "cash_flow", "claim": "Operating cash flow=3"},
+            {"primary_fact_key": "cash", "claim": "Cash=4"},
+            {"primary_fact_key": "debt", "claim": "Debt=5"},
+            {"primary_fact_key": "capex", "claim": "Capex=6"},
+        ]
+        coverage = coverage_for_requirement(FINANCIAL_REQUIREMENT, items)
+        self.assertIsNotNone(coverage)
+        self.assertEqual(coverage["covered_facts"], 6)
+        self.assertTrue(coverage["coverage_gate_passed"])
+
+    def test_resolution_stays_blocked_when_fact_contract_is_incomplete(self):
+        items = [
+            {
+                "source": "SEC EDGAR",
+                "source_type": "filing",
+                "evidence_type": "fundamental",
+                "url": "https://data.sec.gov/a",
+                "claim": "Micron revenue increased",
+                "timestamp": "2026-08-22T00:00:00+00:00",
+                "reliability_score": 0.99,
+                "gap_requirement": FINANCIAL_REQUIREMENT,
+                "primary_fact_key": "revenue",
+            },
+            {
+                "source": "Micron IR",
+                "source_type": "company",
+                "evidence_type": "fundamental",
+                "url": "https://investors.micron.com/a",
+                "claim": "Micron HBM volume and margin detail",
+                "timestamp": "2026-08-22T00:00:00+00:00",
+                "reliability_score": 0.95,
+                "gap_requirement": FINANCIAL_REQUIREMENT,
+                "primary_fact_key": "hbm_margin",
+            },
+        ]
+        row = build_resolution_matrix([FINANCIAL_REQUIREMENT], items)[0]
+        self.assertFalse(row["resolved"])
+        self.assertIn("PRIMARY_FACT_COVERAGE_INCOMPLETE", row["blockers"])
+
+    def test_resolution_can_pass_with_fact_coverage_and_source_diversity(self):
+        facts = ["revenue", "hbm_margin", "inventory", "cash_flow", "cash", "debt", "capex"]
+        items = []
+        for index, fact in enumerate(facts):
+            sec = index % 2 == 0
+            items.append(
+                {
+                    "source": "SEC EDGAR" if sec else "Micron IR",
+                    "source_type": "filing" if sec else "company",
+                    "evidence_type": "fundamental",
+                    "url": "https://data.sec.gov/a" if sec else "https://investors.micron.com/a",
+                    "claim": f"Verified primary fact {fact}",
+                    "timestamp": "2026-08-22T00:00:00+00:00",
+                    "reliability_score": 0.99 if sec else 0.95,
+                    "gap_requirement": FINANCIAL_REQUIREMENT,
+                    "primary_fact_key": fact,
+                }
+            )
+        row = build_resolution_matrix([FINANCIAL_REQUIREMENT], items)[0]
+        self.assertTrue(row["fact_coverage"]["coverage_gate_passed"])
+        self.assertTrue(row["resolved"])
+
+
+if __name__ == "__main__":
+    unittest.main()
