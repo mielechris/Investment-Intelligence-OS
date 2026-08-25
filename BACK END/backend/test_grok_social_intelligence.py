@@ -97,20 +97,17 @@ class GrokSocialIntelligenceTests(unittest.TestCase):
         self.assertEqual([row["source"] for row in seen[-1][1]], ["base"])
         self.assertEqual(len(base), 1)
 
-    def test_citation_extractor_does_not_trust_plain_model_text(self):
+    def test_citation_extractor_trusts_xai_all_citations_not_plain_model_text(self):
         response = SimpleNamespace(
             model_dump=lambda: {
+                "citations": ["https://x.com/real/status/2?ref=test"],
                 "output": [{
                     "type": "message",
                     "content": [{
                         "type": "output_text",
                         "text": "Invented prose https://x.com/fake/status/1",
-                        "annotations": [{
-                            "type": "url_citation",
-                            "url": "https://x.com/real/status/2?ref=test",
-                        }],
                     }],
-                }]
+                }],
             }
         )
         urls = grok._extract_citation_urls(response)
