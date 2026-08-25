@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import re
 from typing import Any
-from uuid import uuid4
 
-from ledger import record_object, utc_now
+from ledger import get_object, record_object, utc_now
 
 
 MEASUREMENT_CASE_ID = "grok_value_measurement"
-POLICY_VERSION = "grok-forward-discovery-observation-v2"
+POLICY_VERSION = "grok-forward-discovery-observation-v3"
+
+
+def _observation_id(source: str, ticker: str) -> str:
+    safe_source = re.sub(r"[^A-Z0-9]+", "_", source.upper()).strip("_") or "UNKNOWN"
+    safe_ticker = re.sub(r"[^A-Z0-9]+", "_", ticker.upper()).strip("_") or "UNKNOWN"
+    return f"grok_value_first_seen_{safe_source}_{safe_ticker}"
 
 
 def record_discovery_observation(
@@ -19,17 +25,22 @@ def record_discovery_observation(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     normalized = str(ticker or "").strip().upper()
-    if not normalized:
+    normalized_source = str(source or "").strip().upper()
+    if not normalized or not normalized_source:
         return None
-    observation_id = f"grok_value_observation_{uuid4().hex}"
+    observation_id = _observation_id(normalized_source, normalized)
+    existing = get_object(observation_id)
+    if existing:
+        return existing
     payload = {
         "discovery_observation_id": observation_id,
         "policy_version": POLICY_VERSION,
-        "source": str(source or "").strip().upper(),
+        "source": normalized_source,
         "ticker": normalized,
         "source_object_id": str(source_object_id or "").strip() or None,
         "observed_at": str(observed_at or utc_now()),
         "metadata": metadata or {},
+        "first_observation_only": True,
         "measurement_only": True,
         "qualification_evidence": False,
         "trade_signal": False,
