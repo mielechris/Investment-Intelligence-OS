@@ -9,18 +9,26 @@ class FakeTimeout(Exception):
 
 
 class FakeRawResponse:
-    def __init__(self):
-        self.http_response = SimpleNamespace(
-            json=lambda: {
+    def parse(self, *, to=None):
+        if to is dict:
+            return {
                 "citations": [
                     "https://x.com/real_one/status/1?ref=test",
                     "https://x.com/real_two/status/2",
                     "https://example.com/not-x",
-                ]
+                ],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Untrusted prose https://x.com/fake/status/999",
+                            }
+                        ],
+                    }
+                ],
             }
-        )
-
-    def parse(self):
         return SimpleNamespace(
             output_text='{"claims":[]}',
             model_dump=lambda: {
@@ -45,7 +53,7 @@ class FakeWithRaw:
 
 
 class GrokCitationCompatTests(unittest.TestCase):
-    def test_raw_xai_citations_survive_sdk_parsing_without_trusting_prose(self):
+    def test_untyped_raw_xai_citations_survive_sdk_model_parsing_without_trusting_prose(self):
         def normalize(value):
             text = str(value or "").split("?", 1)[0].rstrip("/")
             return text or None
