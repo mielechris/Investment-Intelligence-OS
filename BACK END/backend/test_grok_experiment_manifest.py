@@ -36,8 +36,9 @@ class GrokExperimentManifestTests(unittest.TestCase):
         self.assertTrue(result["all_invariants_pass"])
         self.assertEqual(result["baseline_tag"], "IIOS-V1.0")
         self.assertEqual(result["experiment_branch"], "experiment/grok-intelligence-v1")
-        self.assertEqual(result["citation_compat_version"], "xai-untyped-parse-citations-v3")
-        self.assertTrue(result["invariant_checks"]["xai_top_level_citation_compat_installed"])
+        self.assertEqual(result["xai_adapter_version"], "xai-official-sdk-citations-v4")
+        self.assertEqual(result["citation_compat_version"], "xai-official-sdk-citations-v4")
+        self.assertTrue(result["invariant_checks"]["xai_official_sdk_adapter_installed"])
         self.assertFalse(result["permanent_factory_promotion_ready"])
         self.assertTrue(result["main_baseline_should_remain_unchanged"])
         self.assertFalse(result["auto_trade_authority"])
@@ -45,21 +46,24 @@ class GrokExperimentManifestTests(unittest.TestCase):
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
 
-    def test_xai_top_level_citations_are_read_without_trusting_plain_text(self):
+    def test_existing_firewall_reads_sdk_adapter_citations_without_trusting_plain_text(self):
         response = SimpleNamespace(
             citations=[
                 "https://x.com/alpha/status/123?ref=test",
                 "https://example.com/not-x",
             ],
-            sources=None,
             model_dump=lambda: {
+                "citations": [
+                    "https://x.com/alpha/status/123?ref=test",
+                    "https://example.com/not-x",
+                ],
                 "output": [{
                     "type": "message",
                     "content": [{
                         "type": "output_text",
                         "text": "Untrusted prose https://x.com/fake/status/999",
                     }],
-                }]
+                }],
             },
         )
         urls = manifest.grok_social._extract_citation_urls(response)
