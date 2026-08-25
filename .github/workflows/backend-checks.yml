@@ -50,6 +50,7 @@ jobs:
           dynamic_agent_factory.py ipo_monitoring.py v1_consolidation_manifest.py
           grok_social_intelligence.py grok_citation_compat.py grok_xai_sdk_adapter.py grok_status_matcher.py
           grok_ab_benchmark.py grok_ab_reuse.py grok_experiment_scorecard.py
+          grok_discovery_lead_time.py grok_false_positive_tracker.py grok_paper_value.py grok_value_scorecard.py
           grok_opportunity_discovery.py grok_experiment_manifest.py
           agent_calibration_weighting.py thesis_lifecycle_intelligence.py
           portfolio_intelligence.py intelligence_safety_manifest.py
@@ -85,9 +86,9 @@ jobs:
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
           test_grok_social_intelligence.py test_grok_citation_compat.py test_grok_xai_sdk_adapter.py
           test_grok_status_matcher.py test_grok_ab_benchmark.py test_grok_ab_reuse.py
-          test_grok_experiment_scorecard.py test_grok_opportunity_discovery.py
-          test_grok_experiment_manifest.py test_v1_consolidation_manifest.py
-          test_governed_chain_end_to_end.py
+          test_grok_experiment_scorecard.py test_grok_value_measurement.py
+          test_grok_opportunity_discovery.py test_grok_experiment_manifest.py
+          test_v1_consolidation_manifest.py test_governed_chain_end_to_end.py
       - name: Run governed paper-chain safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
@@ -131,7 +132,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
