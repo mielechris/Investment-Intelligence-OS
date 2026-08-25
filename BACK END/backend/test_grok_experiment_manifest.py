@@ -36,7 +36,7 @@ class GrokExperimentManifestTests(unittest.TestCase):
         self.assertTrue(result["all_invariants_pass"])
         self.assertEqual(result["baseline_tag"], "IIOS-V1.0")
         self.assertEqual(result["experiment_branch"], "experiment/grok-intelligence-v1")
-        self.assertEqual(result["citation_compat_version"], "xai-raw-response-citations-v2")
+        self.assertEqual(result["citation_compat_version"], "xai-untyped-parse-citations-v3")
         self.assertTrue(result["invariant_checks"]["xai_top_level_citation_compat_installed"])
         self.assertFalse(result["permanent_factory_promotion_ready"])
         self.assertTrue(result["main_baseline_should_remain_unchanged"])
