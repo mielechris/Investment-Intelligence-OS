@@ -5,6 +5,7 @@ on:
     branches:
       - feature/governed-chain-v1
       - integration/iios-v1.0
+      - experiment/grok-intelligence-v1
   pull_request:
     branches:
       - main
@@ -47,7 +48,8 @@ jobs:
           interview_portal.py chain_verifier.py evidence_depth_engine.py
           historical_regime_memory.py cross_case_memory.py judgment_bank_integration.py
           dynamic_agent_factory.py ipo_monitoring.py v1_consolidation_manifest.py
-          agent_calibration_weighting.py thesis_lifecycle_intelligence.py
+          grok_social_intelligence.py grok_ab_benchmark.py grok_opportunity_discovery.py
+          grok_experiment_manifest.py agent_calibration_weighting.py thesis_lifecycle_intelligence.py
           portfolio_intelligence.py intelligence_safety_manifest.py
           governed_paper_execution_api.py governed_paper_execution_bridge.py
           paper_authorization_api.py governed_paper_authorization.py automatic_paper_sizing.py
@@ -76,6 +78,12 @@ jobs:
           test_dynamic_agent_factory.py test_ipo_monitoring.py test_v1_consolidation_manifest.py
           test_governed_chain_end_to_end.py test_intelligence_safety_manifest.py
           test_production_safety_stress.py
+      - name: Run Batch 7 Grok experiment safety tests
+        run: >-
+          PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
+          test_grok_social_intelligence.py test_grok_ab_benchmark.py
+          test_grok_opportunity_discovery.py test_grok_experiment_manifest.py
+          test_v1_consolidation_manifest.py test_governed_chain_end_to_end.py
       - name: Run governed paper-chain safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
