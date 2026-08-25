@@ -12,7 +12,11 @@ from ledger import utc_now
 
 
 router = APIRouter()
-SCORECARD_VERSION = "grok-value-proof-v2"
+SCORECARD_VERSION = "grok-value-proof-v3"
+MIN_VALID_REPEATABILITY_CASES = 4
+MIN_PROSPECTIVE_LEAD_PAIRS = 5
+MIN_RESOLVED_NOMINATIONS = 5
+MIN_REALIZED_PAPER_OUTCOMES = 3
 
 
 def build_grok_value_scorecard() -> dict[str, Any]:
@@ -22,29 +26,36 @@ def build_grok_value_scorecard() -> dict[str, Any]:
     paper = build_paper_value_report()
 
     milestones = {
-        "four_case_repeatability_sample": int(repeatability.get("valid_repeatability_cases") or 0) >= 4,
-        "prospective_lead_time_pairs_measured": int(lead_time.get("prospective_pair_count") or 0) > 0,
-        "false_positive_sample_resolved": int(false_positive.get("resolved_count") or 0) > 0,
+        "four_case_repeatability_sample": int(repeatability.get("valid_repeatability_cases") or 0) >= MIN_VALID_REPEATABILITY_CASES,
+        "prospective_lead_time_sample_sufficient": int(lead_time.get("prospective_pair_count") or 0) >= MIN_PROSPECTIVE_LEAD_PAIRS,
+        "false_positive_sample_sufficient": int(false_positive.get("resolved_count") or 0) >= MIN_RESOLVED_NOMINATIONS,
         "shadow_measurement_ledger_ready": paper.get("shadow_measurement_ledger_ready") is True,
-        "paper_outcomes_observed": int(paper.get("cases_with_realized_return") or 0) > 0,
+        "paper_outcome_sample_sufficient": int(paper.get("cases_with_realized_return") or 0) >= MIN_REALIZED_PAPER_OUTCOMES,
         "dual_arm_pnl_ready": paper.get("return_comparison_ready") is True,
     }
 
     blockers: list[str] = []
-    if not milestones["prospective_lead_time_pairs_measured"]:
-        blockers.append("prospective discovery lead-time sample required")
-    if not milestones["false_positive_sample_resolved"]:
-        blockers.append("resolved Grok nomination false-positive sample required")
+    if not milestones["prospective_lead_time_sample_sufficient"]:
+        blockers.append(f"at least {MIN_PROSPECTIVE_LEAD_PAIRS} prospective discovery lead-time pairs required")
+    if not milestones["false_positive_sample_sufficient"]:
+        blockers.append(f"at least {MIN_RESOLVED_NOMINATIONS} independently resolved Grok nominations required")
     if not milestones["shadow_measurement_ledger_ready"]:
         blockers.append("decision-shadow ledger enrollment required")
-    if not milestones["paper_outcomes_observed"]:
-        blockers.append("realized paper outcomes required")
+    if not milestones["paper_outcome_sample_sufficient"]:
+        blockers.append(f"at least {MIN_REALIZED_PAPER_OUTCOMES} realized governed paper outcomes required")
     if not milestones["dual_arm_pnl_ready"]:
         blockers.append("governed dual-arm paper P&L comparison required")
 
     return {
         "scorecard_version": SCORECARD_VERSION,
         "status": "VALUE_PROOF_IN_PROGRESS" if milestones["four_case_repeatability_sample"] else "REPEATABILITY_SAMPLE_INCOMPLETE",
+        "measurement_thresholds": {
+            "valid_repeatability_cases": MIN_VALID_REPEATABILITY_CASES,
+            "prospective_lead_time_pairs": MIN_PROSPECTIVE_LEAD_PAIRS,
+            "resolved_grok_nominations": MIN_RESOLVED_NOMINATIONS,
+            "realized_paper_outcomes": MIN_REALIZED_PAPER_OUTCOMES,
+            "dual_arm_pnl_required": True,
+        },
         "milestones": milestones,
         "repeatability": {
             "valid_cases": repeatability.get("valid_repeatability_cases"),
