@@ -27,6 +27,8 @@ from agent_calibration_weighting import (
     install_calibration_context,
     router as agent_calibration_router,
 )
+from dynamic_agent_factory import router as dynamic_agent_factory_router
+from ipo_monitoring import router as ipo_monitoring_router
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
 import opportunity_acquisition
@@ -85,6 +87,7 @@ from portfolio_intelligence import router as portfolio_intelligence_router
 from production_safety_freeze import router as production_safety_freeze_router
 from source_ingestion import ingest_sources
 from thesis_lifecycle_intelligence import router as thesis_lifecycle_router
+from v1_consolidation_manifest import router as v1_consolidation_router
 
 
 router = APIRouter()
@@ -92,6 +95,7 @@ router.include_router(opportunity_router)
 router.include_router(opportunity_dispatch_router)
 router.include_router(opportunity_scheduler_router)
 router.include_router(adaptive_research_queue_router)
+router.include_router(ipo_monitoring_router)
 router.include_router(market_event_radar_router)
 router.include_router(orchestration_runtime_router)
 router.include_router(orchestration_resilience_router)
@@ -102,10 +106,12 @@ router.include_router(evidence_depth_router)
 router.include_router(historical_regime_memory_router)
 router.include_router(cross_case_memory_router)
 router.include_router(judgment_bank_router)
+router.include_router(dynamic_agent_factory_router)
 router.include_router(agent_calibration_router)
 router.include_router(thesis_lifecycle_router)
 router.include_router(portfolio_intelligence_router)
 router.include_router(intelligence_safety_manifest_router)
+router.include_router(v1_consolidation_router)
 router.include_router(orchestration_router)
 
 
