@@ -10,7 +10,7 @@ from ledger import DB_PATH, latest_object, utc_now
 
 
 router = APIRouter()
-POLICY_VERSION = "grok-paper-value-readiness-v1"
+POLICY_VERSION = "grok-paper-value-readiness-v2"
 
 
 def _rows(object_type: str) -> list[dict[str, Any]]:
@@ -68,23 +68,32 @@ def build_paper_value_report() -> dict[str, Any]:
             "live_execution": False,
         })
 
+    shadow_pairs = _rows("grok_shadow_paper_pair")
+    shadow_snapshots = _rows("grok_shadow_paper_snapshot")
+    differentiated = sum(1 for row in shadow_pairs if row.get("differentiated_action") is True)
     blockers = [
-        "dual-arm paper portfolio ledger not yet built",
-        "arm-specific entry price and position size required",
+        "arm-specific governed paper positions required before P&L can be claimed",
         "benchmark and drawdown attribution required",
     ]
+    if differentiated == 0:
+        blockers.append("at least one valid A/B case with differentiated committee action required for comparative paper value")
+
     return {
         "policy_version": POLICY_VERSION,
-        "status": "OUTCOME_OBSERVATIONS_AVAILABLE" if (realized_count or monitored_count) else "WAITING_FOR_PAPER_OUTCOMES",
+        "status": "OUTCOME_OBSERVATIONS_AVAILABLE" if (realized_count or monitored_count or shadow_snapshots) else "WAITING_FOR_PAPER_OUTCOMES",
         "valid_ab_case_count": len(cases),
         "cases_with_position_monitor": monitored_count,
         "cases_with_realized_return": realized_count,
+        "shadow_pair_count": len(shadow_pairs),
+        "shadow_snapshot_count": len(shadow_snapshots),
+        "differentiated_action_pair_count": differentiated,
         "cases": cases,
+        "shadow_measurement_ledger_ready": len(shadow_pairs) > 0,
         "return_comparison_ready": False,
         "arm_specific_pnl_available": False,
         "permanent_promotion_value_proof_ready": False,
         "blockers": blockers,
-        "interpretation": "Existing case outcomes can be observed, but IIOS-only versus IIOS+Grok P&L must not be claimed until both arms have governed virtual positions with their own entry, sizing, benchmark, and lifecycle records.",
+        "interpretation": "The shadow ledger can track cash/no-position versus watch-only decisions and underlying asset movement, but IIOS-only versus IIOS+Grok P&L is not claimed until governed arm-specific paper positions actually exist.",
         "automatic_promotion": False,
         "research_only": True,
         "paper_mode": True,
