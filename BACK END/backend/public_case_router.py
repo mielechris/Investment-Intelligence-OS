@@ -83,6 +83,7 @@ from opportunity_acquisition import router as opportunity_router
 from opportunity_dispatch import router as opportunity_dispatch_router
 from opportunity_scheduler import router as opportunity_scheduler_router
 from orchestration_worker_pool import router as orchestration_worker_pool_router
+from paper_portfolio_core import router as paper_portfolio_core_router
 from portfolio_intelligence import router as portfolio_intelligence_router
 from production_safety_freeze import router as production_safety_freeze_router
 from source_ingestion import ingest_sources
@@ -109,6 +110,7 @@ router.include_router(judgment_bank_router)
 router.include_router(dynamic_agent_factory_router)
 router.include_router(agent_calibration_router)
 router.include_router(thesis_lifecycle_router)
+router.include_router(paper_portfolio_core_router)
 router.include_router(portfolio_intelligence_router)
 router.include_router(intelligence_safety_manifest_router)
 router.include_router(v1_consolidation_router)
