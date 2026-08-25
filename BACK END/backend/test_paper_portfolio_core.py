@@ -151,3 +151,92 @@ class PaperPortfolioCoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaperPortfolioPerformanceTests(unittest.TestCase):
+    def setUp(self):
+        self.original_db = ledger.DB_PATH
+        self.tempdir = tempfile.TemporaryDirectory()
+        ledger.DB_PATH = Path(self.tempdir.name) / "performance_test.db"
+        ledger.init_ledger()
+
+    def tearDown(self):
+        ledger.DB_PATH = self.original_db
+        self.tempdir.cleanup()
+
+    def test_empty_live_snapshot_keeps_10000_nav(self):
+        snapshot = portfolio.record_live_portfolio_snapshot()
+
+        self.assertEqual(snapshot["nav"], 10000.00)
+        self.assertEqual(snapshot["position_count"], 0)
+        self.assertFalse(snapshot["trade_execution_permission"])
+        self.assertFalse(snapshot["live_execution"])
+
+        perf = portfolio.build_performance_history()
+
+        self.assertEqual(perf["snapshot_count"], 1)
+        self.assertEqual(perf["latest_nav"], 10000.00)
+        self.assertEqual(perf["cumulative_return_pct"], 0.0)
+
+    def test_performance_tracks_return_and_drawdown(self):
+        portfolio.ensure_account()
+
+        portfolio.record_portfolio_snapshot({})
+
+        ledger.record_object(
+            "paper_portfolio_snapshot_test_up",
+            "paper_portfolio_snapshot",
+            portfolio.PORTFOLIO_CASE_ID,
+            {
+                "paper_portfolio_snapshot_id":
+                    "paper_portfolio_snapshot_test_up",
+                "paper_portfolio_account_id":
+                    portfolio.ACCOUNT_ID,
+                "nav": 10500.00,
+                "cash": 5000.00,
+                "market_value": 5500.00,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 500.00,
+                "total_pnl": 500.00,
+                "created_at": "2026-08-25T12:00:00+00:00",
+            },
+            parent_id=portfolio.ACCOUNT_ID,
+        )
+
+        ledger.record_object(
+            "paper_portfolio_snapshot_test_down",
+            "paper_portfolio_snapshot",
+            portfolio.PORTFOLIO_CASE_ID,
+            {
+                "paper_portfolio_snapshot_id":
+                    "paper_portfolio_snapshot_test_down",
+                "paper_portfolio_account_id":
+                    portfolio.ACCOUNT_ID,
+                "nav": 10000.00,
+                "cash": 5000.00,
+                "market_value": 5000.00,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "total_pnl": 0.0,
+                "created_at": "2026-08-25T13:00:00+00:00",
+            },
+            parent_id=portfolio.ACCOUNT_ID,
+        )
+
+        perf = portfolio.build_performance_history()
+
+        self.assertEqual(perf["snapshot_count"], 3)
+        self.assertEqual(perf["high_water_mark"], 10500.00)
+        self.assertAlmostEqual(
+            perf["max_drawdown_pct"],
+            -4.7619,
+            places=4,
+        )
+        self.assertEqual(perf["latest_nav"], 10000.00)
+
+    def test_performance_has_no_execution_authority(self):
+        perf = portfolio.build_performance_history()
+
+        self.assertFalse(perf["trade_execution_permission"])
+        self.assertFalse(perf["live_execution"])
+        self.assertFalse(perf["paper_order_permission"])
