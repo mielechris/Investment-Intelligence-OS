@@ -12,7 +12,7 @@ from ledger import utc_now
 
 
 router = APIRouter()
-SCORECARD_VERSION = "grok-value-proof-v1"
+SCORECARD_VERSION = "grok-value-proof-v2"
 
 
 def build_grok_value_scorecard() -> dict[str, Any]:
@@ -23,21 +23,24 @@ def build_grok_value_scorecard() -> dict[str, Any]:
 
     milestones = {
         "four_case_repeatability_sample": int(repeatability.get("valid_repeatability_cases") or 0) >= 4,
-        "lead_time_pairs_measured": int(lead_time.get("measurable_pair_count") or 0) > 0,
+        "prospective_lead_time_pairs_measured": int(lead_time.get("prospective_pair_count") or 0) > 0,
         "false_positive_sample_resolved": int(false_positive.get("resolved_count") or 0) > 0,
+        "shadow_measurement_ledger_ready": paper.get("shadow_measurement_ledger_ready") is True,
         "paper_outcomes_observed": int(paper.get("cases_with_realized_return") or 0) > 0,
         "dual_arm_pnl_ready": paper.get("return_comparison_ready") is True,
     }
 
     blockers: list[str] = []
-    if not milestones["lead_time_pairs_measured"]:
-        blockers.append("discovery lead-time sample required")
+    if not milestones["prospective_lead_time_pairs_measured"]:
+        blockers.append("prospective discovery lead-time sample required")
     if not milestones["false_positive_sample_resolved"]:
         blockers.append("resolved Grok nomination false-positive sample required")
+    if not milestones["shadow_measurement_ledger_ready"]:
+        blockers.append("decision-shadow ledger enrollment required")
     if not milestones["paper_outcomes_observed"]:
         blockers.append("realized paper outcomes required")
     if not milestones["dual_arm_pnl_ready"]:
-        blockers.append("dual-arm paper portfolio P&L comparison required")
+        blockers.append("governed dual-arm paper P&L comparison required")
 
     return {
         "scorecard_version": SCORECARD_VERSION,
@@ -52,9 +55,13 @@ def build_grok_value_scorecard() -> dict[str, Any]:
         },
         "lead_time": {
             "measurable_pair_count": lead_time.get("measurable_pair_count"),
+            "prospective_pair_count": lead_time.get("prospective_pair_count"),
             "grok_earlier_count": lead_time.get("grok_earlier_count"),
             "iios_earlier_count": lead_time.get("iios_earlier_count"),
+            "prospective_grok_earlier_count": lead_time.get("prospective_grok_earlier_count"),
+            "prospective_iios_earlier_count": lead_time.get("prospective_iios_earlier_count"),
             "median_grok_lead_minutes": lead_time.get("median_grok_lead_minutes"),
+            "prospective_median_grok_lead_minutes": lead_time.get("prospective_median_grok_lead_minutes"),
         },
         "false_positive": {
             "nomination_count": false_positive.get("nomination_count"),
@@ -67,6 +74,10 @@ def build_grok_value_scorecard() -> dict[str, Any]:
             "valid_ab_case_count": paper.get("valid_ab_case_count"),
             "cases_with_position_monitor": paper.get("cases_with_position_monitor"),
             "cases_with_realized_return": paper.get("cases_with_realized_return"),
+            "shadow_pair_count": paper.get("shadow_pair_count"),
+            "shadow_snapshot_count": paper.get("shadow_snapshot_count"),
+            "differentiated_action_pair_count": paper.get("differentiated_action_pair_count"),
+            "shadow_measurement_ledger_ready": paper.get("shadow_measurement_ledger_ready"),
             "return_comparison_ready": paper.get("return_comparison_ready"),
         },
         "recommendation": "CONTINUE_VALUE_PROOF",
