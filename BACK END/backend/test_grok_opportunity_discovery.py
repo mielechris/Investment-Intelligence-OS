@@ -43,12 +43,12 @@ class GrokOpportunityDiscoveryTests(unittest.TestCase):
         self.assertLessEqual(nominated["advisory_confidence"], 0.60)
 
     @patch.object(discovery, "get_object")
-    @patch.object(discovery, "fetch_market_quote")
-    @patch.object(discovery, "fetch_gdelt_news")
+    @patch.object(discovery, "fetch_crosschecked_quote")
+    @patch.object(discovery, "fetch_news_bundle")
     @patch.object(discovery, "score_candidate")
     @patch.object(discovery, "record_object")
     @patch.object(discovery, "record_event")
-    def test_revalidation_creates_standard_candidate_but_does_not_promote_case(self, event, record, score, news, quote, get_object):
+    def test_revalidation_uses_hardened_standard_gate_and_does_not_promote_case(self, event, record, score, news_bundle, quote, get_object):
         get_object.return_value = {
             "grok_opportunity_candidate_id": "grok_opportunity_1",
             "ticker": "ABC",
@@ -56,8 +56,25 @@ class GrokOpportunityDiscoveryTests(unittest.TestCase):
             "eligible_for_iios_revalidation": True,
             "standard_candidate_id": None,
         }
-        quote.return_value = {"status": "ok", "current_price": 10.0, "provider": "test", "items": [{"claim": "quote"}]}
-        news.return_value = [{"claim": "news1"}, {"claim": "news2"}]
+        quote.return_value = {
+            "status": "ok",
+            "current_price": 10.0,
+            "provider": "Yahoo Finance",
+            "provider_count": 2,
+            "providers": ["CNBC", "Yahoo Finance"],
+            "cross_checked": True,
+            "spread_pct": 0.2,
+            "quote_quality": "CROSSCHECKED",
+            "items": [{"claim": "quote1"}, {"claim": "quote2"}],
+            "error": None,
+        }
+        news_bundle.return_value = {
+            "items": [{"claim": "news1"}, {"claim": "news2"}],
+            "provider_count": 2,
+            "successful_providers": ["GDELT", "GOOGLE_NEWS_RSS"],
+            "failed_providers": [],
+            "status": "ok",
+        }
         score.return_value = {
             "ticker": "ABC",
             "score": 70.0,
@@ -81,13 +98,20 @@ class GrokOpportunityDiscoveryTests(unittest.TestCase):
         self.assertFalse(result["automatic_promotion"])
         self.assertEqual(result["agents_started"], 0)
         self.assertTrue(result["next_step"].startswith("POST /opportunities/opportunity_"))
-        self.assertIsNone(result["standard_candidate"]["promoted_case_id"])
+        standard = result["standard_candidate"]
+        self.assertIsNone(standard["promoted_case_id"])
+        self.assertTrue(standard["quote_cross_checked"])
+        self.assertEqual(standard["quote_provider_count"], 2)
+        self.assertEqual(standard["news_provider_count"], 2)
+        self.assertEqual(standard["standard_revalidation_evidence_policy"], discovery.STANDARD_REVALIDATION_EVIDENCE_POLICY)
 
-    def test_plan_requires_standard_iios_gate(self):
+    def test_plan_requires_hardened_standard_iios_gate(self):
         plan = discovery.grok_opportunity_plan()
         self.assertFalse(plan["grok_can_create_governed_case_directly"])
         self.assertTrue(plan["standard_quote_required"])
+        self.assertTrue(plan["standard_quote_crosscheck_required"])
         self.assertTrue(plan["standard_news_required"])
+        self.assertTrue(plan["standard_news_multi_provider_path"])
         self.assertTrue(plan["standard_opportunity_score_required"])
         self.assertFalse(plan["automatic_promotion"])
         self.assertFalse(plan["automatic_agent_run"])
