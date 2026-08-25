@@ -28,15 +28,57 @@ def _clean_ticker(value: Any) -> str | None:
     return ticker
 
 
+def _status_id(value: Any) -> str | None:
+    text = str(value or "").strip().split("?", 1)[0].rstrip("/")
+    match = re.search(r"/status/(\d+)(?:/|$)", text)
+    return match.group(1) if match else None
+
+
+def _source_author(value: Any) -> str | None:
+    text = str(value or "").strip().split("?", 1)[0].rstrip("/")
+    match = re.search(
+        r"https?://(?:www\.)?(?:x\.com|twitter\.com)/([^/]+)/status/\d+(?:/|$)",
+        text,
+        flags=re.I,
+    )
+    if not match:
+        return None
+    author = match.group(1).strip().lower()
+    return None if author in {"i", "web"} else author
+
+
 def _normalize_urls(values: Any, verified: set[str]) -> list[str]:
     raw = values if isinstance(values, list) else []
+    verified_ids = {
+        status_id
+        for value in verified
+        for status_id in [_status_id(value)]
+        if status_id
+    }
+
     output: list[str] = []
     for value in raw:
         text = str(value or "").strip()
         normalized = text.split("?", 1)[0].rstrip("/")
-        if normalized in verified and normalized not in output:
-            output.append(normalized)
+        status_id = _status_id(normalized)
+
+        if (
+            normalized in verified
+            or (status_id is not None and status_id in verified_ids)
+        ):
+            if normalized not in output:
+                output.append(normalized)
+
     return output
+
+
+def _independent_accounts(values: list[str]) -> set[str]:
+    return {
+        author
+        for value in values
+        for author in [_source_author(value)]
+        if author
+    }
 
 
 def _confidence(value: Any) -> float:
@@ -76,8 +118,12 @@ def discover_grok_opportunities(query: str, *, days: int = 2, max_candidates: in
             continue
         seen.add(ticker)
         source_urls = _normalize_urls(raw.get("source_urls"), verified)
+        independent_accounts = _independent_accounts(source_urls)
         reasons = []
-        if len(source_urls) < MIN_NOMINATION_SOURCES:
+        if (
+            len(source_urls) < MIN_NOMINATION_SOURCES
+            or len(independent_accounts) < MIN_NOMINATION_SOURCES
+        ):
             reasons.append("INSUFFICIENT_VERIFIED_X_SOURCE_DIVERSITY")
         rationale = " ".join(str(raw.get("rationale") or "").split()).strip()
         if not rationale:
@@ -91,6 +137,7 @@ def discover_grok_opportunities(query: str, *, days: int = 2, max_candidates: in
             "advisory_confidence": _confidence(raw.get("confidence")),
             "source_urls": source_urls,
             "source_count": len(source_urls),
+            "independent_account_count": len(independent_accounts),
             "status": "QUARANTINED" if reasons else "NOMINATED_FOR_IIOS_REVALIDATION",
             "quarantine_reasons": reasons,
             "eligible_for_iios_revalidation": not reasons,
