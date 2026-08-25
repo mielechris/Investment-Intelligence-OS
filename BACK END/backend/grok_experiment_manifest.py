@@ -5,12 +5,12 @@ from typing import Any
 from fastapi import APIRouter
 
 import grok_social_intelligence as grok_social
-from grok_citation_compat import COMPAT_VERSION, install_grok_citation_compat
+from grok_xai_sdk_adapter import ADAPTER_VERSION, install_xai_sdk_x_search
 
-# xAI Responses API exposes the complete source list on response.citations. Install
-# the compatibility shim before any live experiment call so real X citations are
-# considered by the existing firewall without trusting URLs from model prose.
-install_grok_citation_compat(grok_social)
+# xAI's official Python SDK exposes response.citations directly for X Search.
+# Install only the Grok transport adapter; the existing IIOS social firewall,
+# qualification rules, committee, sizing, authorization, and execution paths stay unchanged.
+install_xai_sdk_x_search(grok_social)
 
 from grok_ab_benchmark import grok_ab_plan
 from grok_opportunity_discovery import grok_opportunity_plan
@@ -47,7 +47,7 @@ def grok_experiment_manifest() -> dict[str, Any]:
         "grok_nominations_require_standard_iios_revalidation": opportunities.get("standard_opportunity_score_required") is True,
         "grok_nominations_do_not_auto_promote": opportunities.get("automatic_promotion") is False,
         "grok_nominations_do_not_auto_run_agents": opportunities.get("automatic_agent_run") is False,
-        "xai_top_level_citation_compat_installed": getattr(grok_social, "_xai_citation_compat_installed", False) is True,
+        "xai_official_sdk_adapter_installed": getattr(grok_social, "_xai_official_sdk_adapter_installed", False) is True,
     }
     all_pass = all(invariants.values())
     return {
@@ -59,7 +59,8 @@ def grok_experiment_manifest() -> dict[str, Any]:
         "grok_runtime_enabled": context.get("enabled"),
         "model": context.get("model"),
         "x_search_tool": True,
-        "citation_compat_version": COMPAT_VERSION,
+        "xai_adapter_version": ADAPTER_VERSION,
+        "citation_compat_version": ADAPTER_VERSION,
         "invariant_checks": invariants,
         "all_invariants_pass": all_pass,
         "permanent_factory_promotion_ready": False,
