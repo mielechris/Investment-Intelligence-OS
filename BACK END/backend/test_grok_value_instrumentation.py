@@ -50,6 +50,18 @@ class GrokValueInstrumentationTests(unittest.TestCase):
         self.assertFalse(row["live_execution"])
         record_object.assert_called_once()
 
+    @patch.object(value, "get_object", return_value=None)
+    @patch.object(value, "record_object")
+    def test_observation_cycle_tags_first_seen_without_changing_safety(self, record_object, get_object):
+        with value.observation_cycle("cycle_123", "GROK_X_PROBE"):
+            row = value.record_discovery_observation(source="GROK_X", ticker="abc")
+        self.assertEqual(row["measurement_cycle_id"], "cycle_123")
+        self.assertEqual(row["measurement_cycle_phase"], "GROK_X_PROBE")
+        self.assertEqual(row["metadata"]["measurement_cycle_id"], "cycle_123")
+        self.assertFalse(row["qualification_evidence"])
+        self.assertFalse(row["trade_execution_permission"])
+        self.assertFalse(row["live_execution"])
+
     @patch.object(value, "get_object")
     @patch.object(value, "record_object")
     def test_existing_first_seen_observation_is_not_replaced(self, record_object, get_object):
