@@ -1,19 +1,34 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from ledger import get_object, record_object, utc_now
 
 
 MEASUREMENT_CASE_ID = "grok_value_measurement"
-POLICY_VERSION = "grok-forward-discovery-observation-v3"
+POLICY_VERSION = "grok-forward-discovery-observation-v4"
+_CYCLE_ID: ContextVar[str | None] = ContextVar("grok_value_cycle_id", default=None)
+_CYCLE_PHASE: ContextVar[str | None] = ContextVar("grok_value_cycle_phase", default=None)
 
 
 def _observation_id(source: str, ticker: str) -> str:
     safe_source = re.sub(r"[^A-Z0-9]+", "_", source.upper()).strip("_") or "UNKNOWN"
     safe_ticker = re.sub(r"[^A-Z0-9]+", "_", ticker.upper()).strip("_") or "UNKNOWN"
     return f"grok_value_first_seen_{safe_source}_{safe_ticker}"
+
+
+@contextmanager
+def observation_cycle(cycle_id: str, phase: str):
+    cycle_token = _CYCLE_ID.set(str(cycle_id or "").strip() or None)
+    phase_token = _CYCLE_PHASE.set(str(phase or "").strip().upper() or None)
+    try:
+        yield
+    finally:
+        _CYCLE_PHASE.reset(phase_token)
+        _CYCLE_ID.reset(cycle_token)
 
 
 def record_discovery_observation(
@@ -32,6 +47,13 @@ def record_discovery_observation(
     existing = get_object(observation_id)
     if existing:
         return existing
+    cycle_id = _CYCLE_ID.get()
+    cycle_phase = _CYCLE_PHASE.get()
+    merged_metadata = dict(metadata or {})
+    if cycle_id:
+        merged_metadata["measurement_cycle_id"] = cycle_id
+    if cycle_phase:
+        merged_metadata["measurement_cycle_phase"] = cycle_phase
     payload = {
         "discovery_observation_id": observation_id,
         "policy_version": POLICY_VERSION,
@@ -39,7 +61,9 @@ def record_discovery_observation(
         "ticker": normalized,
         "source_object_id": str(source_object_id or "").strip() or None,
         "observed_at": str(observed_at or utc_now()),
-        "metadata": metadata or {},
+        "measurement_cycle_id": cycle_id,
+        "measurement_cycle_phase": cycle_phase,
+        "metadata": merged_metadata,
         "first_observation_only": True,
         "measurement_only": True,
         "qualification_evidence": False,
