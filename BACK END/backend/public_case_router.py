@@ -34,12 +34,17 @@ from agent_calibration_weighting import (
 from dynamic_agent_factory import router as dynamic_agent_factory_router
 from grok_ab_benchmark import router as grok_ab_router
 from grok_ab_reuse import router as grok_ab_reuse_router
+from grok_batch7_checkpoint import router as grok_batch7_checkpoint_router
 from grok_discovery_lead_time import router as grok_lead_time_router
 from grok_experiment_manifest import router as grok_experiment_manifest_router
 from grok_experiment_scorecard import router as grok_scorecard_router
 from grok_false_positive_tracker import router as grok_false_positive_router
+import grok_opportunity_discovery
 from grok_opportunity_discovery import router as grok_opportunity_router
 from grok_paper_value import router as grok_paper_value_router
+from grok_shadow_paper import router as grok_shadow_paper_router
+from grok_value_instrumentation import install_grok_value_instrumentation
+from grok_value_probe import router as grok_value_probe_router
 from grok_value_scorecard import router as grok_value_scorecard_router
 from ipo_monitoring import router as ipo_monitoring_router
 from market_event_radar import router as market_event_radar_router
@@ -82,18 +87,21 @@ install_grok_prompt_context(eight_agent_orchestrator)
 # threshold. Even when mature, it cannot bypass committee guards.
 install_calibration_context(eight_agent_orchestrator)
 
-# Install research-only evidence hardening before dispatch/scheduler modules import
-# the opportunity scan function. This changes only scanner evidence acquisition;
-# it does not touch sizing, authorization, paper execution, or live execution.
+# Install research-only evidence hardening before value instrumentation so every
+# native discovery timestamp refers to the hardened opportunity path.
 install_opportunity_evidence_hardening(opportunity_acquisition)
 
 # Reuse successful exact-match public source responses within bounded TTLs. This
 # never caches model judgments or market-quote decisions.
 install_research_source_cache(source_ingestion)
 
+# Forward value-proof instrumentation only records when IIOS/Grok first observed
+# a ticker. It cannot promote a case, qualify evidence, start agents, or trade.
+install_grok_value_instrumentation(opportunity_acquisition, grok_opportunity_discovery)
+
 # Import modules that capture the installed orchestrator only after runtime,
-# resilience, timing, memory, Judgment Bank, Grok experiment hook, and calibration
-# layers are in place.
+# resilience, timing, memory, Judgment Bank, Grok experiment hook, calibration,
+# evidence hardening, caching, and value instrumentation layers are in place.
 from adaptive_research_queue import router as adaptive_research_queue_router
 from evidence_depth_engine import router as evidence_depth_router
 from historical_regime_memory import router as historical_regime_memory_router
@@ -135,7 +143,10 @@ router.include_router(grok_scorecard_router)
 router.include_router(grok_lead_time_router)
 router.include_router(grok_false_positive_router)
 router.include_router(grok_paper_value_router)
+router.include_router(grok_shadow_paper_router)
+router.include_router(grok_value_probe_router)
 router.include_router(grok_value_scorecard_router)
+router.include_router(grok_batch7_checkpoint_router)
 router.include_router(agent_calibration_router)
 router.include_router(thesis_lifecycle_router)
 router.include_router(portfolio_intelligence_router)
