@@ -48,7 +48,7 @@ jobs:
           interview_portal.py chain_verifier.py evidence_depth_engine.py
           historical_regime_memory.py cross_case_memory.py judgment_bank_integration.py
           dynamic_agent_factory.py ipo_monitoring.py v1_consolidation_manifest.py
-          grok_social_intelligence.py grok_ab_benchmark.py grok_opportunity_discovery.py
+          grok_social_intelligence.py grok_citation_compat.py grok_ab_benchmark.py grok_opportunity_discovery.py
           grok_experiment_manifest.py agent_calibration_weighting.py thesis_lifecycle_intelligence.py
           portfolio_intelligence.py intelligence_safety_manifest.py
           governed_paper_execution_api.py governed_paper_execution_bridge.py
