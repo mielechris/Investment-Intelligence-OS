@@ -23,11 +23,18 @@ from judgment_bank_integration import (
     install_judgment_bank_context,
     router as judgment_bank_router,
 )
+from grok_social_intelligence import (
+    install_grok_prompt_context,
+    router as grok_social_router,
+)
 from agent_calibration_weighting import (
     install_calibration_context,
     router as agent_calibration_router,
 )
 from dynamic_agent_factory import router as dynamic_agent_factory_router
+from grok_ab_benchmark import router as grok_ab_router
+from grok_experiment_manifest import router as grok_experiment_manifest_router
+from grok_opportunity_discovery import router as grok_opportunity_router
 from ipo_monitoring import router as ipo_monitoring_router
 from market_event_radar import router as market_event_radar_router
 from monitoring_engine import _default_sources, _fetch_stooq_quote, configure_profile
@@ -60,6 +67,11 @@ install_cross_case_memory(eight_agent_orchestrator)
 # context only and cannot become qualifying evidence or capital authority.
 install_judgment_bank_context(eight_agent_orchestrator)
 
+# Batch 7 Grok hook is dormant in ordinary IIOS operation. Only isolated A/B
+# subprocesses receive IIOS_GROK_CONTEXT_FILE; the hook never mutates the case
+# evidence packet or qualifying evidence summary.
+install_grok_prompt_context(eight_agent_orchestrator)
+
 # Calibration remains neutral until every desk reaches the governed sample-size
 # threshold. Even when mature, it cannot bypass committee guards.
 install_calibration_context(eight_agent_orchestrator)
@@ -74,7 +86,8 @@ install_opportunity_evidence_hardening(opportunity_acquisition)
 install_research_source_cache(source_ingestion)
 
 # Import modules that capture the installed orchestrator only after runtime,
-# resilience, timing, memory, Judgment Bank, and calibration layers are in place.
+# resilience, timing, memory, Judgment Bank, Grok experiment hook, and calibration
+# layers are in place.
 from adaptive_research_queue import router as adaptive_research_queue_router
 from evidence_depth_engine import router as evidence_depth_router
 from historical_regime_memory import router as historical_regime_memory_router
@@ -107,6 +120,10 @@ router.include_router(historical_regime_memory_router)
 router.include_router(cross_case_memory_router)
 router.include_router(judgment_bank_router)
 router.include_router(dynamic_agent_factory_router)
+router.include_router(grok_social_router)
+router.include_router(grok_ab_router)
+router.include_router(grok_opportunity_router)
+router.include_router(grok_experiment_manifest_router)
 router.include_router(agent_calibration_router)
 router.include_router(thesis_lifecycle_router)
 router.include_router(portfolio_intelligence_router)
