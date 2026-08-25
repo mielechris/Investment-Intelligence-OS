@@ -12,7 +12,7 @@ from ledger import DB_PATH, utc_now
 
 
 router = APIRouter()
-POLICY_VERSION = "grok-discovery-lead-time-v2"
+POLICY_VERSION = "grok-discovery-lead-time-v3"
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -103,12 +103,27 @@ def _merged_first_seen(
     return output
 
 
+def _lead(grok_at: datetime | None, iios_at: datetime | None) -> tuple[float | None, str]:
+    if grok_at is not None and iios_at is not None:
+        lead_minutes = round((iios_at - grok_at).total_seconds() / 60.0, 4)
+        if lead_minutes > 0:
+            return lead_minutes, "GROK_EARLIER"
+        if lead_minutes < 0:
+            return lead_minutes, "IIOS_EARLIER"
+        return lead_minutes, "TIE"
+    if grok_at is not None:
+        return None, "GROK_ONLY_SO_FAR"
+    if iios_at is not None:
+        return None, "IIOS_ONLY_SO_FAR"
+    return None, "UNMEASURED"
+
+
 def build_discovery_lead_time_report() -> dict[str, Any]:
     forward_grok = _first_forward_observations("GROK_X")
     forward_iios = _first_forward_observations("IIOS_NATIVE")
     grok = _merged_first_seen(forward_grok, _first_legacy_grok_nominations())
     iios = _merged_first_seen(forward_iios, _first_legacy_native_iios_candidates())
-    tickers = sorted(set(grok) | set(iios))
+    tickers = sorted(set(grok) | set(iios) | set(forward_grok) | set(forward_iios))
     rows: list[dict[str, Any]] = []
     measurable_leads: list[float] = []
     prospective_leads: list[float] = []
@@ -118,27 +133,18 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         iios_entry = iios.get(ticker) or {}
         grok_at = grok_entry.get("observed_at")
         iios_at = iios_entry.get("observed_at")
-        lead_minutes = None
-        winner = "UNMEASURED"
-        prospective_pair = (
-            grok_entry.get("measurement_mode") == "FORWARD_INSTRUMENTED"
-            and iios_entry.get("measurement_mode") == "FORWARD_INSTRUMENTED"
-        )
-        if grok_at is not None and iios_at is not None:
-            lead_minutes = round((iios_at - grok_at).total_seconds() / 60.0, 4)
+        lead_minutes, winner = _lead(grok_at, iios_at)
+        if lead_minutes is not None:
             measurable_leads.append(lead_minutes)
-            if prospective_pair:
-                prospective_leads.append(lead_minutes)
-            if lead_minutes > 0:
-                winner = "GROK_EARLIER"
-            elif lead_minutes < 0:
-                winner = "IIOS_EARLIER"
-            else:
-                winner = "TIE"
-        elif grok_at is not None:
-            winner = "GROK_ONLY_SO_FAR"
-        elif iios_at is not None:
-            winner = "IIOS_ONLY_SO_FAR"
+
+        forward_grok_entry = forward_grok.get(ticker) or {}
+        forward_iios_entry = forward_iios.get(ticker) or {}
+        prospective_grok_at = forward_grok_entry.get("observed_at")
+        prospective_iios_at = forward_iios_entry.get("observed_at")
+        prospective_lead, prospective_winner = _lead(prospective_grok_at, prospective_iios_at)
+        prospective_pair = prospective_lead is not None
+        if prospective_lead is not None:
+            prospective_leads.append(prospective_lead)
 
         rows.append({
             "ticker": ticker,
@@ -146,10 +152,15 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
             "iios_first_seen_at": iios_at.isoformat() if iios_at else None,
             "grok_measurement_mode": grok_entry.get("measurement_mode"),
             "iios_measurement_mode": iios_entry.get("measurement_mode"),
-            "prospective_pair": prospective_pair,
             "grok_lead_minutes": lead_minutes,
             "winner": winner,
-            "measurement_definition": "positive grok_lead_minutes means Grok nomination preceded native IIOS opportunity discovery",
+            "prospective_grok_first_seen_at": prospective_grok_at.isoformat() if prospective_grok_at else None,
+            "prospective_iios_first_seen_at": prospective_iios_at.isoformat() if prospective_iios_at else None,
+            "prospective_pair": prospective_pair,
+            "prospective_grok_lead_minutes": prospective_lead,
+            "prospective_winner": prospective_winner,
+            "measurement_definition": "positive Grok lead minutes means Grok nomination preceded native IIOS opportunity discovery",
+            "prospective_definition": "prospective fields use only forward-instrumented first-seen observations and are never masked by older legacy ledger rows",
             "trade_signal": False,
             "trade_execution_permission": False,
             "live_execution": False,
@@ -166,8 +177,10 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         "tie_count": sum(1 for value in measurable_leads if value == 0),
         "prospective_grok_earlier_count": sum(1 for value in prospective_leads if value > 0),
         "prospective_iios_earlier_count": sum(1 for value in prospective_leads if value < 0),
+        "prospective_tie_count": sum(1 for value in prospective_leads if value == 0),
         "mean_grok_lead_minutes": round(statistics.mean(measurable_leads), 4) if measurable_leads else None,
         "median_grok_lead_minutes": round(statistics.median(measurable_leads), 4) if measurable_leads else None,
+        "prospective_mean_grok_lead_minutes": round(statistics.mean(prospective_leads), 4) if prospective_leads else None,
         "prospective_median_grok_lead_minutes": round(statistics.median(prospective_leads), 4) if prospective_leads else None,
         "rows": rows,
         "automatic_promotion": False,
