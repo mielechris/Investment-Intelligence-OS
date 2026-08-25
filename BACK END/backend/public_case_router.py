@@ -35,6 +35,7 @@ from dynamic_agent_factory import router as dynamic_agent_factory_router
 from grok_ab_benchmark import router as grok_ab_router
 from grok_ab_reuse import router as grok_ab_reuse_router
 from grok_experiment_manifest import router as grok_experiment_manifest_router
+from grok_experiment_scorecard import router as grok_scorecard_router
 from grok_opportunity_discovery import router as grok_opportunity_router
 from ipo_monitoring import router as ipo_monitoring_router
 from market_event_radar import router as market_event_radar_router
@@ -126,6 +127,7 @@ router.include_router(grok_ab_router)
 router.include_router(grok_ab_reuse_router)
 router.include_router(grok_opportunity_router)
 router.include_router(grok_experiment_manifest_router)
+router.include_router(grok_scorecard_router)
 router.include_router(agent_calibration_router)
 router.include_router(thesis_lifecycle_router)
 router.include_router(portfolio_intelligence_router)
