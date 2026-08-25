@@ -8,11 +8,11 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from ledger import DB_PATH, utc_now
+from ledger import DB_PATH, get_object, utc_now
 
 
 router = APIRouter()
-POLICY_VERSION = "grok-discovery-lead-time-v4"
+POLICY_VERSION = "grok-discovery-lead-time-v5"
 MIN_PROSPECTIVE_SEPARATION_MINUTES = 10.0
 
 
@@ -126,6 +126,17 @@ def _cycle_id(entry: dict[str, Any]) -> str | None:
     return text or None
 
 
+def _cycle_valid_for_prospective(cycle_id: str | None) -> bool:
+    if not cycle_id:
+        return False
+    cycle = get_object(cycle_id) or {}
+    return bool(
+        cycle.get("status") == "COMPLETE"
+        and (cycle.get("native") or {}).get("status") == "ok"
+        and (cycle.get("grok") or {}).get("status") == "ok"
+    )
+
+
 def build_discovery_lead_time_report() -> dict[str, Any]:
     forward_grok = _first_forward_observations("GROK_X")
     forward_iios = _first_forward_observations("IIOS_NATIVE")
@@ -155,11 +166,20 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         iios_cycle_id = _cycle_id(forward_iios_entry)
         same_cycle = bool(grok_cycle_id and iios_cycle_id and grok_cycle_id == iios_cycle_id)
         cycle_ids_present = bool(grok_cycle_id and iios_cycle_id)
+        grok_cycle_valid = _cycle_valid_for_prospective(grok_cycle_id)
+        iios_cycle_valid = _cycle_valid_for_prospective(iios_cycle_id)
+        source_cycles_valid = bool(grok_cycle_valid and iios_cycle_valid)
         separation_ok = bool(
             raw_forward_lead is not None
             and abs(raw_forward_lead) >= MIN_PROSPECTIVE_SEPARATION_MINUTES
         )
-        prospective_pair = bool(raw_forward_lead is not None and cycle_ids_present and not same_cycle and separation_ok)
+        prospective_pair = bool(
+            raw_forward_lead is not None
+            and cycle_ids_present
+            and source_cycles_valid
+            and not same_cycle
+            and separation_ok
+        )
         if raw_forward_lead is not None:
             raw_forward_leads.append(raw_forward_lead)
         if prospective_pair:
@@ -177,6 +197,9 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
             "prospective_iios_first_seen_at": prospective_iios_at.isoformat() if prospective_iios_at else None,
             "prospective_grok_cycle_id": grok_cycle_id,
             "prospective_iios_cycle_id": iios_cycle_id,
+            "prospective_grok_cycle_valid": grok_cycle_valid,
+            "prospective_iios_cycle_valid": iios_cycle_valid,
+            "source_cycles_valid": source_cycles_valid,
             "raw_forward_pair": raw_forward_lead is not None,
             "same_cycle_pair": same_cycle,
             "minimum_separation_minutes": MIN_PROSPECTIVE_SEPARATION_MINUTES,
@@ -186,7 +209,7 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
             "raw_forward_grok_lead_minutes": raw_forward_lead,
             "prospective_winner": raw_forward_winner if prospective_pair else "NOT_ELIGIBLE",
             "measurement_definition": "positive Grok lead minutes means Grok nomination preceded native IIOS opportunity discovery",
-            "prospective_definition": "prospective proof requires forward-instrumented first-seen observations from different measurement cycles separated by at least 10 minutes; same-cycle API latency never counts as discovery advantage",
+            "prospective_definition": "prospective proof requires forward-instrumented first-seen observations from different fully successful measurement cycles separated by at least 10 minutes; same-cycle API latency and partial/error cycles never count as discovery advantage",
             "trade_signal": False,
             "trade_execution_permission": False,
             "live_execution": False,
@@ -200,6 +223,10 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         "raw_forward_pair_count": len(raw_forward_leads),
         "prospective_pair_count": len(eligible_prospective_leads),
         "same_cycle_pair_count": sum(1 for row in rows if row.get("same_cycle_pair") is True),
+        "invalid_source_cycle_pair_count": sum(
+            1 for row in rows
+            if row.get("raw_forward_pair") is True and row.get("source_cycles_valid") is False
+        ),
         "grok_earlier_count": sum(1 for value in measurable_leads if value > 0),
         "iios_earlier_count": sum(1 for value in measurable_leads if value < 0),
         "tie_count": sum(1 for value in measurable_leads if value == 0),
@@ -212,6 +239,7 @@ def build_discovery_lead_time_report() -> dict[str, Any]:
         "prospective_mean_grok_lead_minutes": round(statistics.mean(eligible_prospective_leads), 4) if eligible_prospective_leads else None,
         "prospective_median_grok_lead_minutes": round(statistics.median(eligible_prospective_leads), 4) if eligible_prospective_leads else None,
         "minimum_prospective_separation_minutes": MIN_PROSPECTIVE_SEPARATION_MINUTES,
+        "partial_or_error_cycles_excluded_from_prospective": True,
         "rows": rows,
         "automatic_promotion": False,
         "research_only": True,
