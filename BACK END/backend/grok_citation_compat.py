@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-COMPAT_VERSION = "xai-raw-response-citations-v2"
+COMPAT_VERSION = "xai-untyped-parse-citations-v3"
 
 
 class _ResponseWithRawCitations:
@@ -46,7 +46,7 @@ def _direct_urls(response: Any, module) -> set[str]:
 
 
 def _install_raw_x_search(module) -> None:
-    """Capture raw xAI JSON before OpenAI SDK model parsing can drop extension fields."""
+    """Capture untyped xAI JSON before SDK model parsing can drop extension fields."""
     if getattr(module, "_xai_raw_x_search_installed", False):
         return
     module._xai_raw_x_search_installed = True
@@ -60,10 +60,18 @@ def _install_raw_x_search(module) -> None:
                     input=prompt,
                     tools=[{"type": "x_search", "from_date": from_date, "to_date": to_date}],
                 )
+
+                # LegacyAPIResponse.parse(to=dict) asks the SDK to return the complete
+                # JSON object without coercing it into OpenAI's typed Response model.
+                # That preserves xAI extension fields such as top-level `citations`.
                 try:
-                    raw_payload = raw.http_response.json()
+                    raw_payload = raw.parse(to=dict)
                 except Exception:
                     raw_payload = {}
+                if not isinstance(raw_payload, dict):
+                    raw_payload = {}
+
+                # Parse the ordinary typed response separately for output_text/usage.
                 parsed = raw.parse()
                 return _ResponseWithRawCitations(parsed, raw_payload), attempt
             except module.APITimeoutError as exc:
