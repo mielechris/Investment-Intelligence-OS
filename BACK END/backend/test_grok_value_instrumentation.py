@@ -35,10 +35,12 @@ class FakeGrokModule:
 
 
 class GrokValueInstrumentationTests(unittest.TestCase):
+    @patch.object(value, "get_object", return_value=None)
     @patch.object(value, "record_object")
-    def test_observation_is_measurement_only_and_non_executing(self, record_object):
+    def test_observation_is_measurement_only_and_non_executing(self, record_object, get_object):
         row = value.record_discovery_observation(source="GROK_X", ticker="abc")
         self.assertEqual(row["ticker"], "ABC")
+        self.assertTrue(row["first_observation_only"])
         self.assertTrue(row["measurement_only"])
         self.assertFalse(row["qualification_evidence"])
         self.assertFalse(row["trade_signal"])
@@ -47,6 +49,24 @@ class GrokValueInstrumentationTests(unittest.TestCase):
         self.assertFalse(row["trade_execution_permission"])
         self.assertFalse(row["live_execution"])
         record_object.assert_called_once()
+
+    @patch.object(value, "get_object")
+    @patch.object(value, "record_object")
+    def test_existing_first_seen_observation_is_not_replaced(self, record_object, get_object):
+        existing = {
+            "discovery_observation_id": "grok_value_first_seen_GROK_X_ABC",
+            "source": "GROK_X",
+            "ticker": "ABC",
+            "observed_at": "2026-01-01T00:00:00+00:00",
+        }
+        get_object.return_value = existing
+        row = value.record_discovery_observation(
+            source="GROK_X",
+            ticker="ABC",
+            observed_at="2026-01-02T00:00:00+00:00",
+        )
+        self.assertEqual(row, existing)
+        record_object.assert_not_called()
 
     def test_installed_wrappers_record_both_sources(self):
         opportunity = FakeOpportunityModule()
