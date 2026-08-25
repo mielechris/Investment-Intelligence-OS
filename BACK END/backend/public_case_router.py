@@ -33,6 +33,7 @@ from agent_calibration_weighting import (
 )
 from dynamic_agent_factory import router as dynamic_agent_factory_router
 from grok_ab_benchmark import router as grok_ab_router
+from grok_ab_reuse import router as grok_ab_reuse_router
 from grok_experiment_manifest import router as grok_experiment_manifest_router
 from grok_opportunity_discovery import router as grok_opportunity_router
 from ipo_monitoring import router as ipo_monitoring_router
@@ -122,6 +123,7 @@ router.include_router(judgment_bank_router)
 router.include_router(dynamic_agent_factory_router)
 router.include_router(grok_social_router)
 router.include_router(grok_ab_router)
+router.include_router(grok_ab_reuse_router)
 router.include_router(grok_opportunity_router)
 router.include_router(grok_experiment_manifest_router)
 router.include_router(agent_calibration_router)
