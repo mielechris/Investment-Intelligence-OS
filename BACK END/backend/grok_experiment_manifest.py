@@ -6,11 +6,17 @@ from fastapi import APIRouter
 
 import grok_social_intelligence as grok_social
 from grok_xai_sdk_adapter import ADAPTER_VERSION, install_xai_sdk_x_search
+from grok_status_matcher import MATCHER_VERSION, install_grok_status_matcher
 
 # xAI's official Python SDK exposes response.citations directly for X Search.
 # Install only the Grok transport adapter; the existing IIOS social firewall,
 # qualification rules, committee, sizing, authorization, and execution paths stay unchanged.
 install_xai_sdk_x_search(grok_social)
+
+# xAI canonicalizes post citations as x.com/i/status/<id>, while structured
+# claim output may use x.com/<account>/status/<id>. Match only identical numeric
+# status ids, then keep the stricter distinct-account source-diversity check.
+install_grok_status_matcher(grok_social)
 
 from grok_ab_benchmark import grok_ab_plan
 from grok_opportunity_discovery import grok_opportunity_plan
@@ -48,6 +54,7 @@ def grok_experiment_manifest() -> dict[str, Any]:
         "grok_nominations_do_not_auto_promote": opportunities.get("automatic_promotion") is False,
         "grok_nominations_do_not_auto_run_agents": opportunities.get("automatic_agent_run") is False,
         "xai_official_sdk_adapter_installed": getattr(grok_social, "_xai_official_sdk_adapter_installed", False) is True,
+        "x_status_id_matcher_installed": getattr(grok_social, "_grok_status_matcher_installed", False) is True,
     }
     all_pass = all(invariants.values())
     return {
@@ -61,6 +68,7 @@ def grok_experiment_manifest() -> dict[str, Any]:
         "x_search_tool": True,
         "xai_adapter_version": ADAPTER_VERSION,
         "citation_compat_version": ADAPTER_VERSION,
+        "x_status_matcher_version": MATCHER_VERSION,
         "invariant_checks": invariants,
         "all_invariants_pass": all_pass,
         "permanent_factory_promotion_ready": False,
