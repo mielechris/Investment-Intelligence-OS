@@ -25,6 +25,8 @@ import FactoryRoom from "./FactoryRoom";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
 
+const ACTIVE_CASE_KEY = "iios.activeCaseId";
+
 const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: string }> = [
   { key: "factory", label: "Factory", eyebrow: "OPERATING HOME", description: "Live intelligence floor, eight specialist desks, case movement, and MAX." },
   { key: "research", label: "Research", eyebrow: "INTELLIGENCE INPUTS", description: "Discovery, hard data, institutional context, market structure, and external research." },
@@ -98,9 +100,10 @@ function CasesRoomView() {
 }
 
 function CapitalRoomView() {
+  const caseId = window.localStorage.getItem(ACTIVE_CASE_KEY);
   return (
     <>
-      <PaperCapitalControlPanel />
+      <PaperCapitalControlPanel caseId={caseId} />
       <PortfolioContextPanel />
     </>
   );
