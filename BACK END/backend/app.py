@@ -26,6 +26,8 @@ from decision_history import router as history_router
 import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
 from finra_short_interest_fallback import install_finra_short_interest_fallback
+from factory_room_api import router as factory_room_router
+from generic_primary_evidence import router as generic_primary_evidence_router
 from hard_data import hard_data_evidence, router as hard_data_router
 from hyperscaler_primary_fallback import install_hyperscaler_primary_fallback
 import insider_intelligence
@@ -137,6 +139,8 @@ def monitoring_dashboard_live(limit: int = 25):
 app.include_router(cycle_valuation_router)
 app.include_router(history_router)
 app.include_router(gap_hunter_router)
+app.include_router(generic_primary_evidence_router)
+app.include_router(factory_room_router)
 app.include_router(hard_data_router)
 app.include_router(insider_router)
 app.include_router(institutional_router)

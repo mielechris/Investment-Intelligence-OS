@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import OpportunityFloor from "./OpportunityFloor";
+import FactoryRoom from "./FactoryRoom";
 import PaperCapitalControlPanel from "./PaperCapitalControlPanel";
 
-const API = "http://localhost:8000";
+const API = "http://localhost:8002";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 type SystemStatus = {
@@ -431,6 +432,8 @@ function App() {
           <span style={{ color: "#8d9aaa", fontSize: "13px" }}>{notice}</span>
         </div>
       </section>
+
+      <FactoryRoom />
 
       <OpportunityFloor />
 

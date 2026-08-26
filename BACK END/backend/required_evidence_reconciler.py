@@ -687,6 +687,64 @@ def _generic_company_targets(requirement: str) -> list[dict[str, str]]:
     ):
         add("generic_portfolio_context", "portfolio_state")
 
+
+    # Broader normal-company operating KPIs.
+    # These are governed as operating context rather
+    # than being treated as unknown/uncontrolled scope.
+    if any(
+        term in text
+        for term in (
+            "production",
+            "production volume",
+            "shipment",
+            "shipments",
+            "unit volume",
+            "volumes",
+            "orders",
+            "order growth",
+            "dealer inventory",
+            "inventory levels",
+            "capacity",
+            "utilization",
+            "wafer",
+            "backlog",
+            "bookings",
+            "customer growth",
+            "customers",
+            "subscriber",
+            "monthly active",
+            "daily active",
+            "advertising demand",
+            "ad impressions",
+            "net interest income",
+            "net interest margin",
+            "nim",
+            "deposit growth",
+            "deposits",
+            "loan growth",
+            "credit losses",
+            "credit quality",
+            "prescription",
+            "prescriptions",
+            "patient",
+            "market share",
+            "refining",
+            "upstream",
+            "downstream",
+            "realized price",
+            "commodity price",
+            "data center",
+            "networking",
+            "gaming",
+            "same-store",
+            "same store",
+        )
+    ):
+        add(
+            "generic_operating_context",
+            "operating_kpis",
+        )
+
     return targets
 
 
@@ -831,6 +889,7 @@ def _generic_state(
                     "official" in blob
                     or "market_data" in blob
                     or "research" in blob
+                    or "consensus_data" in blob
                 )
                 for blob in blobs
             )
@@ -840,63 +899,126 @@ def _generic_state(
             }
 
     if lane == "generic_operating_context":
-        # News can discover these facts, but cannot resolve the gap.
-        primary = [
-            blob
-            for blob in blobs
-            if (
-                "amazon investor" in blob
-                or "ir.aboutamazon.com" in blob
-                or "sec edgar" in blob
-                or "data.sec.gov" in blob
-            )
-            and any(
-                term in blob
-                for term in (
-                    "aws",
-                    "advertising",
-                    "bookings",
-                    "backlog",
-                    "utilization",
-                    "customer adoption",
-                    "segment",
-                )
-            )
-        ]
+        # An explicit first-party tagged operating record
+        # can satisfy the fact. Ordinary news/context can
+        # only create a governed WATCH obligation.
+        primary_tagged = []
 
-        if primary:
+        for item in current:
+            raw = (
+                item.get("raw")
+                if isinstance(
+                    item.get("raw"),
+                    dict,
+                )
+                else item
+            )
+
+            source_type = str(
+                raw.get("source_type")
+                or item.get("source_type")
+                or ""
+            ).lower()
+
+            primary_lane = str(
+                raw.get("primary_evidence_lane")
+                or item.get("primary_evidence_lane")
+                or ""
+            )
+
+            primary_fact = str(
+                raw.get("primary_fact_key")
+                or item.get("primary_fact_key")
+                or ""
+            )
+
+            if (
+                source_type
+                in {
+                    "official",
+                    "company",
+                    "filing",
+                }
+                and primary_lane
+                == "generic_operating_context"
+                and primary_fact
+                == "operating_kpis"
+            ):
+                primary_tagged.append(item)
+
+        if primary_tagged:
             return {
-                "state": "SATISFIED",
-                "covered": True,
-                "primary_operating_items": len(primary),
+                "state":
+                    "SATISFIED",
+                "covered":
+                    True,
+                "primary_operating_items":
+                    len(primary_tagged),
             }
+
+        operating_terms = (
+            "production",
+            "shipment",
+            "volume",
+            "orders",
+            "backlog",
+            "booking",
+            "capacity",
+            "utilization",
+            "customer",
+            "subscriber",
+            "advertising",
+            "aws",
+            "azure",
+            "cloud",
+            "retail",
+            "net interest",
+            "nim",
+            "deposit",
+            "loan growth",
+            "credit loss",
+            "prescription",
+            "patient",
+            "market share",
+            "refining",
+            "upstream",
+            "downstream",
+            "realized price",
+            "data center",
+            "networking",
+            "gaming",
+            "inventory",
+        )
 
         context = any(
             any(
                 term in blob
-                for term in (
-                    "aws",
-                    "advertising",
-                    "bookings",
-                    "backlog",
-                    "customer adoption",
-                )
+                for term
+                in operating_terms
             )
             for blob in blobs
         )
 
         return {
-            "state": (
-                "WATCHING"
-                if context
-                else "OPEN"
-            ),
-            "covered": False,
-            "watch_state": (
-                WATCH_STATE
-                if context
-                else None
-            ),
+            "state":
+                (
+                    "WATCHING"
+                    if context
+                    else "OPEN"
+                ),
+
+            "covered":
+                False,
+
+            "watch_state":
+                (
+                    WATCH_STATE
+                    if context
+                    else None
+                ),
+
+            "context_only":
+                context,
         }
 
     if lane == "generic_policy_context":

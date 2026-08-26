@@ -466,6 +466,62 @@ def _tagged_ingestion(plan: dict[str, Any]) -> dict[str, Any]:
 def run_gap_hunt(case_id: str) -> dict[str, Any]:
     case = _require_case(case_id)
     plan = build_gap_plan(case_id)
+
+    generic_primary_capture = None
+    ticker_upper = str(
+        plan.get("ticker") or ""
+    ).upper()
+
+    if ticker_upper not in {
+        "MU",
+        "MU.US",
+    }:
+        try:
+            from generic_primary_evidence import (
+                capture_generic_primary_evidence,
+            )
+
+            generic_primary_capture = (
+                capture_generic_primary_evidence(
+                    case_id
+                )
+            )
+
+        except Exception as exc:
+            generic_primary_capture = {
+                "status":
+                    "ERROR",
+
+                "error":
+                    f"{type(exc).__name__}: {exc}",
+
+                "paper_mode":
+                    True,
+
+                "trade_execution_permission":
+                    False,
+
+                "live_execution":
+                    False,
+            }
+
+            record_event(
+                case_id,
+                "GENERIC_PRIMARY_CAPTURE_FAILED",
+                payload={
+                    "error":
+                        generic_primary_capture[
+                            "error"
+                        ],
+
+                    "trade_execution_permission":
+                        False,
+
+                    "live_execution":
+                        False,
+                },
+            )
+
     prior_decision = _latest_decision(case_id)
     prior_packet = get_object(str(prior_decision.get("evidence_packet_id") or ""))
     prior_raw = _raw_items_from_packet(prior_packet)
@@ -623,6 +679,8 @@ def run_gap_hunt(case_id: str) -> dict[str, Any]:
         "case_id": case_id,
         "topic": case.get("topic"),
         "plan": plan,
+        "generic_primary_capture":
+            generic_primary_capture,
         "ingestion": ingestion,
         "quote": quote,
         "evidence_summary": packet["summary"],
