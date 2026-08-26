@@ -9,11 +9,13 @@ from pathlib import Path
 BRANCH = "feature/iios-experience-x0-x1"
 SUPERVISOR_LABEL = "com.iios.batch-supervisor"
 SUPERVISOR_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{SUPERVISOR_LABEL}.plist"
+NAV_IMPORT = 'import ExperienceRoomNav from "./ExperienceRoomNav";\n'
 EXPERIENCE_IMPORT = 'import ExperienceCommandCenter from "./ExperienceCommandCenter";\n'
 FLOOR_IMPORT = 'import LivingFactoryFloor from "./LivingFactoryFloor";\n'
 EVENT_RAIL_IMPORT = 'import FactoryEventRail from "./FactoryEventRail";\n'
 DESK_FLOOR_IMPORT = 'import SpecialistDeskFloor from "./SpecialistDeskFloor";\n'
 ANCHOR_IMPORT = 'import FactoryRoom from "./FactoryRoom";\n'
+NAV_RENDER = '      <ExperienceRoomNav />\n\n'
 EXPERIENCE_RENDER = '      <ExperienceCommandCenter />\n\n'
 FLOOR_RENDER = '      <LivingFactoryFloor />\n\n'
 EVENT_RAIL_RENDER = '      <FactoryEventRail />\n\n'
@@ -88,6 +90,7 @@ def main() -> int:
 
     required = [
         app_path,
+        frontend / "src" / "ExperienceRoomNav.tsx",
         frontend / "src" / "ExperienceCommandCenter.tsx",
         frontend / "src" / "experienceBlueprint.ts",
         frontend / "src" / "LivingFactoryFloor.tsx",
@@ -124,35 +127,34 @@ def main() -> int:
 
     app = app_path.read_text(encoding="utf-8")
 
-    if EXPERIENCE_IMPORT not in app:
+    if NAV_IMPORT not in app:
         if ANCHOR_IMPORT not in app:
             print("STOP: App import anchor not found")
             return 2
-        app = app.replace(ANCHOR_IMPORT, ANCHOR_IMPORT + EXPERIENCE_IMPORT, 1)
+        app = app.replace(ANCHOR_IMPORT, ANCHOR_IMPORT + NAV_IMPORT, 1)
 
+    if EXPERIENCE_IMPORT not in app:
+        app = app.replace(NAV_IMPORT, NAV_IMPORT + EXPERIENCE_IMPORT, 1)
     if FLOOR_IMPORT not in app:
         app = app.replace(EXPERIENCE_IMPORT, EXPERIENCE_IMPORT + FLOOR_IMPORT, 1)
-
     if EVENT_RAIL_IMPORT not in app:
         app = app.replace(FLOOR_IMPORT, FLOOR_IMPORT + EVENT_RAIL_IMPORT, 1)
-
     if DESK_FLOOR_IMPORT not in app:
         app = app.replace(EVENT_RAIL_IMPORT, EVENT_RAIL_IMPORT + DESK_FLOOR_IMPORT, 1)
 
-    ordered_renders = [EXPERIENCE_RENDER, FLOOR_RENDER, DESK_FLOOR_RENDER, EVENT_RAIL_RENDER]
-    if not any(render in app for render in ordered_renders):
-        if RENDER_ANCHOR not in app:
-            print("STOP: App render anchor not found")
-            return 2
-        app = app.replace(RENDER_ANCHOR, "".join(ordered_renders) + RENDER_ANCHOR, 1)
-    else:
-        for render in ordered_renders:
-            if render not in app:
-                existing_anchor = next((candidate for candidate in reversed(ordered_renders) if candidate in app), None)
-                if existing_anchor:
-                    app = app.replace(existing_anchor, existing_anchor + render, 1)
-                elif RENDER_ANCHOR in app:
-                    app = app.replace(RENDER_ANCHOR, render + RENDER_ANCHOR, 1)
+    # Canonical X3 home order: navigation -> cinematic factory -> command center ->
+    # living geometry -> audit lineage. The older operational surfaces remain in
+    # the DOM and are grouped by ExperienceRoomNav into Research/Cases/Capital/Judgment.
+    ordered_renders = [NAV_RENDER, DESK_FLOOR_RENDER, EXPERIENCE_RENDER, FLOOR_RENDER, EVENT_RAIL_RENDER]
+
+    existing_renders = [NAV_RENDER, EXPERIENCE_RENDER, FLOOR_RENDER, EVENT_RAIL_RENDER, DESK_FLOOR_RENDER]
+    for render in existing_renders:
+        app = app.replace(render, "")
+
+    if RENDER_ANCHOR not in app:
+        print("STOP: App render anchor not found")
+        return 2
+    app = app.replace(RENDER_ANCHOR, "".join(ordered_renders) + RENDER_ANCHOR, 1)
 
     app_path.write_text(app, encoding="utf-8")
 
@@ -166,6 +168,7 @@ def main() -> int:
     run(["git", "status", "-sb"], repo)
 
     print("\nX0-X3 preview gate is build-clean.")
+    print("Formal experience shell groups legacy modules into Factory / Research / Cases / Capital / Judgment.")
     print("Batch supervisor checkout was verified separate before any file mutation.")
     print("Living Factory Floor reads /factory-room/status active_room derived from audit events.")
     print("Factory Event Rail exposes strict raw-ledger -> canonical-X2 translation.")
