@@ -123,8 +123,9 @@ def main() -> int:
         new = (
             '      <div style={card}><b>Production input health</b>'
             '<div>Research discoveries: {data.a?.institutional_discovery?.discovery_count ?? 0}</div>'
-            '<div>Production universe: {data.a?.strict_universe_verified ? "VERIFIED" : "NOT READY"} · {data.a?.production_index_universe?.symbol_count ?? 0} symbols</div>'
-            '<div>Universe source: {(data.a?.production_index_universe?.source_lineage || []).map((x:any)=>`${x.index}:${x.verified_complete ? "OK" : "FAIL"}`).join(" · ") || "—"}</div>'
+            '<div>Production universe: {data.a?.strict_universe_verified ? "VERIFIED" : "NOT READY"} · {data.a?.active_production_index_universe?.symbol_count ?? 0} symbols</div>'
+            '<div>Universe source: {(data.a?.active_production_index_universe?.source_lineage || []).map((x:any)=>`${x.index}:${x.verified_complete ? "OK" : "FAIL"}`).join(" · ") || "—"}</div>'
+            '<div>Using prior verified snapshot: {data.a?.using_prior_verified_universe ? "YES" : "NO"}</div>'
             '<div>CME FedWatch: {data.a?.cme_fedwatch?.configured ? `${data.a?.cme_fedwatch?.mode || "EOD"} CONFIGURED` : "NOT CONFIGURED"}</div>'
             '<div>Fed snapshot verified: {data.a?.cme_fedwatch?.latest_snapshot_source_verified ? "YES" : "NO"}</div>'
             '<div>Fail closed: {data.a?.production_inputs_fail_closed ? "YES" : "—"}</div></div>'
