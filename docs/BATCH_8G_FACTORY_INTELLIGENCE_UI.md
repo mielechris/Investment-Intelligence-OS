@@ -2,6 +2,16 @@
 
 Batch 8G turns the Batch 8 intelligence stack into one governed operating surface.
 
+## Release state
+
+- Integrated IIOS version: `0.20.0`
+- Integration commit: `c186468d3259680a8f081646fe473fc262cdb141`
+- Factory UI contract: installed
+- Full backend regression: passed during autonomous integration
+- Frontend production build: passed during autonomous integration
+- Live API smoke: passed during autonomous integration
+- Live execution authority: `false`
+
 ## Purpose
 
 The UI is a read-only view over actual IIOS state. It does not create research facts, resolve evidence gaps, qualify a trade, size capital, authorize an order, or execute a trade. Missing backend data is displayed as `UNKNOWN`, `PENDING`, `UNAVAILABLE`, or `OFFLINE`.
