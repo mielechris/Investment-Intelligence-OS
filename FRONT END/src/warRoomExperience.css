@@ -6,7 +6,6 @@
 .judgment-bank-workspace-live,.judgment-bank-workspace-offline,.portfolio-war-room-live,.portfolio-war-room-offline { padding:7px 9px; border-radius:6px; font-size:8px; font-weight:900; letter-spacing:1.1px; white-space:nowrap; }
 .judgment-bank-workspace-live,.portfolio-war-room-live { color:#70dfa4; border:1px solid rgba(112,223,164,.36); background:rgba(9,36,26,.52); }
 .judgment-bank-workspace-offline,.portfolio-war-room-offline { color:#ff7f8e; border:1px solid rgba(255,127,142,.34); background:rgba(51,9,15,.48); }
-
 .judgment-bank-flow { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; margin-top:14px; border:1px solid rgba(169,124,60,.22); background:rgba(169,124,60,.16); }
 .judgment-bank-flow > div { background:#080b0e; padding:11px 12px; min-width:0; }
 .judgment-bank-flow span { display:inline-grid; place-items:center; width:20px; height:20px; border-radius:50%; background:#2a1d0d; border:1px solid #6e4d21; color:#d5a860; font-size:9px; font-weight:900; }
@@ -19,24 +18,12 @@
 .judgment-bank-table-wrap td:first-child strong { display:block; color:#dce1e5; }
 .judgment-bank-table-wrap td:first-child small { display:block; margin-top:2px; color:#64717e; font-size:8px; }
 .judgment-calibration-band { display:inline-block; padding:4px 6px; border-radius:5px; font-size:8px; font-weight:900; letter-spacing:.8px; }
-.judgment-calibration-band--strong { color:#70dfa4; background:rgba(20,73,50,.42); }
-.judgment-calibration-band--developing { color:#e2bc71; background:rgba(73,55,20,.42); }
-.judgment-calibration-band--weak { color:#ff8a98; background:rgba(78,20,29,.42); }
-.judgment-calibration-band--unobserved { color:#83909c; background:rgba(42,49,55,.42); }
-.judgment-bank-safety { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-top:11px; padding:9px 11px; border-left:2px solid #ad7b38; background:rgba(52,36,17,.30); }
-.judgment-bank-safety span { color:#876a43; font-size:8px; font-weight:900; letter-spacing:1.2px; }
-.judgment-bank-safety strong { color:#d7bb84; font-size:10px; }
-
-.portfolio-war-room-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
-.portfolio-war-room-panel { border:1px solid rgba(169,124,60,.25); background:#080b0e; border-radius:8px; padding:11px; }
-.portfolio-war-room-metrics { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; margin-top:9px; background:rgba(169,124,60,.14); }
-.portfolio-war-room-metrics > div { background:#080b0e; padding:10px 9px; min-width:0; }
-.portfolio-war-room-metrics span,.portfolio-war-room-decision span { display:block; color:#806542; font-size:7px; font-weight:900; letter-spacing:1px; }
-.portfolio-war-room-metrics strong { display:block; margin-top:4px; color:#d9dfe4; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.portfolio-war-room-decision { display:grid; grid-template-columns:2fr 1fr; gap:1px; margin-top:10px; background:rgba(169,124,60,.16); border:1px solid rgba(169,124,60,.22); }
-.portfolio-war-room-decision > div { background:#090b0d; padding:10px 11px; min-width:0; }
-.portfolio-war-room-decision strong { display:block; margin-top:5px; color:#d8bc86; font-size:10px; overflow:hidden; text-overflow:ellipsis; }
-.portfolio-war-room-lock { color:#ff7f8e!important; }
-
-@media (max-width:1180px) { .judgment-bank-flow { grid-template-columns:repeat(3,1fr); } .portfolio-war-room-grid { grid-template-columns:1fr; } }
-@media (max-width:760px) { .judgment-bank-workspace-head,.portfolio-war-room-head,.judgment-bank-safety { flex-direction:column; align-items:flex-start; } .judgment-bank-flow { grid-template-columns:1fr; } .portfolio-war-room-metrics { grid-template-columns:1fr 1fr; } .portfolio-war-room-decision { grid-template-columns:1fr; } }
+.judgment-calibration-band--strong { color:#70dfa4; background:rgba(20,73,50,.42); }.judgment-calibration-band--developing { color:#e2bc71; background:rgba(73,55,20,.42); }.judgment-calibration-band--weak { color:#ff8a98; background:rgba(78,20,29,.42); }.judgment-calibration-band--unobserved { color:#83909c; background:rgba(42,49,55,.42); }
+.judgment-bank-safety { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-top:11px; padding:9px 11px; border-left:2px solid #ad7b38; background:rgba(52,36,17,.30); }.judgment-bank-safety span { color:#876a43; font-size:8px; font-weight:900; letter-spacing:1.2px; }.judgment-bank-safety strong { color:#d7bb84; font-size:10px; }
+.portfolio-war-room-primary { display:grid; grid-template-columns:1.1fr 1fr .7fr 1.25fr .8fr; gap:1px; margin-top:13px; border:1px solid rgba(209,164,93,.32); background:rgba(209,164,93,.18); }
+.portfolio-war-room-primary > div { min-width:0; padding:11px 12px; background:linear-gradient(180deg,#0b0c0d,#07090b); }
+.portfolio-war-room-primary span { display:block; color:#8d7048; font-size:7px; font-weight:900; letter-spacing:1.05px; }
+.portfolio-war-room-primary strong { display:block; margin-top:5px; color:#e0e4e7; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.portfolio-war-room-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }.portfolio-war-room-panel { border:1px solid rgba(169,124,60,.25); background:#080b0e; border-radius:8px; padding:11px; }.portfolio-war-room-metrics { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; margin-top:9px; background:rgba(169,124,60,.14); }.portfolio-war-room-metrics > div { background:#080b0e; padding:10px 9px; min-width:0; }.portfolio-war-room-metrics span,.portfolio-war-room-decision span { display:block; color:#806542; font-size:7px; font-weight:900; letter-spacing:1px; }.portfolio-war-room-metrics strong { display:block; margin-top:4px; color:#d9dfe4; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.portfolio-war-room-decision { display:grid; grid-template-columns:2fr 1fr; gap:1px; margin-top:10px; background:rgba(169,124,60,.16); border:1px solid rgba(169,124,60,.22); }.portfolio-war-room-decision > div { background:#090b0d; padding:10px 11px; min-width:0; }.portfolio-war-room-decision strong { display:block; margin-top:5px; color:#d8bc86; font-size:10px; overflow:hidden; text-overflow:ellipsis; }.portfolio-war-room-lock { color:#ff7f8e!important; }
+@media(max-width:1180px){.judgment-bank-flow{grid-template-columns:repeat(3,1fr)}.portfolio-war-room-grid{grid-template-columns:1fr}.portfolio-war-room-primary{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){.judgment-bank-workspace-head,.portfolio-war-room-head,.judgment-bank-safety{flex-direction:column;align-items:flex-start}.judgment-bank-flow{grid-template-columns:1fr}.portfolio-war-room-primary,.portfolio-war-room-metrics{grid-template-columns:1fr 1fr}.portfolio-war-room-decision{grid-template-columns:1fr}}
