@@ -32,6 +32,19 @@ router = APIRouter()
 
 POLICY_VERSION = "generic-primary-evidence-v1"
 
+# Stable SEC registrant identifiers for the current
+# validation cohort. This avoids making every research
+# run depend on SEC's company_tickers.json endpoint,
+# which may return 403 even while Company Facts remains
+# available.
+KNOWN_SEC_CIKS = {
+    "XOM": "34088",
+    "JPM": "19617",
+    "AMZN": "1018724",
+    "MSFT": "789019",
+    "AVGO": "1730168",
+}
+
 FINANCIAL_TAGS = [
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "Revenues",
@@ -135,6 +148,12 @@ def _case_ticker(
 def _resolve_cik(
     ticker: str,
 ) -> str:
+    wanted = ticker.strip().upper()
+
+    known = KNOWN_SEC_CIKS.get(wanted)
+    if known:
+        return known
+
     url = (
         "https://www.sec.gov/files/"
         "company_tickers.json"
@@ -152,8 +171,6 @@ def _resolve_cik(
     payload = json.loads(
         raw.decode("utf-8")
     )
-
-    wanted = ticker.upper()
 
     for row in payload.values():
         if (

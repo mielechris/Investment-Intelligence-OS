@@ -26,6 +26,7 @@ from decision_history import router as history_router
 import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
 from finra_short_interest_fallback import install_finra_short_interest_fallback
+from generic_coverage_v2 import install_generic_coverage_v2, router as generic_coverage_v2_router
 from factory_room_api import router as factory_room_router
 from generic_primary_evidence import router as generic_primary_evidence_router
 from hard_data import hard_data_evidence, router as hard_data_router
@@ -93,6 +94,7 @@ install_analyst_consensus_fallback(primary_evidence)
 install_short_interest_fallback(primary_evidence)
 install_finra_short_interest_fallback(primary_evidence)
 install_open_evidence_watch(primary_evidence, monitoring_engine)
+install_generic_coverage_v2()
 install_required_evidence_risk_guard(primary_evidence)
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
@@ -140,6 +142,7 @@ app.include_router(cycle_valuation_router)
 app.include_router(history_router)
 app.include_router(gap_hunter_router)
 app.include_router(generic_primary_evidence_router)
+app.include_router(generic_coverage_v2_router)
 app.include_router(factory_room_router)
 app.include_router(hard_data_router)
 app.include_router(insider_router)
