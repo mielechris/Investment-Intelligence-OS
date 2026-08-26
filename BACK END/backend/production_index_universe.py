@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -60,6 +61,48 @@ SOURCE_SPECS = (
         default_url=DEFAULT_NASDAQ_100_URL,
     ),
 )
+
+
+class _TableParser(HTMLParser):
+    """Collect table rows without treating arbitrary HTML text as ticker data."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[tuple[str, str]]]] = []
+        self._table: list[list[tuple[str, str]]] | None = None
+        self._row: list[tuple[str, str]] | None = None
+        self._cell_tag: str | None = None
+        self._cell_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        name = tag.lower()
+        if name == "table":
+            self._table = []
+        elif name == "tr" and self._table is not None:
+            self._row = []
+        elif name in {"td", "th"} and self._row is not None:
+            self._cell_tag = name
+            self._cell_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._cell_tag is not None:
+            self._cell_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if name in {"td", "th"} and self._cell_tag is not None and self._row is not None:
+            value = " ".join("".join(self._cell_parts).split())
+            self._row.append((self._cell_tag, value))
+            self._cell_tag = None
+            self._cell_parts = []
+        elif name == "tr" and self._row is not None and self._table is not None:
+            if self._row:
+                self._table.append(self._row)
+            self._row = None
+        elif name == "table" and self._table is not None:
+            if self._table:
+                self.tables.append(self._table)
+            self._table = None
 
 
 def utc_now() -> str:
@@ -168,19 +211,51 @@ def parse_delimited_symbols(text: str) -> list[str]:
     return normalize_symbols([row[0] for row in raw_reader if row])
 
 
+def _symbols_from_tables(html: str) -> list[str]:
+    parser = _TableParser()
+    parser.feed(html)
+    output: list[str] = []
+
+    for table in parser.tables:
+        header_index: int | None = None
+        header_row_index: int | None = None
+
+        for row_index, row in enumerate(table):
+            for column_index, (tag, value) in enumerate(row):
+                if tag == "th" and _looks_like_symbol_header(value):
+                    header_index = column_index
+                    header_row_index = row_index
+                    break
+            if header_index is not None:
+                break
+
+        if header_index is None or header_row_index is None:
+            continue
+
+        for row in table[header_row_index + 1 :]:
+            if header_index >= len(row):
+                continue
+            symbol = normalize_symbol(row[header_index][1])
+            if symbol:
+                output.append(symbol)
+
+    return normalize_symbols(output)
+
+
 def parse_html_symbols(text: str) -> list[str]:
     html = unescape(text)
     candidates: list[str] = []
 
-    # Common structured fields used by index tables and embedded JSON.
+    # Explicit structured attributes/embedded fields only. We deliberately do not
+    # accept every short <td> value because company names can look ticker-like.
     patterns = (
         r'(?i)\b(?:symbol|ticker)\b\s*["\']?\s*[:=]\s*["\']([A-Z][A-Z0-9.\-]{0,11})["\']',
-        r'(?i)<t[dh][^>]*>\s*([A-Z][A-Z0-9.\-]{0,11})\s*</t[dh]>',
         r'(?i)data-(?:symbol|ticker)=["\']([A-Z][A-Z0-9.\-]{0,11})["\']',
     )
     for pattern in patterns:
         candidates.extend(re.findall(pattern, html))
 
+    candidates.extend(_symbols_from_tables(html))
     return normalize_symbols(candidates)
 
 
@@ -219,7 +294,7 @@ def _validate_host(url: str) -> None:
         "spdji.com",
         "www.spdji.com",
     )
-    if host not in allowed and not any(host.endswith("." + x) for x in allowed):
+    if host not in allowed and not any(host.endswith("." + value) for value in allowed):
         raise ValueError(
             f"Index source host {host or '<missing>'} is not an approved official host. "
             "Set IIOS_ALLOW_CUSTOM_INDEX_SOURCE_HOSTS=1 only for a separately governed source."
