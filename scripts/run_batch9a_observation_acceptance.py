@@ -12,7 +12,10 @@ PREVIEW = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9a-o
 BRANCH = "feature/batch9a-observation-paper-operations"
 LEDGER = LIVE / "BACK END" / "backend" / "iios_ledger.db"
 DOTENV = LIVE / "BACK END" / "backend" / ".env"
-VENV_PYTHON = LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python"
+VENV_CANDIDATES = (
+    LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python",
+    Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
+)
 
 
 def run(*args: str, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -51,6 +54,15 @@ def load_dotenv(path: Path, env: dict[str, str]) -> None:
             env[key] = value.strip('"\'')
 
 
+def resolve_python() -> Path:
+    for candidate in VENV_CANDIDATES:
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+    raise SystemExit(
+        "No IIOS backend virtualenv Python found. Refusing to fall back to system Python because provider dependencies must match the live backend."
+    )
+
+
 def main() -> int:
     if not LIVE.exists():
         raise SystemExit(f"Live Batch8 checkout not found: {LIVE}")
@@ -77,7 +89,7 @@ def main() -> int:
     else:
         run("git", "worktree", "add", "--detach", str(PREVIEW), f"origin/{BRANCH}", cwd=LIVE)
 
-    python = VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable)
+    python = resolve_python()
     env = dict(os.environ)
     load_dotenv(DOTENV, env)
     env["IIOS_DB_PATH"] = str(LEDGER)
