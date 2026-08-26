@@ -1,0 +1,76 @@
+:root {
+  --iios-clear:#66d99b;
+  --iios-watch:#d1a45d;
+  --iios-block:#ff7182;
+  --iios-idle:#7e8994;
+  --iios-clear-bg:rgba(14,52,37,.55);
+  --iios-watch-bg:rgba(62,43,18,.48);
+  --iios-block-bg:rgba(66,10,19,.48);
+  --iios-idle-bg:rgba(31,37,43,.48);
+}
+
+/* Canonical state semantics: green cleared/operating, brass watch/pending, red blocked/locked, gray idle/not evaluated. */
+.iios-state-clear { color:var(--iios-clear)!important; }
+.iios-state-watch { color:var(--iios-watch)!important; }
+.iios-state-block { color:var(--iios-block)!important; }
+.iios-state-idle { color:var(--iios-idle)!important; }
+
+.native-room-command-cell strong { color:#d7dde2; }
+.native-room-command-cell:last-child strong { color:var(--iios-watch); }
+.native-room--capital .native-room-command-cell:last-child strong,
+.native-room--factory .native-room-command-cell:last-child strong { color:var(--iios-block); }
+
+/* Executive density: state first, implementation detail second. */
+.native-room-header { margin-bottom:7px; }
+.native-room-command-strip { margin-bottom:12px!important; }
+.native-room > .cases-command-card,
+.native-room > .research-command-card,
+.native-room > .judgment-command-card,
+.native-room > .capital-command-card,
+.native-room > .portfolio-war-room { margin-bottom:13px!important; }
+
+.cases-command-live,.research-command-live,.judgment-command-live,.capital-command-live,.portfolio-war-room-live { color:var(--iios-clear)!important; }
+.cases-command-offline,.research-command-offline,.judgment-command-offline,.capital-command-offline,.portfolio-war-room-offline { color:var(--iios-block)!important; }
+.cases-command-next,.research-command-next,.judgment-command-next,.capital-command-next,.portfolio-war-room-decision { border-left-color:var(--iios-watch)!important; }
+.capital-lock,.research-lock,.judgment-lock,.portfolio-war-room-lock { color:var(--iios-block)!important; }
+
+/* Cases: surveillance is secondary to the active underwriting command. */
+.native-room--cases .native-legacy-workspace > main > section { box-shadow:none!important; }
+.native-room--cases .native-legacy-workspace > main > section:nth-of-type(5) { opacity:.94; }
+.native-room--cases table td:first-child { color:#74808a!important; font-size:10px!important; }
+.native-room--cases table tr { transition:background .15s ease; }
+.native-room--cases table tr:hover { background:rgba(169,124,60,.055)!important; }
+
+/* War Room: thesis state is the primary decision surface. */
+.portfolio-war-room-grid { grid-template-columns:.85fr 1.15fr!important; }
+.portfolio-war-room-panel:last-child { border-color:rgba(209,164,93,.58)!important; background:linear-gradient(180deg,rgba(25,18,9,.94),rgba(7,8,9,.98))!important; }
+.portfolio-war-room-panel:last-child .portfolio-war-room-label { color:#d1a45d!important; }
+.portfolio-war-room-panel:last-child .portfolio-war-room-metrics strong { font-size:13px!important; }
+.portfolio-war-room-decision { background:linear-gradient(90deg,rgba(62,43,18,.44),rgba(10,12,14,.78))!important; }
+
+/* Judgment: the governed progression is visually unmistakable. */
+.judgment-bank-flow { position:relative; }
+.judgment-bank-flow > div { position:relative; min-height:92px; }
+.judgment-bank-flow > div::after { content:"→"; position:absolute; right:-8px; top:32px; z-index:2; color:#765c38; font-size:15px; }
+.judgment-bank-flow > div:last-child::after { display:none; }
+.judgment-bank-flow > div:nth-child(3),.judgment-bank-flow > div:nth-child(4) { border-color:rgba(209,164,93,.55)!important; background:rgba(42,30,14,.34)!important; }
+.judgment-bank-flow > div:nth-child(4) strong { color:#e0bc7e!important; }
+.judgment-bank-safety { border-color:rgba(255,113,130,.35)!important; background:var(--iios-block-bg)!important; }
+.judgment-bank-safety strong { color:var(--iios-block)!important; }
+.judgment-bank-table-wrap td:first-child small { opacity:.52; font-size:9px; }
+
+/* Factory: reduce decorative dominance without losing the cinematic identity. */
+.native-room--factory .factory-x3-shell,
+.native-room--factory .specialist-desk-floor { max-height:none; }
+.native-room--factory .factory-x3-title { letter-spacing:.02em!important; }
+.native-room--factory .factory-x3-subtitle { opacity:.72; }
+.native-room--factory .native-drawer { opacity:.94; }
+
+@media (max-width:1100px) {
+  .portfolio-war-room-grid { grid-template-columns:1fr!important; }
+  .judgment-bank-flow { grid-template-columns:1fr 1fr!important; }
+  .judgment-bank-flow > div::after { display:none; }
+}
+@media (max-width:700px) {
+  .judgment-bank-flow { grid-template-columns:1fr!important; }
+}
