@@ -1,0 +1,75 @@
+{
+  "branch": "feature/batch8-paper-portfolio",
+  "poll_seconds": 900,
+  "state_directory": "~/.iios/batch-supervisor",
+  "engineering_lane": [
+    {
+      "id": "8D",
+      "name": "Kimi Research & Swarm Intelligence",
+      "apply_script": "scripts/apply_batch8d.py",
+      "depends_on": [],
+      "parallel_with_external_gates": true
+    },
+    {
+      "id": "8E",
+      "name": "Multi-Model Intelligence Council",
+      "apply_script": "scripts/apply_batch8e.py",
+      "depends_on": ["8D"],
+      "parallel_with_external_gates": true
+    },
+    {
+      "id": "8F",
+      "name": "Scale Validation and Calibration",
+      "apply_script": "scripts/apply_batch8f.py",
+      "depends_on": ["8E"],
+      "parallel_with_external_gates": true
+    },
+    {
+      "id": "8G",
+      "name": "Factory Intelligence UI",
+      "apply_script": "scripts/apply_batch8g.py",
+      "depends_on": ["8F"],
+      "parallel_with_external_gates": true
+    }
+  ],
+  "external_gates": [
+    {
+      "id": "8C1_PRODUCTION_INPUTS",
+      "name": "Strict index universe + governed Fed probability feed",
+      "status_endpoint": "http://127.0.0.1:8002/intelligence/production-inputs/status",
+      "ready_json_path": "health.production_inputs_ready",
+      "blocks_engineering_lane": false
+    },
+    {
+      "id": "JESSE_JUDGMENT_APPROVAL",
+      "name": "Jesse Judgment Bank human approval",
+      "issue_number": 8,
+      "human_gate": true,
+      "blocks_engineering_lane": false
+    },
+    {
+      "id": "KIMI_LIVE_PROVIDER",
+      "name": "Kimi provider credential / entitlement for live validation",
+      "issue_number": 9,
+      "human_gate": true,
+      "blocks_engineering_lane": false
+    },
+    {
+      "id": "GROK_LIVE_PROVIDER",
+      "name": "Grok provider credential / entitlement for live validation",
+      "human_gate": true,
+      "blocks_engineering_lane": false
+    }
+  ],
+  "safety_strings": {
+    "required_present": [
+      "\"paper_mode\": True",
+      "\"live_execution\": False"
+    ],
+    "forbidden_present": [
+      "\"live_execution\": True",
+      "\"auto_trade_authority\": True",
+      "\"trade_execution_permission\": True"
+    ]
+  }
+}
