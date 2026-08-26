@@ -1,3 +1,4 @@
+import "./previewApiBridge8G";
 import { useEffect, useState } from "react";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
 import SpecialistDeskFloor from "./SpecialistDeskFloor";
