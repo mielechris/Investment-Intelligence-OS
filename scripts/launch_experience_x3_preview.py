@@ -12,6 +12,7 @@ LABEL = "com.iios.batch-supervisor"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 WORKTREE_NAME = "Investment-Intelligence-OS-experience-x3"
 PREVIEW_PORT = 5188
+PREVIEW_MUTATION_PATH = "FRONT END/src/App.tsx"
 
 
 def run(
@@ -94,6 +95,33 @@ def assert_supervisor_isolated(source: Path, target: Path) -> tuple[Path | None,
     return supervisor, supervisor_branch
 
 
+def sync_existing_worktree(target: Path) -> None:
+    status = output(["git", "status", "--porcelain"], target)
+    dirty_paths: list[str] = []
+    for line in status.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        dirty_paths.append(path)
+
+    unexpected = [path for path in dirty_paths if path != PREVIEW_MUTATION_PATH]
+    if unexpected:
+        print("STOP: experience worktree has unexpected local changes:")
+        for path in unexpected:
+            print(" ", path)
+        print("Nothing was reset. Resolve those changes before previewing.")
+        raise SystemExit(4)
+
+    if PREVIEW_MUTATION_PATH in dirty_paths:
+        print("Resetting prior preview-only App.tsx mount before fast-forward update.")
+        run(["git", "restore", "--", PREVIEW_MUTATION_PATH], target)
+
+    print("Fast-forwarding existing experience worktree to the fetched branch head.")
+    run(["git", "merge", "--ff-only", f"origin/{BRANCH}"], target)
+
+
 def ensure_worktree(source: Path, target: Path) -> None:
     before_branch = git_branch(source)
 
@@ -113,6 +141,7 @@ def ensure_worktree(source: Path, target: Path) -> None:
             run(["git", "worktree", "add", "-b", BRANCH, str(target), f"origin/{BRANCH}"], source)
     else:
         print("Experience worktree already exists.")
+        sync_existing_worktree(target)
 
     after_branch = git_branch(source)
     if after_branch != before_branch:
@@ -150,13 +179,14 @@ def main() -> int:
     supervisor, supervisor_branch = assert_supervisor_isolated(source, target)
     ensure_worktree(source, target)
 
-    # The preview gate contains a second independent LaunchAgent working-directory guard.
-    run([sys.executable, "scripts/apply_experience_x2.py"], target)
-
     frontend = target / "FRONT END"
     if not (frontend / "node_modules").exists():
         lockfile = frontend / "package-lock.json"
+        print("Frontend dependencies missing in experience worktree; installing before build gate.")
         run(["npm", "ci"] if lockfile.exists() else ["npm", "install"], frontend)
+
+    # The preview gate contains a second independent LaunchAgent working-directory guard.
+    run([sys.executable, "scripts/apply_experience_x2.py"], target)
 
     verify_supervisor_unchanged(supervisor, supervisor_branch)
 
