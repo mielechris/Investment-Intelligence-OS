@@ -64,7 +64,8 @@
   "safety_strings": {
     "required_present": [
       "\"paper_mode\": True",
-      "\"live_execution\": False"
+      "\"opportunity_auto_trade_authority\": False",
+      "\"hard_data_auto_trade_evidence\": False"
     ],
     "forbidden_present": [
       "\"live_execution\": True",
