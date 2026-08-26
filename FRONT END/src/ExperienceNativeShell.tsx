@@ -4,6 +4,7 @@ import "./experienceShell.css";
 import "./roomCommandStrip.css";
 import "./executiveRoomCards.css";
 import "./warRoomExperience.css";
+import "./stateLanguage.css";
 
 import LegacyApp from "./App";
 import OpportunityFloor from "./OpportunityFloor";
@@ -33,7 +34,6 @@ import JudgmentBankWorkspace from "./JudgmentBankWorkspace";
 import PortfolioThesisWarRoom from "./PortfolioThesisWarRoom";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
-
 const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: string }> = [
   { key: "factory", label: "Factory", eyebrow: "OPERATING HOME", description: "Live intelligence floor, eight specialist desks, case movement, and MAX." },
   { key: "research", label: "Research", eyebrow: "INTELLIGENCE INPUTS", description: "Discovery, hard data, institutional context, market structure, and external research." },
@@ -41,7 +41,6 @@ const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: 
   { key: "capital", label: "Capital", eyebrow: "CONTROL & RISK", description: "Portfolio overlap, thesis integrity, deterministic risk, paper execution, and capital controls." },
   { key: "judgment", label: "Judgment", eyebrow: "HUMAN INTELLIGENCE", description: "Professional interviews, Judgment Bank capture, calibration, and governed human insight." },
 ];
-
 const ROOM_COMMANDS: Record<RoomKey, Array<[string, string]>> = {
   factory: [["PRIMARY SURFACE", "OPERATIONS"], ["AUTHORITY", "OBSERVE / ROUTE"], ["EXECUTION", "PAPER ONLY"]],
   research: [["PRIMARY SURFACE", "EVIDENCE"], ["AUTHORITY", "RESEARCH ONLY"], ["OUTPUT", "GOVERNED INPUTS"]],
@@ -49,21 +48,13 @@ const ROOM_COMMANDS: Record<RoomKey, Array<[string, string]>> = {
   capital: [["PRIMARY SURFACE", "RISK & CAPITAL"], ["AUTHORITY", "SIZE / BLOCK"], ["EXECUTION", "PAPER ONLY"]],
   judgment: [["PRIMARY SURFACE", "HUMAN JUDGMENT"], ["AUTHORITY", "CAPTURE / CALIBRATE"], ["OUTPUT", "JUDGMENT BANK"]],
 };
-
-function RoomHeader({ room }: { room: (typeof ROOMS)[number] }) {
-  return <><div className="native-room-header"><div><div className="native-room-eyebrow">{room.eyebrow}</div><h2>{room.label}</h2><p>{room.description}</p></div><div className="native-room-mode">PAPER / SHADOW · LIVE CAPITAL LOCKED</div></div><div className="native-room-command-strip">{ROOM_COMMANDS[room.key].map(([label, value]) => <div key={label} className="native-room-command-cell"><span>{label}</span><strong>{value}</strong></div>)}</div></>;
-}
-
-function DetailDrawer({ title, children }: { title: string; children: React.ReactNode }) {
-  return <details className="native-drawer native-drawer--room-detail"><summary>{title}</summary><div className="native-drawer-body native-detail-stack">{children}</div></details>;
-}
-
+function RoomHeader({ room }: { room: (typeof ROOMS)[number] }) { return <><div className="native-room-header"><div><div className="native-room-eyebrow">{room.eyebrow}</div><h2>{room.label}</h2><p>{room.description}</p></div><div className="native-room-mode iios-state-block">PAPER / SHADOW · LIVE CAPITAL LOCKED</div></div><div className="native-room-command-strip">{ROOM_COMMANDS[room.key].map(([label, value]) => <div key={label} className="native-room-command-cell"><span>{label}</span><strong>{value}</strong></div>)}</div></>; }
+function DetailDrawer({ title, children }: { title: string; children: React.ReactNode }) { return <details className="native-drawer native-drawer--room-detail"><summary>{title}</summary><div className="native-drawer-body native-detail-stack">{children}</div></details>; }
 function FactoryRoomView() { return <><SpecialistDeskFloor /><FactoryEventRail /><DetailDrawer title="Live Factory Map"><LivingFactoryFloor /></DetailDrawer><DetailDrawer title="Operations Conveyor"><FactoryRoom /></DetailDrawer><DetailDrawer title="System Architecture"><ExperienceCommandCenter /></DetailDrawer></>; }
 function ResearchRoomView() { return <><ResearchCommandCard /><DetailDrawer title="Opportunity Hunt"><OpportunityFloor /></DetailDrawer><DetailDrawer title="Jesse / External Research Intelligence"><JesseIntelligencePanel /></DetailDrawer><DetailDrawer title="Evidence Acquisition & Verification"><HardDataPanel /><CaseAwarePrimaryEvidencePanel /><ConsensusVerificationPanel /><ShortInterestVerificationPanel /><OptionsPositioningVerificationPanel /></DetailDrawer><DetailDrawer title="Ownership & Institutional Context"><InsiderOwnershipPanel /><InstitutionalIntelligencePanel /></DetailDrawer></>; }
 function CasesRoomView() { return <><CasesCommandCard /><NewCaseLauncher /><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>; }
 function CapitalRoomView() { return <><CapitalCommandCenter /><PortfolioThesisWarRoom /><DetailDrawer title="Portfolio Context & Overlap"><PortfolioContextPanel /></DetailDrawer></>; }
 function JudgmentRoomView() { return <><JudgmentCommandCard /><JudgmentBankWorkspace /><DetailDrawer title="Professional Interview Portal"><InterviewPortalPanel /></DetailDrawer></>; }
-
 export default function ExperienceNativeShell() {
   const [activeRoom, setActiveRoom] = useState<RoomKey>("factory");
   const room = ROOMS.find((item) => item.key === activeRoom) ?? ROOMS[0];
