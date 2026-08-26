@@ -28,23 +28,30 @@ const ROOM_MAP: Record<string, FactoryZoneKey> = {
 function canonicalType(rawType: string): FactoryEventType | null {
   const event = rawType.toUpperCase();
 
+  if (event.includes("SAFETY") && event.includes("UNLOCK")) return "safety.unlocked";
+  if (event.includes("SAFETY") && event.includes("LOCK")) return "safety.locked";
+  if (event.includes("STALE") && event.includes("EVIDENCE")) return "evidence.stale";
+  if (event.includes("EVIDENCE") && (event.includes("REFRESH") || event.includes("UPDATED"))) return "evidence.refreshed";
   if (event.includes("CASE_CREATED")) return "case.created";
-  if (event.includes("EVIDENCE") || event.includes("INGEST") || event.includes("PRIMARY_")) return "evidence.loaded";
-  if (event.includes("AGENT_COMPLETE") || event.includes("SPECIALIST_COMPLETE") || event.includes("DESK_COMPLETE")) return "agent.completed";
-  if (event.includes("AGENT_START") || event.includes("SPECIALIST_START") || event.includes("DESK_START")) return "agent.assigned";
-  if (event.includes("COMMITTEE_COMPLETE")) return "committee.completed";
-  if (event.includes("COMMITTEE")) return "committee.opened";
+  if (event.includes("CASE_UNBLOCK") || event.includes("UNBLOCKED")) return "case.unblocked";
+  if (event.includes("BLOCK")) return "case.blocked";
+  if (event.includes("THESIS") && event.includes("BROKEN")) return "thesis.status_changed";
+  if (event.includes("THESIS") || event.includes("MONITOR")) return "thesis.monitored";
+  if (event.includes("PAPER_ORDER") && (event.includes("FILLED") || event.includes("EXECUTED"))) return "paper.order.filled";
+  if (event.includes("PAPER_ORDER")) return "paper.order.created";
+  if (event.includes("PAPER_EXECUTION") && (event.includes("REJECT") || event.includes("DENY"))) return "execution.rejected";
+  if (event.includes("PAPER_EXECUTION")) return "execution.approved";
   if (event.includes("RISK_REJECT") || event.includes("RISK_DENY")) return "risk.rejected";
   if (event.includes("RISK_COMPLETE") || event.includes("RISK_CLEAR") || event.includes("RISK_AUTH")) return "risk.cleared";
   if (event.includes("RISK_")) return "risk.inspected";
-  if (event.includes("PAPER_ORDER") && (event.includes("FILLED") || event.includes("EXECUTED"))) return "paper.order.filled";
-  if (event.includes("PAPER_ORDER")) return "paper.order.created";
-  if (event.includes("PAPER_EXECUTION") || event.includes("AUTHORIZATION")) return "execution.approved";
-  if (event.includes("THESIS") && event.includes("BROKEN")) return "thesis.status_changed";
-  if (event.includes("THESIS") || event.includes("MONITOR")) return "thesis.monitored";
-  if (event.includes("STALE") && event.includes("EVIDENCE")) return "evidence.stale";
-  if (event.includes("BLOCK")) return "case.blocked";
-  if (event.includes("SAFETY") && event.includes("LOCK")) return "safety.locked";
+  if (event.includes("CHALLENGE") && event.includes("CLEAR")) return "challenge.cleared";
+  if (event.includes("CHALLENGE") || event.includes("SKEPTIC") || event.includes("RED_TEAM")) return "challenge.raised";
+  if (event.includes("COMMITTEE_COMPLETE")) return "committee.completed";
+  if (event.includes("COMMITTEE")) return "committee.opened";
+  if (event.includes("AGENT_COMPLETE") || event.includes("SPECIALIST_COMPLETE") || event.includes("DESK_COMPLETE")) return "agent.completed";
+  if (event.includes("AGENT_THINK") || event.includes("SPECIALIST_THINK") || event.includes("DESK_THINK")) return "agent.thinking";
+  if (event.includes("AGENT_START") || event.includes("SPECIALIST_START") || event.includes("DESK_START") || event.includes("AGENT_ASSIGNED")) return "agent.assigned";
+  if (event.includes("EVIDENCE") || event.includes("INGEST") || event.includes("PRIMARY_")) return "evidence.loaded";
 
   return null;
 }
