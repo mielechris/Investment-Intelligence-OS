@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.14.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.15.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.14.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.15.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -48,6 +48,8 @@ from institutional_research_intelligence import institutional_research_evidence,
 from macro_policy_intelligence import market_policy_evidence, router as macro_policy_router
 from dislocation_intelligence import router as dislocation_intelligence_router
 from thesis_integrity_v2 import thesis_integrity_evidence, router as thesis_integrity_v2_router
+from jesse_source_acquisition import router as jesse_source_acquisition_router
+from jesse_scheduler import router as jesse_scheduler_router, start_jesse_scheduler, stop_jesse_scheduler
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -188,6 +190,8 @@ app.include_router(institutional_research_router)
 app.include_router(macro_policy_router)
 app.include_router(dislocation_intelligence_router)
 app.include_router(thesis_integrity_v2_router)
+app.include_router(jesse_source_acquisition_router)
+app.include_router(jesse_scheduler_router)
 app.include_router(primary_evidence_router)
 app.include_router(portfolio_context_router)
 app.include_router(paper_capital_router)
@@ -199,18 +203,20 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.14.0"
+app.version = "0.15.0"
 
 
 @app.on_event("startup")
 def start_iios_monitoring() -> None:
     start_scheduler()
     start_opportunity_scheduler()
+    start_jesse_scheduler()
 
 
 @app.on_event("shutdown")
 def stop_iios_monitoring() -> None:
     stop_opportunity_scheduler()
+    stop_jesse_scheduler()
     stop_scheduler()
 
 
@@ -218,7 +224,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.14.0",
+        "version": "0.15.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -233,6 +239,13 @@ def system_status():
         "tariff_transmission_engine": True,
         "daily_dislocation_scanner": True,
         "generic_thesis_integrity_v2": True,
+        "jesse_live_source_acquisition": True,
+        "jesse_internal_scheduler": True,
+        "dislocation_11am_pacific_scheduler": True,
+        "dislocation_next_day_calibration": True,
+        "authorized_research_inbox": True,
+        "governed_fed_probability_feed_adapter": True,
+        "governed_dislocation_universe_registry": True,
         "opportunity_scanner_available": True,
         "opportunity_auto_scan_default": False,
         "opportunity_scan_interval_floor_minutes": 240,
