@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const API = "http://127.0.0.1:8002";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 export default function NewCaseLauncher() {
+  const drawerRef = useRef<HTMLDetailsElement | null>(null);
   const [topic, setTopic] = useState("");
   const [ticker, setTicker] = useState("");
   const [direction, setDirection] = useState("LONG");
@@ -11,6 +12,10 @@ export default function NewCaseLauncher() {
   const [intervalMinutes, setIntervalMinutes] = useState("60");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Create a governed paper/shadow case. Live execution remains disabled.");
+
+  useEffect(() => {
+    if (drawerRef.current) drawerRef.current.open = false;
+  }, []);
 
   const run = async () => {
     setBusy(true);
@@ -35,6 +40,10 @@ export default function NewCaseLauncher() {
       if (caseId) {
         window.localStorage.setItem(ACTIVE_CASE_KEY, caseId);
         window.dispatchEvent(new Event("iios-active-case-changed"));
+        setTopic("");
+        setTicker("");
+        setReferencePrice("");
+        if (drawerRef.current) drawerRef.current.open = false;
       }
       setMessage(caseId ? `Case ${caseId.slice(-8)} created and placed into AUTO WATCH. ${data.ingestion?.successful_sources ?? 0} public sources responded.` : "Governed case completed, but no case ID was returned.");
     } catch (error) {
@@ -45,7 +54,7 @@ export default function NewCaseLauncher() {
   };
 
   return (
-    <details className="native-drawer native-new-case-drawer">
+    <details ref={drawerRef} className="native-drawer native-new-case-drawer">
       <summary>+ New Case</summary>
       <div className="native-drawer-body">
         <div className="native-new-case-grid">
