@@ -1,128 +1,21 @@
 import type { FactoryZoneKey } from "./factoryGeometry";
 import type { FactoryEvent, FactoryEventType } from "./factoryMovement";
-
-export type RawLedgerEvent = {
-  event_id?: string;
-  case_id?: string;
-  event_type?: string;
-  created_at?: string;
-  room?: string;
-  payload?: Record<string, unknown>;
-};
-
-export type AdaptedLedgerEvent = {
-  raw: RawLedgerEvent;
-  canonical: FactoryEvent | null;
-  recognizedType: FactoryEventType | null;
-  movementEligible: boolean;
-  zone: FactoryZoneKey | null;
-  reason: string | null;
-};
-
-const ROOM_MAP: Record<string, FactoryZoneKey> = {
-  EVIDENCE: "evidence-warehouse",
-  EIGHT_DESKS: "agent-desks",
-  COMMITTEE: "committee-room",
-  RISK: "risk-inspection",
-  CAPITAL: "portfolio-office",
-  PAPER_PORTFOLIO: "paper-execution",
-};
-
-function canonicalType(rawType: string): FactoryEventType | null {
-  const event = rawType.toUpperCase();
-
-  if (event.includes("SAFETY") && event.includes("UNLOCK")) return "safety.unlocked";
-  if (event.includes("SAFETY") && event.includes("LOCK")) return "safety.locked";
-  if (event.includes("STALE") && event.includes("EVIDENCE")) return "evidence.stale";
-  if (event.includes("EVIDENCE") && (event.includes("REFRESH") || event.includes("UPDATED"))) return "evidence.refreshed";
-  if (event.includes("CASE_CREATED")) return "case.created";
-  if (event.includes("CASE_UNBLOCK") || event.includes("UNBLOCKED")) return "case.unblocked";
-  if (event.includes("BLOCK")) return "case.blocked";
-  if (event.includes("THESIS") && event.includes("BROKEN")) return "thesis.status_changed";
-  if (event.includes("THESIS") || event.includes("MONITOR")) return "thesis.monitored";
-  if (event.includes("PAPER_ORDER") && (event.includes("FILLED") || event.includes("EXECUTED"))) return "paper.order.filled";
-  if (event.includes("PAPER_ORDER")) return "paper.order.created";
-  if (event.includes("PAPER_EXECUTION") && (event.includes("REJECT") || event.includes("DENY"))) return "execution.rejected";
-  if (event.includes("PAPER_EXECUTION")) return "execution.approved";
-  if (event.includes("RISK_REJECT") || event.includes("RISK_DENY")) return "risk.rejected";
-  if (event.includes("RISK_COMPLETE") || event.includes("RISK_CLEAR") || event.includes("RISK_AUTH")) return "risk.cleared";
-  if (event.includes("RISK_")) return "risk.inspected";
-  if (event.includes("CHALLENGE") && event.includes("CLEAR")) return "challenge.cleared";
-  if (event.includes("CHALLENGE") || event.includes("SKEPTIC") || event.includes("RED_TEAM")) return "challenge.raised";
-  if (event.includes("COMMITTEE_COMPLETE") || event.includes("COUNCIL_COMPLETE")) return "committee.completed";
-  if (event.includes("COMMITTEE") || event.includes("COUNCIL")) return "committee.opened";
-  if (event.includes("AGENT_COMPLETE") || event.includes("SPECIALIST_COMPLETE") || event.includes("DESK_COMPLETE")) return "agent.completed";
-  if (event.includes("AGENT_THINK") || event.includes("SPECIALIST_THINK") || event.includes("DESK_THINK")) return "agent.thinking";
-  if (event.includes("AGENT_START") || event.includes("SPECIALIST_START") || event.includes("DESK_START") || event.includes("AGENT_ASSIGNED")) return "agent.assigned";
-  if (event.includes("EVIDENCE") || event.includes("INGEST") || event.includes("PRIMARY_")) return "evidence.loaded";
-
-  return null;
-}
-
-function inferredZoneForType(type: FactoryEventType | null): FactoryZoneKey | null {
-  if (!type) return null;
-  if (type.startsWith("committee.")) return "committee-room";
-  if (type.startsWith("challenge.")) return "skeptic-room";
-  if (type.startsWith("risk.")) return "risk-inspection";
-  if (type.startsWith("execution.") || type.startsWith("paper.")) return "paper-execution";
-  if (type.startsWith("agent.")) return "agent-desks";
-  if (type.startsWith("evidence.")) return "evidence-warehouse";
-  if (type.startsWith("thesis.")) return "thesis-integrity";
-  return null;
-}
-
-function zoneFor(raw: RawLedgerEvent, type: FactoryEventType | null): FactoryZoneKey | null {
-  const room = String(raw.room || "").toUpperCase();
-  return ROOM_MAP[room] ?? inferredZoneForType(type);
-}
-
-export function adaptLedgerEvent(raw: RawLedgerEvent): AdaptedLedgerEvent {
-  const eventType = String(raw.event_type || "").trim();
-  const eventId = String(raw.event_id || "").trim();
-  const caseId = String(raw.case_id || "").trim();
-  const occurredAt = String(raw.created_at || "").trim();
-  const type = canonicalType(eventType);
-  const zone = zoneFor(raw, type);
-
-  if (!eventType || !type) {
-    return {
-      raw,
-      canonical: null,
-      recognizedType: null,
-      movementEligible: false,
-      zone,
-      reason: eventType ? `Unrecognized ledger event type: ${eventType}` : "Missing event type.",
-    };
-  }
-
-  if (!eventId || !caseId || !occurredAt) {
-    return {
-      raw,
-      canonical: null,
-      recognizedType: type,
-      movementEligible: false,
-      zone,
-      reason: "Recognized system event, but case/audit identity is incomplete; no case movement projected.",
-    };
-  }
-
-  return {
-    raw,
-    zone,
-    recognizedType: type,
-    movementEligible: true,
-    reason: null,
-    canonical: {
-      eventId,
-      caseId,
-      eventType: type,
-      occurredAt,
-      room: zone,
-      payload: raw.payload,
-    },
-  };
-}
-
-export function adaptLedgerEvents(events: readonly RawLedgerEvent[]) {
-  return events.map(adaptLedgerEvent);
-}
+export type RawLedgerEvent={event_id?:string;case_id?:string;event_type?:string;created_at?:string;room?:string;payload?:Record<string,unknown>};
+export type AdaptedLedgerEvent={raw:RawLedgerEvent;canonical:FactoryEvent|null;recognizedType:FactoryEventType|null;movementEligible:boolean;zone:FactoryZoneKey|null;reason:string|null};
+const ROOM_MAP:Record<string,FactoryZoneKey>={EVIDENCE:"evidence-warehouse",EIGHT_DESKS:"agent-desks",COMMITTEE:"committee-room",RISK:"risk-inspection",CAPITAL:"portfolio-office",PAPER_PORTFOLIO:"paper-execution"};
+function canonicalType(rawType:string):FactoryEventType|null{const e=rawType.toUpperCase();
+ if(e.includes("SAFETY")&&e.includes("UNLOCK"))return"safety.unlocked";if(e.includes("SAFETY")&&e.includes("LOCK"))return"safety.locked";
+ if(e.includes("STALE")&&e.includes("EVIDENCE"))return"evidence.stale";if(e.includes("EVIDENCE")&&(e.includes("REFRESH")||e.includes("UPDATED")))return"evidence.refreshed";
+ if(e.includes("CASE_CREATED")||e.includes("CASE_LAUNCHED")||e.includes("CASE_PROMOTED"))return"case.created";if(e.includes("CASE_UNBLOCK")||e.includes("UNBLOCKED"))return"case.unblocked";if(e.includes("BLOCK"))return"case.blocked";
+ if(e.includes("THESIS")&&(e.includes("BROKEN")||e.includes("STATUS")||e.includes("MATERIAL_CHANGE")))return"thesis.status_changed";if(e.includes("THESIS")||e.includes("MONITOR")||e.includes("REUNDERWRITE"))return"thesis.monitored";
+ if(e.includes("PAPER_ORDER")&&(e.includes("FILLED")||e.includes("EXECUTED")))return"paper.order.filled";if(e.includes("PAPER_ORDER")||e.includes("GOVERNED_PAPER_EXECUTION_CREATED"))return"paper.order.created";
+ if((e.includes("PAPER_EXECUTION")||e.includes("EXECUTION"))&&(e.includes("REJECT")||e.includes("DENY")||e.includes("BLOCK")))return"execution.rejected";if(e.includes("PAPER_EXECUTION")||e.includes("EXECUTION_APPROVED"))return"execution.approved";
+ if(e.includes("RISK_REJECT")||e.includes("RISK_DENY")||e.includes("RISK_BLOCK"))return"risk.rejected";if(e.includes("RISK_COMPLETE")||e.includes("RISK_CLEAR")||e.includes("RISK_AUTH")||e.includes("RISK_EVALUATED"))return"risk.cleared";if(e.includes("RISK_"))return"risk.inspected";
+ if(e.includes("CHALLENGE")&&e.includes("CLEAR"))return"challenge.cleared";if(e.includes("CHALLENGE")||e.includes("SKEPTIC")||e.includes("RED_TEAM"))return"challenge.raised";
+ if(e.includes("COMMITTEE_COMPLETE")||e.includes("COUNCIL_COMPLETE")||e.includes("COMMITTEE_DECISION"))return"committee.completed";if(e.includes("COMMITTEE")||e.includes("COUNCIL"))return"committee.opened";
+ if(e.includes("AGENT_COMPLETE")||e.includes("SPECIALIST_COMPLETE")||e.includes("DESK_COMPLETE")||e.includes("AGENT_RESULT"))return"agent.completed";if(e.includes("AGENT_THINK")||e.includes("SPECIALIST_THINK")||e.includes("DESK_THINK")||e.includes("AGENT_RUNNING"))return"agent.thinking";if(e.includes("AGENT_START")||e.includes("SPECIALIST_START")||e.includes("DESK_START")||e.includes("AGENT_ASSIGNED")||e.includes("DESK_ASSIGNED"))return"agent.assigned";
+ if(e.includes("EVIDENCE")||e.includes("INGEST")||e.includes("PRIMARY_")||e.includes("GAP_PACKET")||e.includes("SOURCE_ACQUISITION"))return"evidence.loaded";return null;}
+function inferredZoneForType(t:FactoryEventType|null):FactoryZoneKey|null{if(!t)return null;if(t.startsWith("committee."))return"committee-room";if(t.startsWith("challenge."))return"skeptic-room";if(t.startsWith("risk."))return"risk-inspection";if(t.startsWith("execution.")||t.startsWith("paper."))return"paper-execution";if(t.startsWith("agent."))return"agent-desks";if(t.startsWith("evidence."))return"evidence-warehouse";if(t.startsWith("thesis."))return"thesis-integrity";return null;}
+function zoneFor(raw:RawLedgerEvent,t:FactoryEventType|null){return ROOM_MAP[String(raw.room||"").toUpperCase()]??inferredZoneForType(t)}
+export function adaptLedgerEvent(raw:RawLedgerEvent):AdaptedLedgerEvent{const eventType=String(raw.event_type||"").trim(),eventId=String(raw.event_id||"").trim(),caseId=String(raw.case_id||"").trim(),occurredAt=String(raw.created_at||"").trim(),type=canonicalType(eventType),zone=zoneFor(raw,type);if(!eventType||!type)return{raw,canonical:null,recognizedType:null,movementEligible:false,zone,reason:eventType?`Unrecognized ledger event type: ${eventType}`:"Missing event type."};if(!eventId||!caseId||!occurredAt)return{raw,canonical:null,recognizedType:type,movementEligible:false,zone,reason:"Recognized system event, but case/audit identity is incomplete; no case movement projected."};return{raw,zone,recognizedType:type,movementEligible:true,reason:null,canonical:{eventId,caseId,eventType:type,occurredAt,room:zone,payload:raw.payload}}}
+export function adaptLedgerEvents(events:readonly RawLedgerEvent[]){return events.map(adaptLedgerEvent)}
