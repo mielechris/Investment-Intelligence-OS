@@ -9,18 +9,6 @@ from pathlib import Path
 BRANCH = "feature/iios-experience-x0-x1"
 SUPERVISOR_LABEL = "com.iios.batch-supervisor"
 SUPERVISOR_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{SUPERVISOR_LABEL}.plist"
-NAV_IMPORT = 'import ExperienceRoomNav from "./ExperienceRoomNav";\n'
-EXPERIENCE_IMPORT = 'import ExperienceCommandCenter from "./ExperienceCommandCenter";\n'
-FLOOR_IMPORT = 'import LivingFactoryFloor from "./LivingFactoryFloor";\n'
-EVENT_RAIL_IMPORT = 'import FactoryEventRail from "./FactoryEventRail";\n'
-DESK_FLOOR_IMPORT = 'import SpecialistDeskFloor from "./SpecialistDeskFloor";\n'
-ANCHOR_IMPORT = 'import FactoryRoom from "./FactoryRoom";\n'
-NAV_RENDER = '      <ExperienceRoomNav />\n\n'
-EXPERIENCE_RENDER = '      <ExperienceCommandCenter />\n\n'
-FLOOR_RENDER = '      <LivingFactoryFloor />\n\n'
-EVENT_RAIL_RENDER = '      <FactoryEventRail />\n\n'
-DESK_FLOOR_RENDER = '      <SpecialistDeskFloor />\n\n'
-RENDER_ANCHOR = '      <section style={{ ...panel, marginBottom: "22px", borderColor: "#365575" }}>\n'
 
 
 def run(cmd: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -63,8 +51,8 @@ def enforce_supervisor_isolation(repo: Path) -> None:
     if current_repo == supervisor_repo:
         print()
         print("STOP: experience preview is running inside the batch supervisor checkout.")
-        print("This gate will NOT switch, patch, build, or write App.tsx here.")
-        print("Create a separate git worktree for feature/iios-experience-x0-x1 and run the preview there.")
+        print("This gate will NOT patch or build the supervisor checkout.")
+        print("Use the separate experience worktree.")
         raise SystemExit(3)
 
     print("ISOLATION OK: preview checkout is separate from the batch supervisor checkout.")
@@ -86,13 +74,12 @@ def ensure_frontend_dependencies(frontend: Path) -> None:
 def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     frontend = repo / "FRONT END"
-    app_path = frontend / "src" / "App.tsx"
 
     required = [
-        app_path,
-        frontend / "src" / "ExperienceRoomNav.tsx",
+        frontend / "src" / "main.tsx",
+        frontend / "src" / "ExperienceNativeShell.tsx",
+        frontend / "src" / "experienceShell.css",
         frontend / "src" / "ExperienceCommandCenter.tsx",
-        frontend / "src" / "experienceBlueprint.ts",
         frontend / "src" / "LivingFactoryFloor.tsx",
         frontend / "src" / "FactoryEventRail.tsx",
         frontend / "src" / "SpecialistDeskFloor.tsx",
@@ -104,7 +91,7 @@ def main() -> int:
     ]
 
     print("=" * 72)
-    print("IIOS EXPERIENCE X0-X3 - SUPERVISOR-SAFE PREVIEW / BUILD GATE")
+    print("IIOS EXPERIENCE X0-X3 - NATIVE SHELL / SUPERVISOR-SAFE BUILD GATE")
     print("=" * 72)
 
     enforce_supervisor_isolation(repo)
@@ -122,61 +109,27 @@ def main() -> int:
             print(" ", path)
         return 2
 
-    ensure_frontend_dependencies(frontend)
-    run(["git", "diff", "--check"], repo)
-
-    app = app_path.read_text(encoding="utf-8")
-
-    if NAV_IMPORT not in app:
-        if ANCHOR_IMPORT not in app:
-            print("STOP: App import anchor not found")
-            return 2
-        app = app.replace(ANCHOR_IMPORT, ANCHOR_IMPORT + NAV_IMPORT, 1)
-
-    if EXPERIENCE_IMPORT not in app:
-        app = app.replace(NAV_IMPORT, NAV_IMPORT + EXPERIENCE_IMPORT, 1)
-    if FLOOR_IMPORT not in app:
-        app = app.replace(EXPERIENCE_IMPORT, EXPERIENCE_IMPORT + FLOOR_IMPORT, 1)
-    if EVENT_RAIL_IMPORT not in app:
-        app = app.replace(FLOOR_IMPORT, FLOOR_IMPORT + EVENT_RAIL_IMPORT, 1)
-    if DESK_FLOOR_IMPORT not in app:
-        app = app.replace(EVENT_RAIL_IMPORT, EVENT_RAIL_IMPORT + DESK_FLOOR_IMPORT, 1)
-
-    # Canonical X3 home order: navigation -> cinematic factory -> command center ->
-    # living geometry -> audit lineage. The older operational surfaces remain in
-    # the DOM and are grouped by ExperienceRoomNav into Research/Cases/Capital/Judgment.
-    ordered_renders = [NAV_RENDER, DESK_FLOOR_RENDER, EXPERIENCE_RENDER, FLOOR_RENDER, EVENT_RAIL_RENDER]
-
-    existing_renders = [NAV_RENDER, EXPERIENCE_RENDER, FLOOR_RENDER, EVENT_RAIL_RENDER, DESK_FLOOR_RENDER]
-    for render in existing_renders:
-        app = app.replace(render, "")
-
-    if RENDER_ANCHOR not in app:
-        print("STOP: App render anchor not found")
+    main_text = (frontend / "src" / "main.tsx").read_text(encoding="utf-8")
+    if "ExperienceNativeShell" not in main_text:
+        print("STOP: main.tsx is not mounted to the native five-room experience shell.")
         return 2
-    app = app.replace(RENDER_ANCHOR, "".join(ordered_renders) + RENDER_ANCHOR, 1)
 
-    app_path.write_text(app, encoding="utf-8")
-
+    ensure_frontend_dependencies(frontend)
     run(["git", "diff", "--check"], repo)
 
     print("\n=== FRONTEND BUILD ===")
     run(["npm", "run", "build"], frontend)
 
-    print("\n=== EXPERIENCE DIFF ===")
-    run(["git", "diff", "--stat"], repo)
+    print("\n=== EXPERIENCE STATUS ===")
     run(["git", "status", "-sb"], repo)
 
-    print("\nX0-X3 preview gate is build-clean.")
-    print("Formal experience shell groups legacy modules into Factory / Research / Cases / Capital / Judgment.")
-    print("Batch supervisor checkout was verified separate before any file mutation.")
-    print("Living Factory Floor reads /factory-room/status active_room derived from audit events.")
-    print("Factory Event Rail exposes strict raw-ledger -> canonical-X2 translation.")
-    print("Eight Specialist Desks read only /agents plus recent audit activity.")
-    print("MAX reacts only to real desk telemetry; no synthetic activity is generated.")
-    print("Unknown active_room values remain UNPLACED; unknown event types remain IGNORED.")
-    print("No backend, Batch 8D, supervisor config, paper-chain, or live-execution permissions were changed.")
-    print("Review the UI locally before committing App.tsx.")
+    print("\nX0-X3 native-shell preview gate is build-clean.")
+    print("Factory / Research / Cases / Capital / Judgment are mounted as React views, not DOM-hidden modules.")
+    print("Factory defaults to the cinematic eight-desk floor and truthful event lineage.")
+    print("Live map, operations conveyor, and system architecture are secondary drawers.")
+    print("Research owns discovery and market/evidence inputs; Capital owns portfolio/risk controls; Judgment owns interview capture.")
+    print("Cases temporarily retains the legacy underwriting workspace until its inline sections are extracted.")
+    print("Batch supervisor checkout was verified separate; no supervisor, backend, paper-chain, or live-execution permissions were changed.")
     return 0
 
 
