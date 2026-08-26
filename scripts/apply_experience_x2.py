@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
 
 BRANCH = "feature/iios-experience-x0-x1"
+SUPERVISOR_LABEL = "com.iios.batch-supervisor"
+SUPERVISOR_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{SUPERVISOR_LABEL}.plist"
 EXPERIENCE_IMPORT = 'import ExperienceCommandCenter from "./ExperienceCommandCenter";\n'
 FLOOR_IMPORT = 'import LivingFactoryFloor from "./LivingFactoryFloor";\n'
 EVENT_RAIL_IMPORT = 'import FactoryEventRail from "./FactoryEventRail";\n'
@@ -30,6 +33,41 @@ def output(cmd: list[str], cwd: Path) -> str:
     return subprocess.check_output(cmd, cwd=cwd, text=True).strip()
 
 
+def supervisor_working_directory() -> Path | None:
+    if not SUPERVISOR_PLIST.exists():
+        return None
+    try:
+        with SUPERVISOR_PLIST.open("rb") as handle:
+            payload = plistlib.load(handle)
+    except Exception as exc:
+        raise SystemExit(f"STOP: unable to inspect batch supervisor LaunchAgent: {exc}") from exc
+
+    value = payload.get("WorkingDirectory") if isinstance(payload, dict) else None
+    if not value:
+        raise SystemExit("STOP: batch supervisor LaunchAgent has no WorkingDirectory; isolation cannot be proven.")
+    return Path(str(value)).expanduser().resolve()
+
+
+def enforce_supervisor_isolation(repo: Path) -> None:
+    supervisor_repo = supervisor_working_directory()
+    if supervisor_repo is None:
+        print("Supervisor LaunchAgent not installed at the standard path; continuing with branch guard.")
+        return
+
+    current_repo = repo.resolve()
+    print("Batch supervisor checkout:", supervisor_repo)
+    print("Experience preview checkout:", current_repo)
+
+    if current_repo == supervisor_repo:
+        print()
+        print("STOP: experience preview is running inside the batch supervisor checkout.")
+        print("This gate will NOT switch, patch, build, or write App.tsx here.")
+        print("Create a separate git worktree for feature/iios-experience-x0-x1 and run the preview there.")
+        raise SystemExit(3)
+
+    print("ISOLATION OK: preview checkout is separate from the batch supervisor checkout.")
+
+
 def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     frontend = repo / "FRONT END"
@@ -50,8 +88,13 @@ def main() -> int:
     ]
 
     print("=" * 72)
-    print("IIOS EXPERIENCE X0-X3 - SAFE PREVIEW / BUILD GATE")
+    print("IIOS EXPERIENCE X0-X3 - SUPERVISOR-SAFE PREVIEW / BUILD GATE")
     print("=" * 72)
+
+    # This check happens before any file mutation. The supervisor LaunchAgent runs
+    # directly from its configured repo checkout, so the visual track must use a
+    # different worktree and must never branch-switch the supervisor checkout.
+    enforce_supervisor_isolation(repo)
 
     branch = output(["git", "branch", "--show-current"], repo)
     if branch != BRANCH:
@@ -112,12 +155,13 @@ def main() -> int:
     run(["git", "status", "-sb"], repo)
 
     print("\nX0-X3 preview gate is build-clean.")
+    print("Batch supervisor checkout was verified separate before any file mutation.")
     print("Living Factory Floor reads /factory-room/status active_room derived from audit events.")
     print("Factory Event Rail exposes strict raw-ledger -> canonical-X2 translation.")
     print("Eight Specialist Desks read only /agents plus recent audit activity.")
     print("MAX reacts only to real desk telemetry; no synthetic activity is generated.")
     print("Unknown active_room values remain UNPLACED; unknown event types remain IGNORED.")
-    print("No backend, Batch 8D, paper-chain, or live-execution permissions were changed.")
+    print("No backend, Batch 8D, supervisor config, paper-chain, or live-execution permissions were changed.")
     print("Review the UI locally before committing App.tsx.")
     return 0
 
