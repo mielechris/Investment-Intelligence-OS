@@ -13,6 +13,8 @@ export type RawLedgerEvent = {
 export type AdaptedLedgerEvent = {
   raw: RawLedgerEvent;
   canonical: FactoryEvent | null;
+  recognizedType: FactoryEventType | null;
+  movementEligible: boolean;
   zone: FactoryZoneKey | null;
   reason: string | null;
 };
@@ -22,6 +24,7 @@ const ROOM_MAP: Record<string, FactoryZoneKey> = {
   EIGHT_DESKS: "agent-desks",
   COMMITTEE: "committee-room",
   RISK: "risk-inspection",
+  CAPITAL: "portfolio-office",
   PAPER_PORTFOLIO: "paper-execution",
 };
 
@@ -46,8 +49,8 @@ function canonicalType(rawType: string): FactoryEventType | null {
   if (event.includes("RISK_")) return "risk.inspected";
   if (event.includes("CHALLENGE") && event.includes("CLEAR")) return "challenge.cleared";
   if (event.includes("CHALLENGE") || event.includes("SKEPTIC") || event.includes("RED_TEAM")) return "challenge.raised";
-  if (event.includes("COMMITTEE_COMPLETE")) return "committee.completed";
-  if (event.includes("COMMITTEE")) return "committee.opened";
+  if (event.includes("COMMITTEE_COMPLETE") || event.includes("COUNCIL_COMPLETE")) return "committee.completed";
+  if (event.includes("COMMITTEE") || event.includes("COUNCIL")) return "committee.opened";
   if (event.includes("AGENT_COMPLETE") || event.includes("SPECIALIST_COMPLETE") || event.includes("DESK_COMPLETE")) return "agent.completed";
   if (event.includes("AGENT_THINK") || event.includes("SPECIALIST_THINK") || event.includes("DESK_THINK")) return "agent.thinking";
   if (event.includes("AGENT_START") || event.includes("SPECIALIST_START") || event.includes("DESK_START") || event.includes("AGENT_ASSIGNED")) return "agent.assigned";
@@ -56,9 +59,21 @@ function canonicalType(rawType: string): FactoryEventType | null {
   return null;
 }
 
-function zoneFor(raw: RawLedgerEvent): FactoryZoneKey | null {
+function inferredZoneForType(type: FactoryEventType | null): FactoryZoneKey | null {
+  if (!type) return null;
+  if (type.startsWith("committee.")) return "committee-room";
+  if (type.startsWith("challenge.")) return "skeptic-room";
+  if (type.startsWith("risk.")) return "risk-inspection";
+  if (type.startsWith("execution.") || type.startsWith("paper.")) return "paper-execution";
+  if (type.startsWith("agent.")) return "agent-desks";
+  if (type.startsWith("evidence.")) return "evidence-warehouse";
+  if (type.startsWith("thesis.")) return "thesis-integrity";
+  return null;
+}
+
+function zoneFor(raw: RawLedgerEvent, type: FactoryEventType | null): FactoryZoneKey | null {
   const room = String(raw.room || "").toUpperCase();
-  return ROOM_MAP[room] ?? null;
+  return ROOM_MAP[room] ?? inferredZoneForType(type);
 }
 
 export function adaptLedgerEvent(raw: RawLedgerEvent): AdaptedLedgerEvent {
@@ -67,19 +82,35 @@ export function adaptLedgerEvent(raw: RawLedgerEvent): AdaptedLedgerEvent {
   const caseId = String(raw.case_id || "").trim();
   const occurredAt = String(raw.created_at || "").trim();
   const type = canonicalType(eventType);
-  const zone = zoneFor(raw);
+  const zone = zoneFor(raw, type);
 
-  if (!eventType || !eventId || !caseId || !occurredAt) {
-    return { raw, canonical: null, zone, reason: "Missing required audit-event identity fields." };
+  if (!eventType || !type) {
+    return {
+      raw,
+      canonical: null,
+      recognizedType: null,
+      movementEligible: false,
+      zone,
+      reason: eventType ? `Unrecognized ledger event type: ${eventType}` : "Missing event type.",
+    };
   }
 
-  if (!type) {
-    return { raw, canonical: null, zone, reason: `Unrecognized ledger event type: ${eventType}` };
+  if (!eventId || !caseId || !occurredAt) {
+    return {
+      raw,
+      canonical: null,
+      recognizedType: type,
+      movementEligible: false,
+      zone,
+      reason: "Recognized system event, but case/audit identity is incomplete; no case movement projected.",
+    };
   }
 
   return {
     raw,
     zone,
+    recognizedType: type,
+    movementEligible: true,
     reason: null,
     canonical: {
       eventId,
