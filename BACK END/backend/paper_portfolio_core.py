@@ -250,6 +250,7 @@ def build_portfolio_state(
 
     cash = _safe_float(account.get("starting_cash"), STARTING_CASH)
     realized_pnl = 0.0
+    accounting_flags: list[str] = []
 
     positions: dict[str, dict[str, Any]] = {}
 
@@ -271,16 +272,63 @@ def build_portfolio_state(
 
         quantity = int(transaction.get("quantity") or 0)
         notional = _safe_float(transaction.get("notional"))
-        cash_delta = _safe_float(transaction.get("cash_delta"))
 
-        cash += cash_delta
-        realized_pnl += _safe_float(
-            transaction.get("realized_pnl_delta")
-        )
+        if quantity <= 0 or notional <= 0:
+            accounting_flags.append(
+                f"INVALID_TRANSACTION:{ticker}:{side}"
+            )
+            continue
 
         if side == "BUY":
+            cash -= notional
             position["quantity"] += quantity
             position["cost_basis"] += notional
+
+        elif side == "SELL":
+            current_quantity = int(
+                position.get("quantity") or 0
+            )
+
+            current_cost = _safe_float(
+                position.get("cost_basis")
+            )
+
+            if (
+                current_quantity <= 0
+                or quantity > current_quantity
+            ):
+                accounting_flags.append(
+                    f"OVERSELL_BLOCKED:{ticker}"
+                )
+                continue
+
+            average_cost = (
+                current_cost
+                / current_quantity
+            )
+
+            released_cost = (
+                average_cost * quantity
+            )
+
+            realized = (
+                notional - released_cost
+            )
+
+            cash += notional
+            realized_pnl += realized
+
+            position["quantity"] -= quantity
+            position["cost_basis"] = max(
+                0.0,
+                current_cost - released_cost,
+            )
+
+        else:
+            accounting_flags.append(
+                f"UNSUPPORTED_SIDE:{ticker}:{side}"
+            )
+            continue
 
     rows: list[dict[str, Any]] = []
     total_market_value = 0.0
