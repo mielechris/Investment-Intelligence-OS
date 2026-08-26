@@ -59,7 +59,7 @@ The isolated integration validator passed on 2026-08-26 from validation worktree
 
 `/Users/crm/Documents/GitHub/Investment-Intelligence-OS-integration-validation-a1d4260afa`
 
-Validated code head: `a1d4260afac82388e49838148288081c0d1a9353`.
+Validated runtime/code head: `a1d4260afac82388e49838148288081c0d1a9353`.
 
 - X0–X6 experience gate: PASS
 - Full TypeScript / Vite build: PASS
@@ -73,13 +73,13 @@ Validated code head: `a1d4260afac82388e49838148288081c0d1a9353`.
 - Committee / Risk override: `FALSE`
 - Capital / trade authority: `FALSE`
 
-Subsequent integration-branch commits only record this validation result and acceptance documentation; they do not change the validated runtime/backend/frontend contracts.
+Later integration-branch commits only record the validation checkpoint; the validated runtime/frontend/backend state remains the browser-acceptance candidate.
 
-The operator-port invariant reported `8002 PID(s) unchanged -> none`. This proves the validator did not stop or replace a process on 8002, but it also means a live operator backend was not present during this validation. Backend API/health therefore remains a separate browser-acceptance prerequisite.
+The operator-port invariant reported `8002 PID(s) unchanged -> none`. The validator therefore did not stop or replace any listener on 8002, but a live backend was not present during the run. Backend health remains a separate browser-acceptance prerequisite.
 
 ## Port isolation plan
 
-- `8002`: operator/integration browser backend. Validation never kills or replaces it.
+- `8002`: operator/integration browser backend.
 - `8102`: temporary isolated Batch 8F engineering smoke backend.
 - `5188`: existing experience preview may remain running.
 - `5189`: integrated browser-acceptance preview.
