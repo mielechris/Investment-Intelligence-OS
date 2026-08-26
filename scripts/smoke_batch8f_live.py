@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -104,7 +106,9 @@ def env() -> dict[str, str]:
     return output
 
 
-def kill_8002() -> None:
+def listening_pids() -> list[int]:
+    if shutil.which("lsof") is None:
+        return []
     result = subprocess.run(
         [
             "lsof",
@@ -113,12 +117,17 @@ def kill_8002() -> None:
         ],
         text=True,
         capture_output=True,
+        check=False,
     )
-    pids = [
+    return [
         int(value)
         for value in result.stdout.split()
         if value.isdigit()
     ]
+
+
+def kill_8002() -> None:
+    pids = listening_pids()
     for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -126,16 +135,7 @@ def kill_8002() -> None:
             pass
     deadline = time.time() + 5
     while time.time() < deadline:
-        check = subprocess.run(
-            [
-                "lsof",
-                "-tiTCP:8002",
-                "-sTCP:LISTEN",
-            ],
-            text=True,
-            capture_output=True,
-        )
-        if not check.stdout.strip():
+        if not listening_pids():
             return
         time.sleep(0.25)
     for pid in pids:
@@ -145,34 +145,67 @@ def kill_8002() -> None:
             pass
 
 
+def stop_backend(
+    proc: subprocess.Popen | None,
+) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    proc.wait(timeout=5)
+
+
 def start_backend():
     LOG.write_text("")
     log = LOG.open("ab", buffering=0)
     py = str(
         PYTHON
         if PYTHON.exists()
-        else Path("python3")
+        else Path(sys.executable)
     )
-    proc = subprocess.Popen(
-        [
-            py,
-            "-m",
-            "uvicorn",
-            "app:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8002",
-        ],
-        cwd=BACKEND,
-        env=env(),
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            [
+                py,
+                "-m",
+                "uvicorn",
+                "app:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8002",
+                # The smoke validates the integrated API and
+                # safety contract without starting external-feed
+                # schedulers or network side effects.
+                "--lifespan",
+                "off",
+            ],
+            cwd=BACKEND,
+            env=env(),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    finally:
+        log.close()
+
     deadline = time.time() + 30
     last = None
     while time.time() < deadline:
+        exit_code = proc.poll()
+        if exit_code is not None:
+            break
         last = call(
             "/system/status",
             timeout=2,
@@ -184,11 +217,22 @@ def start_backend():
             ).get("version")
             == "0.19.0"
         ):
-            return proc.pid, last["data"]
+            return proc, last["data"]
         time.sleep(0.5)
-    raise SystemExit(
+
+    exit_code = proc.poll()
+    stop_backend(proc)
+    try:
+        log_text = LOG.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        log_text = f"Unable to read backend log: {exc}"
+    raise RuntimeError(
         "v0.19.0 backend did not become ready. "
-        f"Last={last}; log={LOG}"
+        f"exit_code={exit_code}; last={last}; "
+        f"log={LOG}\n--- backend log ---\n{log_text}"
     )
 
 
@@ -234,234 +278,246 @@ def main() -> int:
     )
     print("=" * 72)
 
-    kill_8002()
-    pid, system = start_backend()
+    proc: subprocess.Popen | None = None
+    try:
+        kill_8002()
+        proc, system = start_backend()
 
-    status = call(
-        "/intelligence/model-calibration/status"
-    )
-
-    evaluations = []
-    for index in range(5):
-        benchmark = f"smoke_benchmark_{index}"
-        evaluations.extend(
-            [
-                metric_row(
-                    "IIOS_OPENAI_CORE",
-                    "POLICY_MACRO",
-                    benchmark,
-                    0.93,
-                ),
-                metric_row(
-                    "KIMI_RESEARCH",
-                    "POLICY_MACRO",
-                    benchmark,
-                    0.78,
-                ),
-            ]
+        status = call(
+            "/intelligence/model-calibration/status"
         )
 
-    calibration_run = call(
-        "/intelligence/model-calibration/run",
-        method="POST",
-        payload={
-            "evaluations": evaluations,
-            "persist": False,
-        },
-    )
-
-    sd = (
-        status.get("data")
-        if status["ok"]
-        else {}
-    )
-    rd = (
-        calibration_run.get("data")
-        if calibration_run["ok"]
-        else {}
-    )
-    task = (
-        (rd.get("tasks") or {})
-        .get("POLICY_MACRO")
-        or {}
-    )
-    recommendations = (
-        task.get("model_recommendations")
-        or {}
-    )
-    iios_weight = (
-        recommendations
-        .get("IIOS_OPENAI_CORE", {})
-        .get("recommended_task_weight")
-    )
-    kimi_weight = (
-        recommendations
-        .get("KIMI_RESEARCH", {})
-        .get("recommended_task_weight")
-    )
-
-    print("\nSYSTEM")
-    print("  Version:", system.get("version"))
-    print("  Paper mode:", system.get("paper_mode"))
-    print(
-        "  Scale validation:",
-        system.get(
-            "multi_model_scale_validation"
-        ),
-    )
-    print(
-        "  Task calibration:",
-        system.get(
-            "task_specific_model_calibration"
-        ),
-    )
-
-    print("\nCALIBRATION")
-    print(
-        "  Status endpoint:",
-        status.get("status"),
-    )
-    print(
-        "  Weighting mode:",
-        sd.get("model_weighting_mode"),
-    )
-    print(
-        "  Minimum samples:",
-        sd.get(
-            "minimum_samples_per_model_task"
-        ),
-    )
-    print(
-        "  Dry run HTTP:",
-        calibration_run.get("status"),
-    )
-    print(
-        "  Task status:",
-        task.get("status"),
-    )
-    print(
-        "  IIOS policy weight:",
-        iios_weight,
-    )
-    print(
-        "  Kimi policy weight:",
-        kimi_weight,
-    )
-    print(
-        "  Persisted:",
-        rd.get("persisted"),
-    )
-
-    required = [
-        system.get("version") == "0.19.0",
-        system.get("paper_mode") is True,
-        system.get(
-            "multi_model_scale_validation"
-        )
-        is True,
-        system.get(
-            "task_specific_model_calibration"
-        )
-        is True,
-        system.get(
-            "model_calibration_manual_promotion_only"
-        )
-        is True,
-        system.get(
-            "universal_model_weighting"
-        )
-        is False,
-        status["ok"],
-        sd.get(
-            "universal_model_weighting"
-        )
-        is False,
-        sd.get(
-            "manual_promotion_required"
-        )
-        is True,
-        sd.get(
-            "automatically_applied_to_council"
-        )
-        is False,
-        sd.get("committee_override") is False,
-        sd.get("risk_override") is False,
-        sd.get(
-            "trade_execution_permission"
-        )
-        is False,
-        sd.get("live_execution") is False,
-        calibration_run["ok"],
-        rd.get("persisted") is False,
-        task.get("status")
-        == "READY_FOR_MANUAL_REVIEW",
-        isinstance(iios_weight, (int, float)),
-        isinstance(kimi_weight, (int, float)),
-        (
-            isinstance(iios_weight, (int, float))
-            and isinstance(
-                kimi_weight,
-                (int, float),
+        evaluations = []
+        for index in range(5):
+            benchmark = f"smoke_benchmark_{index}"
+            evaluations.extend(
+                [
+                    metric_row(
+                        "IIOS_OPENAI_CORE",
+                        "POLICY_MACRO",
+                        benchmark,
+                        0.93,
+                    ),
+                    metric_row(
+                        "KIMI_RESEARCH",
+                        "POLICY_MACRO",
+                        benchmark,
+                        0.78,
+                    ),
+                ]
             )
-            and iios_weight > kimi_weight
-        ),
-        rd.get(
-            "universal_model_weighting"
-        )
-        is False,
-        rd.get(
-            "automatically_applied_to_council"
-        )
-        is False,
-        rd.get("committee_override") is False,
-        rd.get("risk_override") is False,
-        rd.get(
-            "trade_execution_permission"
-        )
-        is False,
-        rd.get("live_execution") is False,
-    ]
 
-    software_ok = all(required)
-    verdict = (
-        "SCALE_VALIDATION_READY"
-        if software_ok
-        else "NEEDS_ATTENTION"
-    )
-
-    report = {
-        "backend_pid": pid,
-        "system": system,
-        "calibration_status": sd,
-        "dry_calibration": rd,
-        "software_ready": software_ok,
-        "verdict": verdict,
-        "universal_model_weighting": False,
-        "automatically_applied_to_council":
-            False,
-        "live_execution": False,
-    }
-    REPORT.write_text(
-        json.dumps(
-            report,
-            indent=2,
-            default=str,
+        calibration_run = call(
+            "/intelligence/model-calibration/run",
+            method="POST",
+            payload={
+                "evaluations": evaluations,
+                "persist": False,
+            },
         )
-    )
 
-    print("\n" + "=" * 72)
-    print("BATCH 8F VERDICT:", verdict)
-    print("Software ready:", software_ok)
-    print("Backend PID:", pid)
-    print("Backend log:", LOG)
-    print("Report:", REPORT)
-    print("Universal model weighting: FALSE")
-    print("Automatic council promotion: FALSE")
-    print("Committee / Risk override: FALSE")
-    print("Capital / trade authority: FALSE")
-    print("Live execution authority: FALSE")
-    print("=" * 72)
-    return 0 if software_ok else 1
+        sd = (
+            status.get("data")
+            if status["ok"]
+            else {}
+        )
+        rd = (
+            calibration_run.get("data")
+            if calibration_run["ok"]
+            else {}
+        )
+        task = (
+            (rd.get("tasks") or {})
+            .get("POLICY_MACRO")
+            or {}
+        )
+        recommendations = (
+            task.get("model_recommendations")
+            or {}
+        )
+        iios_weight = (
+            recommendations
+            .get("IIOS_OPENAI_CORE", {})
+            .get("recommended_task_weight")
+        )
+        kimi_weight = (
+            recommendations
+            .get("KIMI_RESEARCH", {})
+            .get("recommended_task_weight")
+        )
+
+        print("\nSYSTEM")
+        print("  Version:", system.get("version"))
+        print("  Paper mode:", system.get("paper_mode"))
+        print(
+            "  Scale validation:",
+            system.get(
+                "multi_model_scale_validation"
+            ),
+        )
+        print(
+            "  Task calibration:",
+            system.get(
+                "task_specific_model_calibration"
+            ),
+        )
+
+        print("\nCALIBRATION")
+        print(
+            "  Status endpoint:",
+            status.get("status"),
+        )
+        print(
+            "  Weighting mode:",
+            sd.get("model_weighting_mode"),
+        )
+        print(
+            "  Minimum samples:",
+            sd.get(
+                "minimum_samples_per_model_task"
+            ),
+        )
+        print(
+            "  Dry run HTTP:",
+            calibration_run.get("status"),
+        )
+        print(
+            "  Task status:",
+            task.get("status"),
+        )
+        print(
+            "  IIOS policy weight:",
+            iios_weight,
+        )
+        print(
+            "  Kimi policy weight:",
+            kimi_weight,
+        )
+        print(
+            "  Persisted:",
+            rd.get("persisted"),
+        )
+
+        required = [
+            system.get("version") == "0.19.0",
+            system.get("paper_mode") is True,
+            system.get(
+                "multi_model_scale_validation"
+            )
+            is True,
+            system.get(
+                "task_specific_model_calibration"
+            )
+            is True,
+            system.get(
+                "model_calibration_manual_promotion_only"
+            )
+            is True,
+            system.get(
+                "universal_model_weighting"
+            )
+            is False,
+            status["ok"],
+            sd.get(
+                "universal_model_weighting"
+            )
+            is False,
+            sd.get(
+                "manual_promotion_required"
+            )
+            is True,
+            sd.get(
+                "automatically_applied_to_council"
+            )
+            is False,
+            sd.get("committee_override") is False,
+            sd.get("risk_override") is False,
+            sd.get(
+                "trade_execution_permission"
+            )
+            is False,
+            sd.get("live_execution") is False,
+            calibration_run["ok"],
+            rd.get("persisted") is False,
+            task.get("status")
+            == "READY_FOR_MANUAL_REVIEW",
+            isinstance(iios_weight, (int, float)),
+            isinstance(kimi_weight, (int, float)),
+            (
+                isinstance(iios_weight, (int, float))
+                and isinstance(
+                    kimi_weight,
+                    (int, float),
+                )
+                and iios_weight > kimi_weight
+            ),
+            rd.get(
+                "universal_model_weighting"
+            )
+            is False,
+            rd.get(
+                "automatically_applied_to_council"
+            )
+            is False,
+            rd.get("committee_override") is False,
+            rd.get("risk_override") is False,
+            rd.get(
+                "trade_execution_permission"
+            )
+            is False,
+            rd.get("live_execution") is False,
+        ]
+
+        software_ok = all(required)
+        verdict = (
+            "SCALE_VALIDATION_READY"
+            if software_ok
+            else "NEEDS_ATTENTION"
+        )
+
+        report = {
+            "backend_pid": proc.pid,
+            "system": system,
+            "calibration_status": sd,
+            "dry_calibration": rd,
+            "software_ready": software_ok,
+            "verdict": verdict,
+            "scheduler_side_effects_enabled": False,
+            "universal_model_weighting": False,
+            "automatically_applied_to_council":
+                False,
+            "live_execution": False,
+        }
+        REPORT.write_text(
+            json.dumps(
+                report,
+                indent=2,
+                default=str,
+            )
+        )
+
+        print("\n" + "=" * 72)
+        print("BATCH 8F VERDICT:", verdict)
+        print("Software ready:", software_ok)
+        print("Backend PID:", proc.pid)
+        print("Backend log:", LOG)
+        print("Report:", REPORT)
+        print("Scheduler side effects: DISABLED FOR API SMOKE")
+        print("Universal model weighting: FALSE")
+        print("Automatic council promotion: FALSE")
+        print("Committee / Risk override: FALSE")
+        print("Capital / trade authority: FALSE")
+        print("Live execution authority: FALSE")
+        print("=" * 72)
+        return 0 if software_ok else 1
+    except Exception as exc:
+        print(
+            "Batch 8F live smoke error: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return 1
+    finally:
+        stop_backend(proc)
 
 
 if __name__ == "__main__":
