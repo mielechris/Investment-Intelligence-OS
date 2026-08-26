@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.18.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.19.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.18.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.19.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -53,6 +53,7 @@ from jesse_scheduler import router as jesse_scheduler_router, start_jesse_schedu
 from batch8c_production_inputs import install_batch8c, router as batch8c_production_inputs_router
 from kimi_research_intelligence import kimi_research_evidence, router as kimi_research_router
 from multi_model_intelligence_council import council_evidence, router as multi_model_council_router
+from model_scale_validation import router as model_scale_validation_router
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -201,6 +202,7 @@ app.include_router(jesse_scheduler_router)
 app.include_router(batch8c_production_inputs_router)
 app.include_router(kimi_research_router)
 app.include_router(multi_model_council_router)
+app.include_router(model_scale_validation_router)
 app.include_router(primary_evidence_router)
 app.include_router(portfolio_context_router)
 app.include_router(paper_capital_router)
@@ -212,7 +214,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.18.0"
+app.version = "0.19.0"
 
 
 @app.on_event("startup")
@@ -233,7 +235,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.18.0",
+        "version": "0.19.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -278,6 +280,14 @@ def system_status():
         "multi_model_committee_override": False,
         "multi_model_risk_override": False,
         "grok_auto_trade_authority": False,
+        "multi_model_scale_validation": True,
+        "task_specific_model_calibration": True,
+        "model_calibration_minimum_samples_required": True,
+        "model_calibration_manual_promotion_only": True,
+        "model_calibration_automatically_applied_to_council": False,
+        "calibration_committee_override": False,
+        "calibration_risk_override": False,
+        "calibration_auto_trade_authority": False,
         "opportunity_scanner_available": True,
         "opportunity_auto_scan_default": False,
         "opportunity_scan_interval_floor_minutes": 240,
