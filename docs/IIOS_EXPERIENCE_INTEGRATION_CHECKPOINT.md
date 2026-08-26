@@ -73,7 +73,7 @@ Validated runtime/code head: `a1d4260afac82388e49838148288081c0d1a9353`.
 - Committee / Risk override: `FALSE`
 - Capital / trade authority: `FALSE`
 
-Later integration-branch commits only record the validation checkpoint; the validated runtime/frontend/backend state remains the browser-acceptance candidate.
+Subsequent commits are checkpoint/documentation-only and do not change the validated runtime code candidate.
 
 The operator-port invariant reported `8002 PID(s) unchanged -> none`. The validator therefore did not stop or replace any listener on 8002, but a live backend was not present during the run. Backend health remains a separate browser-acceptance prerequisite.
 
