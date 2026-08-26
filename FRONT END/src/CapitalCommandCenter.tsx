@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import PaperCapitalControlPanel from "./PaperCapitalControlPanel";
+import "./CapitalCommandCenter.css";
 
 const API = "http://127.0.0.1:8002";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
