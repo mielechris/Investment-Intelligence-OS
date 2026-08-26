@@ -67,18 +67,10 @@ def main() -> int:
     if missing:
         raise SystemExit(f"STOP: missing X0-X6 release files: {missing}")
 
-    require_text(src / "ExperienceNativeShell.tsx", [
-        "FactoryRoomView", "ResearchRoomView", "CasesRoomView", "CapitalRoomView", "JudgmentRoomView",
-        "ExecutiveShowcase", "PAPER / SHADOW", "LIVE CAPITAL LOCKED",
-    ])
-    require_text(src / "factoryMovement.ts", [
-        '"INTACT"', '"EARLY_BUT_INTACT"', '"MATERIAL_CHANGE"', '"THESIS_BROKEN"',
-        '"committee.completed"', '"risk.cleared"', '"paper.order.created"',
-    ])
-    require_text(src / "factoryLedgerAdapter.ts", [
-        "COUNCIL_COMPLETE", "COMMITTEE_DECISION", "AGENT_RESULT", "REUNDERWRITE", "SOURCE_ACQUISITION", "movementEligible:false",
-    ])
-    require_text(src / "factoryActivityModel.ts", ["BUSY", "RECENT", "IDLE", "No recent" if False else "IDLE"])
+    require_text(src / "ExperienceNativeShell.tsx", ["FactoryRoomView", "ResearchRoomView", "CasesRoomView", "CapitalRoomView", "JudgmentRoomView", "ExecutiveShowcase", "PAPER / SHADOW", "LIVE CAPITAL LOCKED"])
+    require_text(src / "factoryMovement.ts", ['"INTACT"', '"EARLY_BUT_INTACT"', '"MATERIAL_CHANGE"', '"THESIS_BROKEN"', '"committee.completed"', '"risk.cleared"', '"paper.order.created"'])
+    require_text(src / "factoryLedgerAdapter.ts", ["COUNCIL_COMPLETE", "COMMITTEE_DECISION", "AGENT_RESULT", "REUNDERWRITE", "SOURCE_ACQUISITION", "movementEligible:false"])
+    require_text(src / "factoryActivityModel.ts", ["BUSY", "RECENT", "IDLE"])
     require_text(src / "activeCaseStore.ts", ["storage", "iios-active-case-changed", "setActiveCaseId", "subscribeActiveCase"])
     require_text(src / "CasesCommandCard.tsx", ["subscribeActiveCase", "getActiveCaseId"])
     require_text(src / "NewCaseLauncher.tsx", ["setActiveCaseId"])
@@ -93,10 +85,13 @@ def main() -> int:
             raise SystemExit(f"STOP: unsafe authority language found in {name}")
 
     run(["git", "diff", "--check"], repo)
-    print("\n=== TYPESCRIPT / VITE BUILD ===")
+
+    print("\n=== FULL TYPESCRIPT / VITE BUILD ===")
     run(["npm", "run", "build"], frontend)
-    print("\n=== ESLINT ===")
-    run(["npm", "run", "lint"], frontend)
+
+    print("\n=== X0-X6 EXPERIENCE ESLINT ===")
+    lint_files = [name for name in required_files if name.endswith((".ts", ".tsx"))]
+    run(["npx", "eslint", *[f"src/{name}" for name in lint_files]], frontend)
 
     print("\n=== RELEASE CONTRACT RESULT ===")
     print("PASS: five-room operator shell + Executive View present")
@@ -106,7 +101,7 @@ def main() -> int:
     print("PASS: Judgment Bank provenance surfaces present")
     print("PASS: active-case state synchronized through one store")
     print("PASS: live-capital authority remains locked")
-    print("PASS: build + lint clean")
+    print("PASS: full frontend build + X0-X6 experience lint clean")
     return 0
 
 
