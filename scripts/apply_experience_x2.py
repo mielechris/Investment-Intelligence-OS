@@ -8,9 +8,11 @@ from pathlib import Path
 BRANCH = "feature/iios-experience-x0-x1"
 EXPERIENCE_IMPORT = 'import ExperienceCommandCenter from "./ExperienceCommandCenter";\n'
 FLOOR_IMPORT = 'import LivingFactoryFloor from "./LivingFactoryFloor";\n'
+EVENT_RAIL_IMPORT = 'import FactoryEventRail from "./FactoryEventRail";\n'
 ANCHOR_IMPORT = 'import FactoryRoom from "./FactoryRoom";\n'
 EXPERIENCE_RENDER = '      <ExperienceCommandCenter />\n\n'
 FLOOR_RENDER = '      <LivingFactoryFloor />\n\n'
+EVENT_RAIL_RENDER = '      <FactoryEventRail />\n\n'
 RENDER_ANCHOR = '      <section style={{ ...panel, marginBottom: "22px", borderColor: "#365575" }}>\n'
 
 
@@ -36,8 +38,10 @@ def main() -> int:
         frontend / "src" / "ExperienceCommandCenter.tsx",
         frontend / "src" / "experienceBlueprint.ts",
         frontend / "src" / "LivingFactoryFloor.tsx",
+        frontend / "src" / "FactoryEventRail.tsx",
         frontend / "src" / "factoryGeometry.ts",
         frontend / "src" / "factoryMovement.ts",
+        frontend / "src" / "factoryLedgerAdapter.ts",
         frontend / "src" / "factoryVisualLanguage.ts",
     ]
 
@@ -74,15 +78,33 @@ def main() -> int:
             return 2
         app = app.replace(EXPERIENCE_IMPORT, EXPERIENCE_IMPORT + FLOOR_IMPORT, 1)
 
-    if EXPERIENCE_RENDER not in app and FLOOR_RENDER not in app:
+    if EVENT_RAIL_IMPORT not in app:
+        if FLOOR_IMPORT not in app:
+            print("STOP: floor import anchor not found")
+            return 2
+        app = app.replace(FLOOR_IMPORT, FLOOR_IMPORT + EVENT_RAIL_IMPORT, 1)
+
+    if EXPERIENCE_RENDER not in app and FLOOR_RENDER not in app and EVENT_RAIL_RENDER not in app:
         if RENDER_ANCHOR not in app:
             print("STOP: App render anchor not found")
             return 2
-        app = app.replace(RENDER_ANCHOR, EXPERIENCE_RENDER + FLOOR_RENDER + RENDER_ANCHOR, 1)
-    elif EXPERIENCE_RENDER in app and FLOOR_RENDER not in app:
-        app = app.replace(EXPERIENCE_RENDER, EXPERIENCE_RENDER + FLOOR_RENDER, 1)
-    elif FLOOR_RENDER in app and EXPERIENCE_RENDER not in app:
-        app = app.replace(FLOOR_RENDER, EXPERIENCE_RENDER + FLOOR_RENDER, 1)
+        app = app.replace(
+            RENDER_ANCHOR,
+            EXPERIENCE_RENDER + FLOOR_RENDER + EVENT_RAIL_RENDER + RENDER_ANCHOR,
+            1,
+        )
+    else:
+        if EXPERIENCE_RENDER not in app:
+            if FLOOR_RENDER in app:
+                app = app.replace(FLOOR_RENDER, EXPERIENCE_RENDER + FLOOR_RENDER, 1)
+            elif EVENT_RAIL_RENDER in app:
+                app = app.replace(EVENT_RAIL_RENDER, EXPERIENCE_RENDER + EVENT_RAIL_RENDER, 1)
+        if FLOOR_RENDER not in app:
+            if EXPERIENCE_RENDER in app:
+                app = app.replace(EXPERIENCE_RENDER, EXPERIENCE_RENDER + FLOOR_RENDER, 1)
+        if EVENT_RAIL_RENDER not in app:
+            if FLOOR_RENDER in app:
+                app = app.replace(FLOOR_RENDER, FLOOR_RENDER + EVENT_RAIL_RENDER, 1)
 
     app_path.write_text(app, encoding="utf-8")
 
@@ -96,8 +118,10 @@ def main() -> int:
     run(["git", "status", "-sb"], repo)
 
     print("\nX0-X2 preview gate is build-clean.")
-    print("Living Factory Floor reads only /factory-room/status.")
-    print("Unknown active_room values remain UNPLACED; no synthetic movement is generated.")
+    print("Living Factory Floor reads /factory-room/status active_room derived from audit events.")
+    print("Factory Event Rail exposes strict raw-ledger -> canonical-X2 translation.")
+    print("Unknown active_room values remain UNPLACED; unknown event types remain IGNORED.")
+    print("No synthetic movement is generated.")
     print("No backend, Batch 8D, paper-chain, or live-execution permissions were changed.")
     print("Review the UI locally before committing App.tsx.")
     return 0
