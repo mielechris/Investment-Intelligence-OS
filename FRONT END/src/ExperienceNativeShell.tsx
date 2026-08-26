@@ -35,16 +35,34 @@ const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: 
   { key: "judgment", label: "Judgment", eyebrow: "HUMAN INTELLIGENCE", description: "Professional interviews, Judgment Bank capture, calibration, and governed human insight." },
 ];
 
+const ROOM_COMMANDS: Record<RoomKey, Array<[string, string]>> = {
+  factory: [["PRIMARY SURFACE", "OPERATIONS"], ["AUTHORITY", "OBSERVE / ROUTE"], ["EXECUTION", "PAPER ONLY"]],
+  research: [["PRIMARY SURFACE", "EVIDENCE"], ["AUTHORITY", "RESEARCH ONLY"], ["OUTPUT", "GOVERNED INPUTS"]],
+  cases: [["PRIMARY SURFACE", "UNDERWRITING"], ["AUTHORITY", "QUALIFY / REJECT"], ["OUTPUT", "CASE STATE"]],
+  capital: [["PRIMARY SURFACE", "RISK & CAPITAL"], ["AUTHORITY", "SIZE / BLOCK"], ["EXECUTION", "PAPER ONLY"]],
+  judgment: [["PRIMARY SURFACE", "HUMAN JUDGMENT"], ["AUTHORITY", "CAPTURE / CALIBRATE"], ["OUTPUT", "JUDGMENT BANK"]],
+};
+
 function RoomHeader({ room }: { room: (typeof ROOMS)[number] }) {
   return (
-    <div className="native-room-header">
-      <div>
-        <div className="native-room-eyebrow">{room.eyebrow}</div>
-        <h2>{room.label}</h2>
-        <p>{room.description}</p>
+    <>
+      <div className="native-room-header">
+        <div>
+          <div className="native-room-eyebrow">{room.eyebrow}</div>
+          <h2>{room.label}</h2>
+          <p>{room.description}</p>
+        </div>
+        <div className="native-room-mode">PAPER / SHADOW · LIVE CAPITAL LOCKED</div>
       </div>
-      <div className="native-room-mode">PAPER / SHADOW · LIVE CAPITAL LOCKED</div>
-    </div>
+      <div className="native-room-command-strip">
+        {ROOM_COMMANDS[room.key].map(([label, value]) => (
+          <div key={label} className="native-room-command-cell">
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
