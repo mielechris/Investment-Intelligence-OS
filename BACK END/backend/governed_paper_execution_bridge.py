@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from governed_paper_authorization import (
     _canonical_binding,
+    _capital_reward_risk_passed,
     consume_verified_paper_authorization,
     verify_paper_authorization,
 )
@@ -21,20 +22,43 @@ def _blocked(
     case_id: str,
     reason: str,
     authorization_id: str | None = None,
+    **extra: Any,
 ) -> dict[str, Any]:
     return {
-        "case_id": case_id,
+        "case_id":
+            case_id,
+
         "paper_authorization_id":
             authorization_id,
-        "status": "BLOCKED",
-        "execution": "NOT_SUBMITTED",
-        "reason": reason,
-        "shares": 0,
-        "notional": 0.0,
-        "paper_mode": True,
-        "live_execution": False,
-        "paper_order_permission": False,
-        "trade_execution_permission": False,
+
+        "status":
+            "BLOCKED",
+
+        "execution":
+            "NOT_SUBMITTED",
+
+        "reason":
+            reason,
+
+        "shares":
+            0,
+
+        "notional":
+            0.0,
+
+        **extra,
+
+        "paper_mode":
+            True,
+
+        "paper_order_permission":
+            False,
+
+        "trade_execution_permission":
+            False,
+
+        "live_execution":
+            False,
     }
 
 
@@ -47,26 +71,16 @@ def create_governed_paper_order(
     capital_gate: dict[str, Any],
     sizing: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Final governed bridge into PAPER execution.
-
-    This function can create a paper-order record only.
-
-    It CANNOT:
-      - send a broker order,
-      - connect to real capital,
-      - create a live trade,
-      - modify the approved size,
-      - reuse an authorization.
-    """
 
     if not str(
         authorization_id or ""
     ).startswith("paper_auth_"):
         return _blocked(
             case_id=case_id,
-            reason="INVALID_AUTHORIZATION_TYPE",
-            authorization_id=authorization_id,
+            reason=
+                "INVALID_AUTHORIZATION_TYPE",
+            authorization_id=
+                authorization_id,
         )
 
     authorization = get_object(
@@ -76,48 +90,65 @@ def create_governed_paper_order(
     if not authorization:
         return _blocked(
             case_id=case_id,
-            reason="AUTHORIZATION_NOT_FOUND",
-            authorization_id=authorization_id,
+            reason=
+                "AUTHORIZATION_NOT_FOUND",
+            authorization_id=
+                authorization_id,
         )
 
     if (
         str(
-            authorization.get("case_id")
+            authorization.get(
+                "case_id"
+            )
             or ""
         )
         != str(case_id)
     ):
         return _blocked(
             case_id=case_id,
-            reason="CASE_BINDING_MISMATCH",
-            authorization_id=authorization_id,
+            reason=
+                "CASE_BINDING_MISMATCH",
+            authorization_id=
+                authorization_id,
         )
 
-    # Reconstruct binding from CURRENT governed state.
-    current_binding = _canonical_binding(
-        case_id=case_id,
-        qualification=qualification,
-        thesis_status=thesis_status,
-        capital_gate=capital_gate,
-        sizing=sizing,
+    current_binding = (
+        _canonical_binding(
+            case_id=case_id,
+            qualification=
+                qualification,
+            thesis_status=
+                thesis_status,
+            capital_gate=
+                capital_gate,
+            sizing=sizing,
+        )
     )
 
-    verification = verify_paper_authorization(
-        authorization_id=authorization_id,
-        current_binding=current_binding,
+    verification = (
+        verify_paper_authorization(
+            authorization_id=
+                authorization_id,
+
+            current_binding=
+                current_binding,
+        )
     )
 
     if not verification.get("valid"):
         return _blocked(
             case_id=case_id,
             reason=str(
-                verification.get("reason")
+                verification.get(
+                    "reason"
+                )
                 or "AUTHORIZATION_INVALID"
             ),
-            authorization_id=authorization_id,
+            authorization_id=
+                authorization_id,
         )
 
-    # Re-check current state directly.
     hard_checks = {
         "qualified_candidate_current": (
             qualification.get(
@@ -158,15 +189,10 @@ def create_governed_paper_order(
             )
         ),
 
-        "reward_risk_still_passed": (
-            (
-                capital_gate.get("checks")
-                or {}
-            ).get(
-                "reward_risk_passed"
-            )
-            is True
-        ),
+        "reward_risk_still_passed":
+            _capital_reward_risk_passed(
+                capital_gate
+            ),
 
         "size_still_ready": (
             sizing.get("decision")
@@ -202,28 +228,21 @@ def create_governed_paper_order(
     ]
 
     if failed:
-        return {
-            **_blocked(
-                case_id=case_id,
-                reason="CURRENT_STATE_NOT_EXECUTABLE",
-                authorization_id=authorization_id,
-            ),
-            "failed_checks": failed,
-            "checks": hard_checks,
-        }
+        return _blocked(
+            case_id=case_id,
+            reason=
+                "CURRENT_STATE_NOT_EXECUTABLE",
+            authorization_id=
+                authorization_id,
+            failed_checks=failed,
+            checks=hard_checks,
+        )
 
-    approved_shares = int(
+    authorized_shares = int(
         authorization.get(
             "authorized_shares"
         )
         or 0
-    )
-
-    approved_notional = float(
-        authorization.get(
-            "authorized_notional"
-        )
-        or 0.0
     )
 
     current_shares = int(
@@ -233,6 +252,69 @@ def create_governed_paper_order(
         or 0
     )
 
+    if (
+        authorized_shares
+        != current_shares
+    ):
+        return _blocked(
+            case_id=case_id,
+            reason=
+                "AUTHORIZED_SIZE_MISMATCH",
+            authorization_id=
+                authorization_id,
+
+            authorized_shares=
+                authorized_shares,
+
+            current_shares=
+                current_shares,
+        )
+
+    current_price = float(
+        capital_gate.get(
+            "current_price"
+        )
+        or 0.0
+    )
+
+    minimum_price = float(
+        authorization.get(
+            "minimum_order_price"
+        )
+        or 0.0
+    )
+
+    maximum_price = float(
+        authorization.get(
+            "maximum_order_price"
+        )
+        or 0.0
+    )
+
+    if (
+        current_price <= 0
+        or minimum_price <= 0
+        or maximum_price <= 0
+        or current_price < minimum_price
+        or current_price > maximum_price
+    ):
+        return _blocked(
+            case_id=case_id,
+            reason=
+                "ORDER_PRICE_OUTSIDE_AUTHORIZED_WINDOW",
+            authorization_id=
+                authorization_id,
+
+            current_price=
+                current_price,
+
+            minimum_order_price=
+                minimum_price,
+
+            maximum_order_price=
+                maximum_price,
+        )
+
     current_notional = float(
         sizing.get(
             "proposed_notional"
@@ -240,33 +322,57 @@ def create_governed_paper_order(
         or 0.0
     )
 
+    expected_notional = (
+        authorized_shares
+        * current_price
+    )
+
+    if abs(
+        current_notional
+        - expected_notional
+    ) > 0.02:
+        return _blocked(
+            case_id=case_id,
+            reason=
+                "CURRENT_NOTIONAL_INCONSISTENT",
+            authorization_id=
+                authorization_id,
+        )
+
+    max_notional = float(
+        authorization.get(
+            "authorized_max_notional"
+        )
+        or 0.0
+    )
+
     if (
-        approved_shares != current_shares
-        or abs(
-            approved_notional
-            - current_notional
-        ) > 0.01
+        max_notional <= 0
+        or current_notional
+        > max_notional + 0.01
     ):
         return _blocked(
             case_id=case_id,
-            reason="AUTHORIZED_SIZE_MISMATCH",
-            authorization_id=authorization_id,
+            reason=
+                "AUTHORIZED_NOTIONAL_EXCEEDED",
+            authorization_id=
+                authorization_id,
+
+            current_notional=
+                current_notional,
+
+            authorized_max_notional=
+                max_notional,
         )
 
-    if (
-        approved_shares <= 0
-        or approved_notional <= 0
-    ):
-        return _blocked(
-            case_id=case_id,
-            reason="NO_AUTHORIZED_CAPITAL",
-            authorization_id=authorization_id,
-        )
+    consumed = (
+        consume_verified_paper_authorization(
+            authorization_id=
+                authorization_id,
 
-    # Final atomic verification + single-use consumption.
-    consumed = consume_verified_paper_authorization(
-        authorization_id=authorization_id,
-        current_binding=current_binding,
+            current_binding=
+                current_binding,
+        )
     )
 
     if not consumed.get("consumed"):
@@ -274,41 +380,60 @@ def create_governed_paper_order(
             case_id=case_id,
             reason=str(
                 consumed.get("reason")
-                or "AUTHORIZATION_CONSUME_FAILED"
+                or
+                "AUTHORIZATION_CONSUME_FAILED"
             ),
-            authorization_id=authorization_id,
+            authorization_id=
+                authorization_id,
         )
 
     execution_id = (
-        f"governed_paper_{uuid4().hex}"
+        f"governed_paper_"
+        f"{uuid4().hex}"
     )
 
     execution = {
         "execution_id":
             execution_id,
+
         "case_id":
             case_id,
+
         "paper_authorization_id":
             authorization_id,
 
         "status":
             "COMPLETE",
+
         "execution":
             "PAPER_ORDER_CREATED",
 
         "shares":
-            approved_shares,
+            authorized_shares,
+
         "entry_price":
-            float(
-                capital_gate.get(
-                    "current_price"
-                )
+            round(
+                current_price,
+                4,
             ),
+
         "notional":
             round(
-                approved_notional,
+                current_notional,
                 2,
             ),
+
+        "authorization_reference_price":
+            authorization.get(
+                "authorization_reference_price"
+            ),
+
+        "authorized_price_window": {
+            "minimum":
+                minimum_price,
+            "maximum":
+                maximum_price,
+        },
 
         "invalidation_price":
             float(
@@ -316,6 +441,7 @@ def create_governed_paper_order(
                     "invalidation_price"
                 )
             ),
+
         "invalidation_basis":
             str(
                 sizing.get(
@@ -344,14 +470,16 @@ def create_governed_paper_order(
         "paper_mode":
             True,
 
-        # Paper order is authorized.
+        # Permission applies only to this recorded
+        # paper order.
         "paper_order_permission":
             True,
 
-        # Real-money execution remains impossible.
-        "live_execution":
-            False,
+        # Real capital is still impossible.
         "trade_execution_permission":
+            False,
+
+        "live_execution":
             False,
 
         "created_at":
@@ -373,15 +501,26 @@ def create_governed_paper_order(
         payload={
             "paper_authorization_id":
                 authorization_id,
+
             "shares":
-                approved_shares,
+                authorized_shares,
+
+            "entry_price":
+                current_price,
+
             "notional":
-                approved_notional,
+                current_notional,
+
+            "authorization_consumed":
+                True,
+
             "paper_mode":
                 True,
-            "live_execution":
-                False,
+
             "trade_execution_permission":
+                False,
+
+            "live_execution":
                 False,
         },
     )

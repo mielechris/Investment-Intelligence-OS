@@ -1,26 +1,111 @@
 from __future__ import annotations
 
+from datetime import (
+    datetime,
+    timezone,
+)
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import (
+    APIRouter,
+    HTTPException,
+)
+
+from capital_entry_watch import (
+    refresh_capital_entry_watch,
+)
+
+from generic_position_sizing import (
+    calculate_generic_position_sizing,
+)
+
+from generic_public_company_capital import (
+    _ticker_for_case,
+    assess_generic_public_company_capital,
+)
+
+from generic_public_company_thesis import (
+    build_generic_thesis_status,
+)
 
 from governed_paper_authorization import (
     _canonical_binding,
     create_paper_authorization,
+    paper_authorization_expired,
 )
+
 from ledger import (
     latest_object,
     paper_authorization_consumed,
 )
+
 from live_invalidation_mapper import (
     build_live_invalidation_status,
 )
+
 from paper_capital_gate import (
     assess_paper_capital,
 )
 
 
 router = APIRouter()
+
+MAX_AUTH_QUOTE_AGE_MINUTES = 30
+
+
+def _parse_time(
+    value: Any,
+) -> datetime | None:
+    if not value:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(
+            str(value).replace(
+                "Z",
+                "+00:00",
+            )
+        )
+    except ValueError:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(
+            tzinfo=timezone.utc
+        )
+
+    return dt.astimezone(
+        timezone.utc
+    )
+
+
+def _quote_is_fresh(
+    entry_watch: dict[str, Any],
+) -> bool:
+    timestamp = _parse_time(
+        entry_watch.get(
+            "quote_timestamp"
+        )
+    )
+
+    if timestamp is None:
+        return False
+
+    age_minutes = (
+        (
+            datetime.now(
+                timezone.utc
+            )
+            - timestamp
+        ).total_seconds()
+        / 60.0
+    )
+
+    return (
+        0
+        <= age_minutes
+        <= MAX_AUTH_QUOTE_AGE_MINUTES
+    )
 
 
 def assess_authorization_readiness(
@@ -36,11 +121,15 @@ def assess_authorization_readiness(
         sizing_entry = float(
             sizing.get("entry_price")
         )
+
         capital_entry = float(
             capital.get("current_price")
         )
+
         watch_entry = float(
-            entry_watch.get("current_price")
+            entry_watch.get(
+                "current_price"
+            )
         )
 
         quote_match = (
@@ -55,6 +144,7 @@ def assess_authorization_readiness(
             )
             <= 0.01
         )
+
     except (TypeError, ValueError):
         quote_match = False
 
@@ -91,7 +181,8 @@ def assess_authorization_readiness(
 
         "entry_watch_ready": (
             entry_watch.get("stage")
-            == "READY_FOR_POSITION_SIZING"
+            ==
+            "READY_FOR_POSITION_SIZING"
         ),
 
         "sizing_ready": (
@@ -122,6 +213,11 @@ def assess_authorization_readiness(
         "quote_binding_current":
             quote_match,
 
+        "quote_fresh_for_authorization":
+            _quote_is_fresh(
+                entry_watch
+            ),
+
         "sizing_execution_locked": (
             sizing.get(
                 "paper_order_permission"
@@ -129,6 +225,10 @@ def assess_authorization_readiness(
             is False
             and sizing.get(
                 "trade_execution_permission"
+            )
+            is False
+            and sizing.get(
+                "live_execution"
             )
             is False
         ),
@@ -142,21 +242,49 @@ def assess_authorization_readiness(
     ]
 
     return {
-        "ready": not failed,
-        "checks": checks,
-        "failed_checks": failed,
+        "ready":
+            not failed,
+
+        "checks":
+            checks,
+
+        "failed_checks":
+            failed,
 
         "paper_order_permission":
             False,
+
         "trade_execution_permission":
             False,
+
         "live_execution":
             False,
     }
 
 
+def _is_micron(
+    case_id: str,
+) -> bool:
+    try:
+        ticker = (
+            _ticker_for_case(
+                case_id
+            )
+            .upper()
+        )
+    except Exception:
+        ticker = ""
+
+    return ticker in {
+        "MU",
+        "MU.US",
+    }
+
+
 def _current_state(
     case_id: str,
+    *,
+    refresh_market: bool = False,
 ) -> dict[str, Any]:
 
     qualification = latest_object(
@@ -164,80 +292,205 @@ def _current_state(
         case_id=case_id,
     ) or {}
 
-    hunt = latest_object(
-        "gap_hunt",
+    if not qualification:
+        raise HTTPException(
+            status_code=409,
+            detail=
+                "Qualification state unavailable",
+        )
+
+    risk = latest_object(
+        "risk_authorization",
         case_id=case_id,
     ) or {}
 
-    risk = hunt.get("risk") or {}
+    if not risk:
+        hunt = latest_object(
+            "gap_hunt",
+            case_id=case_id,
+        ) or {}
 
-    stress = latest_object(
-        "cycle_valuation_stress",
-        case_id=case_id,
-    ) or {}
+        risk = hunt.get("risk") or {}
+
+    if not risk:
+        raise HTTPException(
+            status_code=409,
+            detail=
+                "Risk state unavailable",
+        )
+
+    if refresh_market:
+        refresh_capital_entry_watch(
+            case_id
+        )
 
     entry_watch = latest_object(
         "capital_entry_watch",
         case_id=case_id,
     ) or {}
 
-    sizing = latest_object(
-        "automatic_paper_sizing",
-        case_id=case_id,
-    ) or {}
+    if _is_micron(case_id):
+        stress = latest_object(
+            "cycle_valuation_stress",
+            case_id=case_id,
+        ) or {}
 
-    if not qualification:
-        raise HTTPException(
-            status_code=409,
-            detail="Qualification state unavailable",
+        if not stress:
+            raise HTTPException(
+                status_code=409,
+                detail=
+                    "Cycle valuation state unavailable",
+            )
+
+        thesis = (
+            build_live_invalidation_status(
+                case_id
+            )
         )
 
-    if not risk:
-        raise HTTPException(
-            status_code=409,
-            detail="Risk state unavailable",
+        capital = assess_paper_capital(
+            qualification=
+                qualification,
+
+            risk=
+                risk,
+
+            stress=
+                stress,
+
+            thesis_status=
+                thesis,
         )
 
-    if not stress:
-        raise HTTPException(
-            status_code=409,
-            detail="Cycle valuation state unavailable",
+        sizing = latest_object(
+            "automatic_paper_sizing",
+            case_id=case_id,
+        ) or {}
+
+        profile = (
+            "MICRON_SEMICONDUCTOR_CYCLE"
         )
 
-    thesis = (
-        build_live_invalidation_status(
-            case_id
-        )
-    )
+    else:
+        stress = latest_object(
+            "generic_capital_stress",
+            case_id=case_id,
+        ) or {}
 
-    capital = assess_paper_capital(
-        qualification=qualification,
-        risk=risk,
-        stress=stress,
-        thesis_status=thesis,
-    )
+        if not stress:
+            raise HTTPException(
+                status_code=409,
+                detail=
+                    "Generic capital state unavailable",
+            )
+
+        thesis = latest_object(
+            "generic_thesis_status",
+            case_id=case_id,
+        ) or {}
+
+        if not thesis:
+            thesis = (
+                build_generic_thesis_status(
+                    case_id
+                )
+            )
+
+        capital = (
+            assess_generic_public_company_capital(
+                qualification=
+                    qualification,
+
+                risk=
+                    risk,
+
+                stress=
+                    stress,
+
+                thesis_status=
+                    thesis,
+            )
+        )
+
+        sizing = latest_object(
+            "generic_position_sizing",
+            case_id=case_id,
+        ) or {}
+
+        # If Capital is ready but sizing was not yet
+        # materialized, calculate it now.
+        if (
+            capital.get("decision")
+            == "APPROVED"
+            and sizing.get("decision")
+            != "SIZE_READY"
+        ):
+            sizing = (
+                calculate_generic_position_sizing(
+                    case_id=case_id,
+                    capital_gate=capital,
+                )
+            )
+
+        profile = (
+            "GENERIC_PUBLIC_COMPANY"
+        )
+
+    # Bind authorization to the exact Risk state that
+    # helped produce Capital approval.
+    capital = {
+        **capital,
+
+        "_risk_authorization_id":
+            risk.get(
+                "risk_authorization_id"
+            )
+            or risk.get(
+                "decision_id"
+            ),
+    }
 
     readiness = (
         assess_authorization_readiness(
-            qualification=qualification,
-            thesis=thesis,
-            capital=capital,
-            sizing=sizing,
-            entry_watch=entry_watch,
+            qualification=
+                qualification,
+
+            thesis=
+                thesis,
+
+            capital=
+                capital,
+
+            sizing=
+                sizing,
+
+            entry_watch=
+                entry_watch,
         )
     )
 
     return {
+        "profile":
+            profile,
+
         "qualification":
             qualification,
+
+        "risk":
+            risk,
+
         "thesis":
             thesis,
+
         "capital":
             capital,
+
         "sizing":
             sizing,
+
         "entry_watch":
             entry_watch,
+
         "readiness":
             readiness,
     }
@@ -271,16 +524,26 @@ def paper_authorization_status(
     )
 
     return {
-        "case_id": case_id,
+        "case_id":
+            case_id,
+
+        "profile":
+            state["profile"],
 
         "authorization_ready":
-            state["readiness"]["ready"],
+            state[
+                "readiness"
+            ]["ready"],
 
         "checks":
-            state["readiness"]["checks"],
+            state[
+                "readiness"
+            ]["checks"],
 
         "failed_checks":
-            state["readiness"][
+            state[
+                "readiness"
+            ][
                 "failed_checks"
             ],
 
@@ -296,14 +559,32 @@ def paper_authorization_status(
             "consumed":
                 consumed,
 
+            "expired": (
+                paper_authorization_expired(
+                    latest_auth
+                )
+                if latest_auth
+                else None
+            ),
+
             "authorized_shares":
                 latest_auth.get(
                     "authorized_shares"
                 ),
 
-            "authorized_notional":
+            "minimum_order_price":
                 latest_auth.get(
-                    "authorized_notional"
+                    "minimum_order_price"
+                ),
+
+            "maximum_order_price":
+                latest_auth.get(
+                    "maximum_order_price"
+                ),
+
+            "expires_at":
+                latest_auth.get(
+                    "expires_at"
                 ),
         },
 
@@ -327,8 +608,10 @@ def paper_authorization_status(
 def prepare_paper_authorization(
     case_id: str,
 ):
+    # Preparation always refreshes the market gate first.
     state = _current_state(
-        case_id
+        case_id,
+        refresh_market=True,
     )
 
     readiness = state[
@@ -341,6 +624,7 @@ def prepare_paper_authorization(
             detail={
                 "reason":
                     "AUTHORIZATION_NOT_READY",
+
                 "failed_checks":
                     readiness[
                         "failed_checks"
@@ -351,23 +635,29 @@ def prepare_paper_authorization(
     current_binding = (
         _canonical_binding(
             case_id=case_id,
-            qualification=state[
-                "qualification"
-            ],
-            thesis_status=state[
-                "thesis"
-            ],
-            capital_gate=state[
-                "capital"
-            ],
-            sizing=state[
-                "sizing"
-            ],
+
+            qualification=
+                state[
+                    "qualification"
+                ],
+
+            thesis_status=
+                state[
+                    "thesis"
+                ],
+
+            capital_gate=
+                state[
+                    "capital"
+                ],
+
+            sizing=
+                state[
+                    "sizing"
+                ],
         )
     )
 
-    # Prevent duplicate active authorizations
-    # for the identical governed state.
     existing = latest_object(
         "paper_authorization",
         case_id=case_id,
@@ -379,14 +669,15 @@ def prepare_paper_authorization(
 
     if (
         existing_id
-        and existing.get(
-            "binding"
-        )
+        and existing.get("binding")
         == current_binding
         and paper_authorization_consumed(
             existing_id
         )
         is False
+        and not paper_authorization_expired(
+            existing
+        )
     ):
         return {
             "decision":
@@ -400,9 +691,19 @@ def prepare_paper_authorization(
                     "authorized_shares"
                 ),
 
-            "authorized_notional":
+            "minimum_order_price":
                 existing.get(
-                    "authorized_notional"
+                    "minimum_order_price"
+                ),
+
+            "maximum_order_price":
+                existing.get(
+                    "maximum_order_price"
+                ),
+
+            "expires_at":
+                existing.get(
+                    "expires_at"
                 ),
 
             "single_use":
@@ -422,21 +723,25 @@ def prepare_paper_authorization(
         create_paper_authorization(
             case_id=case_id,
 
-            qualification=state[
-                "qualification"
-            ],
+            qualification=
+                state[
+                    "qualification"
+                ],
 
-            thesis_status=state[
-                "thesis"
-            ],
+            thesis_status=
+                state[
+                    "thesis"
+                ],
 
-            capital_gate=state[
-                "capital"
-            ],
+            capital_gate=
+                state[
+                    "capital"
+                ],
 
-            sizing=state[
-                "sizing"
-            ],
+            sizing=
+                state[
+                    "sizing"
+                ],
         )
     )
 
@@ -444,7 +749,8 @@ def prepare_paper_authorization(
         authorization.get(
             "decision"
         )
-        != "AUTHORIZED_FOR_PAPER_HANDOFF"
+        !=
+        "AUTHORIZED_FOR_PAPER_HANDOFF"
     ):
         raise HTTPException(
             status_code=409,

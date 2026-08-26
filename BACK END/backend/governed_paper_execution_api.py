@@ -167,8 +167,11 @@ def submit_governed_paper_order(
             detail=str(exc),
         )
 
+    # Submission always refreshes current market,
+    # Capital and sizing state before token verification.
     state = _current_state(
-        case_id
+        case_id,
+        refresh_market=True,
     )
 
     result = create_governed_paper_order(
