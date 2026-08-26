@@ -26,16 +26,25 @@ body {
   background: transparent !important;
 }
 
+#root > main > [data-iios-room-visible="false"] {
+  display: none !important;
+}
+
+#root > main > [data-iios-room-visible="true"] {
+  max-width: 100%;
+}
+
 #root > main > header {
   max-width: none;
   margin-left: 0;
   margin-right: 0;
+  padding: 26px 4px 24px !important;
 }
 
 #root > main h1,
 #root > main h2,
 #root > main h3 {
-  color: #edf0f2;
+  color: #edf0f2 !important;
   text-wrap: balance;
 }
 
@@ -63,6 +72,11 @@ body {
   max-width: 100%;
 }
 
+#root > main > section:not([data-iios-shell="experience-room-nav"]),
+#root > main > div[data-iios-room-visible="true"] {
+  margin-bottom: 24px !important;
+}
+
 #root > main table {
   font-size: 13px;
 }
@@ -73,10 +87,15 @@ body {
   min-height: 38px;
 }
 
-/* Keep the cinematic factory legible without allowing its eight-desk grid to
-   force the entire document wider than the viewport. */
 #root > main section {
   overflow-x: clip;
+}
+
+#root > main [data-iios-room="research"] p,
+#root > main [data-iios-room="cases"] p,
+#root > main [data-iios-room="capital"] p,
+#root > main [data-iios-room="judgment"] p {
+  line-height: 1.55;
 }
 
 @media (max-width: 1180px) {
