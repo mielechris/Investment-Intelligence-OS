@@ -14,9 +14,15 @@ WORKTREE_NAME = "Investment-Intelligence-OS-experience-x3"
 PREVIEW_PORT = 5188
 
 
-def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess:
+def run(
+    cmd: list[str],
+    cwd: Path,
+    *,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd), flush=True)
-    result = subprocess.run(cmd, cwd=cwd, text=True)
+    result = subprocess.run(cmd, cwd=cwd, text=True, env=env)
     if check and result.returncode != 0:
         raise SystemExit(result.returncode)
     return result
@@ -45,25 +51,51 @@ def supervisor_repo() -> Path | None:
     return Path(str(working)).expanduser().resolve() if working else None
 
 
-def assert_supervisor_isolated(source: Path, target: Path) -> None:
+def launchagent_loaded() -> bool | None:
+    if sys.platform != "darwin" or not PLIST.exists():
+        return None
+    result = subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"],
+        text=True,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def git_branch(path: Path) -> str:
+    if not path.exists():
+        return "MISSING"
+    try:
+        return output(["git", "branch", "--show-current"], path) or "DETACHED"
+    except Exception:
+        return "UNREADABLE"
+
+
+def assert_supervisor_isolated(source: Path, target: Path) -> tuple[Path | None, str | None]:
     supervisor = supervisor_repo()
+    loaded = launchagent_loaded()
+
     if supervisor is None:
         print("Batch supervisor LaunchAgent: not detected")
-        return
+        return None, None
 
     if target == supervisor:
         raise SystemExit("STOP: experience target is the batch supervisor checkout.")
 
+    supervisor_branch = git_branch(supervisor)
     print("Batch supervisor checkout:", supervisor)
+    print("Batch supervisor branch:", supervisor_branch)
+    print("Batch supervisor LaunchAgent:", "LOADED" if loaded is True else "NOT LOADED" if loaded is False else "UNKNOWN")
     print("Experience checkout:", target)
 
-    if source == supervisor:
-        branch = output(["git", "branch", "--show-current"], source)
-        print("Supervisor checkout branch before preview setup:", branch or "DETACHED")
+    if loaded is False:
+        raise SystemExit("STOP: batch supervisor LaunchAgent is not loaded. Preview not started.")
+
+    return supervisor, supervisor_branch
 
 
 def ensure_worktree(source: Path, target: Path) -> None:
-    before_branch = output(["git", "branch", "--show-current"], source)
+    before_branch = git_branch(source)
 
     # Ref-only update; does not checkout, reset, merge, or alter source working files.
     run(["git", "fetch", "origin", BRANCH], source)
@@ -82,15 +114,29 @@ def ensure_worktree(source: Path, target: Path) -> None:
     else:
         print("Experience worktree already exists.")
 
-    after_branch = output(["git", "branch", "--show-current"], source)
+    after_branch = git_branch(source)
     if after_branch != before_branch:
         raise SystemExit(
             f"STOP: source checkout branch changed unexpectedly: {before_branch!r} -> {after_branch!r}"
         )
 
-    target_branch = output(["git", "branch", "--show-current"], target)
+    target_branch = git_branch(target)
     if target_branch != BRANCH:
         raise SystemExit(f"STOP: experience worktree is on {target_branch!r}, expected {BRANCH!r}.")
+
+
+def verify_supervisor_unchanged(supervisor: Path | None, original_branch: str | None) -> None:
+    if supervisor is None or original_branch is None:
+        return
+    current_branch = git_branch(supervisor)
+    loaded = launchagent_loaded()
+    if current_branch != original_branch:
+        raise SystemExit(
+            f"STOP: supervisor checkout branch changed: {original_branch!r} -> {current_branch!r}."
+        )
+    if loaded is False:
+        raise SystemExit("STOP: batch supervisor LaunchAgent became unloaded during preview setup.")
+    print("Supervisor verification: branch unchanged and LaunchAgent loaded.")
 
 
 def main() -> int:
@@ -101,7 +147,7 @@ def main() -> int:
     print("IIOS X3 PREVIEW — BATCH SUPERVISOR ISOLATED")
     print("=" * 76)
 
-    assert_supervisor_isolated(source, target)
+    supervisor, supervisor_branch = assert_supervisor_isolated(source, target)
     ensure_worktree(source, target)
 
     # The preview gate contains a second independent LaunchAgent working-directory guard.
@@ -111,6 +157,8 @@ def main() -> int:
     if not (frontend / "node_modules").exists():
         lockfile = frontend / "package-lock.json"
         run(["npm", "ci"] if lockfile.exists() else ["npm", "install"], frontend)
+
+    verify_supervisor_unchanged(supervisor, supervisor_branch)
 
     print()
     print("=" * 76)
@@ -128,6 +176,7 @@ def main() -> int:
         ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", str(PREVIEW_PORT), "--strictPort"],
         frontend,
         check=False,
+        env=env,
     ).returncode
 
 
