@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.5 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.14.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.13.5 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.14.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -44,6 +44,10 @@ import institutional_intelligence
 from institutional_intelligence import router as institutional_router
 from institutional_secondary_fallback import install_institutional_secondary_fallback
 from institutional_integrity_guard import install_institutional_integrity_guard
+from institutional_research_intelligence import institutional_research_evidence, router as institutional_research_router
+from macro_policy_intelligence import market_policy_evidence, router as macro_policy_router
+from dislocation_intelligence import router as dislocation_intelligence_router
+from thesis_integrity_v2 import thesis_integrity_evidence, router as thesis_integrity_v2_router
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -111,6 +115,9 @@ def _gap_packet_items_with_governed_data(packet):
         items.extend(hard_data_evidence(case_id))
         items.extend(insider_intelligence.insider_evidence(case_id))
         items.extend(institutional_intelligence.institutional_evidence(case_id))
+        items.extend(institutional_research_evidence(case_id))
+        items.extend(market_policy_evidence(case_id))
+        items.extend(thesis_integrity_evidence(case_id))
         items.extend(primary_evidence_evidence(case_id))
         items.extend(cycle_normalized_evidence(case_id))
         items.extend(consensus_revision_evidence(case_id))
@@ -177,6 +184,10 @@ app.include_router(factory_genericization_router)
 app.include_router(hard_data_router)
 app.include_router(insider_router)
 app.include_router(institutional_router)
+app.include_router(institutional_research_router)
+app.include_router(macro_policy_router)
+app.include_router(dislocation_intelligence_router)
+app.include_router(thesis_integrity_v2_router)
 app.include_router(primary_evidence_router)
 app.include_router(portfolio_context_router)
 app.include_router(paper_capital_router)
@@ -188,7 +199,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.13.6"
+app.version = "0.14.0"
 
 
 @app.on_event("startup")
@@ -207,7 +218,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.13.6",
+        "version": "0.14.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -215,6 +226,13 @@ def system_status():
         "post_decision_learning": True,
         "judgment_bank": True,
         "automatic_monitoring": True,
+        "institutional_research_intelligence": True,
+        "cross_sector_sentiment_engine": True,
+        "monetary_policy_probability_engine": True,
+        "monetary_policy_probability_requires_governed_source": True,
+        "tariff_transmission_engine": True,
+        "daily_dislocation_scanner": True,
+        "generic_thesis_integrity_v2": True,
         "opportunity_scanner_available": True,
         "opportunity_auto_scan_default": False,
         "opportunity_scan_interval_floor_minutes": 240,

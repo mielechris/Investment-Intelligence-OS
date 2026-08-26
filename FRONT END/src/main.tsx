@@ -13,6 +13,7 @@ import ShortInterestVerificationPanel from './ShortInterestVerificationPanel.tsx
 import OptionsPositioningVerificationPanel from './OptionsPositioningVerificationPanel.tsx'
 import PortfolioContextPanel from './PortfolioContextPanel.tsx'
 import InterviewPortalPanel from './InterviewPortalPanel.tsx'
+import JesseIntelligencePanel from './JesseIntelligencePanel.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -27,6 +28,7 @@ createRoot(document.getElementById('root')!).render(
     <ShortInterestVerificationPanel />
     <OptionsPositioningVerificationPanel />
     <PortfolioContextPanel />
+    <JesseIntelligencePanel />
     <InterviewPortalPanel />
   </StrictMode>,
 )
