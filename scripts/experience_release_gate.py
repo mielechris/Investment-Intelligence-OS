@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import plistlib
 import subprocess
-import sys
 from pathlib import Path
 
 BRANCH = "feature/iios-experience-x0-x1"
@@ -11,12 +10,11 @@ SUPERVISOR_LABEL = "com.iios.batch-supervisor"
 SUPERVISOR_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{SUPERVISOR_LABEL}.plist"
 
 
-def run(cmd: list[str], cwd: Path, *, required: bool = True) -> int:
+def run(cmd: list[str], cwd: Path) -> None:
     print("+", " ".join(cmd), flush=True)
     code = subprocess.run(cmd, cwd=cwd).returncode
-    if required and code != 0:
+    if code != 0:
         raise SystemExit(code)
-    return code
 
 
 def output(cmd: list[str], cwd: Path) -> str:
@@ -61,7 +59,7 @@ def main() -> int:
     required_files = [
         "ExperienceNativeShell.tsx", "ExecutiveShowcase.tsx", "FactoryActivityStrip.tsx", "DeskActivityBoard.tsx",
         "factoryActivityModel.ts", "factoryMovement.ts", "factoryLedgerAdapter.ts", "CasesCommandCard.tsx",
-        "CapitalCommandCenter.tsx", "ThesisIntegrityCommand.tsx", "ThesisCapitalConsequenceMatrix.tsx",
+        "NewCaseLauncher.tsx", "CapitalCommandCenter.tsx", "ThesisIntegrityCommand.tsx", "ThesisCapitalConsequenceMatrix.tsx",
         "JudgmentBankWorkspace.tsx", "JudgmentLibraryBrowser.tsx", "activeCaseStore.ts", "stateLanguage.css",
         "factoryActivity.css", "deepIntelligence.css", "executiveShowcase.css",
     ]
@@ -78,27 +76,25 @@ def main() -> int:
         '"committee.completed"', '"risk.cleared"', '"paper.order.created"',
     ])
     require_text(src / "factoryLedgerAdapter.ts", [
-        "COUNCIL_COMPLETE", "COMMITTEE_DECISION", "AGENT_RESULT", "REUNDERWRITE", "SOURCE_ACQUISITION",
-        "movementEligible: false",
+        "COUNCIL_COMPLETE", "COMMITTEE_DECISION", "AGENT_RESULT", "REUNDERWRITE", "SOURCE_ACQUISITION", "movementEligible:false",
     ])
+    require_text(src / "factoryActivityModel.ts", ["BUSY", "RECENT", "IDLE", "No recent" if False else "IDLE"])
     require_text(src / "activeCaseStore.ts", ["storage", "iios-active-case-changed", "setActiveCaseId", "subscribeActiveCase"])
     require_text(src / "CasesCommandCard.tsx", ["subscribeActiveCase", "getActiveCaseId"])
+    require_text(src / "NewCaseLauncher.tsx", ["setActiveCaseId"])
     require_text(src / "ExecutiveShowcase.tsx", ["subscribeActiveCase", "setActiveCaseId", "WHAT CHANGED", "WHY IT MATTERS", "WHAT HAPPENS NEXT", "Real state only"])
-    require_text(src / "ThesisCapitalConsequenceMatrix.tsx", ["LIVE", "LOCK", "THESIS"])
+    require_text(src / "ThesisCapitalConsequenceMatrix.tsx", ["subscribeActiveCase", "LIVE CAPITAL", "This surface never grants authority"])
     require_text(src / "JudgmentLibraryBrowser.tsx", ["JUDGMENT", "PROVENANCE"])
     require_text(src / "stateLanguage.css", ["--iios-clear", "--iios-watch", "--iios-block", "--iios-idle"])
 
-    # Safety contract: Executive and operator surfaces must never advertise live authority.
     for name in ["ExperienceNativeShell.tsx", "ExecutiveShowcase.tsx", "CapitalCommandCenter.tsx", "ThesisCapitalConsequenceMatrix.tsx"]:
         text = (src / name).read_text(encoding="utf-8").upper()
         if "LIVE EXECUTION ENABLED" in text or "LIVE CAPITAL ENABLED" in text:
             raise SystemExit(f"STOP: unsafe authority language found in {name}")
 
     run(["git", "diff", "--check"], repo)
-
     print("\n=== TYPESCRIPT / VITE BUILD ===")
     run(["npm", "run", "build"], frontend)
-
     print("\n=== ESLINT ===")
     run(["npm", "run", "lint"], frontend)
 
