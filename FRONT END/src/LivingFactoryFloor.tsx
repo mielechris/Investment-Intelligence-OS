@@ -36,10 +36,14 @@ type FloorTelemetry = {
 const ROOM_ALIASES: Record<string, FactoryZoneKey> = {
   "evidence-warehouse": "evidence-warehouse",
   "evidence warehouse": "evidence-warehouse",
+  "evidence acquisition": "evidence-warehouse",
   evidence: "evidence-warehouse",
   "agent-desks": "agent-desks",
   "agent desks": "agent-desks",
   "specialist desks": "agent-desks",
+  "8 specialist desks": "agent-desks",
+  "eight specialist desks": "agent-desks",
+  "eight desks": "agent-desks",
   agents: "agent-desks",
   "research-annex": "research-annex",
   "research annex": "research-annex",
@@ -59,8 +63,13 @@ const ROOM_ALIASES: Record<string, FactoryZoneKey> = {
   "paper execution": "paper-execution",
   "paper execution bay": "paper-execution",
   paper: "paper-execution",
+  capital: "paper-execution",
+  qualified: "paper-execution",
+  "position sizing": "paper-execution",
+  authorization: "paper-execution",
   "portfolio-office": "portfolio-office",
   "portfolio office": "portfolio-office",
+  "paper portfolio": "portfolio-office",
   portfolio: "portfolio-office",
   "thesis-integrity": "thesis-integrity",
   "thesis integrity": "thesis-integrity",
@@ -137,18 +146,28 @@ export default function LivingFactoryFloor() {
     };
   }, []);
 
-  const placedCases = useMemo(
-    () => (telemetry.snapshot?.cases || []).map((item, index) => ({
-      item,
-      index,
-      zoneKey: normalizeRoom(item.active_room),
-    })).filter((entry) => entry.zoneKey !== null),
+  const placements = useMemo(
+    () => (telemetry.snapshot?.cases || []).map((item, index) => {
+      const auditZone = normalizeRoom(item.active_room);
+      const stageZone = normalizeRoom(item.stage);
+      return {
+        item,
+        index,
+        zoneKey: auditZone ?? stageZone,
+        placementSource: auditZone ? "AUDIT" as const : stageZone ? "STAGE" as const : "UNPLACED" as const,
+      };
+    }),
     [telemetry.snapshot?.cases]
   );
 
+  const placedCases = useMemo(
+    () => placements.filter((entry) => entry.zoneKey !== null),
+    [placements]
+  );
+
   const unplacedCases = useMemo(
-    () => (telemetry.snapshot?.cases || []).filter((item) => normalizeRoom(item.active_room) === null),
-    [telemetry.snapshot?.cases]
+    () => placements.filter((entry) => entry.zoneKey === null),
+    [placements]
   );
 
   const caseOffsets = useMemo(() => {
@@ -179,7 +198,7 @@ export default function LivingFactoryFloor() {
           <div style={{ color: "#6e88a1", fontSize: "9px", letterSpacing: "2.4px", fontWeight: 900 }}>X2 · LIVING FACTORY FLOOR</div>
           <h2 style={{ margin: "6px 0", fontSize: "25px" }}>REAL STATE. REAL ROOMS. NO FAKE MOTION.</h2>
           <div style={{ color: "#7e8d9d", fontSize: "11px", lineHeight: 1.5, maxWidth: "760px" }}>
-            Case markers move only when `/factory-room/status` reports a recognized `active_room`. Unknown rooms stay unplaced. Canonical ledger events will become the authoritative movement stream when exposed by the backend.
+            Recent audit events drive animated placement. When a case has no recent event, its backend-declared stage provides a static location only; stage placement never implies live movement.
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
@@ -261,10 +280,11 @@ export default function LivingFactoryFloor() {
           const center = getFactoryZoneCenter(entry.zoneKey);
           const offset = caseOffsets.get(entry.item.case_id) ?? 0;
           const visual = visualStateFor(telemetry.online ? "ACTIVE" : "OFFLINE");
+          const auditPlacement = entry.placementSource === "AUDIT";
           return (
             <div
               key={entry.item.case_id}
-              title={`${entry.item.case_id} · ${entry.item.stage ?? "stage unknown"} · ${entry.item.active_room ?? "room unknown"}`}
+              title={`${entry.item.case_id} · ${entry.item.stage ?? "stage unknown"} · ${auditPlacement ? `recent audit room ${entry.item.active_room}` : "static backend stage placement"}`}
               style={{
                 position: "absolute",
                 left: `${center.x + Math.min(offset, 3) * 1.25}%`,
@@ -273,9 +293,9 @@ export default function LivingFactoryFloor() {
                 maxWidth: "150px",
                 padding: "5px 7px",
                 borderRadius: "999px",
-                border: visual.signal === "NEON_ACTIVE" ? "1px solid rgba(99,230,165,.82)" : "1px solid rgba(255,109,124,.72)",
+                border: auditPlacement && visual.signal === "NEON_ACTIVE" ? "1px solid rgba(99,230,165,.82)" : "1px solid rgba(119,145,170,.55)",
                 background: "rgba(4,8,12,.94)",
-                color: visual.signal === "NEON_ACTIVE" ? "#dffff0" : "#ffb2ba",
+                color: auditPlacement ? "#dffff0" : "#a7b4c1",
                 fontSize: "7px",
                 fontWeight: 900,
                 letterSpacing: ".5px",
@@ -283,8 +303,9 @@ export default function LivingFactoryFloor() {
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 zIndex: 4,
-                transition: "left .55s ease, top .55s ease",
-                boxShadow: visual.signal === "NEON_ACTIVE" ? "0 0 16px rgba(99,230,165,.22)" : "0 0 16px rgba(255,109,124,.18)",
+                opacity: auditPlacement ? 1 : .78,
+                transition: auditPlacement ? "left .55s ease, top .55s ease" : "none",
+                boxShadow: auditPlacement ? "0 0 16px rgba(99,230,165,.22)" : "none",
               }}
             >
               {entry.item.case_id}
@@ -295,12 +316,12 @@ export default function LivingFactoryFloor() {
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(260px, .36fr)", gap: "12px", marginTop: "12px" }}>
         <div style={{ color: "#65798d", fontSize: "9px", lineHeight: 1.55 }}>
-          SOURCE CONTRACT: `/factory-room/status` → `cases[].active_room`. Snapshot changes may animate a marker between declared room coordinates; the renderer never infers a room from price, sentiment, stage wording, or elapsed time.
+          SOURCE CONTRACT: `active_room` is authoritative for recent motion; `stage` is authoritative only for static fallback placement. No price, sentiment, timing, or inferred workflow state is used.
         </div>
         <div style={{ borderLeft: "2px solid #34495b", paddingLeft: "10px" }}>
           <div style={{ color: "#6c8298", fontSize: "8px", letterSpacing: "1.2px", fontWeight: 900 }}>UNPLACED CASES</div>
           <div style={{ color: unplacedCases.length ? "#e8c96b" : "#67798b", fontSize: "10px", marginTop: "4px", fontWeight: 800 }}>
-            {unplacedCases.length ? `${unplacedCases.length} · UNKNOWN / UNMAPPED ROOM` : "0"}
+            {unplacedCases.length ? `${unplacedCases.length} · UNKNOWN / UNMAPPED STAGE` : "0"}
           </div>
         </div>
       </div>
