@@ -70,8 +70,8 @@ body {
   justify-content: space-between;
   gap: 24px;
   align-items: center;
-  min-height: 92px;
-  padding: 14px 4px 16px;
+  min-height: 82px;
+  padding: 10px 4px 12px;
   border-bottom: 1px solid rgba(116, 126, 138, .2);
 }
 
@@ -84,8 +84,8 @@ body {
 }
 
 .native-masthead h1 {
-  margin: 5px 0 2px;
-  font-size: clamp(28px, 3.3vw, 40px);
+  margin: 4px 0 2px;
+  font-size: clamp(27px, 3vw, 38px);
   line-height: 1;
 }
 
@@ -98,7 +98,7 @@ body {
 }
 
 .native-masthead-status {
-  min-width: 205px;
+  min-width: 195px;
   display: grid;
   gap: 5px;
   justify-items: end;
@@ -129,8 +129,8 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 7px;
-  padding: 8px 0;
-  background: rgba(5, 6, 8, .94);
+  padding: 7px 0;
+  background: rgba(5, 6, 8, .96);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid rgba(166, 119, 47, .16);
 }
@@ -157,7 +157,7 @@ body {
 }
 
 .native-room {
-  padding-top: 6px;
+  padding-top: 4px;
 }
 
 .native-room-header {
@@ -166,13 +166,13 @@ body {
   gap: 20px;
   align-items: center;
   margin-bottom: 10px;
-  padding: 9px 4px 10px;
+  padding: 8px 4px 9px;
   border-bottom: 1px solid rgba(111, 126, 143, .12);
 }
 
 .native-room-header h2 {
   margin: 3px 0 2px;
-  font-size: 22px;
+  font-size: 21px;
 }
 
 .native-room-mode {
@@ -275,6 +275,175 @@ body {
   width: 100% !important;
   margin-left: 0 !important;
   margin-right: 0 !important;
+}
+
+/* Formal X3 room design system — all non-Factory operational surfaces */
+.native-room--research,
+.native-room--cases,
+.native-room--capital,
+.native-room--judgment {
+  --x3-brass: #9f7338;
+  --x3-brass-bright: #d4a45b;
+  --x3-panel: rgba(7, 9, 11, .96);
+  --x3-panel-deep: rgba(3, 5, 7, .98);
+  --x3-line: rgba(169, 124, 60, .42);
+  --x3-line-soft: rgba(169, 124, 60, .20);
+  --x3-copy: #929da8;
+  --x3-copy-strong: #dde2e7;
+}
+
+.native-room--research > section,
+.native-room--capital > section,
+.native-room--judgment > section,
+.native-room--cases > section,
+.native-room--cases > main > section,
+.native-room--cases > main > div {
+  border-color: var(--x3-line) !important;
+  border-radius: 10px !important;
+  background: linear-gradient(180deg, var(--x3-panel), var(--x3-panel-deep)) !important;
+  box-shadow: inset 0 0 0 1px rgba(217, 164, 91, .025), 0 16px 44px rgba(0, 0, 0, .24) !important;
+}
+
+.native-room--research h2,
+.native-room--research h3,
+.native-room--cases h2,
+.native-room--cases h3,
+.native-room--capital h2,
+.native-room--capital h3,
+.native-room--judgment h2,
+.native-room--judgment h3 {
+  color: var(--x3-copy-strong) !important;
+  font-weight: 650 !important;
+  letter-spacing: -.01em !important;
+}
+
+.native-room--research section > div:first-child,
+.native-room--capital section > div:first-child,
+.native-room--judgment section > div:first-child {
+  border-color: var(--x3-line-soft) !important;
+}
+
+.native-room--research p,
+.native-room--cases p,
+.native-room--capital p,
+.native-room--judgment p,
+.native-room--research label,
+.native-room--cases label,
+.native-room--capital label,
+.native-room--judgment label {
+  color: var(--x3-copy) !important;
+}
+
+.native-room--research input,
+.native-room--research select,
+.native-room--research textarea,
+.native-room--cases input,
+.native-room--cases select,
+.native-room--cases textarea,
+.native-room--capital input,
+.native-room--capital select,
+.native-room--capital textarea,
+.native-room--judgment input,
+.native-room--judgment select,
+.native-room--judgment textarea {
+  border: 1px solid rgba(116, 130, 145, .38) !important;
+  border-radius: 7px !important;
+  background: #090d11 !important;
+  color: #dce2e8 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .015) !important;
+}
+
+.native-room--research input:focus,
+.native-room--research select:focus,
+.native-room--research textarea:focus,
+.native-room--cases input:focus,
+.native-room--cases select:focus,
+.native-room--cases textarea:focus,
+.native-room--capital input:focus,
+.native-room--capital select:focus,
+.native-room--capital textarea:focus,
+.native-room--judgment input:focus,
+.native-room--judgment select:focus,
+.native-room--judgment textarea:focus {
+  outline: none !important;
+  border-color: rgba(212, 164, 91, .76) !important;
+  box-shadow: 0 0 0 2px rgba(159, 115, 56, .10) !important;
+}
+
+.native-room--research button,
+.native-room--cases button,
+.native-room--capital button,
+.native-room--judgment button {
+  border-radius: 7px !important;
+  font-size: 10px !important;
+  font-weight: 850 !important;
+  letter-spacing: .35px !important;
+  box-shadow: none !important;
+}
+
+.native-room--research button:not(:disabled),
+.native-room--cases button:not(:disabled),
+.native-room--capital button:not(:disabled),
+.native-room--judgment button:not(:disabled) {
+  border-color: rgba(159, 115, 56, .56) !important;
+}
+
+.native-room--research table,
+.native-room--cases table,
+.native-room--capital table,
+.native-room--judgment table {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+}
+
+.native-room--research th,
+.native-room--cases th,
+.native-room--capital th,
+.native-room--judgment th {
+  color: #b6925e !important;
+  font-size: 9px !important;
+  letter-spacing: 1.15px !important;
+  text-transform: uppercase !important;
+}
+
+.native-room--research td,
+.native-room--cases td,
+.native-room--capital td,
+.native-room--judgment td {
+  color: #aeb8c1 !important;
+  border-color: rgba(101, 115, 129, .20) !important;
+}
+
+/* Make each non-Factory room read as one formal operating surface rather than stacked prototypes */
+.native-room--research > section,
+.native-room--capital > section,
+.native-room--judgment > section,
+.native-room--cases > section,
+.native-room--cases > main > section {
+  padding-top: 18px !important;
+  padding-bottom: 18px !important;
+}
+
+.native-room--research > section + section,
+.native-room--capital > section + section,
+.native-room--judgment > section + section,
+.native-room--cases > section + section {
+  margin-top: 14px !important;
+}
+
+/* Compact Factory so command state appears sooner on screen */
+.native-room--factory .native-room-header {
+  margin-bottom: 8px;
+}
+
+.native-room--factory > section:first-of-type {
+  transform-origin: top center;
+}
+
+@media (min-width: 1280px) {
+  .native-room--factory > section:first-of-type {
+    zoom: .92;
+  }
 }
 
 @media (max-width: 1180px) {
