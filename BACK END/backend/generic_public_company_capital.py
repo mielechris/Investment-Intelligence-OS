@@ -15,7 +15,7 @@ from ledger import (
 from provider_hardening import fetch_market_quote
 
 
-POLICY_VERSION = "generic-public-company-capital-v1"
+POLICY_VERSION = "generic-public-company-capital-v1.1"
 
 MIN_REWARD_RISK = 1.50
 
@@ -143,6 +143,213 @@ def _forward_eps(
     return eps, record
 
 
+
+def _get_or_create_valuation_anchor(
+    *,
+    case_id: str,
+    ticker: str,
+    current_price: float,
+    forward_eps: float,
+    consensus_record: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Freeze the valuation multiple for the life of the
+    qualified case.
+
+    Market price may move every monitoring cycle.
+    Consensus EPS may also change as new governed
+    estimates arrive.
+
+    The valuation multiple does NOT move merely because
+    the stock price moved.
+    """
+
+    existing = latest_object(
+        "generic_capital_valuation_anchor",
+        case_id=case_id,
+    ) or {}
+
+    if existing:
+        existing_ticker = str(
+            existing.get("ticker") or ""
+        ).upper()
+
+        anchor_pe = float(
+            existing.get("anchor_forward_pe") or 0
+        )
+
+        if (
+            existing_ticker == ticker.upper()
+            and anchor_pe > 0
+        ):
+            return existing
+
+    qualification = latest_object(
+        "qualification_assessment",
+        case_id=case_id,
+    ) or {}
+
+    if (
+        qualification.get(
+            "qualified_buy_candidate"
+        )
+        is not True
+    ):
+        raise ValueError(
+            "Valuation anchor requires a "
+            "qualified research case"
+        )
+
+    # Prefer the already-observed V1 Capital snapshot.
+    # For AMZN this preserves the original qualified
+    # $261.06 / 12.48 / ~20.918x reference instead of
+    # anchoring to a later monitoring price.
+    prior_stress = latest_object(
+        "generic_capital_stress",
+        case_id=case_id,
+    ) or {}
+
+    prior_base = (
+        prior_stress.get("baseline")
+        if isinstance(
+            prior_stress.get("baseline"),
+            dict,
+        )
+        else {}
+    )
+
+    prior_pe = float(
+        prior_base.get(
+            "frozen_anchor_forward_pe"
+        )
+        or prior_base.get(
+            "current_forward_pe"
+        )
+        or 0
+    )
+
+    if prior_pe > 0:
+        anchor_price = float(
+            prior_base.get("current_price")
+            or current_price
+        )
+
+        anchor_eps = float(
+            prior_base.get("forward_eps")
+            or forward_eps
+        )
+
+        anchor_forward_pe = prior_pe
+        anchor_source = (
+            "PRIOR_QUALIFIED_GENERIC_CAPITAL_STRESS"
+        )
+
+    else:
+        anchor_price = float(current_price)
+        anchor_eps = float(forward_eps)
+        anchor_forward_pe = (
+            anchor_price / anchor_eps
+        )
+        anchor_source = (
+            "FIRST_QUALIFIED_GOVERNED_QUOTE"
+        )
+
+    anchor_id = (
+        f"generic_capital_valuation_anchor_"
+        f"{uuid4().hex}"
+    )
+
+    result = {
+        "generic_capital_valuation_anchor_id":
+            anchor_id,
+
+        "policy_version":
+            "generic-capital-frozen-anchor-v1",
+
+        "case_id":
+            case_id,
+
+        "ticker":
+            ticker,
+
+        "anchor_price":
+            round(anchor_price, 4),
+
+        "anchor_forward_eps":
+            round(anchor_eps, 4),
+
+        "anchor_forward_pe":
+            round(anchor_forward_pe, 6),
+
+        "anchor_source":
+            anchor_source,
+
+        "qualification_assessment_id":
+            qualification.get(
+                "qualification_assessment_id"
+            ),
+
+        "consensus_primary_evidence_id":
+            consensus_record.get(
+                "primary_evidence_id"
+            ),
+
+        "anchor_policy":
+            "FROZEN_UNTIL_EXPLICIT_REUNDERWRITE",
+
+        "automatic_market_repricing":
+            False,
+
+        "automatic_multiple_change":
+            False,
+
+        "capital_authority":
+            False,
+
+        "paper_order_permission":
+            False,
+
+        "trade_execution_permission":
+            False,
+
+        "live_execution":
+            False,
+
+        "created_at":
+            utc_now(),
+    }
+
+    record_object(
+        anchor_id,
+        "generic_capital_valuation_anchor",
+        case_id,
+        result,
+    )
+
+    record_event(
+        case_id,
+        "GENERIC_CAPITAL_VALUATION_ANCHOR_FROZEN",
+        entity_id=anchor_id,
+        payload={
+            "ticker": ticker,
+            "anchor_price":
+                result["anchor_price"],
+            "anchor_forward_eps":
+                result["anchor_forward_eps"],
+            "anchor_forward_pe":
+                result["anchor_forward_pe"],
+            "anchor_source":
+                anchor_source,
+            "automatic_market_repricing":
+                False,
+            "trade_execution_permission":
+                False,
+        },
+    )
+
+    return result
+
+
 def required_entry_for_reward_risk(
     *,
     upside_value: float,
@@ -202,6 +409,22 @@ def build_generic_public_company_stress(
         current_price / forward_eps
     )
 
+    valuation_anchor = (
+        _get_or_create_valuation_anchor(
+            case_id=case_id,
+            ticker=ticker,
+            current_price=current_price,
+            forward_eps=forward_eps,
+            consensus_record=consensus_record,
+        )
+    )
+
+    anchor_forward_pe = float(
+        valuation_anchor[
+            "anchor_forward_pe"
+        ]
+    )
+
     upside_eps = (
         forward_eps
         * (
@@ -221,7 +444,7 @@ def build_generic_public_company_stress(
     )
 
     upside_multiple = (
-        current_forward_pe
+        anchor_forward_pe
         * (
             1.0
             + UPSIDE_MULTIPLE_CHANGE_PCT
@@ -230,7 +453,7 @@ def build_generic_public_company_stress(
     )
 
     downside_multiple = (
-        current_forward_pe
+        anchor_forward_pe
         * (
             1.0
             + DOWNSIDE_MULTIPLE_CHANGE_PCT
@@ -298,7 +521,7 @@ def build_generic_public_company_stress(
             POLICY_VERSION,
 
         "model":
-            "GENERIC_PUBLIC_COMPANY_CAPITAL_STRESS_V1",
+            "GENERIC_PUBLIC_COMPANY_CAPITAL_STRESS_V1_1",
 
         "model_type":
             "SCENARIO_NOT_FORECAST",
@@ -320,6 +543,17 @@ def build_generic_public_company_stress(
                 round(
                     current_forward_pe,
                     4,
+                ),
+
+            "frozen_anchor_forward_pe":
+                round(
+                    anchor_forward_pe,
+                    6,
+                ),
+
+            "valuation_anchor_id":
+                valuation_anchor.get(
+                    "generic_capital_valuation_anchor_id"
                 ),
         },
 
@@ -404,6 +638,22 @@ def build_generic_public_company_stress(
             "consensus_source":
                 consensus_record.get(
                     "source_name"
+                ),
+
+            "valuation_anchor_id":
+                valuation_anchor.get(
+                    "generic_capital_valuation_anchor_id"
+                ),
+
+            "valuation_anchor_source":
+                valuation_anchor.get(
+                    "anchor_source"
+                ),
+
+            "frozen_anchor_forward_pe":
+                round(
+                    anchor_forward_pe,
+                    6,
                 ),
         },
 
