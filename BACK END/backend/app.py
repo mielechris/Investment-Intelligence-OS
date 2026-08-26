@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.19.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.20.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.19.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.20.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -54,6 +54,7 @@ from batch8c_production_inputs import install_batch8c, router as batch8c_product
 from kimi_research_intelligence import kimi_research_evidence, router as kimi_research_router
 from multi_model_intelligence_council import council_evidence, router as multi_model_council_router
 from model_scale_validation import router as model_scale_validation_router
+from factory_intelligence_ui import router as factory_intelligence_ui_router
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -203,6 +204,7 @@ app.include_router(batch8c_production_inputs_router)
 app.include_router(kimi_research_router)
 app.include_router(multi_model_council_router)
 app.include_router(model_scale_validation_router)
+app.include_router(factory_intelligence_ui_router)
 app.include_router(primary_evidence_router)
 app.include_router(portfolio_context_router)
 app.include_router(paper_capital_router)
@@ -214,7 +216,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.19.0"
+app.version = "0.20.0"
 
 
 @app.on_event("startup")
@@ -235,7 +237,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.19.0",
+        "version": "0.20.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -288,6 +290,14 @@ def system_status():
         "calibration_committee_override": False,
         "calibration_risk_override": False,
         "calibration_auto_trade_authority": False,
+        "factory_intelligence_ui": True,
+        "factory_intelligence_live_overview": True,
+        "factory_model_council_visualization": True,
+        "factory_task_calibration_visualization": True,
+        "factory_ui_unknown_state_semantics": True,
+        "factory_ui_read_only_aggregation": True,
+        "factory_ui_decision_authority": False,
+        "factory_ui_trade_authority": False,
         "opportunity_scanner_available": True,
         "opportunity_auto_scan_default": False,
         "opportunity_scan_interval_floor_minutes": 240,

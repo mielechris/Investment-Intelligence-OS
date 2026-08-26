@@ -1602,7 +1602,7 @@ export default function FactoryIntelligenceUI() {
                   Governed paper capital controls
                 </summary>
                 <div className="fi-native-workspace">
-                  <PaperCapitalControlPanel />
+                  <PaperCapitalControlPanel caseId={activeCaseId} />
                 </div>
               </details>
             </>
