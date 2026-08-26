@@ -5,10 +5,8 @@ import plistlib
 import subprocess
 from pathlib import Path
 
-ALLOWED_BRANCHES = {
-    "feature/iios-experience-x0-x1",
-    "integration/iios-experience-x0-x6",
-}
+EXPERIENCE_BRANCH = "feature/iios-experience-x0-x1"
+INTEGRATION_PREFIX = "integration/iios-experience-x0-x6"
 SUPERVISOR_LABEL = "com.iios.batch-supervisor"
 SUPERVISOR_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{SUPERVISOR_LABEL}.plist"
 
@@ -50,8 +48,11 @@ def main() -> int:
     print("=" * 78)
 
     branch = output(["git", "branch", "--show-current"], repo)
-    if branch not in ALLOWED_BRANCHES:
-        raise SystemExit(f"STOP: experience gate requires one of {sorted(ALLOWED_BRANCHES)}; found {branch}")
+    branch_ok = branch == EXPERIENCE_BRANCH or branch.startswith(INTEGRATION_PREFIX)
+    if not branch_ok:
+        raise SystemExit(
+            f"STOP: experience gate requires {EXPERIENCE_BRANCH!r} or an {INTEGRATION_PREFIX!r} validation branch; found {branch!r}"
+        )
 
     supervisor = supervisor_dir()
     if supervisor and supervisor == repo.resolve():
