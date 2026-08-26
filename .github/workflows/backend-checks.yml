@@ -5,6 +5,7 @@ on:
     branches:
       - feature/governed-chain-v1
       - integration/iios-v1.0
+      - feature/batch8-paper-portfolio
   pull_request:
     branches:
       - main
@@ -53,6 +54,20 @@ jobs:
           paper_authorization_api.py governed_paper_authorization.py automatic_paper_sizing.py
           paper_sizing_profile.py paper_position_sizing.py capital_entry_watch.py paper_capital_gate.py
           paper_capital_api.py live_invalidation_mapper.py thesis_invalidation_contract.py
+          institutional_research_intelligence.py macro_policy_intelligence.py
+          dislocation_intelligence.py thesis_integrity_v2.py jesse_source_acquisition.py
+          jesse_scheduler.py production_index_universe.py cme_fedwatch_adapter.py
+          batch8c_production_inputs.py kimi_provider.py kimi_swarm_bridge.py
+          kimi_research_intelligence.py test_group_batch8d_kimi_research.py
+      - name: Run Batch 8 Kimi tests
+        run: >-
+          PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
+          test_group_batch8d_kimi_research.py
+          test_group_batch8c_production_inputs.py
+          test_group_batch8b_live_sources.py
+          test_group_batch8a_jesse_intelligence.py
+          test_group_batch7_factory_genericization.py
+          test_group_batch6_generic_coverage.py
       - name: Run opportunity and orchestration safety tests
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
