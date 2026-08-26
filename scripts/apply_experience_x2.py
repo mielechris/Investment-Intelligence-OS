@@ -9,10 +9,12 @@ BRANCH = "feature/iios-experience-x0-x1"
 EXPERIENCE_IMPORT = 'import ExperienceCommandCenter from "./ExperienceCommandCenter";\n'
 FLOOR_IMPORT = 'import LivingFactoryFloor from "./LivingFactoryFloor";\n'
 EVENT_RAIL_IMPORT = 'import FactoryEventRail from "./FactoryEventRail";\n'
+DESK_FLOOR_IMPORT = 'import SpecialistDeskFloor from "./SpecialistDeskFloor";\n'
 ANCHOR_IMPORT = 'import FactoryRoom from "./FactoryRoom";\n'
 EXPERIENCE_RENDER = '      <ExperienceCommandCenter />\n\n'
 FLOOR_RENDER = '      <LivingFactoryFloor />\n\n'
 EVENT_RAIL_RENDER = '      <FactoryEventRail />\n\n'
+DESK_FLOOR_RENDER = '      <SpecialistDeskFloor />\n\n'
 RENDER_ANCHOR = '      <section style={{ ...panel, marginBottom: "22px", borderColor: "#365575" }}>\n'
 
 
@@ -39,6 +41,8 @@ def main() -> int:
         frontend / "src" / "experienceBlueprint.ts",
         frontend / "src" / "LivingFactoryFloor.tsx",
         frontend / "src" / "FactoryEventRail.tsx",
+        frontend / "src" / "SpecialistDeskFloor.tsx",
+        frontend / "src" / "agentVisualContracts.ts",
         frontend / "src" / "factoryGeometry.ts",
         frontend / "src" / "factoryMovement.ts",
         frontend / "src" / "factoryLedgerAdapter.ts",
@@ -46,7 +50,7 @@ def main() -> int:
     ]
 
     print("=" * 72)
-    print("IIOS EXPERIENCE X0-X2 - SAFE PREVIEW / BUILD GATE")
+    print("IIOS EXPERIENCE X0-X3 - SAFE PREVIEW / BUILD GATE")
     print("=" * 72)
 
     branch = output(["git", "branch", "--show-current"], repo)
@@ -73,38 +77,28 @@ def main() -> int:
         app = app.replace(ANCHOR_IMPORT, ANCHOR_IMPORT + EXPERIENCE_IMPORT, 1)
 
     if FLOOR_IMPORT not in app:
-        if EXPERIENCE_IMPORT not in app:
-            print("STOP: experience import anchor not found")
-            return 2
         app = app.replace(EXPERIENCE_IMPORT, EXPERIENCE_IMPORT + FLOOR_IMPORT, 1)
 
     if EVENT_RAIL_IMPORT not in app:
-        if FLOOR_IMPORT not in app:
-            print("STOP: floor import anchor not found")
-            return 2
         app = app.replace(FLOOR_IMPORT, FLOOR_IMPORT + EVENT_RAIL_IMPORT, 1)
 
-    if EXPERIENCE_RENDER not in app and FLOOR_RENDER not in app and EVENT_RAIL_RENDER not in app:
+    if DESK_FLOOR_IMPORT not in app:
+        app = app.replace(EVENT_RAIL_IMPORT, EVENT_RAIL_IMPORT + DESK_FLOOR_IMPORT, 1)
+
+    ordered_renders = [EXPERIENCE_RENDER, FLOOR_RENDER, DESK_FLOOR_RENDER, EVENT_RAIL_RENDER]
+    if not any(render in app for render in ordered_renders):
         if RENDER_ANCHOR not in app:
             print("STOP: App render anchor not found")
             return 2
-        app = app.replace(
-            RENDER_ANCHOR,
-            EXPERIENCE_RENDER + FLOOR_RENDER + EVENT_RAIL_RENDER + RENDER_ANCHOR,
-            1,
-        )
+        app = app.replace(RENDER_ANCHOR, "".join(ordered_renders) + RENDER_ANCHOR, 1)
     else:
-        if EXPERIENCE_RENDER not in app:
-            if FLOOR_RENDER in app:
-                app = app.replace(FLOOR_RENDER, EXPERIENCE_RENDER + FLOOR_RENDER, 1)
-            elif EVENT_RAIL_RENDER in app:
-                app = app.replace(EVENT_RAIL_RENDER, EXPERIENCE_RENDER + EVENT_RAIL_RENDER, 1)
-        if FLOOR_RENDER not in app:
-            if EXPERIENCE_RENDER in app:
-                app = app.replace(EXPERIENCE_RENDER, EXPERIENCE_RENDER + FLOOR_RENDER, 1)
-        if EVENT_RAIL_RENDER not in app:
-            if FLOOR_RENDER in app:
-                app = app.replace(FLOOR_RENDER, FLOOR_RENDER + EVENT_RAIL_RENDER, 1)
+        for render in ordered_renders:
+            if render not in app:
+                existing_anchor = next((candidate for candidate in reversed(ordered_renders) if candidate in app), None)
+                if existing_anchor:
+                    app = app.replace(existing_anchor, existing_anchor + render, 1)
+                elif RENDER_ANCHOR in app:
+                    app = app.replace(RENDER_ANCHOR, render + RENDER_ANCHOR, 1)
 
     app_path.write_text(app, encoding="utf-8")
 
@@ -117,11 +111,12 @@ def main() -> int:
     run(["git", "diff", "--stat"], repo)
     run(["git", "status", "-sb"], repo)
 
-    print("\nX0-X2 preview gate is build-clean.")
+    print("\nX0-X3 preview gate is build-clean.")
     print("Living Factory Floor reads /factory-room/status active_room derived from audit events.")
     print("Factory Event Rail exposes strict raw-ledger -> canonical-X2 translation.")
+    print("Eight Specialist Desks read only /agents plus recent audit activity.")
+    print("MAX reacts only to real desk telemetry; no synthetic activity is generated.")
     print("Unknown active_room values remain UNPLACED; unknown event types remain IGNORED.")
-    print("No synthetic movement is generated.")
     print("No backend, Batch 8D, paper-chain, or live-execution permissions were changed.")
     print("Review the UI locally before committing App.tsx.")
     return 0
