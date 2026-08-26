@@ -8,13 +8,22 @@ import production_index_universe as universe
 
 class GroupBatch8CProductionInputsTests(unittest.TestCase):
     def test_html_symbol_parser(self):
-        html = "<table>" + "".join(
-            f"<tr><td>SYM{i}</td><td>Company {i}</td></tr>"
-            for i in range(100)
-        ) + "</table>"
+        html = (
+            "<table><tr><th>Symbol</th><th>Company</th></tr>"
+            + "".join(
+                f"<tr><td>SYM{i}</td><td>Company {i}</td></tr>"
+                for i in range(100)
+            )
+            + "</table>"
+        )
         symbols = universe.parse_html_symbols(html)
         self.assertEqual(len(symbols), 100)
         self.assertEqual(symbols[0], "SYM0")
+        self.assertNotIn("COMPANY", symbols)
+
+    def test_html_without_symbol_header_is_rejected(self):
+        html = "<table><tr><th>Name</th></tr><tr><td>APPLE</td></tr></table>"
+        self.assertEqual(universe.parse_html_symbols(html), [])
 
     def test_csv_symbol_parser(self):
         text = "Symbol,Company\nAAPL,Apple\nMSFT,Microsoft\nBRK.B,Berkshire\n"
