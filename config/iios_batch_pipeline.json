@@ -6,7 +6,7 @@
     {
       "id": "8D",
       "name": "Kimi Research & Swarm Intelligence",
-      "apply_script": "scripts/apply_batch8d.py",
+      "apply_script": "scripts/apply_batch8d_bg.py",
       "depends_on": [],
       "parallel_with_external_gates": true
     },
