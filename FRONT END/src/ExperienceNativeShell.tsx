@@ -25,7 +25,6 @@ import FactoryEventRail from "./FactoryEventRail";
 import FactoryRoom from "./FactoryRoom";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
-
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: string }> = [
@@ -45,144 +44,36 @@ const ROOM_COMMANDS: Record<RoomKey, Array<[string, string]>> = {
 };
 
 function RoomHeader({ room }: { room: (typeof ROOMS)[number] }) {
-  return (
-    <>
-      <div className="native-room-header">
-        <div>
-          <div className="native-room-eyebrow">{room.eyebrow}</div>
-          <h2>{room.label}</h2>
-          <p>{room.description}</p>
-        </div>
-        <div className="native-room-mode">PAPER / SHADOW · LIVE CAPITAL LOCKED</div>
-      </div>
-      <div className="native-room-command-strip">
-        {ROOM_COMMANDS[room.key].map(([label, value]) => (
-          <div key={label} className="native-room-command-cell">
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
-      </div>
-    </>
-  );
+  return <><div className="native-room-header"><div><div className="native-room-eyebrow">{room.eyebrow}</div><h2>{room.label}</h2><p>{room.description}</p></div><div className="native-room-mode">PAPER / SHADOW · LIVE CAPITAL LOCKED</div></div><div className="native-room-command-strip">{ROOM_COMMANDS[room.key].map(([label, value]) => <div key={label} className="native-room-command-cell"><span>{label}</span><strong>{value}</strong></div>)}</div></>;
+}
+
+function DetailDrawer({ title, children }: { title: string; children: React.ReactNode }) {
+  return <details className="native-drawer native-drawer--room-detail"><summary>{title}</summary><div className="native-drawer-body native-detail-stack">{children}</div></details>;
 }
 
 function FactoryRoomView() {
-  return (
-    <>
-      <SpecialistDeskFloor />
-      <FactoryEventRail />
-      <details className="native-drawer">
-        <summary>Live Factory Map</summary>
-        <div className="native-drawer-body"><LivingFactoryFloor /></div>
-      </details>
-      <details className="native-drawer">
-        <summary>Operations Conveyor</summary>
-        <div className="native-drawer-body"><FactoryRoom /></div>
-      </details>
-      <details className="native-drawer">
-        <summary>System Architecture</summary>
-        <div className="native-drawer-body"><ExperienceCommandCenter /></div>
-      </details>
-    </>
-  );
+  return <><SpecialistDeskFloor /><FactoryEventRail /><DetailDrawer title="Live Factory Map"><LivingFactoryFloor /></DetailDrawer><DetailDrawer title="Operations Conveyor"><FactoryRoom /></DetailDrawer><DetailDrawer title="System Architecture"><ExperienceCommandCenter /></DetailDrawer></>;
 }
 
 function ResearchRoomView() {
-  return (
-    <>
-      <OpportunityFloor />
-      <JesseIntelligencePanel />
-      <HardDataPanel />
-      <InsiderOwnershipPanel />
-      <InstitutionalIntelligencePanel />
-      <ConsensusVerificationPanel />
-      <ShortInterestVerificationPanel />
-      <OptionsPositioningVerificationPanel />
-    </>
-  );
+  return <><OpportunityFloor /><JesseIntelligencePanel /><DetailDrawer title="Evidence Acquisition & Verification"><HardDataPanel /><CaseAwarePrimaryEvidencePanel /><ConsensusVerificationPanel /><ShortInterestVerificationPanel /><OptionsPositioningVerificationPanel /></DetailDrawer><DetailDrawer title="Ownership & Institutional Context"><InsiderOwnershipPanel /><InstitutionalIntelligencePanel /></DetailDrawer></>;
 }
 
 function CasesRoomView() {
-  return (
-    <>
-      <div className="native-migration-note">
-        <strong>UNDERWRITING WORKSPACE</strong>
-        <span>Legacy case launch/surveillance is retained here while its inline sections are extracted into native room components.</span>
-      </div>
-      <LegacyApp />
-      <DecisionHistoryPanel />
-      <EvidenceGapHunterPanel />
-      <CaseAwarePrimaryEvidencePanel />
-    </>
-  );
+  return <><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>;
 }
 
 function CapitalRoomView() {
   const caseId = window.localStorage.getItem(ACTIVE_CASE_KEY);
-  return (
-    <>
-      <PaperCapitalControlPanel caseId={caseId} />
-      <PortfolioContextPanel />
-    </>
-  );
+  return <><PaperCapitalControlPanel caseId={caseId} /><DetailDrawer title="Portfolio Context & Overlap"><PortfolioContextPanel /></DetailDrawer></>;
 }
 
 function JudgmentRoomView() {
-  return (
-    <>
-      <InterviewPortalPanel />
-      <div className="native-migration-note">
-        <strong>JUDGMENT BANK EXPERIENCE</strong>
-        <span>Scorecards, calibration history, interview library, and governed judgment navigation are the next native extraction.</span>
-      </div>
-    </>
-  );
+  return <><InterviewPortalPanel /><div className="native-migration-note"><strong>JUDGMENT BANK EXPERIENCE</strong><span>Scorecards, calibration history, interview library, and governed judgment navigation are the next native extraction.</span></div></>;
 }
 
 export default function ExperienceNativeShell() {
   const [activeRoom, setActiveRoom] = useState<RoomKey>("factory");
   const room = ROOMS.find((item) => item.key === activeRoom) ?? ROOMS[0];
-
-  return (
-    <main className="native-experience-shell">
-      <header className="native-masthead">
-        <div>
-          <div className="native-kicker">INVESTMENT INTELLIGENCE OS</div>
-          <h1>THE INTELLIGENCE FACTORY</h1>
-          <p>Evidence → 8 desks → Committee → Risk → Monitor → Judgment Bank</p>
-        </div>
-        <div className="native-masthead-status">
-          <span>SYSTEM EXPERIENCE</span>
-          <strong>X0–X3 PREVIEW</strong>
-          <em>PAPER / SHADOW</em>
-        </div>
-      </header>
-
-      <nav className="native-room-nav" aria-label="IIOS rooms">
-        {ROOMS.map((item) => (
-          <button
-            type="button"
-            key={item.key}
-            className={item.key === activeRoom ? "active" : ""}
-            onClick={() => {
-              setActiveRoom(item.key);
-              window.scrollTo({ top: 0, behavior: "smooth" });
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
-
-      <section className={`native-room native-room--${activeRoom}`}>
-        <RoomHeader room={room} />
-        {activeRoom === "factory" && <FactoryRoomView />}
-        {activeRoom === "research" && <ResearchRoomView />}
-        {activeRoom === "cases" && <CasesRoomView />}
-        {activeRoom === "capital" && <CapitalRoomView />}
-        {activeRoom === "judgment" && <JudgmentRoomView />}
-      </section>
-    </main>
-  );
+  return <main className="native-experience-shell"><header className="native-masthead"><div><div className="native-kicker">INVESTMENT INTELLIGENCE OS</div><h1>THE INTELLIGENCE FACTORY</h1><p>Evidence → 8 desks → Committee → Risk → Monitor → Judgment Bank</p></div><div className="native-masthead-status"><span>SYSTEM EXPERIENCE</span><strong>X0–X3 PREVIEW</strong><em>PAPER / SHADOW</em></div></header><nav className="native-room-nav" aria-label="IIOS rooms">{ROOMS.map((item) => <button type="button" key={item.key} className={item.key === activeRoom ? "active" : ""} onClick={() => { setActiveRoom(item.key); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{item.label}</button>)}</nav><section className={`native-room native-room--${activeRoom}`}><RoomHeader room={room} />{activeRoom === "factory" && <FactoryRoomView />}{activeRoom === "research" && <ResearchRoomView />}{activeRoom === "cases" && <CasesRoomView />}{activeRoom === "capital" && <CapitalRoomView />}{activeRoom === "judgment" && <JudgmentRoomView />}</section></main>;
 }
