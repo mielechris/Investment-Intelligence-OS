@@ -5,13 +5,11 @@ import type { RawLedgerEvent } from "./factoryLedgerAdapter";
 const API = "http://127.0.0.1:8002";
 const POLL_MS = 5000;
 
-const BRASS = "#c58a35";
 const BRASS_BRIGHT = "#e4ad55";
 const BRASS_DARK = "#6f481d";
 const GREEN = "#67df75";
 const RED = "#f05454";
 const PURPLE = "#b16cff";
-const INK = "#050403";
 
 type AgentRuntime = {
   key: string;
