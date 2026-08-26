@@ -34,7 +34,7 @@ type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
 const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: string }> = [
   { key: "factory", label: "Factory", eyebrow: "OPERATING HOME", description: "Live intelligence floor, eight specialist desks, case movement, and MAX." },
   { key: "research", label: "Research", eyebrow: "INTELLIGENCE INPUTS", description: "Discovery, hard data, institutional context, market structure, and external research." },
-  { key: "cases", label: "Cases", eyebrow: "UNDERWRITING", description: "Case launch, surveillance, thesis history, evidence gaps, and re-underwrite workflow." },
+  { key: "cases", label: "Cases", eyebrow: "UNDERWRITING", description: "Active cases, surveillance, thesis history, evidence gaps, and re-underwrite workflow." },
   { key: "capital", label: "Capital", eyebrow: "CONTROL & RISK", description: "Portfolio overlap, deterministic risk, paper execution, and capital controls." },
   { key: "judgment", label: "Judgment", eyebrow: "HUMAN INTELLIGENCE", description: "Professional interviews, Judgment Bank capture, calibration, and governed human insight." },
 ];
@@ -55,28 +55,14 @@ function DetailDrawer({ title, children }: { title: string; children: React.Reac
   return <details className="native-drawer native-drawer--room-detail"><summary>{title}</summary><div className="native-drawer-body native-detail-stack">{children}</div></details>;
 }
 
-function FactoryRoomView() {
-  return <><SpecialistDeskFloor /><FactoryEventRail /><DetailDrawer title="Live Factory Map"><LivingFactoryFloor /></DetailDrawer><DetailDrawer title="Operations Conveyor"><FactoryRoom /></DetailDrawer><DetailDrawer title="System Architecture"><ExperienceCommandCenter /></DetailDrawer></>;
-}
-
-function ResearchRoomView() {
-  return <><ResearchCommandCard /><DetailDrawer title="Opportunity Hunt"><OpportunityFloor /></DetailDrawer><DetailDrawer title="Jesse / External Research Intelligence"><JesseIntelligencePanel /></DetailDrawer><DetailDrawer title="Evidence Acquisition & Verification"><HardDataPanel /><CaseAwarePrimaryEvidencePanel /><ConsensusVerificationPanel /><ShortInterestVerificationPanel /><OptionsPositioningVerificationPanel /></DetailDrawer><DetailDrawer title="Ownership & Institutional Context"><InsiderOwnershipPanel /><InstitutionalIntelligencePanel /></DetailDrawer></>;
-}
-
-function CasesRoomView() {
-  return <><CasesCommandCard /><NewCaseLauncher /><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>;
-}
-
-function CapitalRoomView() {
-  return <><CapitalCommandCenter /><DetailDrawer title="Portfolio Context & Overlap"><PortfolioContextPanel /></DetailDrawer></>;
-}
-
-function JudgmentRoomView() {
-  return <><JudgmentCommandCard /><DetailDrawer title="Professional Interview Portal"><InterviewPortalPanel /></DetailDrawer><div className="native-migration-note"><strong>JUDGMENT BANK EXPERIENCE</strong><span>Scorecards, calibration history, interview library, and governed judgment navigation are the next native extraction.</span></div></>;
-}
+function FactoryRoomView() { return <><SpecialistDeskFloor /><FactoryEventRail /><DetailDrawer title="Live Factory Map"><LivingFactoryFloor /></DetailDrawer><DetailDrawer title="Operations Conveyor"><FactoryRoom /></DetailDrawer><DetailDrawer title="System Architecture"><ExperienceCommandCenter /></DetailDrawer></>; }
+function ResearchRoomView() { return <><ResearchCommandCard /><DetailDrawer title="Opportunity Hunt"><OpportunityFloor /></DetailDrawer><DetailDrawer title="Jesse / External Research Intelligence"><JesseIntelligencePanel /></DetailDrawer><DetailDrawer title="Evidence Acquisition & Verification"><HardDataPanel /><CaseAwarePrimaryEvidencePanel /><ConsensusVerificationPanel /><ShortInterestVerificationPanel /><OptionsPositioningVerificationPanel /></DetailDrawer><DetailDrawer title="Ownership & Institutional Context"><InsiderOwnershipPanel /><InstitutionalIntelligencePanel /></DetailDrawer></>; }
+function CasesRoomView() { return <><CasesCommandCard /><NewCaseLauncher /><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>; }
+function CapitalRoomView() { return <><CapitalCommandCenter /><DetailDrawer title="Portfolio Context & Overlap"><PortfolioContextPanel /></DetailDrawer></>; }
+function JudgmentRoomView() { return <><JudgmentCommandCard /><DetailDrawer title="Professional Interview Portal"><InterviewPortalPanel /></DetailDrawer></>; }
 
 export default function ExperienceNativeShell() {
   const [activeRoom, setActiveRoom] = useState<RoomKey>("factory");
   const room = ROOMS.find((item) => item.key === activeRoom) ?? ROOMS[0];
-  return <main className="native-experience-shell"><header className="native-masthead"><div><div className="native-kicker">INVESTMENT INTELLIGENCE OS</div><h1>THE INTELLIGENCE FACTORY</h1><p>Evidence → 8 desks → Committee → Risk → Monitor → Judgment Bank</p></div><div className="native-masthead-status"><span>SYSTEM EXPERIENCE</span><strong>X0–X3 PREVIEW</strong><em>PAPER / SHADOW</em></div></header><nav className="native-room-nav" aria-label="IIOS rooms">{ROOMS.map((item) => <button type="button" key={item.key} className={item.key === activeRoom ? "active" : ""} onClick={() => { setActiveRoom(item.key); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{item.label}</button>)}</nav><section className={`native-room native-room--${activeRoom}`}><RoomHeader room={room} />{activeRoom === "factory" && <FactoryRoomView />}{activeRoom === "research" && <ResearchRoomView />}{activeRoom === "cases" && <CasesRoomView />}{activeRoom === "capital" && <CapitalRoomView />}{activeRoom === "judgment" && <JudgmentRoomView />}</section></main>;
+  return <main className="native-experience-shell"><header className="native-masthead"><div><div className="native-kicker">INVESTMENT INTELLIGENCE OS</div><h1>THE INTELLIGENCE FACTORY</h1><p>Evidence → 8 desks → Committee → Risk → Monitor → Judgment Bank</p></div><div className="native-masthead-status"><span>OPERATOR EXPERIENCE</span><strong>EXPERIENCE LANE</strong><em>PAPER / SHADOW</em></div></header><nav className="native-room-nav" aria-label="IIOS rooms">{ROOMS.map((item) => <button type="button" key={item.key} className={item.key === activeRoom ? "active" : ""} onClick={() => { setActiveRoom(item.key); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{item.label}</button>)}</nav><section className={`native-room native-room--${activeRoom}`}><RoomHeader room={room} />{activeRoom === "factory" && <FactoryRoomView />}{activeRoom === "research" && <ResearchRoomView />}{activeRoom === "cases" && <CasesRoomView />}{activeRoom === "capital" && <CapitalRoomView />}{activeRoom === "judgment" && <JudgmentRoomView />}</section></main>;
 }
