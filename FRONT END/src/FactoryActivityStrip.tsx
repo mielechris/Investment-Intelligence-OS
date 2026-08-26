@@ -1,0 +1,12 @@
+import { useEffect, useMemo, useState } from "react";
+import { buildActivitySummary } from "./factoryActivityModel";
+import type { RawLedgerEvent } from "./factoryLedgerAdapter";
+const API="http://127.0.0.1:8002";
+type Status={activity?:{recent_events?:RawLedgerEvent[];recent_event_count?:number;window_seconds?:number};cases?:unknown[]};
+export default function FactoryActivityStrip(){
+ const[status,setStatus]=useState<Status|null>(null);const[online,setOnline]=useState(false);
+ useEffect(()=>{let live=true;const load=async()=>{try{const r=await fetch(`${API}/factory-room/status`);if(!r.ok)throw new Error();const d=await r.json() as Status;if(live){setStatus(d);setOnline(true);}}catch{if(live)setOnline(false);}};void load();const t=window.setInterval(()=>void load(),5000);return()=>{live=false;window.clearInterval(t);};},[]);
+ const summary=useMemo(()=>buildActivitySummary(status?.activity?.recent_events||[]),[status]);
+ const busy=summary.desks.filter(d=>d.state==="BUSY").length;const recent=summary.desks.filter(d=>d.state==="RECENT").length;
+ return <section className="factory-activity-strip"><div><span>EVENT SOURCE</span><strong className={online?"iios-state-clear":"iios-state-block"}>{online?"LIVE":"OFFLINE"}</strong></div><div><span>5-MIN EVENTS</span><strong>{status?.activity?.recent_event_count??0}</strong></div><div><span>CANONICAL</span><strong className={summary.recognized?"iios-state-clear":"iios-state-idle"}>{summary.recognized}</strong></div><div><span>MOVABLE</span><strong className={summary.movable?"iios-state-clear":"iios-state-idle"}>{summary.movable}</strong></div><div><span>DESKS BUSY</span><strong className={busy?"iios-state-watch":"iios-state-idle"}>{busy}</strong></div><div><span>RECENT DESKS</span><strong>{recent}</strong></div><div><span>LATEST</span><strong>{summary.latestCanonical?.replaceAll("."," ").toUpperCase()||"NO RECENT EVENT"}</strong></div></section>;
+}
