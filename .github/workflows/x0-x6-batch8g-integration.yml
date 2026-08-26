@@ -1,0 +1,76 @@
+name: IIOS X0-X6 on Batch 8G integration
+
+on:
+  push:
+    branches:
+      - integration/iios-experience-x0-x6-on-batch8g
+  workflow_dispatch:
+
+jobs:
+  backend-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BACK END/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: pip install fastapi uvicorn openai python-dotenv certifi
+      - name: Compile Batch 8G contract
+        run: python -m py_compile app.py factory_intelligence_ui.py test_group_batch8g_factory_intelligence_ui.py
+      - name: Run Batch 8G Factory Intelligence regression
+        run: PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v test_group_batch8g_factory_intelligence_ui.py
+      - name: Assert read-only authority contract
+        run: |
+          python - <<'PY'
+          import factory_intelligence_ui as ui
+          status = ui.status()
+          assert status["read_only_aggregation"] is True
+          assert status["unknown_state_semantics"] is True
+          assert status["committee_override"] is False
+          assert status["risk_override"] is False
+          assert status["capital_authority"] is False
+          assert status["trade_execution_permission"] is False
+          assert status["live_execution"] is False
+          print("Batch 8G authority contract: OK")
+          PY
+
+  frontend-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Full TypeScript / Vite build
+        run: npm run build
+      - name: Lint X0-X6 integration surface
+        run: >-
+          npx eslint
+          src/FactoryIntelligenceExperienceShell.tsx
+          src/ExecutiveShowcase.tsx
+          src/SpecialistDeskFloor.tsx
+          src/ThesisIntegrityCommand.tsx
+          src/ThesisCapitalConsequenceMatrix.tsx
+          src/PortfolioThesisWarRoom.tsx
+          src/JudgmentBankWorkspace.tsx
+          src/JudgmentLibraryBrowser.tsx
+          src/activeCaseStore.ts
+          src/factoryLedgerAdapter.ts
+          src/factoryMovement.ts
+      - name: Assert 8G remains master shell
+        run: |
+          grep -q 'FactoryIntelligenceUI' src/FactoryIntelligenceExperienceShell.tsx
+          grep -q 'FactoryIntelligenceExperienceShell' src/main.tsx
+          ! grep -R 'LIVE EXECUTION ENABLED\|LIVE CAPITAL ENABLED' src/FactoryIntelligenceExperienceShell.tsx src/ExecutiveShowcase.tsx src/ThesisCapitalConsequenceMatrix.tsx
+          echo '8G master-shell and safety assertions: OK'
