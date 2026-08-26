@@ -5,7 +5,6 @@ import "./roomCommandStrip.css";
 
 import LegacyApp from "./App";
 import OpportunityFloor from "./OpportunityFloor";
-import PaperCapitalControlPanel from "./PaperCapitalControlPanel";
 import DecisionHistoryPanel from "./DecisionHistoryPanel";
 import EvidenceGapHunterPanel from "./EvidenceGapHunterPanel";
 import HardDataPanel from "./HardDataPanel";
@@ -24,9 +23,9 @@ import SpecialistDeskFloor from "./SpecialistDeskFloor";
 import FactoryEventRail from "./FactoryEventRail";
 import FactoryRoom from "./FactoryRoom";
 import CasesCommandCard from "./CasesCommandCard";
+import CapitalCommandCenter from "./CapitalCommandCenter";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
-const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 const ROOMS: Array<{ key: RoomKey; label: string; eyebrow: string; description: string }> = [
   { key: "factory", label: "Factory", eyebrow: "OPERATING HOME", description: "Live intelligence floor, eight specialist desks, case movement, and MAX." },
@@ -65,8 +64,7 @@ function CasesRoomView() {
 }
 
 function CapitalRoomView() {
-  const caseId = window.localStorage.getItem(ACTIVE_CASE_KEY);
-  return <><PaperCapitalControlPanel caseId={caseId} /><DetailDrawer title="Portfolio Context & Overlap"><PortfolioContextPanel /></DetailDrawer></>;
+  return <><CapitalCommandCenter /><DetailDrawer title="Portfolio Context & Overlap"><PortfolioContextPanel /></DetailDrawer></>;
 }
 
 function JudgmentRoomView() {
