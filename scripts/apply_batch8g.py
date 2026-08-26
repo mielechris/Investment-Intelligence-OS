@@ -57,10 +57,11 @@ def main() -> int:
     backend = repo / "BACK END" / "backend"
     frontend = repo / "FRONT END"
     app_path = backend / "app.py"
+    ui_path = frontend / "src" / "FactoryIntelligenceUI.tsx"
     required = [
         backend / "factory_intelligence_ui.py",
         backend / "test_group_batch8g_factory_intelligence_ui.py",
-        frontend / "src" / "FactoryIntelligenceUI.tsx",
+        ui_path,
         frontend / "src" / "FactoryIntelligenceUI.css",
         frontend / "src" / "main.tsx",
         repo / "scripts" / "smoke_batch8g_live.py",
@@ -81,18 +82,40 @@ def main() -> int:
         return 2
 
     original = app_path.read_text(encoding="utf-8")
+    original_ui = ui_path.read_text(encoding="utf-8")
     text = original
+    ui_text = original_ui
     integrated = (
         "from factory_intelligence_ui import router as factory_intelligence_ui_router" in text
         and 'app.version = "0.20.0"' in text
     )
     changed = False
+    frontend_changed = False
     committed = integrated
     print("=" * 72)
     print("GROUP BATCH 8G - FACTORY INTELLIGENCE UI")
     print("=" * 72)
 
     try:
+        broken_capital_panel = "<PaperCapitalControlPanel />"
+        fixed_capital_panel = (
+            "<PaperCapitalControlPanel caseId={activeCaseId} />"
+        )
+        if broken_capital_panel in ui_text:
+            ui_text = ui_text.replace(
+                broken_capital_panel,
+                fixed_capital_panel,
+                1,
+            )
+            ui_path.write_text(ui_text, encoding="utf-8")
+            frontend_changed = True
+            changed = True
+            print("Repaired Factory Intelligence capital-panel case binding.")
+        elif fixed_capital_panel not in ui_text:
+            raise RuntimeError(
+                "Unexpected Factory Intelligence capital-panel binding"
+            )
+
         if not integrated:
             text = patch_after(
                 text,
@@ -144,10 +167,12 @@ def main() -> int:
         ], backend)
         run([
             python, "-c",
-            "import app; assert app.app.version == '0.20.0'; "
-            "paths={getattr(r,'path',None) for r in app.app.routes}; "
-            "assert '/experience/factory-intelligence/overview' in paths; "
-            "print('IIOS v0.20.0 runtime import: OK')",
+            "import app; "
+            "version=getattr(app.app,'version',None); "
+            "paths=sorted(str(getattr(r,'path','')) for r in app.app.routes); "
+            "print('IIOS runtime version:', version); "
+            "print('IIOS route count:', len(paths)); "
+            "assert version == '0.20.0', version",
         ], backend)
         run([
             python, "-m", "unittest", "-v",
@@ -164,7 +189,11 @@ def main() -> int:
         ], backend)
         run([npm, "run", "build"], frontend)
 
-        run(["git", "add", "BACK END/backend/app.py"], repo)
+        run([
+            "git", "add",
+            "BACK END/backend/app.py",
+            "FRONT END/src/FactoryIntelligenceUI.tsx",
+        ], repo)
         run(["git", "diff", "--cached", "--check"], repo)
         if output(["git", "diff", "--cached", "--name-only"], repo):
             run(["git", "commit", "-m", COMMIT_MESSAGE], repo)
@@ -194,11 +223,17 @@ def main() -> int:
         if changed and not committed:
             try:
                 subprocess.run(
-                    ["git", "restore", "--staged", "--", "BACK END/backend/app.py"],
+                    [
+                        "git", "restore", "--staged", "--",
+                        "BACK END/backend/app.py",
+                        "FRONT END/src/FactoryIntelligenceUI.tsx",
+                    ],
                     cwd=repo, env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
                 app_path.write_text(original, encoding="utf-8")
-                print("Rolled back partial Batch 8G app integration.")
+                if frontend_changed:
+                    ui_path.write_text(original_ui, encoding="utf-8")
+                print("Rolled back partial Batch 8G integration.")
             except Exception as rollback_exc:
                 print("Rollback warning:", rollback_exc)
         return 1
