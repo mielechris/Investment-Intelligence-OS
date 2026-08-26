@@ -1,10 +1,10 @@
 const BACKEND_ORIGIN = "http://127.0.0.1:8002";
 const PREVIEW_PREFIX = "/__iios_api";
-const PREVIEW_PORT = "5188";
+const PREVIEW_PORTS = new Set(["5188", "5189"]);
 
 const originalFetch = window.fetch.bind(window);
 
-if (window.location.port === PREVIEW_PORT && !(window as typeof window & { __iiosPreviewFetchBridge?: boolean }).__iiosPreviewFetchBridge) {
+if (PREVIEW_PORTS.has(window.location.port) && !(window as typeof window & { __iiosPreviewFetchBridge?: boolean }).__iiosPreviewFetchBridge) {
   (window as typeof window & { __iiosPreviewFetchBridge?: boolean }).__iiosPreviewFetchBridge = true;
 
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
