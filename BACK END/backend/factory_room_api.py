@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
 
 from ledger import (
+    get_audit,
     get_object,
     latest_object,
     list_objects,
@@ -24,6 +26,276 @@ from paper_portfolio_validation import (
 
 
 router = APIRouter()
+
+
+ACTIVITY_WINDOW_SECONDS = 300
+
+
+def _parse_time(value: Any):
+    text = str(value or "").strip()
+
+    if not text:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            text.replace("Z", "+00:00")
+        )
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(
+                tzinfo=timezone.utc
+            )
+
+        return parsed.astimezone(
+            timezone.utc
+        )
+
+    except ValueError:
+        return None
+
+
+def _event_room(
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> str:
+    event = str(
+        event_type or ""
+    ).upper()
+
+    payload = payload or {}
+
+    if any(
+        token in event
+        for token in (
+            "PAPER_EXECUTION",
+            "PAPER_ORDER",
+        )
+    ):
+        return "PAPER_PORTFOLIO"
+
+    if any(
+        token in event
+        for token in (
+            "CAPITAL",
+            "POSITION_SIZ",
+            "AUTHORIZATION",
+        )
+    ):
+        return "CAPITAL"
+
+    if any(
+        token in event
+        for token in (
+            "RISK_",
+            "RISK_COMPLETE",
+            "RECONCILED",
+        )
+    ):
+        return "RISK"
+
+    if "COMMITTEE" in event:
+        return "COMMITTEE"
+
+    if (
+        "AGENT_COMPLETE" in event
+        or "SPECIALIST" in event
+        or "DESK" in event
+    ):
+        return "EIGHT_DESKS"
+
+    if any(
+        token in event
+        for token in (
+            "EVIDENCE",
+            "GAP_PACKET",
+            "PRIMARY_",
+            "INGEST",
+        )
+    ):
+        return "EVIDENCE"
+
+    if any(
+        token in event
+        for token in (
+            "OPPORTUNITY",
+            "CANDIDATE",
+            "CASE_CREATED",
+        )
+    ):
+        return "INTAKE"
+
+    return "SYSTEM"
+
+
+def _live_activity(
+    case_ids: list[str],
+) -> dict[str, Any]:
+    now = datetime.now(
+        timezone.utc
+    )
+
+    events = []
+
+    for case_id in case_ids:
+        audit = get_audit(
+            case_id
+        )
+
+        for event in (
+            audit.get("events")
+            or []
+        )[-80:]:
+            event_at = _parse_time(
+                event.get("created_at")
+            )
+
+            age_seconds = (
+                (now - event_at)
+                .total_seconds()
+                if event_at
+                else None
+            )
+
+            room = _event_room(
+                event.get("event_type"),
+                event.get("payload"),
+            )
+
+            events.append({
+                **event,
+                "room":
+                    room,
+                "age_seconds":
+                    round(
+                        age_seconds,
+                        2,
+                    )
+                    if age_seconds
+                    is not None
+                    else None,
+            })
+
+    events.sort(
+        key=lambda row:
+            str(
+                row.get("created_at")
+                or ""
+            ),
+        reverse=True,
+    )
+
+    recent = [
+        row
+        for row in events
+        if (
+            row.get("age_seconds")
+            is not None
+            and row[
+                "age_seconds"
+            ]
+            <= ACTIVITY_WINDOW_SECONDS
+        )
+    ]
+
+    by_room = Counter(
+        row["room"]
+        for row in recent
+    )
+
+    agent_completions = sum(
+        1
+        for row in recent
+        if (
+            "AGENT_COMPLETE"
+            in str(
+                row.get(
+                    "event_type"
+                )
+                or ""
+            ).upper()
+        )
+    )
+
+    committee_completions = sum(
+        1
+        for row in recent
+        if (
+            "COMMITTEE_COMPLETE"
+            in str(
+                row.get(
+                    "event_type"
+                )
+                or ""
+            ).upper()
+        )
+    )
+
+    risk_completions = sum(
+        1
+        for row in recent
+        if (
+            "RISK_COMPLETE"
+            in str(
+                row.get(
+                    "event_type"
+                )
+                or ""
+            ).upper()
+        )
+    )
+
+    latest = (
+        events[0]
+        if events
+        else None
+    )
+
+    case_latest = {}
+
+    for row in recent:
+        case_id = str(
+            row.get("case_id")
+            or ""
+        )
+
+        if (
+            case_id
+            and case_id
+            not in case_latest
+        ):
+            case_latest[
+                case_id
+            ] = row
+
+    return {
+        "window_seconds":
+            ACTIVITY_WINDOW_SECONDS,
+
+        "recent_event_count":
+            len(recent),
+
+        "agent_completions":
+            agent_completions,
+
+        "committee_completions":
+            committee_completions,
+
+        "risk_completions":
+            risk_completions,
+
+        "by_room":
+            dict(by_room),
+
+        "latest_event":
+            latest,
+
+        "case_latest":
+            case_latest,
+
+        "recent_events":
+            recent[:40],
+    }
 
 
 def _ticker(
@@ -279,11 +551,57 @@ def factory_room_status():
         )
     ]
 
+    case_ids = list(
+        _candidate_case_ids()
+    )
+
+    activity = _live_activity(
+        case_ids
+    )
+
     cases = [
         _case_row(case_id)
         for case_id
-        in _candidate_case_ids()
+        in case_ids
     ]
+
+    for row in cases:
+        live = (
+            activity.get(
+                "case_latest"
+            )
+            or {}
+        ).get(
+            row["case_id"]
+        )
+
+        row[
+            "active_room"
+        ] = (
+            live.get("room")
+            if live
+            else None
+        )
+
+        row[
+            "latest_event"
+        ] = (
+            live.get(
+                "event_type"
+            )
+            if live
+            else None
+        )
+
+        row[
+            "latest_event_at"
+        ] = (
+            live.get(
+                "created_at"
+            )
+            if live
+            else None
+        )
 
     stage_counts = Counter(
         row["stage"]
@@ -315,6 +633,18 @@ def factory_room_status():
                 "Opportunity Intake",
             "count":
                 len(intake),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "INTAKE",
+                        0,
+                    )
+                ),
         },
         {
             "key":
@@ -325,6 +655,18 @@ def factory_room_status():
                 stage_counts.get(
                     "EVIDENCE",
                     0,
+                ),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "EVIDENCE",
+                        0,
+                    )
                 ),
         },
         {
@@ -337,6 +679,18 @@ def factory_room_status():
                     "EIGHT_DESKS",
                     0,
                 ),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "EIGHT_DESKS",
+                        0,
+                    )
+                ),
         },
         {
             "key":
@@ -348,6 +702,18 @@ def factory_room_status():
                     "COMMITTEE",
                     0,
                 ),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "COMMITTEE",
+                        0,
+                    )
+                ),
         },
         {
             "key":
@@ -358,6 +724,18 @@ def factory_room_status():
                 stage_counts.get(
                     "RISK",
                     0,
+                ),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "RISK",
+                        0,
+                    )
                 ),
         },
         {
@@ -384,6 +762,18 @@ def factory_room_status():
                         0,
                     )
                 ),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "CAPITAL",
+                        0,
+                    )
+                ),
         },
         {
             "key":
@@ -394,6 +784,18 @@ def factory_room_status():
                 stage_counts.get(
                     "PAPER_PORTFOLIO",
                     0,
+                ),
+            "activity_count":
+                int(
+                    (
+                        activity.get(
+                            "by_room"
+                        )
+                        or {}
+                    ).get(
+                        "PAPER_PORTFOLIO",
+                        0,
+                    )
                 ),
         },
     ]
@@ -406,6 +808,9 @@ def factory_room_status():
     return {
         "generated_at":
             utc_now(),
+
+        "activity":
+            activity,
 
         "rooms":
             rooms,

@@ -6,6 +6,7 @@ type Room = {
   key: string;
   label: string;
   count: number;
+  activity_count?: number;
 };
 
 type FactoryCase = {
@@ -13,6 +14,9 @@ type FactoryCase = {
   ticker?: string | null;
   topic?: string;
   stage: string;
+  active_room?: string | null;
+  latest_event?: string | null;
+  latest_event_at?: string | null;
   committee?: string | null;
   committee_confidence?: number | null;
   risk?: string | null;
@@ -25,6 +29,19 @@ type FactoryCase = {
 
 type FactoryRoomStatus = {
   generated_at: string;
+  activity?: {
+    window_seconds: number;
+    recent_event_count: number;
+    agent_completions: number;
+    committee_completions: number;
+    risk_completions: number;
+    latest_event?: {
+      event_type?: string;
+      case_id?: string;
+      created_at?: string;
+      room?: string;
+    } | null;
+  };
   rooms: Room[];
   cases: FactoryCase[];
   portfolio: {
@@ -234,6 +251,68 @@ export default function FactoryRoom() {
         style={{
           display: "grid",
           gridTemplateColumns:
+            "repeat(4, minmax(140px, 1fr))",
+          gap: "9px",
+          marginBottom: "12px",
+        }}
+      >
+        {[
+          [
+            "EVENTS · 5M",
+            data?.activity?.recent_event_count || 0,
+          ],
+          [
+            "DESKS COMPLETE · 5M",
+            data?.activity?.agent_completions || 0,
+          ],
+          [
+            "COMMITTEES · 5M",
+            data?.activity?.committee_completions || 0,
+          ],
+          [
+            "RISK PASSES · 5M",
+            data?.activity?.risk_completions || 0,
+          ],
+        ].map(([label, value]) => (
+          <div
+            key={String(label)}
+            style={{
+              padding: "10px 12px",
+              border: "1px solid #263441",
+              borderRadius: "9px",
+              background: "rgba(9,15,22,.85)",
+            }}
+          >
+            <div
+              style={{
+                color: "#63788e",
+                fontSize: "8px",
+                letterSpacing: "1.4px",
+              }}
+            >
+              {label}
+            </div>
+
+            <div
+              style={{
+                marginTop: "4px",
+                color: Number(value) > 0
+                  ? "#63e6a5"
+                  : "#58687a",
+                fontSize: "20px",
+                fontWeight: 900,
+              }}
+            >
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
             "repeat(7, minmax(135px, 1fr))",
           gap: "9px",
           marginBottom: "20px",
@@ -278,15 +357,37 @@ export default function FactoryRoom() {
               <div
                 style={{
                   marginTop: "13px",
-                  fontSize: "27px",
-                  fontWeight: 900,
-                  color:
-                    room.count > 0
-                      ? "#b9dcff"
-                      : "#455363",
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: "8px",
                 }}
               >
-                {room.count}
+                <span
+                  style={{
+                    fontSize: "27px",
+                    fontWeight: 900,
+                    color:
+                      room.count > 0
+                        ? "#b9dcff"
+                        : "#455363",
+                  }}
+                >
+                  {room.count}
+                </span>
+
+                <span
+                  style={{
+                    color:
+                      (room.activity_count || 0) > 0
+                        ? "#63e6a5"
+                        : "#465565",
+                    fontSize: "10px",
+                    fontWeight: 900,
+                    letterSpacing: "1px",
+                  }}
+                >
+                  LIVE +{room.activity_count || 0}
+                </span>
               </div>
             </div>
           )
@@ -366,10 +467,11 @@ export default function FactoryRoom() {
                       letterSpacing: ".5px",
                     }}
                   >
-                    {row.stage.replaceAll(
+                    {(row.active_room || row.stage).replaceAll(
                       "_",
                       " "
                     )}
+                    {row.active_room ? " • LIVE" : ""}
                   </div>
 
                   <div
