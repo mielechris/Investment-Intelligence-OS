@@ -12,116 +12,109 @@ type Room = {
 };
 
 const ROOMS: readonly Room[] = [
-  {
-    key: "factory",
-    label: "Factory",
-    eyebrow: "OPERATING HOME",
-    description: "Command center, living floor, eight specialist desks, event lineage, and MAX.",
-  },
-  {
-    key: "research",
-    label: "Research",
-    eyebrow: "INTELLIGENCE INPUTS",
-    description: "Opportunity discovery, production inputs, institutional context, and governed research.",
-  },
-  {
-    key: "cases",
-    label: "Cases",
-    eyebrow: "UNDERWRITING",
-    description: "Launch, surveillance, active thesis, re-underwrite, and live case operations.",
-  },
-  {
-    key: "capital",
-    label: "Capital",
-    eyebrow: "CONTROL & RISK",
-    description: "Risk inspection, paper execution, portfolio controls, and thesis integrity.",
-  },
-  {
-    key: "judgment",
-    label: "Judgment",
-    eyebrow: "HUMAN INTELLIGENCE",
-    description: "Judgment Bank, calibration, interviews, and professional judgment capture.",
-  },
+  { key: "factory", label: "Factory", eyebrow: "OPERATING HOME", description: "Command center, living floor, eight specialist desks, event lineage, and MAX." },
+  { key: "research", label: "Research", eyebrow: "INTELLIGENCE INPUTS", description: "Opportunity discovery, evidence acquisition, institutional context, and governed research." },
+  { key: "cases", label: "Cases", eyebrow: "UNDERWRITING", description: "Launch, surveillance, active thesis, re-underwrite history, and live case operations." },
+  { key: "capital", label: "Capital", eyebrow: "CONTROL & RISK", description: "Risk inspection, paper execution, portfolio controls, sizing, and thesis integrity." },
+  { key: "judgment", label: "Judgment", eyebrow: "HUMAN INTELLIGENCE", description: "Judgment Bank, calibration, interviews, and professional judgment capture." },
 ] as const;
 
-const ALWAYS_VISIBLE = ["experience-room-nav"];
+const FACTORY_MARKERS = [
+  "FACTORY BLUEPRINT + COMMAND CENTER",
+  "X2 · LIVING FACTORY FLOOR",
+  "BACKEND AUDIT → CANONICAL FACTORY EVENTS",
+  "THE EIGHT AGENTS",
+  "CHIEF BULLSHIT OFFICER",
+];
+
+const RESEARCH_MARKERS = [
+  "OPPORTUNITY FLOOR",
+  "AUTONOMOUS RESEARCH HUNT",
+  "EVIDENCE GAP HUNTER",
+  "HARD DATA ACQUISITION",
+  "PRIMARY EVIDENCE ACQUISITION",
+  "INSIDER & OWNERSHIP INTELLIGENCE",
+  "INSTITUTIONAL EXPECTATIONS",
+  "ANALYST CONSENSUS",
+  "SHORT INTEREST",
+  "OPTIONS POSITIONING",
+  "JESSE INTELLIGENCE FLOOR",
+  "INSTITUTIONAL SECTOR SENTIMENT",
+  "MONETARY POLICY PROBABILITY",
+  "PRODUCTION INPUT HEALTH",
+  "DAILY DISLOCATION SCANNER",
+];
+
+const CASE_MARKERS = [
+  "CASE LAUNCH BAY",
+  "SURVEILLANCE FLOOR",
+  "ACTIVE CASE",
+  "LAST FACTORY PASS",
+  "LIVE OPERATIONS FLOOR",
+  "THE FACTORY ROOM",
+  "RE-UNDERWRITE HISTORY",
+  "SIGNAL LADDER",
+];
+
+const CAPITAL_MARKERS = [
+  "CAPITAL CONTROL ROOM",
+  "GOVERNED CAPITAL CHAIN",
+  "PORTFOLIO CONTROL",
+  "PAPER PORTFOLIO",
+  "POSITION QUALIFICATION",
+  "POSITION SIZING",
+  "EXECUTION LOCK",
+  "PAPER EXECUTION",
+  "THESIS INTEGRITY",
+];
+
+const JUDGMENT_MARKERS = [
+  "JUDGMENT BANK",
+  "AGENT CALIBRATION BOARD",
+  "PROFESSIONAL INTERVIEW PORTAL",
+  "JUDGMENT CAPTURE",
+  "CREATE INTERVIEW RECORD",
+];
 
 function normalizedText(node: Element): string {
   return String(node.textContent || "").replace(/\s+/g, " ").toUpperCase();
 }
 
+function hasMarker(text: string, markers: readonly string[]) {
+  return markers.some((marker) => text.includes(marker));
+}
+
 function classify(node: HTMLElement): RoomKey | "always" | null {
-  if (ALWAYS_VISIBLE.some((value) => node.dataset.iiosShell === value)) return "always";
+  if (node.dataset.iiosShell === "experience-room-nav") return "always";
   if (node.tagName === "HEADER") return "always";
 
   const text = normalizedText(node);
 
-  if (
-    text.includes("FACTORY BLUEPRINT + COMMAND CENTER") ||
-    text.includes("X2 · LIVING FACTORY FLOOR") ||
-    text.includes("THE EIGHT AGENTS") ||
-    text.includes("BACKEND AUDIT → CANONICAL FACTORY EVENTS") ||
-    text.includes("THE OPERATING FLOOR") ||
-    text.includes("CHIEF BULLSHIT OFFICER")
-  ) return "factory";
-
-  if (
-    text.includes("OPPORTUNITY FLOOR") ||
-    text.includes("AUTONOMOUS RESEARCH HUNT") ||
-    text.includes("JESSE INTELLIGENCE FLOOR") ||
-    text.includes("INSTITUTIONAL SECTOR SENTIMENT") ||
-    text.includes("PRODUCTION INPUT HEALTH") ||
-    text.includes("DAILY DISLOCATION SCANNER")
-  ) return "research";
-
-  if (
-    text.includes("CASE LAUNCH BAY") ||
-    text.includes("SURVEILLANCE FLOOR") ||
-    text.includes("ACTIVE CASE") ||
-    text.includes("LAST FACTORY PASS") ||
-    text.includes("LIVE OPERATIONS FLOOR") ||
-    text.includes("THE FACTORY ROOM")
-  ) return "cases";
-
-  if (
-    text.includes("CAPITAL CONTROL ROOM") ||
-    text.includes("GOVERNED CAPITAL CHAIN") ||
-    text.includes("PAPER PORTFOLIO") ||
-    text.includes("POSITION QUALIFICATION") ||
-    text.includes("EXECUTION LOCK")
-  ) return "capital";
-
-  if (
-    text.includes("JUDGMENT BANK") ||
-    text.includes("AGENT CALIBRATION BOARD") ||
-    text.includes("PROFESSIONAL INTERVIEW PORTAL") ||
-    text.includes("JUDGMENT CAPTURE")
-  ) return "judgment";
+  if (hasMarker(text, JUDGMENT_MARKERS)) return "judgment";
+  if (hasMarker(text, CAPITAL_MARKERS)) return "capital";
+  if (hasMarker(text, CASE_MARKERS)) return "cases";
+  if (hasMarker(text, RESEARCH_MARKERS)) return "research";
+  if (hasMarker(text, FACTORY_MARKERS)) return "factory";
 
   return null;
 }
 
-function applyRoom(activeRoom: RoomKey) {
+function stampRoomState(activeRoom: RoomKey) {
   const main = document.querySelector("main");
   if (!main) return;
 
-  const children = Array.from(main.children) as HTMLElement[];
-  for (const child of children) {
+  for (const child of Array.from(main.children) as HTMLElement[]) {
     const room = classify(child);
+    child.dataset.iiosRoom = room ?? "legacy";
+
     if (room === "always") {
-      child.style.removeProperty("display");
-      continue;
+      child.dataset.iiosRoomVisible = "true";
+    } else if (room === null) {
+      child.dataset.iiosRoomVisible = activeRoom === "cases" ? "true" : "false";
+    } else {
+      child.dataset.iiosRoomVisible = room === activeRoom ? "true" : "false";
     }
-
-    if (room === null) {
-      child.style.display = activeRoom === "cases" ? "" : "none";
-      continue;
-    }
-
-    child.style.display = room === activeRoom ? "" : "none";
   }
-
-  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 export default function ExperienceRoomNav() {
@@ -129,9 +122,15 @@ export default function ExperienceRoomNav() {
   const room = useMemo(() => ROOMS.find((item) => item.key === activeRoom) ?? ROOMS[0], [activeRoom]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => applyRoom(activeRoom));
-    return () => window.cancelAnimationFrame(frame);
+    stampRoomState(activeRoom);
+    const timer = window.setInterval(() => stampRoomState(activeRoom), 750);
+    return () => window.clearInterval(timer);
   }, [activeRoom]);
+
+  const changeRoom = (key: RoomKey) => {
+    setActiveRoom(key);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
 
   return (
     <section
@@ -161,7 +160,7 @@ export default function ExperienceRoomNav() {
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setActiveRoom(item.key)}
+                onClick={() => changeRoom(item.key)}
                 style={{
                   appearance: "none",
                   border: active ? "1px solid #b28749" : "1px solid #2b323b",
