@@ -55,7 +55,11 @@ The integration branch keeps the Batch 8F backend contract unchanged. Experience
 
 ## Automated integration validation — PASS
 
-The isolated integration validator passed on 2026-08-26.
+The isolated integration validator passed on 2026-08-26 from validation worktree:
+
+`/Users/crm/Documents/GitHub/Investment-Intelligence-OS-integration-validation-a1d4260afa`
+
+Validated code head: `a1d4260afac82388e49838148288081c0d1a9353`.
 
 - X0–X6 experience gate: PASS
 - Full TypeScript / Vite build: PASS
@@ -68,6 +72,8 @@ The isolated integration validator passed on 2026-08-26.
 - Live execution authority: `FALSE`
 - Committee / Risk override: `FALSE`
 - Capital / trade authority: `FALSE`
+
+Subsequent integration-branch commits only record this validation result and acceptance documentation; they do not change the validated runtime/backend/frontend contracts.
 
 The operator-port invariant reported `8002 PID(s) unchanged -> none`. This proves the validator did not stop or replace a process on 8002, but it also means a live operator backend was not present during this validation. Backend API/health therefore remains a separate browser-acceptance prerequisite.
 
