@@ -95,18 +95,36 @@ def assert_supervisor_isolated(source: Path, target: Path) -> tuple[Path | None,
     return supervisor, supervisor_branch
 
 
-def sync_existing_worktree(target: Path) -> None:
-    status = output(["git", "status", "--porcelain"], target)
-    dirty_paths: list[str] = []
-    for line in status.splitlines():
-        if not line.strip():
+def dirty_paths(target: Path) -> list[str]:
+    raw = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=target,
+    )
+    records = raw.split(b"\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
             continue
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        dirty_paths.append(path)
+        text = record.decode("utf-8", errors="replace")
+        if len(text) < 4:
+            continue
+        status = text[:2]
+        path = text[3:]
+        # Rename/copy records in -z mode are followed by the second path record.
+        if "R" in status or "C" in status:
+            if index < len(records) and records[index]:
+                path = records[index].decode("utf-8", errors="replace")
+                index += 1
+        paths.append(path)
+    return paths
 
-    unexpected = [path for path in dirty_paths if path != PREVIEW_MUTATION_PATH]
+
+def sync_existing_worktree(target: Path) -> None:
+    changed = dirty_paths(target)
+    unexpected = [path for path in changed if path != PREVIEW_MUTATION_PATH]
     if unexpected:
         print("STOP: experience worktree has unexpected local changes:")
         for path in unexpected:
@@ -114,7 +132,7 @@ def sync_existing_worktree(target: Path) -> None:
         print("Nothing was reset. Resolve those changes before previewing.")
         raise SystemExit(4)
 
-    if PREVIEW_MUTATION_PATH in dirty_paths:
+    if PREVIEW_MUTATION_PATH in changed:
         print("Resetting prior preview-only App.tsx mount before fast-forward update.")
         run(["git", "restore", "--", PREVIEW_MUTATION_PATH], target)
 
