@@ -12,7 +12,7 @@ import cme_fedwatch_adapter
 import jesse_scheduler
 import jesse_source_acquisition
 import production_index_universe
-from ledger import latest_object, record_event, record_object, utc_now
+from ledger import latest_object, list_objects, record_event, record_object, utc_now
 from macro_policy_intelligence import build_monetary_policy_snapshot
 
 
@@ -56,7 +56,20 @@ def _age_hours(value: Any) -> float | None:
 
 
 def latest_universe_health() -> dict[str, Any] | None:
+    """Latest refresh attempt, successful or failed."""
     return latest_object(UNIVERSE_HEALTH_TYPE, case_id=SOURCE_CASE)
+
+
+def latest_verified_universe_health() -> dict[str, Any] | None:
+    rows = [
+        row
+        for row in list_objects(SOURCE_CASE, UNIVERSE_HEALTH_TYPE)
+        if isinstance(row, dict) and row.get("verified_complete") is True and row.get("symbols")
+    ]
+    if not rows:
+        return None
+    rows.sort(key=lambda row: str(row.get("created_at") or row.get("as_of") or ""), reverse=True)
+    return rows[0]
 
 
 def universe_is_fresh(snapshot: dict[str, Any] | None) -> bool:
@@ -64,6 +77,14 @@ def universe_is_fresh(snapshot: dict[str, Any] | None) -> bool:
         return False
     age = _age_hours(snapshot.get("created_at") or snapshot.get("as_of"))
     return age is not None and age <= UNIVERSE_MAX_AGE_HOURS
+
+
+def active_verified_universe_health() -> dict[str, Any] | None:
+    latest = latest_universe_health()
+    if universe_is_fresh(latest):
+        return latest
+    prior = latest_verified_universe_health()
+    return prior if universe_is_fresh(prior) else None
 
 
 def _persist_universe_capture(capture: dict[str, Any]) -> dict[str, Any]:
@@ -118,29 +139,36 @@ def refresh_production_universe(*, force: bool = False) -> dict[str, Any]:
 
 
 def current_strict_governed_universe() -> dict[str, Any] | None:
-    health = latest_universe_health()
-    if not universe_is_fresh(health):
+    active = active_verified_universe_health()
+    if active is None:
         try:
-            health = refresh_production_universe(force=False)
+            refresh_production_universe(force=False)
         except Exception:
-            health = latest_universe_health()
+            pass
+        active = active_verified_universe_health()
 
-    if not universe_is_fresh(health):
+    if active is None:
         return None
 
     base = _original_current_governed_universe() or {}
-    symbols = health.get("symbols") or base.get("symbols") or []
+    symbols = active.get("symbols") or base.get("symbols") or []
     if not symbols:
         return None
+    latest_attempt = latest_universe_health() or {}
     return {
         **base,
         "symbols": symbols,
         "symbol_count": len(symbols),
         "strict_membership": True,
         "verified_complete": True,
-        "production_source_lineage": health.get("source_lineage") or [],
-        "production_universe_as_of": health.get("created_at") or health.get("as_of"),
-        "production_universe_status": health.get("status"),
+        "production_source_lineage": active.get("source_lineage") or [],
+        "production_universe_as_of": active.get("created_at") or active.get("as_of"),
+        "production_universe_status": active.get("status"),
+        "latest_refresh_attempt_status": latest_attempt.get("status"),
+        "using_prior_verified_snapshot": (
+            active.get("production_index_universe_snapshot_id")
+            != latest_attempt.get("production_index_universe_snapshot_id")
+        ),
     }
 
 
@@ -189,16 +217,24 @@ def read_production_fed_probability_source() -> dict[str, Any]:
 
 def production_source_status() -> dict[str, Any]:
     base = _original_source_acquisition_status()
-    universe_health = latest_universe_health()
+    latest_attempt = latest_universe_health()
+    active_universe = active_verified_universe_health()
     fed_config = cme_fedwatch_adapter.configuration_status()
     fed_status = latest_object("monetary_policy_snapshot", case_id="jesse_macro_policy_factory") or {}
     return {
         **base,
-        "production_index_universe": universe_health,
-        "strict_universe_verified": universe_is_fresh(universe_health),
+        "production_index_universe": latest_attempt,
+        "active_production_index_universe": active_universe,
+        "strict_universe_verified": active_universe is not None,
         "strict_universe_freshness_hours": (
-            round(_age_hours((universe_health or {}).get("created_at")) or 0.0, 3)
-            if universe_health else None
+            round(_age_hours((active_universe or {}).get("created_at")) or 0.0, 3)
+            if active_universe else None
+        ),
+        "using_prior_verified_universe": bool(
+            active_universe
+            and latest_attempt
+            and active_universe.get("production_index_universe_snapshot_id")
+            != latest_attempt.get("production_index_universe_snapshot_id")
         ),
         "cme_fedwatch": {
             **fed_config,
@@ -231,10 +267,10 @@ def strict_scheduled_dislocation(request: dict[str, Any] | None = None):
 def _universe_refresh_due(now_pt: datetime) -> bool:
     if now_pt.weekday() >= 5:
         return False
-    health = latest_universe_health()
-    if not universe_is_fresh(health):
+    active = active_verified_universe_health()
+    if active is None:
         return True
-    stamp = _parse_time((health or {}).get("created_at") or (health or {}).get("as_of"))
+    stamp = _parse_time(active.get("created_at") or active.get("as_of"))
     if stamp is None:
         return True
     stamp_pt = stamp.astimezone(PT)
