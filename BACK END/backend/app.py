@@ -2,11 +2,11 @@ import os
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
-    "Investment-Intelligence-OS/0.15.0 research-client github.com/mielechris/Investment-Intelligence-OS",
+    "Investment-Intelligence-OS/0.16.0 research-client github.com/mielechris/Investment-Intelligence-OS",
 )
 os.environ.setdefault(
     "IIOS_SEC_USER_AGENT",
-    "Investment-Intelligence-OS/0.15.0 research mielechris@users.noreply.github.com",
+    "Investment-Intelligence-OS/0.16.0 research mielechris@users.noreply.github.com",
 )
 
 try:
@@ -50,6 +50,7 @@ from dislocation_intelligence import router as dislocation_intelligence_router
 from thesis_integrity_v2 import thesis_integrity_evidence, router as thesis_integrity_v2_router
 from jesse_source_acquisition import router as jesse_source_acquisition_router
 from jesse_scheduler import router as jesse_scheduler_router, start_jesse_scheduler, stop_jesse_scheduler
+from batch8c_production_inputs import install_batch8c, router as batch8c_production_inputs_router
 from interview_portal import router as interview_portal_router
 from learning_loop import router as learning_router
 from ledger import latest_object
@@ -106,6 +107,7 @@ install_finra_short_interest_fallback(primary_evidence)
 install_open_evidence_watch(primary_evidence, monitoring_engine)
 install_generic_coverage_v2()
 install_required_evidence_risk_guard(primary_evidence)
+install_batch8c()
 
 _original_gap_packet_items = evidence_gap_hunter._raw_items_from_packet
 
@@ -192,6 +194,7 @@ app.include_router(dislocation_intelligence_router)
 app.include_router(thesis_integrity_v2_router)
 app.include_router(jesse_source_acquisition_router)
 app.include_router(jesse_scheduler_router)
+app.include_router(batch8c_production_inputs_router)
 app.include_router(primary_evidence_router)
 app.include_router(portfolio_context_router)
 app.include_router(paper_capital_router)
@@ -203,7 +206,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.15.0"
+app.version = "0.16.0"
 
 
 @app.on_event("startup")
@@ -224,7 +227,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.15.0",
+        "version": "0.16.0",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,
@@ -246,6 +249,12 @@ def system_status():
         "authorized_research_inbox": True,
         "governed_fed_probability_feed_adapter": True,
         "governed_dislocation_universe_registry": True,
+        "automatic_official_index_universe_refresh": True,
+        "strict_scheduled_dislocation_universe": True,
+        "cme_fedwatch_production_adapter": True,
+        "cme_fedwatch_eod_realtime_modes": True,
+        "production_input_source_health": True,
+        "production_inputs_fail_closed": True,
         "opportunity_scanner_available": True,
         "opportunity_auto_scan_default": False,
         "opportunity_scan_interval_floor_minutes": 240,
