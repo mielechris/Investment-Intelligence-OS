@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import "./previewApiBridge";
 import "./experienceShell.css";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
