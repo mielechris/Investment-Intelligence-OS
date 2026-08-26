@@ -30,6 +30,9 @@ from generic_public_company_capital import (
 from generic_public_company_thesis import (
     build_generic_thesis_status,
 )
+from generic_position_sizing import (
+    calculate_generic_position_sizing,
+)
 
 
 def classify_entry_state(
@@ -378,21 +381,12 @@ def refresh_capital_entry_watch(
         classified.get("stage")
         == "READY_FOR_POSITION_SIZING"
     ):
-        automatic_sizing = {
-            "decision": "NOT_RUN",
-            "reason":
-                "GENERIC_POSITION_SIZING_NOT_YET_FROZEN",
-            "proposed_shares": 0,
-            "proposed_notional": 0.0,
-            "paper_authorization_ready":
-                False,
-            "paper_order_permission":
-                False,
-            "trade_execution_permission":
-                False,
-            "live_execution":
-                False,
-        }
+        automatic_sizing = (
+            calculate_generic_position_sizing(
+                case_id=case_id,
+                capital_gate=capital,
+            )
+        )
 
     else:
         automatic_sizing = {
