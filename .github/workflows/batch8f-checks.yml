@@ -35,6 +35,9 @@ jobs:
           batch8c_production_inputs.py
           ../../scripts/apply_batch8f.py
           ../../scripts/smoke_batch8f_live.py
+      - name: Import integrated IIOS runtime
+        run: >-
+          python -c "import app; print('IIOS_APP_VERSION=' + str(app.app.version))"
       - name: Run Batch 8F regression stack
         run: >-
           PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
