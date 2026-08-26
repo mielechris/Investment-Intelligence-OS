@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import "./experienceShell.css";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
 
@@ -112,8 +113,6 @@ function applyRoom(activeRoom: RoomKey) {
     }
 
     if (room === null) {
-      // Unknown legacy blocks remain visible only in Cases so nothing functional
-      // silently disappears while the shell is still being normalized.
       child.style.display = activeRoom === "cases" ? "" : "none";
       continue;
     }
