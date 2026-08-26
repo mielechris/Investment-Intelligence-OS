@@ -22,6 +22,14 @@ from paper_capital_gate import (
 from provider_hardening import (
     fetch_market_quote,
 )
+from generic_public_company_capital import (
+    _ticker_for_case,
+    assess_generic_public_company_capital,
+    build_generic_public_company_stress,
+)
+from generic_public_company_thesis import (
+    build_generic_thesis_status,
+)
 
 
 def classify_entry_state(
@@ -191,12 +199,18 @@ def refresh_capital_entry_watch(
                 False,
         }
 
-    hunt = latest_object(
-        "gap_hunt",
+    risk = latest_object(
+        "risk_authorization",
         case_id=case_id,
     ) or {}
 
-    risk = hunt.get("risk") or {}
+    if not risk:
+        hunt = latest_object(
+            "gap_hunt",
+            case_id=case_id,
+        ) or {}
+
+        risk = hunt.get("risk") or {}
 
     if not risk:
         return {
@@ -215,14 +229,10 @@ def refresh_capital_entry_watch(
                 False,
         }
 
-    profile = latest_object(
-        "monitor_profile",
-        case_id=case_id,
-    ) or {}
-
-    ticker = str(
-        profile.get("ticker") or ""
-    ).strip()
+    try:
+        ticker = _ticker_for_case(case_id)
+    except Exception:
+        ticker = ""
 
     if quote is None:
         if not ticker:
@@ -271,25 +281,73 @@ def refresh_capital_entry_watch(
                 False,
         }
 
-    # Recheck thesis every time the entry watch runs.
-    thesis = (
-        build_live_invalidation_status(
-            case_id
+    case = latest_object(
+        "case",
+        case_id=case_id,
+    ) or {}
+
+    topic = str(
+        case.get("topic") or ""
+    ).lower()
+
+    ticker_upper = str(
+        ticker or ""
+    ).upper()
+
+    is_micron = (
+        ticker_upper in {"MU", "MU.US"}
+        or "micron" in topic
+    )
+
+    if is_micron:
+        capital_profile = (
+            "MICRON_SEMICONDUCTOR_CYCLE"
         )
-    )
 
-    # Rebuild downside stress from the exact newest quote.
-    stress = build_live_cycle_stress(
-        case_id,
-        quote_override=quote,
-    )
+        thesis = (
+            build_live_invalidation_status(
+                case_id
+            )
+        )
 
-    capital = assess_paper_capital(
-        qualification=qualification,
-        risk=risk,
-        stress=stress,
-        thesis_status=thesis,
-    )
+        stress = build_live_cycle_stress(
+            case_id,
+            quote_override=quote,
+        )
+
+        capital = assess_paper_capital(
+            qualification=qualification,
+            risk=risk,
+            stress=stress,
+            thesis_status=thesis,
+        )
+
+    else:
+        capital_profile = (
+            "GENERIC_PUBLIC_COMPANY"
+        )
+
+        thesis = (
+            build_generic_thesis_status(
+                case_id
+            )
+        )
+
+        stress = (
+            build_generic_public_company_stress(
+                case_id,
+                quote_override=quote,
+            )
+        )
+
+        capital = (
+            assess_generic_public_company_capital(
+                qualification=qualification,
+                risk=risk,
+                stress=stress,
+                thesis_status=thesis,
+            )
+        )
 
     previous = latest_object(
         "capital_entry_watch",
@@ -306,6 +364,8 @@ def refresh_capital_entry_watch(
     if (
         classified.get("stage")
         == "READY_FOR_POSITION_SIZING"
+        and capital_profile
+        == "MICRON_SEMICONDUCTOR_CYCLE"
     ):
         automatic_sizing = (
             calculate_automatic_paper_sizing(
@@ -313,6 +373,27 @@ def refresh_capital_entry_watch(
                 capital_gate=capital,
             )
         )
+
+    elif (
+        classified.get("stage")
+        == "READY_FOR_POSITION_SIZING"
+    ):
+        automatic_sizing = {
+            "decision": "NOT_RUN",
+            "reason":
+                "GENERIC_POSITION_SIZING_NOT_YET_FROZEN",
+            "proposed_shares": 0,
+            "proposed_notional": 0.0,
+            "paper_authorization_ready":
+                False,
+            "paper_order_permission":
+                False,
+            "trade_execution_permission":
+                False,
+            "live_execution":
+                False,
+        }
+
     else:
         automatic_sizing = {
             "decision": "NOT_RUN",
@@ -352,6 +433,9 @@ def refresh_capital_entry_watch(
 
         "ticker":
             ticker,
+
+        "capital_profile":
+            capital_profile,
 
         "quote_provider":
             quote.get("provider"),

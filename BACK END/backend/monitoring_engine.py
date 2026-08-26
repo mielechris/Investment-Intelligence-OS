@@ -18,6 +18,7 @@ from capital_entry_watch import refresh_capital_entry_watch
 from learning_loop import record_position_monitor, record_thesis_monitor
 from ledger import DB_PATH, get_object, latest_object, list_objects, record_event, record_object
 from source_ingestion import ingest_sources
+from provider_hardening import fetch_market_quote
 
 
 router = APIRouter()
@@ -80,39 +81,17 @@ def _default_sources(topic: str) -> list[dict[str, Any]]:
     ]
 
 
-def _fetch_stooq_quote(symbol: str) -> dict[str, Any]:
-    symbol = symbol.strip().lower()
-    if not symbol:
-        return {"status": "skipped", "items": [], "current_price": None, "error": None}
-    url = f"https://stooq.com/q/l/?s={quote_plus(symbol)}&f=sd2t2ohlcv&h&e=csv"
-    try:
-        req = Request(url, headers={"User-Agent": "Investment-Intelligence-OS/0.6"})
-        with urlopen(req, timeout=12) as response:
-            lines = response.read().decode("utf-8-sig").strip().splitlines()
-        if len(lines) < 2:
-            raise ValueError("No quote row returned")
-        headers = [item.strip() for item in lines[0].split(",")]
-        values = [item.strip() for item in lines[1].split(",")]
-        row = dict(zip(headers, values))
-        close = _safe_float(row.get("Close"))
-        date = row.get("Date")
-        time_value = row.get("Time")
-        timestamp = f"{date}T{time_value}Z" if date and time_value else date
-        item = {
-            "source": "Stooq",
-            "source_type": "market_data",
-            "evidence_type": "market_data",
-            "url": url,
-            "title": f"{symbol.upper()} market snapshot",
-            "claim": f"{symbol.upper()} close={close}",
-            "timestamp": timestamp,
-            "value": close,
-            "symbol": symbol.upper(),
-            "reliability_score": 0.75,
-        }
-        return {"status": "ok", "items": [item], "current_price": close, "error": None}
-    except Exception as exc:  # network/provider failures are recorded, not fatal to monitoring
-        return {"status": "error", "items": [], "current_price": None, "error": f"{type(exc).__name__}: {exc}"}
+def _fetch_stooq_quote(
+    symbol: str,
+) -> dict[str, Any]:
+    """
+    Backward-compatible market quote wrapper.
+
+    Legacy callers retain the old function name, but
+    governed monitoring now uses the hardened market
+    provider rather than relying on Stooq directly.
+    """
+    return fetch_market_quote(symbol)
 
 
 def configure_profile(request: dict[str, Any]) -> dict[str, Any]:

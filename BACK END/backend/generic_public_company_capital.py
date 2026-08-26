@@ -488,3 +488,119 @@ def build_generic_public_company_stress(
     )
 
     return result
+
+
+def assess_generic_public_company_capital(
+    *,
+    qualification: dict[str, Any],
+    risk: dict[str, Any],
+    stress: dict[str, Any],
+    thesis_status: dict[str, Any],
+) -> dict[str, Any]:
+
+    reconciliation = (
+        risk.get("required_evidence_reconciliation")
+        or {}
+    )
+
+    watch_obligations = [
+        row
+        for row in risk.get("watch_obligations") or []
+        if isinstance(row, dict)
+    ]
+
+    measurement = (
+        stress.get("capital_measurement")
+        or {}
+    )
+
+    lineage = stress.get("input_lineage") or {}
+    governance = thesis_status.get("governance") or {}
+
+    checks = {
+        "qualified_buy_candidate":
+            qualification.get("qualified_buy_candidate") is True,
+
+        "research_unmet_clear":
+            not bool(qualification.get("unmet_requirements")),
+
+        "risk_watch_only":
+            risk.get("decision") == "WATCH_ONLY",
+
+        "risk_rules_clear":
+            not bool(risk.get("triggered_rules")),
+
+        "governed_blockers_clear":
+            int(reconciliation.get("blocking_count") or 0) == 0,
+
+        "governed_scope_clear":
+            int(
+                reconciliation.get(
+                    "ungoverned_new_scope_count"
+                ) or 0
+            ) == 0,
+
+        "watch_burden_within_policy":
+            len(watch_obligations) <= 4,
+
+        "quote_lineage_current":
+            lineage.get("quote_origin")
+            == "GENERIC_PUBLIC_COMPANY_EXACT_QUOTE",
+
+        "thesis_mapper_deterministic":
+            governance.get("deterministic_mapper") is True
+            and governance.get("llm_can_trigger_rule") is False,
+
+        "thesis_status_allowed":
+            thesis_status.get("status")
+            in {"ACTIVE_CLEAR", "ACTIVE_WITH_WATCHES"},
+
+        "thesis_not_invalidated":
+            thesis_status.get("thesis_invalidated") is False
+            and not thesis_status.get("breached_rules"),
+    }
+
+    hard_failed = [
+        key for key, passed in checks.items()
+        if not passed
+    ]
+
+    rr = float(measurement.get("reward_risk") or 0.0)
+
+    if hard_failed:
+        decision = "REJECTED"
+    elif rr < MIN_REWARD_RISK:
+        decision = "WAIT_FOR_ENTRY"
+    else:
+        decision = "APPROVED"
+
+    return {
+        "decision": decision,
+        "checks": checks,
+        "failed_hard_checks": hard_failed,
+        "current_price":
+            stress["baseline"]["current_price"],
+        "upside_reference_value":
+            stress["upside_scenario"]["reference_value"],
+        "downside_reference_value":
+            stress["downside_scenario"]["reference_value"],
+        "reward_risk":
+            measurement["reward_risk"],
+        "minimum_reward_risk":
+            measurement["minimum_reward_risk"],
+        "maximum_qualifying_entry":
+            measurement["maximum_qualifying_entry"],
+        "watch_obligation_count":
+            len(watch_obligations),
+        "watch_obligations":
+            watch_obligations,
+        "thesis_status":
+            thesis_status.get("status"),
+        "thesis_invalidated":
+            thesis_status.get("thesis_invalidated"),
+        "allowed_notional": 0.0,
+        "paper_authorization_ready": False,
+        "paper_order_permission": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+    }
