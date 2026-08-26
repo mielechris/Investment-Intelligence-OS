@@ -23,6 +23,7 @@ import LivingFactoryFloor from "./LivingFactoryFloor";
 import SpecialistDeskFloor from "./SpecialistDeskFloor";
 import FactoryEventRail from "./FactoryEventRail";
 import FactoryRoom from "./FactoryRoom";
+import CasesCommandCard from "./CasesCommandCard";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
@@ -60,7 +61,7 @@ function ResearchRoomView() {
 }
 
 function CasesRoomView() {
-  return <><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>;
+  return <><CasesCommandCard /><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>;
 }
 
 function CapitalRoomView() {
