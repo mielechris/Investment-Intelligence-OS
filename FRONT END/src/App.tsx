@@ -3,7 +3,7 @@ import OpportunityFloor from "./OpportunityFloor";
 import FactoryRoom from "./FactoryRoom";
 import PaperCapitalControlPanel from "./PaperCapitalControlPanel";
 
-const API = "http://localhost:8002";
+const API = "http://127.0.0.1:8002";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 type SystemStatus = {

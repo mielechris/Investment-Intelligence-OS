@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const API = "http://localhost:8002";
+const API = "http://127.0.0.1:8002";
 
 type WatchObligation = {
   requirement?: string;
@@ -116,9 +116,32 @@ function money(value?: number | null): string {
   }).format(value);
 }
 
-function ratio(value?: number): string {
-  if (value === undefined || Number.isNaN(value)) return "—";
+function ratio(value?: number | null): string {
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value)
+  ) {
+    return "—";
+  }
+
   return value.toFixed(2);
+}
+
+function percent(
+  value?: number | null,
+  digits = 1,
+  scale = 1,
+): string {
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value)
+  ) {
+    return "—";
+  }
+
+  return `${(value * scale).toFixed(digits)}%`;
 }
 
 function stageLabel(stage?: string): string {
@@ -696,13 +719,10 @@ export default function PaperCapitalControlPanel({
                 Portfolio Overlap
               </div>
               <div style={{ marginTop: "5px" }}>
-                {sizing
-                  ?.combined_overlap_weight_pct !==
-                undefined
-                  ? `${sizing.combined_overlap_weight_pct.toFixed(
-                      1,
-                    )}%`
-                  : "—"}
+                {percent(
+                  sizing?.combined_overlap_weight_pct,
+                  1,
+                )}
               </div>
             </div>
 
@@ -799,15 +819,12 @@ export default function PaperCapitalControlPanel({
                 Portfolio Risk
               </div>
               <div style={{ marginTop: "5px" }}>
-                {sizing?.automatic
-                  ?.proposed_portfolio_risk_pct !==
-                undefined
-                  ? `${(
-                      sizing.automatic
-                        .proposed_portfolio_risk_pct *
-                      100
-                    ).toFixed(2)}%`
-                  : "—"}
+                {percent(
+                  sizing?.automatic
+                    ?.proposed_portfolio_risk_pct,
+                  2,
+                  100,
+                )}
               </div>
             </div>
 

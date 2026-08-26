@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const API = "http://localhost:8002";
+const API = "http://127.0.0.1:8002";
 
 type OpportunityCandidate = {
   opportunity_candidate_id: string;
