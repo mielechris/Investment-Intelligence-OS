@@ -24,6 +24,9 @@ import FactoryEventRail from "./FactoryEventRail";
 import FactoryRoom from "./FactoryRoom";
 import CasesCommandCard from "./CasesCommandCard";
 import CapitalCommandCenter from "./CapitalCommandCenter";
+import NewCaseLauncher from "./NewCaseLauncher";
+import ResearchCommandCard from "./ResearchCommandCard";
+import JudgmentCommandCard from "./JudgmentCommandCard";
 
 type RoomKey = "factory" | "research" | "cases" | "capital" | "judgment";
 
@@ -56,11 +59,11 @@ function FactoryRoomView() {
 }
 
 function ResearchRoomView() {
-  return <><OpportunityFloor /><JesseIntelligencePanel /><DetailDrawer title="Evidence Acquisition & Verification"><HardDataPanel /><CaseAwarePrimaryEvidencePanel /><ConsensusVerificationPanel /><ShortInterestVerificationPanel /><OptionsPositioningVerificationPanel /></DetailDrawer><DetailDrawer title="Ownership & Institutional Context"><InsiderOwnershipPanel /><InstitutionalIntelligencePanel /></DetailDrawer></>;
+  return <><ResearchCommandCard /><DetailDrawer title="Opportunity Hunt"><OpportunityFloor /></DetailDrawer><DetailDrawer title="Jesse / External Research Intelligence"><JesseIntelligencePanel /></DetailDrawer><DetailDrawer title="Evidence Acquisition & Verification"><HardDataPanel /><CaseAwarePrimaryEvidencePanel /><ConsensusVerificationPanel /><ShortInterestVerificationPanel /><OptionsPositioningVerificationPanel /></DetailDrawer><DetailDrawer title="Ownership & Institutional Context"><InsiderOwnershipPanel /><InstitutionalIntelligencePanel /></DetailDrawer></>;
 }
 
 function CasesRoomView() {
-  return <><CasesCommandCard /><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>;
+  return <><CasesCommandCard /><NewCaseLauncher /><div className="native-legacy-workspace"><LegacyApp /></div><DecisionHistoryPanel /><DetailDrawer title="Evidence Gap & Qualification Detail"><EvidenceGapHunterPanel /><CaseAwarePrimaryEvidencePanel /></DetailDrawer></>;
 }
 
 function CapitalRoomView() {
@@ -68,7 +71,7 @@ function CapitalRoomView() {
 }
 
 function JudgmentRoomView() {
-  return <><InterviewPortalPanel /><div className="native-migration-note"><strong>JUDGMENT BANK EXPERIENCE</strong><span>Scorecards, calibration history, interview library, and governed judgment navigation are the next native extraction.</span></div></>;
+  return <><JudgmentCommandCard /><DetailDrawer title="Professional Interview Portal"><InterviewPortalPanel /></DetailDrawer><div className="native-migration-note"><strong>JUDGMENT BANK EXPERIENCE</strong><span>Scorecards, calibration history, interview library, and governed judgment navigation are the next native extraction.</span></div></>;
 }
 
 export default function ExperienceNativeShell() {
