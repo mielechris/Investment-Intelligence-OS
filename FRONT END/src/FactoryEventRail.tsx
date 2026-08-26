@@ -58,15 +58,16 @@ export default function FactoryEventRail() {
     [state.status?.activity?.recent_events]
   );
 
-  const recognized = adapted.filter((entry) => entry.canonical !== null);
-  const ignored = adapted.filter((entry) => entry.canonical === null);
+  const recognized = adapted.filter((entry) => entry.recognizedType !== null);
+  const movable = adapted.filter((entry) => entry.movementEligible);
+  const ignored = adapted.filter((entry) => entry.recognizedType === null);
 
   return (
     <section
       style={{
-        marginBottom: "22px",
-        padding: "16px",
-        borderRadius: "15px",
+        marginBottom: "18px",
+        padding: "14px 16px",
+        borderRadius: "13px",
         border: "1px solid rgba(94,128,160,.28)",
         background: "rgba(5,9,14,.94)",
       }}
@@ -74,26 +75,29 @@ export default function FactoryEventRail() {
       <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <div>
           <div style={{ color: "#66829d", fontSize: "9px", letterSpacing: "2px", fontWeight: 900 }}>X2 · LEDGER EVENT RAIL</div>
-          <div style={{ marginTop: "5px", fontSize: "18px", fontWeight: 900 }}>BACKEND AUDIT → CANONICAL FACTORY EVENTS</div>
+          <div style={{ marginTop: "4px", fontSize: "16px", fontWeight: 900 }}>BACKEND AUDIT → FACTORY EVENTS</div>
         </div>
         <div style={{ textAlign: "right", fontSize: "9px" }}>
           <div style={{ color: state.online ? "#63e6a5" : "#ff6d7c", fontWeight: 900 }}>{state.online ? "EVENT SOURCE LIVE" : "EVENT SOURCE OFFLINE"}</div>
-          <div style={{ color: "#6d7e90", marginTop: "4px" }}>{recognized.length} recognized · {ignored.length} ignored</div>
+          <div style={{ color: "#6d7e90", marginTop: "4px" }}>{recognized.length} recognized · {movable.length} movable · {ignored.length} ignored</div>
         </div>
       </div>
 
-      <div style={{ color: "#718397", fontSize: "10px", lineHeight: 1.5, marginTop: "9px" }}>
-        Only ledger events that match the strict adapter become X2 movement signals. Unknown event types remain visible as ignored and never move a case.
+      <div style={{ color: "#718397", fontSize: "10px", lineHeight: 1.45, marginTop: "7px" }}>
+        Recognized system events appear in the rail. A case marker moves only when the event also carries complete case/audit identity.
       </div>
 
       {state.error && <div style={{ color: "#ff8a96", fontSize: "9px", marginTop: "8px" }}>{state.error}</div>}
 
-      <div style={{ display: "grid", gap: "6px", marginTop: "12px", maxHeight: "260px", overflowY: "auto" }}>
+      <div style={{ display: "grid", gap: "6px", marginTop: "10px", maxHeight: "190px", overflowY: "auto" }}>
         {adapted.slice(0, 24).map((entry, index) => {
           const canonical = entry.canonical;
+          const recognizedType = entry.recognizedType;
+          const recognizedOnly = recognizedType !== null && canonical === null;
           return (
             <div
-              key={entry.raw.event_id || `${entry.raw.case_id || "unknown"}-${index}`}
+              key={entry.raw.event_id || `${entry.raw.case_id || "system"}-${entry.raw.created_at || index}-${index}`}
+              title={entry.reason || undefined}
               style={{
                 display: "grid",
                 gridTemplateColumns: "minmax(110px,.55fr) minmax(150px,1fr) minmax(140px,1fr) minmax(120px,.8fr)",
@@ -101,20 +105,30 @@ export default function FactoryEventRail() {
                 alignItems: "center",
                 padding: "7px 9px",
                 borderRadius: "8px",
-                border: canonical ? "1px solid rgba(99,230,165,.18)" : "1px solid rgba(232,201,107,.18)",
-                background: canonical ? "rgba(10,31,26,.42)" : "rgba(31,27,13,.34)",
+                border: canonical
+                  ? "1px solid rgba(99,230,165,.18)"
+                  : recognizedOnly
+                    ? "1px solid rgba(104,142,178,.22)"
+                    : "1px solid rgba(232,201,107,.18)",
+                background: canonical
+                  ? "rgba(10,31,26,.42)"
+                  : recognizedOnly
+                    ? "rgba(12,22,34,.5)"
+                    : "rgba(31,27,13,.34)",
                 fontSize: "8px",
               }}
             >
-              <div style={{ color: "#98a9b9", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.raw.case_id || "UNKNOWN CASE"}</div>
+              <div style={{ color: "#98a9b9", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.raw.case_id || "SYSTEM EVENT"}</div>
               <div style={{ color: "#6e8194", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.raw.event_type || "UNKNOWN EVENT"}</div>
-              <div style={{ color: canonical ? "#bff9dc" : "#e8c96b", fontWeight: 900 }}>{canonical?.eventType || "IGNORED"}</div>
+              <div style={{ color: canonical ? "#bff9dc" : recognizedOnly ? "#93bddf" : "#e8c96b", fontWeight: 900 }}>
+                {recognizedType || "IGNORED"}{recognizedOnly ? " · NO CASE MOVE" : ""}
+              </div>
               <div style={{ color: "#6c8296" }}>{entry.zone || "NO FACTORY ZONE"}</div>
             </div>
           );
         })}
         {!adapted.length && (
-          <div style={{ color: "#64778a", fontSize: "10px", padding: "10px 0" }}>
+          <div style={{ color: "#64778a", fontSize: "10px", padding: "8px 0" }}>
             No recent ledger events are currently available in the backend activity window.
           </div>
         )}
