@@ -1,0 +1,92 @@
+name: IIOS Batch 8G checks
+
+on:
+  push:
+    branches:
+      - feature/batch8-paper-portfolio
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  batch8g-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BACK END/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: pip install fastapi uvicorn openai python-dotenv certifi
+
+      - name: Compile Batch 8G stack
+        run: >-
+          python -m py_compile
+          app.py
+          factory_intelligence_ui.py
+          test_group_batch8g_factory_intelligence_ui.py
+          model_scale_validation.py
+          multi_model_intelligence_council.py
+          ../../scripts/apply_batch8g.py
+          ../../scripts/smoke_batch8g_live.py
+
+      - name: Import Factory Intelligence contract
+        run: |
+          python - <<'PY'
+          import factory_intelligence_ui as ui
+          status = ui.status()
+          assert status["installed"] is True
+          assert status["read_only_aggregation"] is True
+          assert status["unknown_state_semantics"] is True
+          assert status["committee_override"] is False
+          assert status["risk_override"] is False
+          assert status["capital_authority"] is False
+          assert status["auto_trade_authority"] is False
+          assert status["trade_execution_permission"] is False
+          assert status["live_execution"] is False
+          assert len(ui.PIPELINE) == 4
+          print("Batch 8G read-only UI contract: OK")
+          PY
+
+      - name: Run Batch 8G regression stack
+        run: >-
+          PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
+          test_group_batch8g_factory_intelligence_ui.py
+          test_group_batch8f_scale_validation.py
+          test_group_batch8e_multi_model_council.py
+          test_group_batch8d_kimi_research.py
+          test_group_batch8c_production_inputs.py
+          test_group_batch8b_live_sources.py
+          test_group_batch8a_jesse_intelligence.py
+          test_group_batch7_factory_genericization.py
+          test_group_batch6_generic_coverage.py
+          test_governed_chain_end_to_end.py
+
+  batch8g-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Factory Intelligence UI
+        run: npm run build

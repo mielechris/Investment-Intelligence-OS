@@ -1,0 +1,63 @@
+name: IIOS Batch 8G autonomous apply
+
+on:
+  push:
+    branches:
+      - feature/batch8-paper-portfolio
+    paths:
+      - BACK END/backend/factory_intelligence_ui.py
+      - BACK END/backend/test_group_batch8g_factory_intelligence_ui.py
+      - FRONT END/src/FactoryIntelligenceUI.tsx
+      - FRONT END/src/FactoryIntelligenceUI.css
+      - FRONT END/src/main.tsx
+      - scripts/apply_batch8g.py
+      - scripts/smoke_batch8g_live.py
+      - .github/workflows/batch8g-checks.yml
+      - .github/workflows/batch8g-autonomous-apply.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: iios-batch8g-autonomous-apply
+  cancel-in-progress: false
+
+jobs:
+  apply-batch8g:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Batch 8 branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/batch8-paper-portfolio
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend runtime dependencies
+        run: pip install fastapi uvicorn openai python-dotenv certifi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: FRONT END
+        run: npm ci
+
+      - name: Configure integration commit identity
+        run: |
+          git config user.name "mielechris"
+          git config user.email "34699111+mielechris@users.noreply.github.com"
+
+      - name: Apply, validate, and smoke Batch 8G
+        env:
+          PYTHONWARNINGS: error::ResourceWarning
+        run: python scripts/apply_batch8g.py
