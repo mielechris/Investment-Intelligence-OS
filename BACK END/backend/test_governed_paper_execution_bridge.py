@@ -98,6 +98,7 @@ class GovernedPaperExecutionBridgeTests(
             "paper_order_permission": False,
             "trade_execution_permission":
                 False,
+            "live_execution": False,
         }
 
     def create_auth(
@@ -247,7 +248,7 @@ class GovernedPaperExecutionBridgeTests(
             "AUTHORIZATION_ALREADY_CONSUMED",
         )
 
-    def test_changed_quote_blocks_execution(self):
+    def test_changed_quote_outside_window_blocks_execution(self):
         case_id = "case_quote"
 
         auth = self.create_auth(
@@ -255,7 +256,7 @@ class GovernedPaperExecutionBridgeTests(
         )
 
         capital = self.capital()
-        capital["current_price"] = 801.0
+        capital["current_price"] = 805.0
 
         result = self.execute(
             case_id,
@@ -265,7 +266,7 @@ class GovernedPaperExecutionBridgeTests(
 
         self.assertEqual(
             result["reason"],
-            "AUTHORIZATION_BINDING_MISMATCH",
+            "ORDER_PRICE_OUTSIDE_AUTHORIZED_WINDOW",
         )
 
     def test_changed_size_blocks_execution(self):
@@ -336,7 +337,7 @@ class GovernedPaperExecutionBridgeTests(
         )
 
         self.assertIsNone(
-            auth["authorization_id"]
+            auth["paper_authorization_id"]
         )
 
     def test_zero_notional_cannot_authorize(self):

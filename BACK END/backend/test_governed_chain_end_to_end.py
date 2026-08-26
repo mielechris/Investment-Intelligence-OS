@@ -203,12 +203,12 @@ class GovernedChainEndToEndTests(unittest.TestCase):
         executions = self.ledger.list_objects(case_id, "governed_paper_execution")
         self.assertEqual(len(executions), 1)
 
-    def test_03_changed_quote_is_rejected(self):
+    def test_03_changed_quote_outside_window_is_rejected(self):
         case_id = "case_e2e_quote_attack"
         chain = self.build_good_chain(case_id)
-        changed = {**chain["capital"], "current_price": 801.0}
+        changed = {**chain["capital"], "current_price": 805.0}
         result = self.execute(case_id, chain, capital=changed)
-        self.assertEqual(result["reason"], "AUTHORIZATION_BINDING_MISMATCH")
+        self.assertEqual(result["reason"], "ORDER_PRICE_OUTSIDE_AUTHORIZED_WINDOW")
 
     def test_04_changed_size_is_rejected(self):
         case_id = "case_e2e_size_attack"
@@ -242,7 +242,7 @@ class GovernedChainEndToEndTests(unittest.TestCase):
     def test_07_stale_governed_state_is_rejected(self):
         case_id = "case_e2e_stale_state"
         chain = self.build_good_chain(case_id)
-        changed = {**chain["capital"], "reward_risk": 1.76}
+        changed = {**chain["capital"], "maximum_qualifying_entry": 818.0}
         result = self.execute(case_id, chain, capital=changed)
         self.assertEqual(result["reason"], "AUTHORIZATION_BINDING_MISMATCH")
 

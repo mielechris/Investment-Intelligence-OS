@@ -92,6 +92,7 @@ class GovernedPaperAuthorizationTests(
             "paper_order_permission": False,
             "trade_execution_permission":
                 False,
+            "live_execution": False,
         }
 
     def binding(self):
@@ -205,7 +206,8 @@ class GovernedPaperAuthorizationTests(
             sizing=self.sizing(),
         )
 
-        # Simulate quote/entry changing after authorization.
+        # Inject a foreign field to prove the fingerprint rejects
+        # any mutation to the canonical authorization payload.
         current["capital_entry_price"] = 801.0
 
         verified = (

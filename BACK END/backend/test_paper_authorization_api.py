@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 import paper_authorization_api
 from paper_authorization_api import (
@@ -46,6 +47,8 @@ def sizing():
             False,
         "trade_execution_permission":
             False,
+        "live_execution":
+            False,
     }
 
 
@@ -55,6 +58,8 @@ def watch():
             "READY_FOR_POSITION_SIZING",
         "current_price":
             800.0,
+        "quote_timestamp":
+            datetime.now(timezone.utc).isoformat(),
     }
 
 
