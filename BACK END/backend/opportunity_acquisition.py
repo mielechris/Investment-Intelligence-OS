@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from evidence_engine import build_packet
 from ledger import DB_PATH, get_object, latest_object, record_event, record_object, utc_now
-from provider_hardening import fetch_gdelt_news, fetch_market_quote
+from provider_hardening import fetch_gdelt_news, fetch_google_news_rss, fetch_market_quote
 
 
 router = APIRouter()
@@ -284,14 +284,75 @@ def scan_universe(
     for item in symbols[:MAX_SCAN_SYMBOLS]:
         ticker = item["ticker"]
         quote = fetch_market_quote(ticker)
+        # Opportunity discovery must not depend on one
+        # news aggregator. GDELT remains primary, with
+        # hardened Google News RSS as the fallback.
+        news: list[dict[str, Any]] = []
+        news_errors: list[str] = []
+
         try:
             news = fetch_gdelt_news(
-                {"query": item["query"], "limit": news_limit, "timespan": timespan}
+                {
+                    "query": item["query"],
+                    "limit": news_limit,
+                    "timespan": timespan,
+                }
             )
-            news_error = None
-        except Exception as exc:  # provider failure must not crash the whole scan
-            news = []
-            news_error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:
+            news_errors.append(
+                f"GDELT:{type(exc).__name__}:{exc}"
+            )
+
+        # Promotion requires at least two news records.
+        # If GDELT is unavailable or thin, supplement
+        # with Google News RSS rather than manufacturing
+        # eligibility or lowering the promotion gate.
+        if len(news) < 2:
+            try:
+                fallback = fetch_google_news_rss(
+                    {
+                        "query": item["query"],
+                        "limit": news_limit,
+                    }
+                )
+
+                seen = {
+                    (
+                        str(row.get("url") or ""),
+                        str(row.get("title") or ""),
+                    )
+                    for row in news
+                    if isinstance(row, dict)
+                }
+
+                for row in fallback:
+                    if not isinstance(row, dict):
+                        continue
+
+                    key = (
+                        str(row.get("url") or ""),
+                        str(row.get("title") or ""),
+                    )
+
+                    if key in seen:
+                        continue
+
+                    seen.add(key)
+                    news.append(row)
+
+                    if len(news) >= news_limit:
+                        break
+
+            except Exception as exc:
+                news_errors.append(
+                    f"GOOGLE_NEWS:{type(exc).__name__}:{exc}"
+                )
+
+        news_error = (
+            " | ".join(news_errors)
+            if news_errors
+            else None
+        )
 
         scored = score_candidate(ticker=ticker, quote=quote, news_items=news)
         candidate_id = f"opportunity_{uuid4().hex}"
