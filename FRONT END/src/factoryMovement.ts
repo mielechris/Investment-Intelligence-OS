@@ -84,7 +84,7 @@ type EventRule = {
   nextZone: FactoryZoneKey | null | "UNCHANGED";
 };
 
-const EVENT_RULES = {
+const EVENT_RULES: Record<FactoryEventType, EventRule> = {
   "case.created": { allowedFrom: ["UNKNOWN"], nextStage: "EVIDENCE", nextZone: "evidence-warehouse" },
   "case.blocked": { allowedFrom: "ANY", nextStage: "UNCHANGED", nextZone: "UNCHANGED" },
   "case.unblocked": { allowedFrom: "ANY", nextStage: "UNCHANGED", nextZone: "UNCHANGED" },
@@ -109,7 +109,7 @@ const EVENT_RULES = {
   "thesis.status_changed": { allowedFrom: ["MONITORING"], nextStage: "MONITORING", nextZone: "thesis-integrity" },
   "safety.locked": { allowedFrom: "ANY", nextStage: "UNCHANGED", nextZone: "UNCHANGED" },
   "safety.unlocked": { allowedFrom: "ANY", nextStage: "UNCHANGED", nextZone: "UNCHANGED" },
-} satisfies Record<FactoryEventType, EventRule>;
+};
 
 const FACTORY_EVENT_TYPE_SET = new Set<string>(FACTORY_EVENT_TYPES);
 
@@ -181,7 +181,7 @@ export function applyFactoryEvent(current: FactoryCaseProjection, event: Factory
     };
   }
 
-  const rule = EVENT_RULES[event.eventType];
+  const rule: EventRule = EVENT_RULES[event.eventType];
   const transitionAllowed = rule.allowedFrom === "ANY" || rule.allowedFrom.includes(current.stage);
 
   if (!transitionAllowed) {
