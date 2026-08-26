@@ -68,6 +68,19 @@ def enforce_supervisor_isolation(repo: Path) -> None:
     print("ISOLATION OK: preview checkout is separate from the batch supervisor checkout.")
 
 
+def ensure_frontend_dependencies(frontend: Path) -> None:
+    node_modules = frontend / "node_modules"
+    if node_modules.exists():
+        return
+
+    print("\n=== FRONTEND DEPENDENCIES ===")
+    lockfile = frontend / "package-lock.json"
+    if lockfile.exists():
+        run(["npm", "ci"], frontend)
+    else:
+        run(["npm", "install"], frontend)
+
+
 def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     frontend = repo / "FRONT END"
@@ -91,9 +104,6 @@ def main() -> int:
     print("IIOS EXPERIENCE X0-X3 - SUPERVISOR-SAFE PREVIEW / BUILD GATE")
     print("=" * 72)
 
-    # This check happens before any file mutation. The supervisor LaunchAgent runs
-    # directly from its configured repo checkout, so the visual track must use a
-    # different worktree and must never branch-switch the supervisor checkout.
     enforce_supervisor_isolation(repo)
 
     branch = output(["git", "branch", "--show-current"], repo)
@@ -109,6 +119,7 @@ def main() -> int:
             print(" ", path)
         return 2
 
+    ensure_frontend_dependencies(frontend)
     run(["git", "diff", "--check"], repo)
 
     app = app_path.read_text(encoding="utf-8")
