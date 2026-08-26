@@ -9,7 +9,6 @@ Date: 2026-08-26
 - Base engineering commit at branch creation: `db379c7dddbd979faf980bbb572986d2d0445e3e`
 - Frozen experience source: `checkpoint/iios-experience-x0-x6-release`
 - Frozen experience release commit: `a1606248135122a4c8ed3cdfe900e4fd59effc50`
-- Draft integration PR: #12
 
 ## Integration method
 
@@ -36,8 +35,7 @@ The experience release was **not merged directly** into Batch 8 because the bran
 
 - `FRONT END/src/main.tsx`: deliberately switched from stacked legacy panels to `ExperienceNativeShell`. The shell retains the legacy Batch 8 underwriting workspace inside the Cases room.
 - `FRONT END/package.json`: Batch 8 dependencies preserved; only `experience:acceptance` command added.
-- `FRONT END/vite.config.ts`: Batch 8 React config preserved; preview proxy to backend 8002 added. It is inert unless `/__iios_api` is used.
-- `FRONT END/src/previewApiBridge.ts`: isolated previews on 5188 and 5189 may use the same-origin proxy without changing backend CORS or execution authority.
+- `FRONT END/vite.config.ts`: Batch 8 React config preserved; isolated preview proxy added. It is inert unless `/__iios_api` is used.
 
 ### Backend conflict resolution
 
@@ -54,45 +52,42 @@ The integration branch keeps the Batch 8F backend contract unchanged. Experience
 5. Judgment publication remains human-gated.
 6. Thesis integrity remains a read-only projection, not a second decision engine.
 7. Batch Supervisor checkout is not the integration checkout.
-8. Operator backend port 8002 must not be stopped or replaced during integration validation.
 
-## Isolated validation tooling
+## Automated integration validation — PASS
 
-The integration branch includes:
+The isolated integration validator passed on 2026-08-26.
 
-- `scripts/prepare_integration_validation.py` — creates a separate validation worktree at the exact remote integration head without switching the source checkout.
-- `scripts/validate_integration_x0_x6.py` — runs the X0–X6 acceptance gate plus the Batch 8F engineering smoke and verifies operator/supervisor invariants afterward.
-- `scripts/smoke_batch8f_isolated.py` — reuses the Batch 8F smoke logic on **port 8102**, never operator port 8002.
-- `scripts/launch_integration_preview.py` — launches the integrated frontend on **port 5189** while reading the existing operator backend through the Vite proxy; it starts/stops no backend process.
+- X0–X6 experience gate: PASS
+- Full TypeScript / Vite build: PASS
+- Experience-scoped ESLint: PASS
+- Batch 8F engineering smoke on isolated port 8102: PASS
+- Batch 8F verdict: `SCALE_VALIDATION_READY`
+- Batch Supervisor branch unchanged: PASS
+- Batch Supervisor LaunchAgent remained loaded: PASS
+- Validation checkout had no tracked mutations: PASS
+- Live execution authority: `FALSE`
+- Committee / Risk override: `FALSE`
+- Capital / trade authority: `FALSE`
 
-Port allocation during integration validation:
+The operator-port invariant reported `8002 PID(s) unchanged -> none`. This proves the validator did not stop or replace a process on 8002, but it also means a live operator backend was not present during this validation. Backend API/health therefore remains a separate browser-acceptance prerequisite.
 
-- 8002 — existing operator backend; must remain untouched.
-- 8102 — temporary isolated Batch 8F smoke backend; automatically stopped at the end of the smoke.
-- 5188 — existing X0–X6 experience preview may continue running.
-- 5189 — isolated integrated browser acceptance preview.
+## Port isolation plan
 
-The dual-gate validator snapshots the process listening on 8002 and the Batch Supervisor branch/LaunchAgent state before validation and verifies they are unchanged afterward.
+- `8002`: operator/integration browser backend. Validation never kills or replaces it.
+- `8102`: temporary isolated Batch 8F engineering smoke backend.
+- `5188`: existing experience preview may remain running.
+- `5189`: integrated browser-acceptance preview.
 
-## Validation still required
+## Remaining validation
 
 The integration branch is **not merge-ready until all of these pass**:
 
-1. X0–X6 experience acceptance gate in an isolated integration worktree.
-2. Full frontend TypeScript/Vite build.
-3. Experience-scoped ESLint.
-4. Batch 8F engineering smoke on isolated port 8102.
-5. Backend health and API contract verification.
-6. Operator port 8002 and Batch Supervisor invariants unchanged after dual-gate validation.
-7. Browser acceptance on 5189 for Factory / Research / Cases / Capital / Judgment / Executive View.
-8. Confirm no live-execution or paper-safety permission changes.
-
-## Important Batch 8F smoke note
-
-The original `scripts/smoke_batch8f_live.py` defaults to owning port 8002 during its run. Do **not** execute it directly against the currently running operator backend/supervisor environment.
-
-Integration validation must use `scripts/smoke_batch8f_isolated.py`, which redirects the same Batch 8F validation logic to port 8102.
+1. Start/verify the intended backend on port 8002 without disturbing the Batch Supervisor.
+2. Verify backend health and API contract.
+3. Launch integrated browser preview on port 5189.
+4. Human browser acceptance for Factory / Research / Cases / Capital / Judgment / Executive View.
+5. Confirm browser telemetry remains truthful/fail-closed and no live-execution permission is exposed.
 
 ## Merge rule
 
-PR #12 must remain draft until both the Batch 8F engineering validation and X0–X6 experience acceptance gate pass on this integration branch, operator/supervisor isolation is verified, and final browser acceptance is complete.
+Draft PR #12 must remain draft until backend health and human browser acceptance are clean. Only then may it be marked ready for review/merge.
