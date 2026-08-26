@@ -161,3 +161,31 @@ def run_public_case(request: dict[str, Any] = Body(...)):
         "monitor_profile": profile,
         "paper_mode": True,
     }
+
+
+@router.get("/debug/runtime-storage")
+def runtime_storage_debug():
+    import os
+    import sys
+    import ledger
+    import opportunity_acquisition
+
+    queue = opportunity_acquisition.opportunity_queue(20)
+
+    return {
+        "cwd": os.getcwd(),
+        "python": sys.executable,
+        "iios_db_env": os.getenv("IIOS_DB_PATH"),
+        "ledger_module": ledger.__file__,
+        "ledger_db_path": str(ledger.DB_PATH),
+        "opportunity_module": opportunity_acquisition.__file__,
+        "opportunity_db_path": str(opportunity_acquisition.DB_PATH),
+        "xom_candidates": [
+            {
+                "candidate_id": row.get("opportunity_candidate_id"),
+                "score": row.get("score"),
+            }
+            for row in queue
+            if str(row.get("ticker") or "").upper() == "XOM"
+        ],
+    }

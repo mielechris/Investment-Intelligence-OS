@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API = "http://localhost:8000";
+const API = "http://localhost:8002";
 const ACTIVE_CASE_KEY = "iios.activeCaseId";
 
 type InstitutionalRecord = {
