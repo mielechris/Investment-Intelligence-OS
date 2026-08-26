@@ -282,6 +282,71 @@ function App() {
     }
   };
 
+  const runActiveReunderwrite = async () => {
+    if (!activeCaseId) return;
+
+    const activeTicker = String(
+      activeCase?.ticker || ""
+    )
+      .replace(".US", "")
+      .toUpperCase();
+
+    if (activeTicker === "MU") {
+      await runMemoryReunderwrite();
+      return;
+    }
+
+    setBusy(true);
+
+    setNotice(
+      "Running case-aware Gap Hunter + eight desks + Committee + Risk..."
+    );
+
+    try {
+      const result = await apiJson<{
+        committee?: {
+          disposition?: string;
+          confidence?: number;
+        };
+        risk?: {
+          decision?: string;
+        };
+        qualification?: {
+          stage?: string;
+        };
+      }>(
+        `/gap-hunter/${activeCaseId}/run`,
+        {
+          method: "POST",
+        }
+      );
+
+      setMemoryResult(null);
+
+      setNotice(
+        `Re-underwrite complete: Committee ${
+          result.committee?.disposition ?? "—"
+        } · Risk ${
+          result.risk?.decision ?? "—"
+        } · Qualification ${
+          result.qualification?.stage ?? "—"
+        }.`
+      );
+
+      await loadDashboard();
+
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? `Re-underwrite error: ${error.message}`
+          : "Re-underwrite failed."
+      );
+
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const panel = {
     background: "rgba(7, 11, 17, 0.92)",
     border: "1px solid #28313d",
@@ -415,8 +480,8 @@ function App() {
             REFRESH ACTIVE CASE NOW
           </button>
           <button
-            onClick={() => void runMemoryReunderwrite()}
-            disabled={busy || !activeCaseId || system?.semiconductor_memory_intelligence !== true}
+            onClick={() => void runActiveReunderwrite()}
+            disabled={busy || !activeCaseId}
             style={{
               border: "1px solid #765fa8",
               background: "#211936",
@@ -427,7 +492,9 @@ function App() {
               cursor: busy || !activeCaseId ? "default" : "pointer",
             }}
           >
-            MEMORY INTEL + 8-DESK REUNDERWRITE
+            {String(activeCase?.ticker || "").replace(".US", "").toUpperCase() === "MU"
+              ? "MEMORY INTEL + 8-DESK REUNDERWRITE"
+              : "GAP HUNT + 8-DESK REUNDERWRITE"}
           </button>
           <span style={{ color: "#8d9aaa", fontSize: "13px" }}>{notice}</span>
         </div>

@@ -116,9 +116,15 @@ def _extract_number(
 def _forward_eps(
     case_id: str,
 ) -> tuple[float, dict[str, Any]]:
-    record = _latest_primary(
-        case_id,
-        "consensus",
+    record = (
+        _latest_primary(
+            case_id,
+            "consensus",
+        )
+        or _latest_primary(
+            case_id,
+            "valuation_consensus",
+        )
     )
 
     if not record:
@@ -129,6 +135,8 @@ def _forward_eps(
     eps = _extract_number(
         str(record.get("claim") or ""),
         (
+            r"forward\s+EPS\s+consensus\s*=\s*([0-9.,]+)",
+            r"EPS\s+consensus\s*=\s*([0-9.,]+)",
             r"consensus\s+EPS\s*=\s*([0-9.,]+)",
             r"\bEPS\s*=\s*([0-9.,]+)",
         ),

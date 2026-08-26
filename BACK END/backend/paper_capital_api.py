@@ -11,6 +11,13 @@ from live_invalidation_mapper import (
 from paper_capital_gate import (
     assess_paper_capital,
 )
+from factory_genericization import (
+    resolve_case_profile,
+)
+from generic_public_company_capital import (
+    assess_generic_public_company_capital,
+    build_generic_public_company_stress,
+)
 
 
 router = APIRouter()
@@ -71,23 +78,122 @@ def paper_capital_status(
             detail="Latest Gap Hunter result has no Risk state",
         )
 
-    stress = _require_latest(
-        "cycle_valuation_stress",
-        case_id,
-    )
-
     thesis = (
         build_live_invalidation_status(
             case_id
         )
     )
 
-    capital = assess_paper_capital(
-        qualification=qualification,
-        risk=risk,
-        stress=stress,
-        thesis_status=thesis,
+    qualification_ok = (
+        qualification.get(
+            "qualified_buy_candidate"
+        )
+        is True
     )
+
+    identity = resolve_case_profile(
+        case_id
+    )
+
+    stress = {}
+
+    if not qualification_ok:
+        capital = {
+            "decision":
+                "NOT_EVALUATED",
+            "failed_hard_checks": [
+                "RESEARCH_NOT_QUALIFIED",
+            ],
+            "watch_obligations":
+                risk.get(
+                    "watch_obligations"
+                )
+                or [],
+            "paper_authorization_ready":
+                False,
+            "paper_order_permission":
+                False,
+            "trade_execution_permission":
+                False,
+            "live_execution":
+                False,
+        }
+
+    elif identity.get("is_micron"):
+        stress = _require_latest(
+            "cycle_valuation_stress",
+            case_id,
+        )
+
+        capital = assess_paper_capital(
+            qualification=
+                qualification,
+            risk=risk,
+            stress=stress,
+            thesis_status=thesis,
+        )
+
+    else:
+        stress = (
+            latest_object(
+                "generic_capital_stress",
+                case_id=case_id,
+            )
+            or {}
+        )
+
+        if not stress:
+            try:
+                stress = (
+                    build_generic_public_company_stress(
+                        case_id
+                    )
+                )
+            except Exception as exc:
+                capital = {
+                    "decision":
+                        "INPUTS_PENDING",
+                    "failed_hard_checks": [
+                        (
+                            "GENERIC_CAPITAL_INPUT:"
+                            f"{type(exc).__name__}:"
+                            f"{exc}"
+                        )
+                    ],
+                    "watch_obligations":
+                        risk.get(
+                            "watch_obligations"
+                        )
+                        or [],
+                    "paper_authorization_ready":
+                        False,
+                    "paper_order_permission":
+                        False,
+                    "trade_execution_permission":
+                        False,
+                    "live_execution":
+                        False,
+                }
+            else:
+                capital = (
+                    assess_generic_public_company_capital(
+                        qualification=
+                            qualification,
+                        risk=risk,
+                        stress=stress,
+                        thesis_status=thesis,
+                    )
+                )
+        else:
+            capital = (
+                assess_generic_public_company_capital(
+                    qualification=
+                        qualification,
+                    risk=risk,
+                    stress=stress,
+                    thesis_status=thesis,
+                )
+            )
 
     entry_watch = latest_object(
         "capital_entry_watch",
@@ -151,6 +257,9 @@ def paper_capital_status(
 
     elif capital_decision == "APPROVED":
         stage = "READY_FOR_POSITION_SIZING"
+
+    elif capital_decision == "INPUTS_PENDING":
+        stage = "CAPITAL_INPUTS_PENDING"
 
     else:
         stage = "CAPITAL_STATE_UNKNOWN"

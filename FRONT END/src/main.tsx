@@ -7,7 +7,7 @@ import EvidenceGapHunterPanel from './EvidenceGapHunterPanel.tsx'
 import HardDataPanel from './HardDataPanel.tsx'
 import InsiderOwnershipPanel from './InsiderOwnershipPanel.tsx'
 import InstitutionalIntelligencePanel from './InstitutionalIntelligencePanel.tsx'
-import PrimaryEvidencePanel from './PrimaryEvidencePanel.tsx'
+import CaseAwarePrimaryEvidencePanel from './CaseAwarePrimaryEvidencePanel.tsx'
 import ConsensusVerificationPanel from './ConsensusVerificationPanel.tsx'
 import ShortInterestVerificationPanel from './ShortInterestVerificationPanel.tsx'
 import OptionsPositioningVerificationPanel from './OptionsPositioningVerificationPanel.tsx'
@@ -22,7 +22,7 @@ createRoot(document.getElementById('root')!).render(
     <HardDataPanel />
     <InsiderOwnershipPanel />
     <InstitutionalIntelligencePanel />
-    <PrimaryEvidencePanel />
+    <CaseAwarePrimaryEvidencePanel />
     <ConsensusVerificationPanel />
     <ShortInterestVerificationPanel />
     <OptionsPositioningVerificationPanel />

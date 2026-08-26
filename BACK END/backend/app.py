@@ -27,6 +27,10 @@ import evidence_gap_hunter
 from evidence_gap_hunter import router as gap_hunter_router
 from finra_short_interest_fallback import install_finra_short_interest_fallback
 from generic_coverage_v2 import install_generic_coverage_v2, router as generic_coverage_v2_router
+from factory_genericization import (
+    resolve_case_profile,
+    router as factory_genericization_router,
+)
 from factory_room_api import router as factory_room_router
 from generic_primary_evidence import router as generic_primary_evidence_router
 from hard_data import hard_data_evidence, router as hard_data_router
@@ -128,6 +132,31 @@ def monitoring_dashboard_live(limit: int = 25):
         decision = latest_object("committee_decision", case_id=case_id) if case_id else None
         qualification = latest_object("qualification_assessment", case_id=case_id) if case_id else None
         coherent = apply_latest_decision_lineage(row, decision=decision, snapshot=snapshot, qualification=qualification)
+
+        if case_id:
+            try:
+                identity = resolve_case_profile(
+                    case_id
+                )
+
+                coherent["ticker"] = (
+                    coherent.get("ticker")
+                    or identity.get("ticker")
+                )
+
+                coherent["company"] = (
+                    identity.get("company")
+                )
+
+                coherent["sector_profile"] = (
+                    identity.get(
+                        "sector_profile"
+                    )
+                )
+
+            except Exception:
+                pass
+
         reunderwrite = latest_object("full_reunderwrite", case_id=case_id) if case_id else None
         if reunderwrite:
             coherent["latest_reunderwrite_id"] = reunderwrite.get("full_reunderwrite_id")
@@ -144,6 +173,7 @@ app.include_router(gap_hunter_router)
 app.include_router(generic_primary_evidence_router)
 app.include_router(generic_coverage_v2_router)
 app.include_router(factory_room_router)
+app.include_router(factory_genericization_router)
 app.include_router(hard_data_router)
 app.include_router(insider_router)
 app.include_router(institutional_router)
@@ -158,7 +188,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
-app.version = "0.13.5"
+app.version = "0.13.6"
 
 
 @app.on_event("startup")
@@ -177,7 +207,7 @@ def stop_iios_monitoring() -> None:
 def system_status():
     return {
         "name": "Investment Intelligence OS",
-        "version": "0.13.5",
+        "version": "0.13.6",
         "paper_mode": True,
         "governed_chain": True,
         "persistent_ledger": True,

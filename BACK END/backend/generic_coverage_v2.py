@@ -446,9 +446,44 @@ def generic_company_targets_v2(
         "shipping delay",
     )
 
-    if _contains(
-        text,
-        financial_terms,
+    valuation_dominant = (
+        _contains(
+            text,
+            valuation_terms,
+        )
+    )
+
+    explicit_filing_terms = (
+        "10-q",
+        "10-k",
+        "annual report",
+        "quarterly report",
+        "earnings release",
+        "financial statements",
+        "free cash flow",
+        "cash flow",
+        "balance sheet",
+        "operating income",
+        "net income",
+        "diluted shares",
+        "shares outstanding",
+        "capex",
+        "depreciation",
+    )
+
+    explicit_filing = (
+        _contains(
+            text,
+            explicit_filing_terms,
+        )
+    )
+
+    if (
+        explicit_filing
+        or (
+            "revenue" in text
+            and not valuation_dominant
+        )
     ):
         _add(
             targets,
