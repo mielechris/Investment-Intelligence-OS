@@ -50,7 +50,16 @@ def install_required_evidence_risk_guard(primary_module: Any) -> None:
 
         live_floor = primary_module.primary_evidence_status(case_id)
         packet = get_object(packet_id) or {}
-        packet_items = packet.get("items") or []
+
+        # Risk must see both the original Committee packet
+        # and governed evidence captured after Committee review.
+        packet_items = list(packet.get("items") or [])
+
+        governed_primary = (
+            primary_module.primary_evidence_evidence(case_id)
+        )
+
+        packet_items.extend(governed_primary)
 
         effective_decision, reconciliation = reconcile_for_risk(
             decision,
@@ -67,17 +76,33 @@ def install_required_evidence_risk_guard(primary_module: Any) -> None:
         ]
 
         watch_obligations = []
+        seen_watch_targets = set()
+
         for row in reconciliation.get("requirements") or []:
             for target in row.get("targets") or []:
-                if target.get("state") == "WATCHING":
-                    watch_obligations.append(
-                        {
-                            "requirement": row.get("requirement"),
-                            "lane": target.get("lane"),
-                            "fact_key": target.get("fact_key"),
-                            "state": "WATCHING",
-                        }
-                    )
+                if target.get("state") != "WATCHING":
+                    continue
+
+                key = (
+                    str(target.get("lane") or ""),
+                    str(target.get("fact_key") or ""),
+                )
+
+                # A governed watch target counts once even if several
+                # Committee requirements reference the same underlying fact.
+                if key in seen_watch_targets:
+                    continue
+
+                seen_watch_targets.add(key)
+
+                watch_obligations.append(
+                    {
+                        "requirement": row.get("requirement"),
+                        "lane": target.get("lane"),
+                        "fact_key": target.get("fact_key"),
+                        "state": "WATCHING",
+                    }
+                )
 
         reconciled_nonblocking = (
             bool(raw_required)

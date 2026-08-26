@@ -110,7 +110,27 @@ def build_gap_plan(case_id: str) -> dict[str, Any]:
         requirements = [f"Confirm the current evidence supporting and contradicting: {case.get('topic', '')}"]
 
     monitor = latest_object("monitor_profile", case_id=case_id) or {}
-    ticker = str(monitor.get("ticker") or "").strip()
+
+    ticker = str(
+        monitor.get("ticker")
+        or case.get("ticker")
+        or ""
+    ).strip()
+
+    # Opportunity-created cases carry their symbol on the
+    # source opportunity candidate rather than necessarily
+    # having a monitor profile yet.
+    if not ticker:
+        candidate_id = str(
+            case.get("source_candidate_id") or ""
+        ).strip()
+
+        if candidate_id:
+            candidate = get_object(candidate_id) or {}
+            ticker = str(
+                candidate.get("ticker") or ""
+            ).strip()
+
     requests: list[dict[str, Any]] = []
 
     # One targeted current-news discovery lane per explicit requirement. These items are
@@ -122,6 +142,7 @@ def build_gap_plan(case_id: str) -> dict[str, Any]:
                 "params": {
                     "query": f"{case.get('topic', '')} {requirement}"[:350],
                     "limit": 5,
+                    "timespan": "30d",
                 },
                 "gap": requirement,
             }
@@ -165,6 +186,54 @@ def build_gap_plan(case_id: str) -> dict[str, Any]:
                 },
             ]
         )
+
+    # Amazon primary financial evidence.
+    # Use SEC EDGAR Company Facts rather than asking news articles
+    # to prove company financial statements.
+    if (
+        ticker.upper() in {"AMZN", "AMZN.US"}
+        or "amazon" in str(case.get("topic", "")).lower()
+    ):
+        financial_gap = _find_requirement(
+            requirements,
+            "10-q",
+            "10-k",
+            "earnings",
+            "aws growth",
+            "free cash flow",
+            "capex",
+            "depreciation",
+            "balance sheet",
+            "diluted shares",
+        )
+
+        amazon_sec_tags = [
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "OperatingIncomeLoss",
+            "NetCashProvidedByUsedInOperatingActivities",
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "DepreciationDepletionAndAmortization",
+            "CashAndCashEquivalentsAtCarryingValue",
+            "Assets",
+            "Liabilities",
+            "WeightedAverageNumberOfDilutedSharesOutstanding",
+        ]
+
+        for tag in amazon_sec_tags:
+            requests.append(
+                {
+                    "source": "sec_companyfacts",
+                    "params": {
+                        "cik": "1018724",
+                        "tags": [tag],
+                        "limit": 8,
+                    },
+                    "gap": (
+                        financial_gap
+                        or "Amazon primary SEC financial evidence"
+                    ),
+                }
+            )
 
     desk_keys: list[str] = []
     for requirement in requirements:

@@ -10,6 +10,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
+from provider_hardening import (
+    fetch_gdelt_news as hardened_fetch_gdelt_news,
+    fetch_google_news_rss as hardened_fetch_google_news_rss,
+    fetch_sec_companyfacts as hardened_fetch_sec_companyfacts,
+)
+
 DEFAULT_USER_AGENT = os.getenv(
     "IIOS_USER_AGENT",
     "Investment-Intelligence-OS/0.5 contact=admin@example.invalid",
@@ -235,9 +241,10 @@ def fetch_fred_series(params: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 FETCHERS = {
-    "sec_companyfacts": fetch_sec_companyfacts,
+    "sec_companyfacts": hardened_fetch_sec_companyfacts,
     "noaa_alerts": fetch_noaa_alerts,
-    "gdelt_news": fetch_gdelt_news,
+    "gdelt_news": hardened_fetch_gdelt_news,
+    "google_news_rss": hardened_fetch_google_news_rss,
     "fred_series": fetch_fred_series,
 }
 

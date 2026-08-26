@@ -418,7 +418,22 @@ def _lane_status(case_id: str, lane: str, records: list[dict[str, Any]]) -> dict
 def primary_evidence_status(case_id: str) -> dict[str, Any]:
     _require_case(case_id)
     records = list_objects(case_id, "primary_evidence_record")
-    lanes = {lane: _lane_status(case_id, lane, records) for lane in CONTRACTS}
+    requirements = _requirements(case_id)
+
+    relevant_lanes = {
+        matched_lane
+        for requirement in requirements
+        for matched_lane, _ in [contract_for_requirement(requirement)]
+        if matched_lane
+    }
+
+    # The v0.12 primary-evidence floor was originally built
+    # specifically for Micron. Do not manufacture irrelevant
+    # semiconductor requirements for unrelated companies.
+    lanes = {
+        lane: _lane_status(case_id, lane, records)
+        for lane in relevant_lanes
+    }
     latest_hunt = latest_object("gap_hunt", case_id=case_id) or {}
     matrix = latest_hunt.get("resolution_matrix") or []
     resolution_by_requirement = {str(row.get("requirement")): row for row in matrix if isinstance(row, dict)}

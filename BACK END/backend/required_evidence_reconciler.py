@@ -567,12 +567,466 @@ def _macro_state(packet_items: list[dict[str, Any]], fact_key: str) -> dict[str,
     return {"state": "OPEN", "covered": False}
 
 
+
+def _generic_company_targets(requirement: str) -> list[dict[str, str]]:
+    """Map normal public-company underwriting requests without
+    pretending semiconductor-specific contracts apply universally.
+    """
+    text = _norm(requirement)
+    targets: list[dict[str, str]] = []
+
+    def add(lane: str, fact_key: str):
+        key = (lane, fact_key)
+        if key not in {
+            (row["lane"], row["fact_key"])
+            for row in targets
+        }:
+            targets.append(
+                {"lane": lane, "fact_key": fact_key}
+            )
+
+    if any(
+        term in text
+        for term in (
+            "10-q",
+            "10-k",
+            "earnings material",
+            "revenue",
+            "free cash flow",
+            "cash flow",
+            "capex",
+            "depreciation",
+            "balance sheet",
+            "diluted shares",
+            "operating income",
+            "margin",
+        )
+    ):
+        add("generic_company_financials", "filing_financials")
+
+    if any(
+        term in text
+        for term in (
+            "current price",
+            "volume",
+            "volatility",
+            "relative strength",
+            "market price",
+        )
+    ):
+        add("generic_market_context", "current_market")
+
+    if any(
+        term in text
+        for term in (
+            "valuation",
+            "multiple",
+            "enterprise value",
+            "forward eps",
+            "forward revenue",
+            "consensus",
+        )
+    ):
+        add("generic_market_context", "valuation_consensus")
+
+    if any(
+        term in text
+        for term in (
+            "short interest",
+            "options positioning",
+            "put/call",
+            "institutional or etf flows",
+            "institutional flows",
+            "etf flows",
+        )
+    ):
+        add(
+            "generic_market_context",
+            "market_positioning",
+        )
+
+    if any(
+        term in text
+        for term in (
+            "aws",
+            "cloud",
+            "advertising",
+            "retail profitability",
+            "customer adoption",
+            "bookings",
+            "backlog",
+            "utilization",
+            "pricing",
+        )
+    ):
+        add("generic_operating_context", "operating_kpis")
+
+    if any(
+        term in text
+        for term in (
+            "government documentation",
+            "procurement",
+            "award",
+            "regulatory",
+            "antitrust",
+            "policy",
+        )
+    ):
+        add("generic_policy_context", "official_policy")
+
+    if any(
+        term in text
+        for term in (
+            "portfolio holdings",
+            "portfolio exposure",
+            "factor exposure",
+            "correlation",
+            "drawdown stress",
+            "benchmark",
+        )
+    ):
+        add("generic_portfolio_context", "portfolio_state")
+
+    return targets
+
+
+def _packet_blob(item: dict[str, Any]) -> str:
+    raw = (
+        item.get("raw")
+        if isinstance(item.get("raw"), dict)
+        else item
+    )
+    return _norm(
+        " ".join(
+            str(raw.get(k) or item.get(k) or "")
+            for k in (
+                "source",
+                "source_type",
+                "evidence_type",
+                "claim",
+                "title",
+                "url",
+                "form",
+            )
+        )
+    )
+
+
+def _generic_state(
+    packet_items: list[dict[str, Any]],
+    lane: str,
+    fact_key: str,
+) -> dict[str, Any]:
+    current = [
+        item
+        for item in packet_items
+        if isinstance(item, dict)
+        and not item.get("stale")
+        and not item.get("missing_fields")
+    ]
+
+    blobs = [_packet_blob(item) for item in current]
+
+    if lane == "generic_company_financials":
+        sec_items = [
+            blob
+            for blob in blobs
+            if (
+                "sec edgar" in blob
+                or "data.sec.gov" in blob
+            )
+            and any(
+                term in blob
+                for term in (
+                    "10-q",
+                    "10-k",
+                    "revenue",
+                    "operatingincome",
+                    "operating income",
+                    "cash",
+                    "assets",
+                    "liabilities",
+                    "diluted",
+                    "propertyplant",
+                    "property plant",
+                    "depreciation",
+                )
+            )
+        ]
+        passed = len(sec_items) >= 2
+        return {
+            "state": "SATISFIED" if passed else "OPEN",
+            "covered": passed,
+            "primary_filing_items": len(sec_items),
+        }
+
+    if lane == "generic_market_context":
+        if fact_key == "current_market":
+            passed = any(
+                (
+                    "market snapshot" in blob
+                    or "market price" in blob
+                    or "yahoo finance" in blob
+                    or "stooq" in blob
+                )
+                for blob in blobs
+            )
+            return {
+                "state": "SATISFIED" if passed else "OPEN",
+                "covered": passed,
+            }
+
+        if fact_key == "market_positioning":
+            passed = any(
+                any(
+                    term in blob
+                    for term in (
+                        "short interest",
+                        "put/call",
+                        "open interest",
+                        "options positioning",
+                        "institutional flows",
+                        "etf flows",
+                    )
+                )
+                and any(
+                    source in blob
+                    for source in (
+                        "market_data",
+                        "exchange",
+                        "research",
+                        "nasdaq",
+                        "cboe",
+                        "finra",
+                    )
+                )
+                for blob in blobs
+            )
+
+            return {
+                "state": (
+                    "SATISFIED"
+                    if passed
+                    else "OPEN"
+                ),
+                "covered": passed,
+            }
+
+        if fact_key == "valuation_consensus":
+            # A price alone cannot prove valuation/consensus.
+            passed = any(
+                any(
+                    term in blob
+                    for term in (
+                        "forward eps",
+                        "consensus revenue",
+                        "consensus eps",
+                        "enterprise value",
+                        "ev/",
+                        "p/e",
+                        "valuation multiple",
+                    )
+                )
+                and (
+                    "official" in blob
+                    or "market_data" in blob
+                    or "research" in blob
+                )
+                for blob in blobs
+            )
+            return {
+                "state": "SATISFIED" if passed else "OPEN",
+                "covered": passed,
+            }
+
+    if lane == "generic_operating_context":
+        # News can discover these facts, but cannot resolve the gap.
+        primary = [
+            blob
+            for blob in blobs
+            if (
+                "amazon investor" in blob
+                or "ir.aboutamazon.com" in blob
+                or "sec edgar" in blob
+                or "data.sec.gov" in blob
+            )
+            and any(
+                term in blob
+                for term in (
+                    "aws",
+                    "advertising",
+                    "bookings",
+                    "backlog",
+                    "utilization",
+                    "customer adoption",
+                    "segment",
+                )
+            )
+        ]
+
+        if primary:
+            return {
+                "state": "SATISFIED",
+                "covered": True,
+                "primary_operating_items": len(primary),
+            }
+
+        context = any(
+            any(
+                term in blob
+                for term in (
+                    "aws",
+                    "advertising",
+                    "bookings",
+                    "backlog",
+                    "customer adoption",
+                )
+            )
+            for blob in blobs
+        )
+
+        return {
+            "state": (
+                "WATCHING"
+                if context
+                else "OPEN"
+            ),
+            "covered": False,
+            "watch_state": (
+                WATCH_STATE
+                if context
+                else None
+            ),
+        }
+
+    if lane == "generic_policy_context":
+        passed = any(
+            any(
+                host in blob
+                for host in (
+                    ".gov",
+                    "federalregister.gov",
+                    "ftc.gov",
+                    "justice.gov",
+                )
+            )
+            for blob in blobs
+        )
+        return {
+            "state": "SATISFIED" if passed else "OPEN",
+            "covered": passed,
+        }
+
+    if lane == "generic_portfolio_context":
+        # Portfolio state may only be resolved by first-party
+        # governed portfolio evidence. News, filings, consensus,
+        # and agent opinion cannot satisfy this gate.
+        governed = []
+
+        for item in current:
+            raw = (
+                item.get("raw")
+                if isinstance(item.get("raw"), dict)
+                else item
+            )
+
+            source_type = str(
+                raw.get("source_type")
+                or item.get("source_type")
+                or ""
+            ).lower()
+
+            evidence_type = str(
+                raw.get("evidence_type")
+                or item.get("evidence_type")
+                or ""
+            ).lower()
+
+            fact_key = str(
+                raw.get("primary_fact_key")
+                or item.get("primary_fact_key")
+                or ""
+            ).lower()
+
+            source_grade = str(
+                raw.get("primary_source_grade")
+                or item.get("primary_source_grade")
+                or ""
+            ).upper()
+
+            blob = _packet_blob(item)
+
+            if (
+                source_type == "portfolio_data"
+                and evidence_type == "portfolio_snapshot"
+                and fact_key == "portfolio_overlap"
+                and source_grade == "FIRST_PARTY_GOVERNED"
+                and "prospective" in blob
+                and "drawdown" in blob
+                and "cash" in blob
+                and "overlap" in blob
+            ):
+                governed.append(item)
+
+        passed = bool(governed)
+
+        return {
+            "state": "SATISFIED" if passed else "OPEN",
+            "covered": passed,
+            "governed_portfolio_observations": len(governed),
+        }
+
+    return {
+        "state": "OPEN",
+        "covered": False,
+    }
+
+
 def reconcile_requirement(
     requirement: str,
     live_floor: dict[str, Any],
     packet_items: list[dict[str, Any]],
+    *,
+    use_legacy_semiconductor: bool = True,
 ) -> dict[str, Any]:
-    targets = canonical_targets(requirement)
+    if use_legacy_semiconductor:
+        targets = canonical_targets(requirement)
+
+        if not targets:
+            targets = _generic_company_targets(requirement)
+
+    else:
+        # Non-semiconductor companies must not inherit Micron's
+        # HBM / DRAM / NAND / wafer / hyperscaler contracts.
+        targets = _generic_company_targets(requirement)
+
+        # Preserve genuinely generic governed context already
+        # implemented by the legacy reconciler.
+        safe_legacy_lanes = {
+            "macro_context",
+            "institutional_context",
+        }
+
+        for target in canonical_targets(requirement):
+            if target.get("lane") not in safe_legacy_lanes:
+                continue
+
+            key = (
+                target.get("lane"),
+                target.get("fact_key"),
+            )
+
+            existing = {
+                (
+                    row.get("lane"),
+                    row.get("fact_key"),
+                )
+                for row in targets
+            }
+
+            if key not in existing:
+                targets.append(target)
+
     results = []
 
     for target in targets:
@@ -599,6 +1053,12 @@ def reconcile_requirement(
         elif lane == "demand_quality_context":
             state = _demand_quality_state(
                 packet_items,
+                fact_key,
+            )
+        elif lane.startswith("generic_"):
+            state = _generic_state(
+                packet_items,
+                lane,
                 fact_key,
             )
         else:
@@ -633,8 +1093,26 @@ def reconcile_committee(
     live_floor: dict[str, Any],
     packet_items: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    topic = _norm(committee.get("topic"))
+
+    use_legacy_semiconductor = any(
+        token in topic
+        for token in (
+            "micron",
+            "(mu)",
+            "mu.us",
+        )
+    )
+
     rows = [
-        reconcile_requirement(req, live_floor, packet_items)
+        reconcile_requirement(
+            req,
+            live_floor,
+            packet_items,
+            use_legacy_semiconductor=(
+                use_legacy_semiconductor
+            ),
+        )
         for req in committee.get("required_evidence") or []
         if str(req).strip()
     ]
@@ -655,6 +1133,11 @@ def reconcile_committee(
     ]
 
     return {
+        "reconciliation_profile": (
+            "MICRON_SEMICONDUCTOR"
+            if use_legacy_semiconductor
+            else "GENERIC_PUBLIC_COMPANY"
+        ),
         "requirements": rows,
         "blocking_count": len(blocking),
         "watching_count": len(watching),

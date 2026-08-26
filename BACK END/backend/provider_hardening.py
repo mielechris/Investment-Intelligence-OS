@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -128,6 +129,116 @@ def _iso_gdelt_timestamp(value: Any) -> str | None:
         return parsed.astimezone(timezone.utc).isoformat()
     except ValueError:
         return None
+
+
+
+def fetch_google_news_rss(
+    params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    query = str(
+        params.get("query") or ""
+    ).strip()
+
+    if len(query) < 2:
+        raise ValueError(
+            "Google News RSS requires query"
+        )
+
+    limit = max(
+        1,
+        min(
+            int(params.get("limit") or 10),
+            50,
+        ),
+    )
+
+    qs = urlencode(
+        {
+            "q": query,
+            "hl": "en-US",
+            "gl": "US",
+            "ceid": "US:en",
+        }
+    )
+
+    url = (
+        "https://news.google.com/rss/search?"
+        + qs
+    )
+
+    body = _request_bytes(
+        url,
+        accept=(
+            "application/rss+xml,"
+            "application/xml,text/xml"
+        ),
+        provider="google_news_rss",
+        minimum_interval_seconds=0.75,
+        retries=2,
+        cache_ttl_seconds=15 * 60,
+    )
+
+    root = ET.fromstring(body)
+
+    output: list[dict[str, Any]] = []
+
+    for item in root.findall(
+        ".//channel/item"
+    )[:limit]:
+        title = (
+            item.findtext("title") or ""
+        ).strip()
+
+        link = (
+            item.findtext("link") or ""
+        ).strip()
+
+        published = (
+            item.findtext("pubDate") or ""
+        ).strip()
+
+        source_node = item.find("source")
+
+        source = (
+            (
+                source_node.text or ""
+            ).strip()
+            if source_node is not None
+            else "Google News"
+        )
+
+        if not title:
+            continue
+
+        output.append(
+            {
+                "source":
+                    source
+                    or "Google News",
+                "source_type":
+                    "news_aggregator",
+                "evidence_type":
+                    "news",
+                "url":
+                    link or url,
+                "title":
+                    title,
+                "claim":
+                    title,
+                "timestamp":
+                    published or None,
+                "reliability_score":
+                    0.55,
+                "gap_resolution_eligible":
+                    False,
+                "trade_signal":
+                    False,
+                "trade_execution_permission":
+                    False,
+            }
+        )
+
+    return output
 
 
 def fetch_gdelt_news(params: dict[str, Any]) -> list[dict[str, Any]]:
