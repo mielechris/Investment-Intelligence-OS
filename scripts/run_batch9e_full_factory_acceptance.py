@@ -17,12 +17,16 @@ VENV_CANDIDATES = (
 )
 
 
-def run(*args: str, cwd: Path | None = None, check: bool = True, env: dict[str, str] | None = None):
-    return subprocess.run(list(args), cwd=str(cwd) if cwd else None, text=True, check=check, env=env)
+def run(*args: str, cwd: Path | None = None, check: bool = True, env=None):
+    return subprocess.run(
+        list(args), cwd=str(cwd) if cwd else None, text=True, check=check, env=env
+    )
 
 
 def capture(*args: str, cwd: Path | None = None) -> str:
-    return subprocess.check_output(list(args), cwd=str(cwd) if cwd else None, text=True).strip()
+    return subprocess.check_output(
+        list(args), cwd=str(cwd) if cwd else None, text=True
+    ).strip()
 
 
 def resolve_python() -> Path:
@@ -44,8 +48,7 @@ def load_dotenv(path: Path, env: dict[str, str]) -> None:
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
+        key, value = key.strip(), value.strip()
         if not key:
             continue
         try:
@@ -88,13 +91,17 @@ def main() -> int:
 
     env = dict(os.environ)
     load_dotenv(DOTENV, env)
-    env["PYTHONUNBUFFERED"] = "1"
-    env["IIOS_DB_PATH"] = str(ISOLATED_DB)
-    env["IIOS_9E_GROK_MAX_BATCHES"] = "1"
-    env["IIOS_9E_GROK_BATCH_SIZE"] = "20"
-    env["IIOS_9E_GEMINI_FINALISTS"] = "4"
-    env["IIOS_9E_GEMINI_WORKERS"] = "2"
-    env["IIOS_9E_MAX_PROMOTIONS"] = "5"
+    env.update(
+        {
+            "PYTHONUNBUFFERED": "1",
+            "IIOS_DB_PATH": str(ISOLATED_DB),
+            "IIOS_9E_GROK_MAX_BATCHES": "1",
+            "IIOS_9E_GROK_BATCH_SIZE": "20",
+            "IIOS_9E_GEMINI_FINALISTS": "4",
+            "IIOS_9E_GEMINI_WORKERS": "2",
+            "IIOS_9E_MAX_PROMOTIONS": "5",
+        }
+    )
 
     code = r'''
 from __future__ import annotations
@@ -115,8 +122,7 @@ tls = configure_verified_tls()
 import ledger
 ledger.init_ledger()
 
-# Install the same production source/risk/lineage guards as the live backend,
-# but all persistence is routed to the isolated IIOS_DB_PATH.
+# Production hardening is installed against the isolated IIOS_DB_PATH.
 import app as _iios_bootstrap  # noqa: F401
 import main as governed_main
 
@@ -128,14 +134,13 @@ from paper_capital_api import paper_capital_status
 
 
 def object_count(object_type: str) -> int:
-    connection = sqlite3.connect(ledger.DB_PATH, timeout=30)
+    db = sqlite3.connect(ledger.DB_PATH, timeout=30)
     try:
-        row = connection.execute(
-            "SELECT COUNT(*) FROM ledger_objects WHERE object_type = ?",
-            (object_type,),
+        row = db.execute(
+            "SELECT COUNT(*) FROM ledger_objects WHERE object_type=?", (object_type,)
         ).fetchone()
     finally:
-        connection.close()
+        db.close()
     return int(row[0] if row else 0)
 
 
@@ -146,7 +151,7 @@ print(f"TLS mode: {tls.get('mode')}")
 print(f"Certificate verification: {tls.get('certificate_verification') is True}")
 print(f"Hostname verification: {tls.get('hostname_verification') is True}")
 
-print("\n=== B. GOVERNED S&P 500 + NASDAQ-100 UNIVERSE ===")
+print("\n=== B. GOVERNED UNIVERSE ===")
 universe = refresh_production_universe(force=True)
 print(f"Universe verified: {universe.get('verified_complete') is True}")
 print(f"Strict membership: {universe.get('strict_membership') is True}")
@@ -157,7 +162,7 @@ for row in universe.get("source_lineage") or []:
         f"mode={row.get('source_mode')} publisher={row.get('source_publisher')}"
     )
 
-print("\n=== C. HIGH-SPEED RADAR + GROK/GEMINI ===")
+print("\n=== C. RADAR + GROK/GEMINI + REAL PROMOTION GATE ===")
 started = time.perf_counter()
 radar = run_parallel_high_speed_cycle(
     enable_grok=True,
@@ -177,17 +182,14 @@ print(f"Provider errors: {radar.get('provider_errors') or 'NONE'}")
 print(f"Promoted governed cases: {radar.get('promoted_case_count')}")
 print(f"Radar seconds: {round(time.perf_counter() - started, 3)}")
 
-promotions = list(radar.get("promotions") or [])
-for index, item in enumerate(promotions, 1):
-    candidate = item.get("candidate") or {}
-    case = item.get("case") or {}
+promoted_cases = list(radar.get("promoted_cases") or [])
+for index, row in enumerate(promoted_cases, 1):
     print(
-        f"  PROMOTION {index}: ticker={candidate.get('ticker')} "
-        f"research_score={candidate.get('score')} "
-        f"radar_rank={candidate.get('radar_rank_score')} case={case.get('case_id')}"
+        f"  PROMOTION {index}: ticker={row.get('ticker')} "
+        f"radar_rank={row.get('rank_score')} case={row.get('case_id')}"
     )
 
-if not promotions:
+if not promoted_cases:
     print("RESULT: INCONCLUSIVE — no candidate cleared the unchanged real promotion gate this cycle")
     print("No synthetic case was injected and no threshold was weakened.")
     raise SystemExit(2)
@@ -229,8 +231,7 @@ for case_id in completed_case_ids:
     reconciliation = risk.get("required_evidence_reconciliation") or {}
     print(
         f"  {case_id}: risk={risk.get('decision')} rules={risk.get('triggered_rules') or []} "
-        f"blocking={reconciliation.get('blocking_count')} "
-        f"watching={reconciliation.get('watching_count')}"
+        f"blocking={reconciliation.get('blocking_count')} watching={reconciliation.get('watching_count')}"
     )
 
 print("\n=== F. READ-ONLY CAPITAL BOUNDARY ===")
@@ -289,7 +290,7 @@ authority_locked = authorizations == 0 and governed_executions == 0
 print("\n=== H. FULL FACTORY ACCEPTANCE SUMMARY ===")
 print(f"Governed universe/TLS: {universe_ok}")
 print(f"Grok + Gemini: {model_ok}")
-print(f"Natural promotions: {len(promotions)}")
+print(f"Natural promotions: {len(promoted_cases)}")
 print(f"Eight-agent + Committee floor: {floor_ok}")
 print(f"Governed Risk reached: {risk_ok}")
 print(f"Read-only Capital boundary reached: {capital_boundary_ok}")
@@ -300,7 +301,7 @@ print("A Capital prerequisite block is a valid governed outcome; it is not bypas
 passed = bool(
     universe_ok
     and model_ok
-    and len(promotions) >= 1
+    and len(promoted_cases) >= 1
     and floor_ok
     and risk_ok
     and capital_boundary_ok
