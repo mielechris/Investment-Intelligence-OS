@@ -53,16 +53,18 @@ def _loop(name: str, interval_seconds: float, fn: Callable[[], Any]) -> None:
         _sleep_interruptible(max(1.0, interval_seconds - elapsed))
 
 
-def run_once(*, dry_run: bool, no_models: bool) -> int:
+def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = False) -> int:
     _log("=== IIOS BATCH 9E · ONE-SHOT HIGH-SPEED RADAR ===")
     _log(f"Promotions enabled: {not dry_run}")
     _log(f"Grok/Kimi enabled: {not no_models}")
+    _log(f"Force fresh model research: {bool(force_model_refresh)}")
     _log("Broker connected: FALSE")
     _log("Live execution: FALSE")
     cycle = run_parallel_high_speed_cycle(
         enable_grok=not no_models,
         enable_kimi=not no_models,
         enable_promotions=not dry_run,
+        force_model_refresh=bool(force_model_refresh),
     )
     _log(
         "RADAR COMPLETE · "
@@ -146,6 +148,11 @@ def main() -> int:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Do not promote cases")
     parser.add_argument("--no-models", action="store_true", help="Skip Grok and Kimi provider calls")
+    parser.add_argument(
+        "--force-model-refresh",
+        action="store_true",
+        help="Ignore cached model context and require a fresh Grok/Kimi attempt for this cycle",
+    )
     parser.add_argument("--radar-minutes", type=int, default=DEFAULT_RADAR_MINUTES)
     parser.add_argument("--case-floor-seconds", type=int, default=DEFAULT_CASE_FLOOR_SECONDS)
     parser.add_argument("--swarm-seconds", type=int, default=DEFAULT_SWARM_SECONDS)
@@ -155,7 +162,11 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_stop)
 
     if args.once:
-        return run_once(dry_run=args.dry_run, no_models=args.no_models)
+        return run_once(
+            dry_run=args.dry_run,
+            no_models=args.no_models,
+            force_model_refresh=args.force_model_refresh,
+        )
 
     return run_continuous(
         radar_minutes=max(2, min(int(args.radar_minutes), 60)),
