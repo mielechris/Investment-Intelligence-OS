@@ -11,6 +11,10 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body
 
 from dislocation_intelligence import run_dislocation_scan
+from jesse_outcome_attribution import (
+    refresh_all_jesse_outcome_attributions,
+    router as jesse_outcome_router,
+)
 from jesse_paper_fund_bridge import dispatch_jesse_top_three
 from jesse_source_acquisition import (
     current_governed_universe,
@@ -24,6 +28,7 @@ from opportunity_acquisition import OPPORTUNITY_LEDGER_CASE
 from provider_hardening import fetch_market_quote
 
 router = APIRouter()
+router.include_router(jesse_outcome_router)
 SCHEDULER_CASE = "jesse_intelligence_scheduler"
 STATE_ID = "jesse_scheduler_state"
 STATE_TYPE = "jesse_scheduler_state"
@@ -274,8 +279,9 @@ def run_cycle(force_jobs: list[str] | None = None) -> dict[str, Any]:
     ):
         def followup():
             result = settle_dislocation_outcomes(now_pt)
+            attribution = refresh_all_jesse_outcome_attributions()
             s["last_followup_date"] = now_pt.date().isoformat()
-            return result
+            return {**result, "attribution": attribution}
         jobs.append(("followup", followup))
 
     for name, func in jobs:
