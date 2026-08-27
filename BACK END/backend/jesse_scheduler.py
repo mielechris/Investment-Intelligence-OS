@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body
 
 from dislocation_intelligence import run_dislocation_scan
+from jesse_paper_fund_bridge import dispatch_jesse_top_three
 from jesse_source_acquisition import (
     current_governed_universe,
     discover_public_institutional_research,
@@ -260,8 +261,9 @@ def run_cycle(force_jobs: list[str] | None = None) -> dict[str, Any]:
             if universe.get("symbols"):
                 request["universe_symbols"] = universe["symbols"]
             result = run_dislocation_scan(request)
+            bridge = dispatch_jesse_top_three(result)
             s["last_dislocation_date"] = now_pt.date().isoformat()
-            return result
+            return {**result, "bridge": bridge}
         jobs.append(("dislocation", dislocation))
 
     if "followup" in force or should_run_daily(
