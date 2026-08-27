@@ -1,0 +1,48 @@
+name: Batch 10C Historical Pattern Agent
+
+on:
+  push:
+    branches:
+      - feature/batch10c-historical-pattern-agent
+  workflow_dispatch:
+
+jobs:
+  historical-pattern-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BACK END/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: pip install fastapi openai python-dotenv certifi
+      - name: Compile historical review path
+        run: >-
+          python -m py_compile
+          historical_regime_memory.py historical_pattern_analyst.py
+          eight_agent_orchestrator.py opportunity_dispatch.py jesse_paper_fund_bridge.py
+      - name: Run historical pattern tests
+        run: >-
+          PYTHONWARNINGS="error::ResourceWarning" python -m unittest -v
+          test_historical_pattern_analyst.py test_eight_agent_orchestrator.py
+          test_historical_regime_memory.py test_opportunity_dispatch.py
+          test_jesse_paper_fund_bridge.py
+      - name: Enforce paper-only historical desk
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          analyst = Path('historical_pattern_analyst.py').read_text()
+          orchestrator = Path('eight_agent_orchestrator.py').read_text()
+          assert 'AFTER_SKEPTIC_AND_PORTFOLIO_BEFORE_COMMITTEE' in orchestrator
+          assert 'historical_pattern_complete' in orchestrator
+          assert 'all_nine_review_desks_complete' in orchestrator
+          assert 'paper_order_permission": False' in analyst
+          assert 'trade_execution_permission": False' in analyst
+          assert 'live_execution": False' in analyst
+          print('historical pattern governance contract verified')
+          PY
