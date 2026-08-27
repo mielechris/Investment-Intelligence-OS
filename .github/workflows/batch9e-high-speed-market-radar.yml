@@ -29,6 +29,7 @@ jobs:
           "BACK END/backend/high_speed_gemini_deep_worker.py"
           "BACK END/backend/high_speed_case_queue.py"
           scripts/iios_high_speed_factory_runner.py
+          scripts/launch_batch9e_live_paper_factory.py
           scripts/run_batch9e_high_speed_acceptance.py
           scripts/run_batch9e_official_universe_acceptance.py
           scripts/run_batch9e_model_acceptance.py
@@ -73,6 +74,19 @@ jobs:
           grep -q 'Paper order authority: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
           grep -q 'Broker connected: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
           grep -q 'Live execution: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
+      - name: Assert live-ledger paper factory launcher safety
+        run: |
+          grep -q 'IIOS_DB_PATH' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'iios_ledger.db' scripts/launch_batch9e_live_paper_factory.py
+          grep -q '9A / 9B existing processes: UNTOUCHED' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'EXISTING 9B GOVERNED CHAIN ONLY' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'IIOS_GEMINI_TIMEOUT_SECONDS.*30' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'IIOS_GEMINI_RETRIES.*0' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'gemini-3.6-flash' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Broker connected: FALSE' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Live execution: FALSE' scripts/launch_batch9e_live_paper_factory.py
+          ! grep -q 'prepare_paper_authorization' scripts/launch_batch9e_live_paper_factory.py
+          ! grep -q 'submit_paper_order' scripts/launch_batch9e_live_paper_factory.py
       - name: Assert qualification-aware full-factory v2 safety
         run: |
           grep -q 'Qualification stage: REQUIRED' scripts/run_batch9e_full_factory_acceptance_v2.py
