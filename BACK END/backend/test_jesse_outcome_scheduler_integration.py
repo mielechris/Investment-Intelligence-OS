@@ -3,8 +3,6 @@ from datetime import datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI
-
 import jesse_scheduler as scheduler
 
 
@@ -76,12 +74,10 @@ class JesseOutcomeSchedulerIntegrationTests(unittest.TestCase):
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
 
-    def test_outcome_router_is_exposed_when_scheduler_router_is_mounted(self):
-        app = FastAPI()
-        app.include_router(scheduler.router)
+    def test_outcome_routes_are_registered_on_scheduler_router(self):
         paths = {
             route.path
-            for route in app.routes
+            for route in scheduler.router.routes
             if isinstance(getattr(route, "path", None), str)
         }
         self.assertIn("/intelligence/jesse-outcomes/status", paths)
