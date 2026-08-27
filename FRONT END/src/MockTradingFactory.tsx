@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { AGENT_VISUAL_CONTRACTS } from "./agentVisualContracts";
+import { MockAfterActionRoom, MockCommitteeRoom, MockRiskRoom, MockWhyDrawer } from "./MockDecisionRooms";
 import "./MockTradingFactory.css";
 
 type MockStage = "RADAR" | "RESEARCH" | "COMMITTEE" | "RISK" | "PAPER" | "REVIEW";
@@ -31,30 +32,15 @@ const ROOM_COPY:Record<MockStage,string>={
  REVIEW:"After Action grades the call with hindsight separated from process.",
 };
 
-const MAX_MOOD_BY_STAGE:Record<MockStage,MaxMood>={
- RADAR:"WATCHING",
- RESEARCH:"WORKING",
- COMMITTEE:"SUSPICIOUS",
- RISK:"PISSED",
- PAPER:"APPROVING",
- REVIEW:"REVIEWING",
-};
-
-const MAX_MOOD_COPY:Record<MaxMood,string>={
- WATCHING:"Eyes on the street",
- WORKING:"Crew is digging",
- SUSPICIOUS:"Convince me",
- PISSED:"Risk found something",
- APPROVING:"Mock ticket cleared",
- REVIEWING:"Bring the file back",
-};
-
+const MAX_MOOD_BY_STAGE:Record<MockStage,MaxMood>={RADAR:"WATCHING",RESEARCH:"WORKING",COMMITTEE:"SUSPICIOUS",RISK:"PISSED",PAPER:"APPROVING",REVIEW:"REVIEWING"};
+const MAX_MOOD_COPY:Record<MaxMood,string>={WATCHING:"Eyes on the street",WORKING:"Crew is digging",SUSPICIOUS:"Convince me",PISSED:"Risk found something",APPROVING:"Mock ticket cleared",REVIEWING:"Bring the file back"};
 function mark(s:CheckState){return s==="PASS"?"✅":s==="WARN"?"⚠️":s==="FAIL"?"❌":"⏳"}
 
 export default function MockTradingFactory(){
  const[tick,setTick]=useState(0);
  const[paused,setPaused]=useState(false);
  const[showBubble,setShowBubble]=useState(true);
+ const[whyOpen,setWhyOpen]=useState(false);
  useEffect(()=>{if(paused)return;const timer=window.setInterval(()=>setTick(v=>v+1),2200);return()=>window.clearInterval(timer)},[paused]);
 
  const stageIndex=tick%STAGES.length;
@@ -67,23 +53,25 @@ export default function MockTradingFactory(){
  const mockNav=10000+((tick%11)-4)*13.25;
  const mockPnl=mockNav-10000;
  const price=movingCase.tape[tick%movingCase.tape.length];
- const afterAction=activeStage==="REVIEW";
  const hasFailure=movingCase.checks.some(c=>c.state==="FAIL");
  const progressPct=(stageIndex/(STAGES.length-1))*100;
+
+ useEffect(()=>{setWhyOpen(false)},[movingCase.ticker]);
 
  const maxLine=useMemo(()=>{
   const roomLines:Record<MockStage,string>={
    RADAR:`I see ${movingCase.ticker}. Nobody falls in love with a ticker in the hallway.`,
    RESEARCH:`${activeAgent.mobAlias||activeAgent.floorTitle} has the file. Dig until the story either earns respect or dies.`,
-   COMMITTEE:`Everybody at the table. If the thesis needs applause to survive, bury it.`,
-   RISK:hasFailure?`Stop. Something in ${movingCase.ticker} stinks. Risk gets the last word before the mock ticket.`:`Risk room is open. Size the downside before you count the upside.`,
-   PAPER:`Mock ticket only. Real money stays in the vault.`,
+   COMMITTEE:"Everybody at the table. If the thesis needs applause to survive, bury it.",
+   RISK:hasFailure?`Stop. Something in ${movingCase.ticker} stinks. Risk gets the last word before the mock ticket.`:"Risk room is open. Size the downside before you count the upside.",
+   PAPER:"Mock ticket only. Real money stays in the vault.",
    REVIEW:`Bring ${movingCase.ticker} back in. We grade the decision, not the ego.`,
   };
   return roomLines[activeStage];
  },[activeAgent.floorTitle,activeAgent.mobAlias,activeStage,hasFailure,movingCase.ticker]);
 
  const trailStyle={"--stage-index":stageIndex,"--progress":`${progressPct}%`} as CSSProperties;
+ const commonRoomProps={ticker:movingCase.ticker,score:movingCase.score,decision:movingCase.decision,checks:movingCase.checks};
 
  return <section className="mock-factory" aria-label="IIOS mock trading factory">
   <header className="mock-factory__header">
@@ -101,13 +89,8 @@ export default function MockTradingFactory(){
 
   <div className="mock-factory__grid">
    <aside className={`mock-factory__max max-mood--${maxMood.toLowerCase()}`}>
-    <div className={`mock-factory__portrait ${activeStage==="RISK"?"alarm":""}`}>
-     <div className="max-status-ring"><span className="max-dog">MAX</span></div>
-     <small>FLOOR BOSS</small>
-     <b className="max-mood-badge">{maxMood}</b>
-    </div>
-    <h3>MAX · THE BOSS</h3>
-    <div className="max-mood-copy">{MAX_MOOD_COPY[maxMood]}</div>
+    <div className={`mock-factory__portrait ${activeStage==="RISK"?"alarm":""}`}><div className="max-status-ring"><span className="max-dog">MAX</span></div><small>FLOOR BOSS</small><b className="max-mood-badge">{maxMood}</b></div>
+    <h3>MAX · THE BOSS</h3><div className="max-mood-copy">{MAX_MOOD_COPY[maxMood]}</div>
     {showBubble?<div className="mob-bubble">“{maxLine}”</div>:null}
     <div className="max-command-strip"><span>CASE</span><b>{movingCase.ticker}</b><span>ROOM</span><b>{activeStage}</b></div>
     <div className="mock-factory__metrics"><span>MOCK NAV <b>${mockNav.toFixed(2)}</b></span><span>MOCK P&L <b>{mockPnl>=0?"+":""}${mockPnl.toFixed(2)}</b></span><span>REAL ORDERS <b>0</b></span></div>
@@ -116,20 +99,18 @@ export default function MockTradingFactory(){
    <main className="mock-factory__floor">
     <div className="mock-factory__rooms">{STAGES.map((stage,i)=><div key={stage} className={`mock-room ${stage===activeStage?"mock-room--active":""} ${stage==="COMMITTEE"&&stage===activeStage?"committee-light":""} ${stage==="RISK"&&stage===activeStage?"risk-light":""} ${i<stageIndex?"mock-room--cleared":""}`}><span>{stage}</span><small>{stage===activeStage?`${movingCase.ticker} IN ROOM`:i<stageIndex?"CLEARED":"STANDBY"}</small></div>)}</div>
 
-    <div className="case-transit" style={trailStyle}>
-     <div className="case-transit__rail"><div className="case-transit__progress" /></div>
-     {STAGES.map((stage,i)=><i key={stage} className={`case-transit__node ${i<stageIndex?"done":""} ${i===stageIndex?"active":""}`}><span>{i+1}</span></i>)}
-     <div className="case-runner"><b>{movingCase.ticker}</b><small>{activeStage} FILE</small></div>
-     <div className="handoff-flash">{activeAgent.mobAlias||activeAgent.floorTitle} → {activeStage}</div>
-    </div>
+    <div className="case-transit" style={trailStyle}><div className="case-transit__rail"><div className="case-transit__progress" /></div>{STAGES.map((stage,i)=><i key={stage} className={`case-transit__node ${i<stageIndex?"done":""} ${i===stageIndex?"active":""}`}><span>{i+1}</span></i>)}<div className="case-runner"><b>{movingCase.ticker}</b><small>{activeStage} FILE</small></div><div className="handoff-flash">{activeAgent.mobAlias||activeAgent.floorTitle} → {activeStage}</div></div>
 
     <div className="mock-factory__case-card">
      <div className="mock-factory__case-head"><div><span>CURRENT MOCK CASE</span><strong>{movingCase.ticker}</strong></div><div><span>MOCK PRICE</span><strong>${price.toFixed(2)}</strong></div><div><span>RADAR SCORE</span><strong>{movingCase.score}</strong></div><div><span>DISPOSITION</span><strong>{movingCase.decision}</strong></div></div>
-     <p><b>WHY IT SURFACED:</b> {movingCase.catalyst}</p>
-     <p className="room-narration"><b>ROOM:</b> {ROOM_COPY[activeStage]}</p>
-     <div className="mock-factory__checks">{movingCase.checks.map(item=><span key={item.label}>{mark(item.state)} {item.label}</span>)}</div>
-     <div className="mock-factory__handoff"><b>HANDOFF</b> · MAX → {activeAgent.mobAlias||activeAgent.floorTitle} → {activeStage}</div>
+     <p><b>WHY IT SURFACED:</b> {movingCase.catalyst}</p><p className="room-narration"><b>ROOM:</b> {ROOM_COPY[activeStage]}</p>
+     <div className="mock-factory__checks">{movingCase.checks.map(item=><span key={item.label}>{mark(item.state)} {item.label}</span>)}</div><div className="mock-factory__handoff"><b>HANDOFF</b> · MAX → {activeAgent.mobAlias||activeAgent.floorTitle} → {activeStage}</div>
     </div>
+
+    <MockWhyDrawer ticker={movingCase.ticker} decision={movingCase.decision} checks={movingCase.checks} catalyst={movingCase.catalyst} open={whyOpen} onToggle={()=>setWhyOpen(v=>!v)} />
+
+    {activeStage==="COMMITTEE"?<MockCommitteeRoom {...commonRoomProps}/>:null}
+    {activeStage==="RISK"?<MockRiskRoom {...commonRoomProps}/>:null}
 
     <div className="crew-header"><span>THE EIGHT DESKS</span><strong>EVERYBODY HAS A JOB. EGO IS NOT ONE.</strong></div>
     <div className="mock-factory__desks">{AGENT_VISUAL_CONTRACTS.map((agent,index)=>{
@@ -138,16 +119,10 @@ export default function MockTradingFactory(){
       const warning=active&&(activeStage==="RISK"||hasFailure);
       const status=active?(warning?"BLOCKING / CHALLENGING":"WORKING MOCK CASE"):supporting?"ON DECK":"WAITING";
       const line=warning?(agent.warningLine||agent.maxReaction):active?(agent.workingLine||agent.maxReaction):supporting?"Standing by for the handoff.":agent.clearedLine||"Waiting for a case.";
-      return <div key={agent.key} className={`mock-desk ${active?"mock-desk--active":""} ${supporting?"mock-desk--support":""} ${warning?"mock-desk--warning":""}`}>
-       <div className="mob-avatar"><span>{agent.mobAlias?.split(" ").pop()?.slice(0,2)||agent.floorTitle.slice(0,2)}</span></div>
-       <div className="desk-title"><small>{agent.mobAlias||"CREW"}</small><strong>{agent.floorTitle}</strong></div>
-       <span>{agent.crewRole||agent.characterArchetype}</span>
-       <em>{status}</em>
-       {showBubble&&(active||supporting)?<i>“{line}”</i>:null}
-      </div>
+      return <div key={agent.key} className={`mock-desk ${active?"mock-desk--active":""} ${supporting?"mock-desk--support":""} ${warning?"mock-desk--warning":""}`}><div className="mob-avatar"><span>{agent.mobAlias?.split(" ").pop()?.slice(0,2)||agent.floorTitle.slice(0,2)}</span></div><div className="desk-title"><small>{agent.mobAlias||"CREW"}</small><strong>{agent.floorTitle}</strong></div><span>{agent.crewRole||agent.characterArchetype}</span><em>{status}</em>{showBubble&&(active||supporting)?<i>“{line}”</i>:null}</div>
     })}</div>
 
-    {afterAction?<section className="after-action-room"><div><span>AFTER ACTION ROOM</span><h3>{movingCase.ticker} GETS CALLED BACK INTO THE OFFICE</h3></div><div className="aar-grid"><b>PROCESS GRADE · {movingCase.decision==="NO TRADE"?"A":"B+"}</b><span>Thesis discipline: PASS</span><span>Risk discipline: {hasFailure?"VETO VALUABLE":"PASS"}</span><span>Hindsight contamination: BLOCKED</span><span>Lesson: recorded in MOCK memory only</span></div></section>:null}
+    {activeStage==="REVIEW"?<MockAfterActionRoom ticker={movingCase.ticker} decision={movingCase.decision} checks={movingCase.checks} score={movingCase.score}/>:null}
    </main>
   </div>
 
