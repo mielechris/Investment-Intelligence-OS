@@ -1,3 +1,5 @@
+import "./MockDecisionRooms.css";
+
 type CheckState = "PASS" | "WARN" | "FAIL" | "PENDING";
 
 type Check = { label:string; state:CheckState };
