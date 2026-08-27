@@ -9,7 +9,6 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -104,49 +103,102 @@ def _normalize_symbols(values: list[Any]) -> list[str]:
 
 
 def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
+    """Parse the publisher's visible Nasdaq-100 Symbol | Company Name list.
+
+    The Nasdaq page is not a conventional HTML table in every render. Treating
+    every short uppercase text node as a ticker over-collects company-name words
+    such as APPLE, COSTCO, INTUIT, etc. The publisher section is explicitly a
+    two-column Symbol / Company Name list, so consume the bounded section as
+    symbol/company pairs and validate the resulting count before use.
+    """
     text = raw.decode("utf-8", errors="replace")
     parser = _TextCollector()
     parser.feed(unescape(text))
     parts = parser.parts
 
-    start = None
-    end = None
+    section_start: int | None = None
+    section_end: int | None = None
     for idx, value in enumerate(parts):
         lower = value.lower()
-        if start is None and "nasdaq-100 company breakdown" in lower:
-            start = idx
-        if start is not None and "last updated" in lower:
-            end = idx
+        if section_start is None and "nasdaq-100 company breakdown" in lower:
+            section_start = idx
+        if section_start is not None and lower.startswith("last updated"):
+            section_end = idx
             break
-    if start is None:
+    if section_start is None:
         return []
-    scope = parts[start : end if end is not None else min(len(parts), start + 500)]
 
-    candidates: list[str] = []
-    # The official Nasdaq page presents an alphabetized Symbol / Company Name table.
-    # Within that bounded section, symbol cells are short uppercase tokens. We still
-    # require the governed 95-110 count range before accepting the result.
-    for value in scope:
+    end = section_end if section_end is not None else min(len(parts), section_start + 500)
+    scope = parts[section_start:end]
+
+    # Find the exact two-column header. Some renders emit the header cells as
+    # separate text nodes; others include both labels in one node.
+    data_start: int | None = None
+    for idx, value in enumerate(scope):
+        normalized = " ".join(value.lower().split())
+        if normalized == "symbol":
+            if idx + 1 < len(scope) and "company name" in scope[idx + 1].lower():
+                data_start = idx + 2
+                break
+        if "symbol" in normalized and "company name" in normalized:
+            data_start = idx + 1
+            break
+    if data_start is None:
+        return []
+
+    rows = scope[data_start:]
+    symbols: list[str] = []
+
+    # Primary path: each publisher row contributes [symbol, company name].
+    for idx in range(0, len(rows) - 1, 2):
+        token = rows[idx].strip().upper()
+        symbol = _normalize_symbol(token)
+        if symbol and re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,7}", token):
+            symbols.append(symbol)
+
+    paired = _normalize_symbols(symbols)
+    if legacy.validate_index_count("NASDAQ100", paired)[0]:
+        return paired
+
+    # Defensive fallback for a render that inserts extra text nodes: select only
+    # ticker-looking nodes whose immediate successor looks like a company label,
+    # while rejecting known UI/category labels. Count validation remains the gate.
+    rejected = {
+        "SYMBOL", "ALL", "TECHNOLOGY", "INDUSTRIALS", "UTILITIES",
+        "TELECOMMUNICATIONS", "HEALTH", "CARE", "BASIC", "MATERIALS",
+        "CONSUMER", "STAPLES", "DISCRETIONARY", "COMPANY", "NAME",
+    }
+    fallback: list[str] = []
+    for idx, value in enumerate(rows[:-1]):
         token = value.strip().upper()
-        if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,7}", token):
-            if token in {
-                "SYMBOL", "ALL", "TECHNOLOGY", "INDUSTRIALS", "UTILITIES",
-                "TELECOMMUNICATIONS", "HEALTH", "CARE", "BASIC", "MATERIALS",
-                "CONSUMER", "STAPLES", "DISCRETIONARY", "COMPANY", "NAME",
-            }:
-                continue
-            candidates.append(token)
-    return _normalize_symbols(candidates)
+        if token in rejected or not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,7}", token):
+            continue
+        next_value = rows[idx + 1].strip()
+        # Company labels normally contain lowercase after normalization, spaces,
+        # punctuation, or are longer than plausible ticker symbols.
+        if (
+            " " in next_value
+            or any(ch in next_value for ch in ".,'&()")
+            or len(next_value) > 8
+        ):
+            symbol = _normalize_symbol(token)
+            if symbol:
+                fallback.append(symbol)
+    return _normalize_symbols(fallback)
 
 
 def _read_nasdaq100() -> dict[str, Any]:
     url = str(os.getenv("IIOS_NASDAQ100_CONSTITUENTS_URL") or NASDAQ100_DIRECT_URL).strip()
     raw, content_type = _fetch(url, referer="https://www.nasdaq.com/")
-    symbols = legacy.parse_symbols_bytes(raw, content_type)
-    if not legacy.validate_index_count("NASDAQ100", symbols)[0]:
-        visible = _nasdaq_visible_company_symbols(raw)
-        if len(visible) > len(symbols):
-            symbols = visible
+
+    # Prefer the publisher's explicitly labeled complete company list. Generic
+    # page parsers can see navigation/marketing symbols and therefore over-count.
+    visible = _nasdaq_visible_company_symbols(raw)
+    if legacy.validate_index_count("NASDAQ100", visible)[0]:
+        symbols = visible
+    else:
+        symbols = _normalize_symbols(legacy.parse_symbols_bytes(raw, content_type))
+
     symbols = _normalize_symbols(symbols)
     verified, error = legacy.validate_index_count("NASDAQ100", symbols)
     return {
