@@ -16,15 +16,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compile observation runner and acceptance launcher
-        run: python -m py_compile scripts/iios_observation_runner.py scripts/run_batch9a_observation_acceptance.py scripts/test_batch9a_observation_contract.py
+      - name: Compile observation runner and acceptance tools
+        run: python -m py_compile scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py scripts/run_batch9a_observation_acceptance.py scripts/test_batch9a_observation_contract.py
       - name: Run Batch 9A safety contract
         run: python scripts/test_batch9a_observation_contract.py
       - name: Assert no live execution authority
         run: |
-          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py
-          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py
-          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py
+          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py
 
   frontend-regression:
     runs-on: ubuntu-latest
