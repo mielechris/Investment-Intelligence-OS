@@ -2,6 +2,7 @@ import "./previewApiBridge8G";
 import { useEffect, useMemo, useState } from "react";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
 import SpecialistDeskFloor from "./SpecialistDeskFloor";
+import MockTradingFactory from "./MockTradingFactory";
 import ThesisIntegrityCommand from "./ThesisIntegrityCommand";
 import ThesisCapitalConsequenceMatrix from "./ThesisCapitalConsequenceMatrix";
 import PortfolioThesisWarRoom from "./PortfolioThesisWarRoom";
@@ -16,6 +17,7 @@ import "./executiveShowcase.css";
 import "./FactoryIntelligenceExperienceShell.css";
 
 type DeepRoom = "factory" | "thesis" | "judgment" | "executive";
+type FactoryMode = "REAL" | "MOCK";
 type CaseMeta = { case_id:string; ticker?:string|null; topic?:string|null };
 
 const API="http://127.0.0.1:8002";
@@ -29,6 +31,7 @@ const ROOMS: Array<{ key: DeepRoom; label: string; detail: string }> = [
 export default function FactoryIntelligenceExperienceShell() {
   const [open, setOpen] = useState(false);
   const [room, setRoom] = useState<DeepRoom>("factory");
+  const [factoryMode, setFactoryMode] = useState<FactoryMode>("REAL");
   const [activeCaseId,setActiveCaseId]=useState<string|null>(()=>window.localStorage.getItem(ACTIVE_CASE_KEY));
   const [cases,setCases]=useState<CaseMeta[]>([]);
 
@@ -97,11 +100,11 @@ export default function FactoryIntelligenceExperienceShell() {
             <div>
               <span>IIOS · X0–X6 DEEP INTELLIGENCE</span>
               <h2>{ROOMS.find((item) => item.key === room)?.label}</h2>
-              <p>Batch 8G remains the authoritative operating shell. This layer is additive and read-only unless an existing governed control explicitly says otherwise.</p>
+              <p>Batch 8G remains the authoritative operating shell. The mock theater is a separate browser-only experience and never writes into governed telemetry, learning, paper execution, or live-capital paths.</p>
             </div>
             <div className="fi-x-layer-safety">
               <span className="fi-x-layer-case">ACTIVE CASE · {activeCaseLabel}</span>
-              <span>PAPER / SHADOW</span>
+              <span>{factoryMode === "MOCK" && room === "factory" ? "MOCK / DEMO" : "PAPER / SHADOW"}</span>
               <strong>LIVE CAPITAL LOCKED</strong>
             </div>
           </header>
@@ -111,9 +114,22 @@ export default function FactoryIntelligenceExperienceShell() {
               <>
                 <div className="fi-x-section-note">
                   <span>X3 · FACTORY THEATER</span>
-                  <strong>Same telemetry. More personality. No fake busy state.</strong>
+                  <strong>{factoryMode === "REAL" ? "Real telemetry. No fake busy state." : "Mob theater alive. Mock data isolated from the brain."}</strong>
                 </div>
-                <SpecialistDeskFloor />
+                <div style={{display:"flex",gap:8,marginBottom:10,fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace"}}>
+                  <button
+                    type="button"
+                    onClick={()=>setFactoryMode("REAL")}
+                    style={{border:"1px solid #6f481d",background:factoryMode==="REAL"?"#1b130a":"#070604",color:factoryMode==="REAL"?"#67df75":"#8a795c",padding:"7px 11px",cursor:"pointer"}}
+                  >REAL TELEMETRY</button>
+                  <button
+                    type="button"
+                    onClick={()=>setFactoryMode("MOCK")}
+                    style={{border:"1px solid #6f481d",background:factoryMode==="MOCK"?"#1b130a":"#070604",color:factoryMode==="MOCK"?"#f2b95e":"#8a795c",padding:"7px 11px",cursor:"pointer"}}
+                  >MOCK TRADING THEATER</button>
+                  <span style={{alignSelf:"center",fontSize:9,color:factoryMode==="MOCK"?"#f05454":"#67df75"}}>{factoryMode === "MOCK" ? "DEMO ISOLATION ON" : "GOVERNED SOURCE OF TRUTH"}</span>
+                </div>
+                {factoryMode === "REAL" ? <SpecialistDeskFloor /> : <MockTradingFactory />}
               </>
             ) : null}
 
