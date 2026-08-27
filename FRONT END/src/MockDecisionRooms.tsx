@@ -1,4 +1,4 @@
-import "./MockDecisionRooms.css";
+import "./MockTradingFactoryPolish.css";
 
 type CheckState = "PASS" | "WARN" | "FAIL" | "PENDING";
 
