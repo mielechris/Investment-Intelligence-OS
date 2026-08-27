@@ -32,6 +32,7 @@ jobs:
           scripts/run_batch9e_high_speed_acceptance.py
           scripts/run_batch9e_official_universe_acceptance.py
           scripts/run_batch9e_model_acceptance.py
+          scripts/run_batch9e_full_factory_acceptance.py
           scripts/test_batch9e_high_speed_contract.py
       - name: Run Batch 9E throughput and safety contract
         run: python scripts/test_batch9e_high_speed_contract.py
@@ -48,6 +49,13 @@ jobs:
           grep -q 'SP500_IVV_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
           grep -q 'GOVERNED_INDEX_TRACKER_MIRROR' "BACK END/backend/production_index_universe_resilient.py"
           grep -q 'acceptance_screener_fallback_used' "BACK END/backend/production_index_universe_resilient.py"
+      - name: Assert Grok Gemini promotion reaches case floor
+        run: |
+          grep -q 'BATCH_9E_GROK_GEMINI_HIGH_SPEED_RADAR' "BACK END/backend/high_speed_gemini_pipeline.py"
+          grep -q 'BATCH_9E_GROK_GEMINI_HIGH_SPEED_RADAR' "BACK END/backend/high_speed_case_queue.py"
+          grep -q 'Synthetic promotion fixture: FORBIDDEN' scripts/run_batch9e_full_factory_acceptance.py
+          grep -q 'Authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
+          grep -q 'Execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
       - name: Assert no live or broker authority
         run: |
           ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
