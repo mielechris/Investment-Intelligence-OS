@@ -1,6 +1,7 @@
 import "./previewApiBridge8G";
 import { useEffect, useMemo, useState } from "react";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
+import JesseStrategyPanel from "./JesseStrategyPanel";
 import SpecialistDeskFloor from "./SpecialistDeskFloor";
 import MockTradingFactory from "./MockTradingFactory";
 import ThesisIntegrityCommand from "./ThesisIntegrityCommand";
@@ -67,6 +68,7 @@ export default function FactoryIntelligenceExperienceShell() {
   return (
     <div className="fi-x-shell">
       <FactoryIntelligenceUI />
+      <JesseStrategyPanel />
 
       <div className={`fi-x-dock ${open ? "open" : ""}`}>
         <button
