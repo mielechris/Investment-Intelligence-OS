@@ -33,6 +33,7 @@ jobs:
           scripts/run_batch9e_official_universe_acceptance.py
           scripts/run_batch9e_model_acceptance.py
           scripts/run_batch9e_full_factory_acceptance.py
+          scripts/run_batch9e_full_factory_acceptance_v2.py
           scripts/run_batch9e_case_floor_benchmark.py
           scripts/run_batch9e_case_floor_scaling_benchmark.py
           scripts/run_batch9e_case_floor_edge_confirmation.py
@@ -59,6 +60,16 @@ jobs:
           grep -q 'Synthetic promotion fixture: FORBIDDEN' scripts/run_batch9e_full_factory_acceptance.py
           grep -q 'Authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
           grep -q 'Execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
+      - name: Assert qualification-aware full-factory v2 safety
+        run: |
+          grep -q 'Qualification stage: REQUIRED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'Legacy execution check: INTERCEPTED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'evidence_gap_hunter.run_gap_hunt' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'paper_capital_status' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'Paper authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'Governed execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'BATCH9E_ACCEPTANCE_EXECUTION_LOCK' scripts/run_batch9e_full_factory_acceptance_v2.py
+          ! grep -q 'prepare_paper_authorization' scripts/run_batch9e_full_factory_acceptance_v2.py
       - name: Assert throughput benchmark boundary and safety
         run: |
           grep -q 'DEFAULT_TRIALS = 10' scripts/run_batch9e_case_floor_benchmark.py
