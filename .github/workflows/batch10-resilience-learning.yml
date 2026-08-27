@@ -7,6 +7,11 @@ on:
       - 'BACK END/backend/decision_journal.py'
       - 'BACK END/backend/after_action_learning.py'
       - 'BACK END/backend/champion_challenger.py'
+      - 'FRONT END/src/MockTradingFactory.tsx'
+      - 'FRONT END/src/MockTradingFactory.css'
+      - 'FRONT END/src/agentVisualContracts.ts'
+      - 'FRONT END/src/FactoryIntelligenceExperienceShell.tsx'
+      - 'FRONT END/src/FactoryIntelligenceExperienceShell.css'
       - 'scripts/run_batch10_resilience_acceptance.py'
       - '.github/workflows/batch10-resilience-learning.yml'
   workflow_dispatch:
@@ -15,7 +20,7 @@ permissions:
   contents: read
 
 jobs:
-  acceptance:
+  resilience-acceptance:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +41,27 @@ jobs:
           grep -q 'automatic_rule_change: bool = False' 'BACK END/backend/after_action_learning.py'
           grep -q 'automatic_promotion: bool = False' 'BACK END/backend/champion_challenger.py'
           grep -q 'challenger_shadow_only: bool = True' 'BACK END/backend/champion_challenger.py'
+
+  mob-theater-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+      - name: Install frontend dependencies
+        working-directory: 'FRONT END'
+        run: npm ci
+      - name: Build Batch 10A frontend
+        working-directory: 'FRONT END'
+        run: npm run build
+      - name: Assert mock-real isolation remains visible
+        run: |
+          grep -q 'MOCK / DEMO' 'FRONT END/src/MockTradingFactory.tsx'
+          grep -q 'REAL ENGINE ISOLATED' 'FRONT END/src/MockTradingFactory.tsx'
+          grep -q 'LIVE CAPITAL LOCKED' 'FRONT END/src/MockTradingFactory.tsx'
+          grep -q 'REAL ORDERS' 'FRONT END/src/MockTradingFactory.tsx'
+          grep -q 'MOCK DATA NEVER BECOMES REAL TELEMETRY' 'FRONT END/src/MockTradingFactory.tsx'
+          grep -q 'Mock activity cannot enter governed telemetry' 'FRONT END/src/MockTradingFactory.tsx'
