@@ -103,7 +103,7 @@ def main() -> int:
     branch_before = capture("git", "branch", "--show-current", cwd=LIVE)
     status_before = capture("git", "status", "--porcelain", cwd=LIVE)
 
-    print("IIOS BATCH 9E — ISOLATED GROK + KIMI MODEL ACCEPTANCE")
+    print("IIOS BATCH 9E — ISOLATED GROK + GEMINI MODEL ACCEPTANCE")
     print(f"Source acceptance universe: {universe.get('symbol_count')} symbols")
     print(f"Universe source mode: {universe.get('source_mode') or 'PERSISTED_ACCEPTANCE_SNAPSHOT'}")
     print("Live ledger mutation: FORBIDDEN")
@@ -113,7 +113,7 @@ def main() -> int:
     print("Broker connected: FALSE")
     print("Live execution: FALSE")
     print("Grok: X SEARCH + WEB SEARCH — fresh execution REQUIRED for PASS")
-    print("Kimi: Formula Web Search + HIGH reasoning + bounded forced synthesis — fresh execution REQUIRED for PASS")
+    print("Gemini Flash: GOOGLE SEARCH + URL CONTEXT + STRUCTURED OUTPUT — fresh execution REQUIRED for PASS")
 
     run("git", "fetch", "origin", BRANCH, cwd=LIVE)
     if WORKTREE.exists():
@@ -136,11 +136,10 @@ def main() -> int:
     # Full provider capabilities, deliberately bounded breadth for acceptance latency/cost.
     env["IIOS_9E_GROK_MAX_BATCHES"] = "1"
     env["IIOS_9E_GROK_BATCH_SIZE"] = "20"
-    env["IIOS_9E_KIMI_FINALISTS"] = "4"
-    env["IIOS_9E_KIMI_WORKERS"] = "2"
-    env["IIOS_9E_KIMI_TOOL_ROUNDS"] = "3"
+    env["IIOS_9E_GEMINI_FINALISTS"] = "4"
+    env["IIOS_9E_GEMINI_WORKERS"] = "2"
+    env["IIOS_9E_GEMINI_THINKING"] = "medium"
 
-    # Make direct official/provider HTTPS calls use the same CA bundle as the production app.
     cert = capture(str(python), "-c", "import certifi; print(certifi.where())")
     if cert:
         env["SSL_CERT_FILE"] = cert
@@ -160,15 +159,15 @@ def main() -> int:
     cycle = latest_object(MODEL_LEDGER, "high_speed_market_radar_cycle")
     model_context = latest_object(MODEL_LEDGER, "high_speed_market_model_context")
     provider_errors = cycle.get("provider_errors") or {}
-    kimi_diagnostics = cycle.get("kimi_diagnostics") or {}
+    gemini_diagnostics = cycle.get("gemini_diagnostics") or {}
 
     grok_configured = cycle.get("grok_configured") is True
-    kimi_configured = cycle.get("kimi_configured") is True
+    gemini_configured = cycle.get("gemini_configured") is True
     grok_satisfied = cycle.get("grok_execution_satisfied") is True
-    kimi_satisfied = cycle.get("kimi_execution_satisfied") is True
+    gemini_satisfied = cycle.get("gemini_execution_satisfied") is True
     model_satisfied = cycle.get("model_execution_satisfied") is True
     grok_count = int(cycle.get("grok_candidate_count") or 0)
-    kimi_count = int(cycle.get("kimi_candidate_count") or 0)
+    gemini_count = int(cycle.get("gemini_candidate_count") or 0)
     fresh_forced = cycle.get("model_refresh_forced") is True
 
     branch_after = capture("git", "branch", "--show-current", cwd=LIVE)
@@ -176,15 +175,15 @@ def main() -> int:
     branch_unchanged = branch_after == branch_before
     status_unchanged = status_after == status_before
 
-    print("\n=== BATCH 9E MODEL ACCEPTANCE SUMMARY ===")
+    print("\n=== BATCH 9E GROK + GEMINI ACCEPTANCE SUMMARY ===")
     print(f"Fresh model refresh forced: {fresh_forced}")
     print(f"Grok configured: {grok_configured}")
     print(f"Grok execution satisfied: {grok_satisfied}")
     print(f"Grok candidates: {grok_count}")
-    print(f"Kimi configured: {kimi_configured}")
-    print(f"Kimi execution satisfied: {kimi_satisfied}")
-    print(f"Kimi candidates: {kimi_count}")
-    print(f"Kimi finalist diagnostics: {kimi_diagnostics or 'NONE'}")
+    print(f"Gemini configured: {gemini_configured}")
+    print(f"Gemini execution satisfied: {gemini_satisfied}")
+    print(f"Gemini candidates: {gemini_count}")
+    print(f"Gemini finalist diagnostics: {gemini_diagnostics or 'NONE'}")
     print(f"Model execution satisfied: {model_satisfied}")
     print(f"Deep research seconds: {cycle.get('deep_research_duration_seconds')}")
     print(f"Total cycle seconds: {cycle.get('cycle_duration_seconds')}")
@@ -201,26 +200,28 @@ def main() -> int:
         and status_unchanged
         and fresh_forced
         and grok_configured
-        and kimi_configured
+        and gemini_configured
         and grok_satisfied
-        and kimi_satisfied
+        and gemini_satisfied
         and model_satisfied
         and grok_count > 0
-        and kimi_count > 0
+        and gemini_count > 0
         and int(cycle.get("promoted_case_count") or 0) == 0
     )
 
     if passed:
-        print("RESULT: PASS — fresh Grok X/Web and Kimi web-research execution completed on isolated ledger; promotions remained disabled")
+        print(
+            "RESULT: PASS — fresh Grok X/Web and Gemini Google-grounded research completed on isolated ledger; promotions remained disabled"
+        )
         return 0
 
-    if not grok_configured or not kimi_configured:
+    if not grok_configured or not gemini_configured:
         print(
             "RESULT: FAIL — provider configuration incomplete. Configure the missing provider credential in the local IIOS .env; do not paste secrets into chat."
         )
     else:
         print(
-            "RESULT: FAIL — one or both configured providers did not return a valid fresh research result. Inspect Kimi finalist diagnostics/provider errors above; live lanes were not intentionally stopped."
+            "RESULT: FAIL — one or both configured providers did not return a valid fresh research result. Inspect Gemini finalist diagnostics/provider errors above; live lanes were not intentionally stopped."
         )
     return 1
 
