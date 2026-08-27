@@ -14,6 +14,12 @@ BACKEND = REPO_ROOT / "BACK END" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
+# Establish a normal certificate-verifying CA path before any official-source
+# or external-provider HTTPS calls. This never disables TLS verification.
+from index_tls_bootstrap import configure_verified_tls  # noqa: E402
+
+_TLS_STATUS = configure_verified_tls()
+
 # Load production patches / governed adapters before worker modules.
 import app as _iios_bootstrap  # noqa: F401,E402
 from high_speed_case_queue import run_case_floor_cycle  # noqa: E402
@@ -58,6 +64,8 @@ def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = Fals
     _log(f"Promotions enabled: {not dry_run}")
     _log(f"Grok/Gemini enabled: {not no_models}")
     _log(f"Force fresh model research: {bool(force_model_refresh)}")
+    _log(f"Verified TLS mode: {_TLS_STATUS.get('mode')}")
+    _log("Certificate verification: TRUE")
     _log("Broker connected: FALSE")
     _log("Live execution: FALSE")
     cycle = run_parallel_high_speed_cycle(
@@ -92,6 +100,8 @@ def run_continuous(
     _log("Grok Wire Room: X SEARCH + WEB SEARCH when configured")
     _log("Gemini Flash: Google Search grounding + URL Context + structured research")
     _log("Gemini Pro: selective complex finalists only, separate non-blocking lane")
+    _log(f"Verified TLS mode: {_TLS_STATUS.get('mode')}")
+    _log("Certificate verification: TRUE")
     _log("Maximum concurrent governed cases on 8-agent floor: 2")
     _log("Broker connected: FALSE")
     _log("Live execution: FALSE")
