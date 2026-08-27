@@ -14,6 +14,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = REPO_ROOT / "BACK END" / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
+from after_action_learning import (  # noqa: E402
+    OutcomeWindow,
+    ThesisExpectations,
+    assess_decision,
+    summarize_by_regime,
+)
+from champion_challenger import EvaluationMetrics, compare  # noqa: E402
 from decision_journal import DecisionEvent, DecisionJournal  # noqa: E402
 from resilience_health import (  # noqa: E402
     CRITICAL_FOR_PAPER,
@@ -123,12 +130,71 @@ def test_shadow_cannot_impersonate_execution() -> None:
         raise AssertionError("shadow event was allowed to impersonate an executable paper order")
 
 
+def test_after_action_scores_veto_without_rewriting_history() -> None:
+    assessment = assess_decision(
+        case_id="case-avgo-001",
+        ticker="AVGO",
+        original_decision="VETO",
+        original_score=74,
+        market_regime="NARROW_LEADERSHIP",
+        outcome=OutcomeWindow(
+            horizon="1h",
+            decision_price=350.0,
+            end_price=352.0,
+            max_favorable_price=357.0,
+            max_adverse_price=343.0,
+        ),
+        thesis=ThesisExpectations(
+            direction="LONG",
+            expected_move_pct=3.0,
+            max_tolerated_drawdown_pct=1.5,
+        ),
+    )
+    check(assessment.shadow_only is True, "AAR must be shadow only")
+    check(assessment.portfolio_effect == "NONE", "AAR gained portfolio authority")
+    check(assessment.automatic_rule_change is False, "AAR gained rule-change authority")
+    check(assessment.veto_value_pct is not None and assessment.veto_value_pct > 0, "veto downside not measured")
+    check(assessment.opportunity_cost_pct is not None and assessment.opportunity_cost_pct > 0, "veto upside cost not measured")
+
+    regime = summarize_by_regime([assessment])
+    check("NARROW_LEADERSHIP" in regime, "regime-aware memory missing")
+    check(regime["NARROW_LEADERSHIP"]["shadow_only"] is True, "regime summary must remain shadow only")
+
+
+def test_challenger_never_auto_promotes() -> None:
+    champion = EvaluationMetrics(
+        observations=500,
+        expectancy_pct=0.40,
+        max_drawdown_pct=5.0,
+        false_positive_rate=0.20,
+        missed_opportunity_rate=0.15,
+        calibration_error=0.10,
+    )
+    challenger = EvaluationMetrics(
+        observations=500,
+        expectancy_pct=0.55,
+        max_drawdown_pct=4.5,
+        false_positive_rate=0.18,
+        missed_opportunity_rate=0.13,
+        calibration_error=0.08,
+    )
+    review = compare("champion-v1", "challenger-v2", champion, challenger)
+    check(review.recommended_for_human_review is True, "better challenger should reach human review")
+    check(review.challenger_shadow_only is True, "challenger left shadow mode")
+    check(review.automatic_promotion is False, "challenger can auto-promote")
+    check(review.automatic_threshold_mutation is False, "challenger can auto-retune thresholds")
+    check(review.broker_connected is False, "challenger connected broker")
+    check(review.live_execution is False, "challenger enabled live execution")
+
+
 def main() -> int:
     tests = [
         test_health_freshness_and_fail_closed,
         test_invalid_payload_is_degraded,
         test_journal_captures_no_trade_and_shadow_counterfactual,
         test_shadow_cannot_impersonate_execution,
+        test_after_action_scores_veto_without_rewriting_history,
+        test_challenger_never_auto_promotes,
     ]
     for test in tests:
         test()
@@ -138,6 +204,7 @@ def main() -> int:
     print("Broker connected: FALSE")
     print("Live execution: FALSE")
     print("Automatic threshold mutation: FALSE")
+    print("Automatic challenger promotion: FALSE")
     return 0
 
 
