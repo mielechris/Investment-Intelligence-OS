@@ -12,16 +12,13 @@ from governed_paper_execution_bridge import (
     create_governed_paper_order,
 )
 from ledger import (
+    get_object,
     latest_object,
     paper_authorization_consumed,
     utc_now,
 )
 from paper_authorization_api import (
     _current_state,
-)
-from paper_portfolio_core import (
-    build_performance_history,
-    build_portfolio_state,
 )
 
 
@@ -31,6 +28,8 @@ OBSERVATION_CASE_ID = "observation_operations"
 PAPER_TRADING_CASE_ID = "paper_trading_operations"
 OBSERVATION_STATE_TYPE = "observation_operations_state"
 PAPER_TRADING_STATE_TYPE = "governed_paper_trading_state"
+PAPER_ACCOUNT_ID = "paper_portfolio_default"
+PAPER_STARTING_CASH = 10_000.0
 DEFAULT_WORKER_CADENCE_MINUTES = 15
 
 
@@ -60,6 +59,16 @@ def _authorization_id(
     return authorization_id
 
 
+def _safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_time(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -79,6 +88,7 @@ def _rows_by_type(
     object_type: str,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
+    """Pure ledger read. This helper never calls reconciliation or record_* APIs."""
     connection = sqlite3.connect(
         ledger.DB_PATH,
         timeout=30,
@@ -95,7 +105,7 @@ def _rows_by_type(
             """,
             (
                 object_type,
-                max(1, min(int(limit), 100)),
+                max(1, min(int(limit), 5000)),
             ),
         ).fetchall()
     finally:
@@ -162,6 +172,122 @@ def _worker_summary(
         "seconds_until_next_cycle": max(0, seconds_until),
         "seconds_since_last_cycle": seconds_since,
         "cadence_state": cadence_state,
+    }
+
+
+def _read_paper_portfolio() -> dict[str, Any]:
+    """
+    Read the persisted paper-fund snapshot history without invoking the
+    operational reconciliation/state builders, which can write ledger state.
+    """
+    snapshots = _rows_by_type(
+        "paper_portfolio_snapshot",
+        1000,
+    )
+    latest = snapshots[0] if snapshots else {}
+    account = get_object(PAPER_ACCOUNT_ID) or {}
+
+    starting_cash = _safe_float(
+        latest.get("starting_cash"),
+        _safe_float(
+            account.get("starting_cash"),
+            PAPER_STARTING_CASH,
+        ),
+    )
+    nav = _safe_float(
+        latest.get("nav"),
+        starting_cash,
+    )
+
+    high_water = starting_cash
+    max_drawdown_pct = 0.0
+    for snapshot in reversed(snapshots):
+        one_nav = _safe_float(
+            snapshot.get("nav"),
+            starting_cash,
+        )
+        high_water = max(high_water, one_nav)
+        drawdown = (
+            ((one_nav / high_water) - 1.0) * 100.0
+            if high_water > 0
+            else 0.0
+        )
+        max_drawdown_pct = min(
+            max_drawdown_pct,
+            drawdown,
+        )
+
+    cumulative_return_pct = (
+        ((nav / starting_cash) - 1.0) * 100.0
+        if starting_cash > 0
+        else 0.0
+    )
+    current_drawdown_pct = (
+        ((nav / high_water) - 1.0) * 100.0
+        if high_water > 0
+        else 0.0
+    )
+
+    positions = latest.get("positions")
+    positions = positions if isinstance(positions, list) else []
+
+    return {
+        "snapshot_id": latest.get(
+            "paper_portfolio_snapshot_id"
+        ),
+        "snapshot_as_of": latest.get("created_at")
+        or latest.get("_ledger_created_at"),
+        "starting_cash": round(starting_cash, 2),
+        "nav": round(nav, 2),
+        "cash": round(
+            _safe_float(
+                latest.get("cash"),
+                starting_cash,
+            ),
+            2,
+        ),
+        "market_value": round(
+            _safe_float(latest.get("market_value")),
+            2,
+        ),
+        "realized_pnl": round(
+            _safe_float(latest.get("realized_pnl")),
+            2,
+        ),
+        "unrealized_pnl": round(
+            _safe_float(latest.get("unrealized_pnl")),
+            2,
+        ),
+        "total_pnl": round(
+            _safe_float(latest.get("total_pnl")),
+            2,
+        ),
+        "gross_exposure": round(
+            _safe_float(latest.get("gross_exposure")),
+            2,
+        ),
+        "position_count": int(
+            latest.get("position_count")
+            or len(positions)
+        ),
+        "transaction_count": int(
+            latest.get("transaction_count") or 0
+        ),
+        "positions": positions,
+        "snapshot_count": len(snapshots),
+        "cumulative_return_pct": round(
+            cumulative_return_pct,
+            4,
+        ),
+        "current_drawdown_pct": round(
+            current_drawdown_pct,
+            4,
+        ),
+        "max_drawdown_pct": round(
+            max_drawdown_pct,
+            4,
+        ),
+        "data_source": "PERSISTED_GOVERNED_PAPER_SNAPSHOTS_ONLY",
     }
 
 
@@ -268,8 +394,7 @@ def _clean_case_results(
 
 
 def build_paper_fund_operations() -> dict[str, Any]:
-    portfolio = build_portfolio_state()
-    performance = build_performance_history()
+    portfolio = _read_paper_portfolio()
 
     observation = latest_object(
         OBSERVATION_STATE_TYPE,
@@ -327,7 +452,6 @@ def build_paper_fund_operations() -> dict[str, Any]:
         if isinstance(observation_promotions, list)
         else []
     )
-
     latest_promotion = (
         observation_promotions[0]
         if observation_promotions
@@ -335,35 +459,11 @@ def build_paper_fund_operations() -> dict[str, Any]:
         else {}
     )
 
-    portfolio_view = {
-        "starting_cash": portfolio.get("starting_cash"),
-        "nav": portfolio.get("nav"),
-        "cash": portfolio.get("cash"),
-        "market_value": portfolio.get("market_value"),
-        "realized_pnl": portfolio.get("realized_pnl"),
-        "unrealized_pnl": portfolio.get("unrealized_pnl"),
-        "total_pnl": portfolio.get("total_pnl"),
-        "gross_exposure": portfolio.get("gross_exposure"),
-        "position_count": portfolio.get("position_count"),
-        "transaction_count": portfolio.get("transaction_count"),
-        "positions": portfolio.get("positions") or [],
-        "snapshot_count": performance.get("snapshot_count"),
-        "cumulative_return_pct": performance.get(
-            "cumulative_return_pct"
-        ),
-        "current_drawdown_pct": performance.get(
-            "current_drawdown_pct"
-        ),
-        "max_drawdown_pct": performance.get(
-            "max_drawdown_pct"
-        ),
-    }
-
     return {
         "name": "IIOS Paper Fund Operations",
         "generated_at": utc_now(),
         "refresh_seconds": 5,
-        "portfolio": portfolio_view,
+        "portfolio": portfolio,
         "observation": {
             **observation_worker,
             "market_phase": observation.get("market_phase"),
@@ -444,6 +544,7 @@ def build_paper_fund_operations() -> dict[str, Any]:
             "live_execution": False,
         },
         "read_only": True,
+        "read_model_source": "PERSISTED_LEDGER_ONLY",
         "unknown_state_semantics": True,
     }
 
@@ -453,11 +554,11 @@ def build_paper_fund_operations() -> dict[str, Any]:
 )
 def paper_fund_operations():
     """
-    Read-only operating feed for the browser Paper Fund board.
+    Strictly read-only operating feed for the browser Paper Fund board.
 
-    It aggregates existing governed state only. It cannot deepen a case,
-    create an authorization, submit a paper order, connect a broker, or
-    change live-capital authority.
+    It reads persisted governed objects and snapshots only. It never invokes
+    reconciliation, portfolio snapshot creation, case deepening, authorization,
+    paper execution, broker connectivity, or live-capital authority.
     """
     return build_paper_fund_operations()
 
