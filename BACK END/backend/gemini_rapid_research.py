@@ -12,7 +12,7 @@ DEFAULT_FINALIST_COUNT = max(4, min(int(os.getenv("IIOS_9E_GEMINI_FINALISTS", "8
 DEFAULT_MAX_WORKERS = max(1, min(int(os.getenv("IIOS_9E_GEMINI_WORKERS", "4")), 8))
 DEFAULT_THINKING_LEVEL = str(os.getenv("IIOS_9E_GEMINI_THINKING", "medium")).strip().lower()
 DEFAULT_FALLBACK_MODEL = str(
-    os.getenv("IIOS_9E_GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+    os.getenv("IIOS_9E_GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
 ).strip()
 
 RESEARCH_SCHEMA: dict[str, Any] = {
@@ -90,7 +90,7 @@ def _transient_provider_error(exc: Exception) -> bool:
 
 
 def _fallback_model() -> str:
-    value = DEFAULT_FALLBACK_MODEL or "gemini-2.5-flash"
+    value = DEFAULT_FALLBACK_MODEL or "gemini-3.6-flash"
     return value.strip()
 
 
