@@ -5,6 +5,8 @@ on:
     paths:
       - 'BACK END/backend/resilience_health.py'
       - 'BACK END/backend/decision_journal.py'
+      - 'BACK END/backend/after_action_learning.py'
+      - 'BACK END/backend/champion_challenger.py'
       - 'scripts/run_batch10_resilience_acceptance.py'
       - '.github/workflows/batch10-resilience-learning.yml'
   workflow_dispatch:
@@ -28,5 +30,9 @@ jobs:
           grep -q 'Broker connected: FALSE' scripts/run_batch10_resilience_acceptance.py
           grep -q 'Live execution: FALSE' scripts/run_batch10_resilience_acceptance.py
           grep -q 'Automatic threshold mutation: FALSE' scripts/run_batch10_resilience_acceptance.py
+          grep -q 'Automatic challenger promotion: FALSE' scripts/run_batch10_resilience_acceptance.py
           grep -q 'broker_connected.*False' 'BACK END/backend/resilience_health.py'
           grep -q 'live_execution.*False' 'BACK END/backend/resilience_health.py'
+          grep -q 'automatic_rule_change: bool = False' 'BACK END/backend/after_action_learning.py'
+          grep -q 'automatic_promotion: bool = False' 'BACK END/backend/champion_challenger.py'
+          grep -q 'challenger_shadow_only: bool = True' 'BACK END/backend/champion_challenger.py'
