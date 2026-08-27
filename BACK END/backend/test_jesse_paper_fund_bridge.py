@@ -51,16 +51,15 @@ class JessePaperFundBridgeTests(unittest.TestCase):
             "confidence": 0.81,
         }
 
-        result = bridge.dispatch_jesse_top_three(
-            {
-                "dislocation_scan_id": "scan_1",
-                "opportunity_candidate_ids": [
-                    "opportunity_1",
-                    "opportunity_2",
-                    "opportunity_3",
-                ],
-            }
-        )
+        scan = {
+            "dislocation_scan_id": "scan_1",
+            "opportunity_candidate_ids": [
+                "opportunity_1",
+                "opportunity_2",
+                "opportunity_3",
+            ],
+        }
+        result = bridge.dispatch_jesse_top_three(scan)
 
         dispatch_candidate.assert_called_once_with("opportunity_1")
         self.assertEqual(result["top_three_count"], 3)
@@ -73,7 +72,18 @@ class JessePaperFundBridgeTests(unittest.TestCase):
         self.assertFalse(result["paper_order_permission"])
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
-        record_object.assert_called_once()
+
+        self.assertEqual(record_object.call_count, 2)
+        scan_write = record_object.call_args_list[1]
+        self.assertEqual(scan_write.args[0], "scan_1")
+        self.assertEqual(scan_write.args[1], "dislocation_scan")
+        self.assertEqual(scan_write.args[3]["bridge"]["dispatched_count"], 1)
+        self.assertEqual(
+            scan_write.args[3]["bridge"]["authority_scope"],
+            "RESEARCH_DISPATCH_ONLY",
+        )
+        self.assertFalse(scan_write.args[3]["bridge"]["paper_order_permission"])
+        self.assertFalse(scan_write.args[3]["bridge"]["live_execution"])
         record_event.assert_called_once()
 
     @patch.object(bridge, "record_event")
@@ -110,6 +120,8 @@ class JessePaperFundBridgeTests(unittest.TestCase):
         self.assertFalse(result["paper_order_permission"])
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
+        self.assertEqual(record_object.call_count, 2)
+        self.assertFalse(record_object.call_args_list[1].args[3]["bridge"]["live_execution"])
 
 
 if __name__ == "__main__":
