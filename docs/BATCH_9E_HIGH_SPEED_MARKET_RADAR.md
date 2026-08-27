@@ -6,7 +6,7 @@ Increase IIOS discovery throughput without lowering the governed case, Committee
 
 Batch 9E is a research-discovery and case-throughput upgrade. It does not create trade authority.
 
-## Architecture
+## Current architecture
 
 ```text
 Official S&P 500 + Nasdaq-100 governed universe
@@ -20,9 +20,10 @@ Official S&P 500 + Nasdaq-100 governed universe
                  |
           +------+------+
           |             |
-   Grok Wire Room    Kimi K3 Crew
-   X + Web Search    Formula Web Search
-   batch narrative   high-reasoning research
+   Grok — The Wire   Gemini — The Books
+   X + Web Search    Google Search grounding
+   live narratives   URL Context
+   crowding/chatter  structured evidence
           |             |
           +------+------+
                  |
@@ -42,23 +43,39 @@ Official S&P 500 + Nasdaq-100 governed universe
  Risk -> Capital -> Sizing -> Paper Auth -> Paper
 ```
 
-## Speed design
+## Gemini model gears
 
-### 1. Broad radar instead of ticker-by-ticker news
+### Rapid research — Gemini 3.7 Flash
 
-The initial sweep uses a small number of broad Yahoo screener calls for:
+Default endpoint: `gemini-3.7-flash`.
 
-- day gainers,
-- day losers,
-- most active.
+Used for the high-speed finalist lane with:
 
-Results are intersected with the existing verified official S&P 500 + Nasdaq-100 universe. This avoids hundreds of serial GDELT/news calls.
+- Google Search grounding,
+- URL Context,
+- structured JSON output,
+- medium thinking by default,
+- parallel workers,
+- source/query metadata captured for audit.
 
-### 2. Grok and Kimi run concurrently
+### Selective deep research — Gemini 3.1 Pro Preview
 
-Grok and Kimi launch in parallel after the deterministic sweep.
+Default endpoint: `gemini-3.1-pro-preview`.
 
-Grok is used as the real-time **Wire Room**:
+Only complex promoted finalists may be queued into the separate Gemini Pro worker. It uses:
+
+- high thinking,
+- Google Search grounding,
+- URL Context,
+- structured deep-research packets,
+- primary-source and contradiction hunting,
+- no decision or execution authority.
+
+The deep worker is outside the radar critical path, so a difficult Pro investigation cannot stop the next market sweep.
+
+## Grok role
+
+Grok remains the real-time **Wire Room**:
 
 - X Search,
 - Web Search,
@@ -68,86 +85,45 @@ Grok is used as the real-time **Wire Room**:
 - crowding/hype,
 - contradictions and missing evidence.
 
-Kimi K3 is used as the rapid **Research Crew**:
+Grok and Gemini launch concurrently after the deterministic radar sweep.
 
-- Formula Web Search,
-- high reasoning,
-- catalyst verification,
-- primary/credible-source discovery,
-- counterevidence,
-- structural-vs-temporary assessment,
-- unresolved research questions.
+## Provider governance
 
-Neither model output is qualification evidence or fact-resolution authority.
-
-### 3. Deep-context reuse
-
-The top radar state is fingerprinted. If the important candidate set and move buckets have not materially changed, Grok/Kimi context can be reused for a bounded period rather than rerunning expensive research every radar cycle.
-
-Default deep refresh window: 15 minutes.
-
-### 4. Separate case-floor lane
-
-Promoted 9E cases enter a separate queue. Up to two cases may run concurrently through the governed eight-agent orchestrator.
-
-The radar does not wait for those cases to finish before beginning another sweep.
-
-### 5. Selective Kimi native swarm
-
-The native Kimi swarm is deliberately off the radar critical path. When configured, only sufficiently complex promoted finalists are queued for deep swarm research.
-
-The swarm:
-
-- may use subagents,
-- uses high thinking,
-- is context-only,
-- has no IIOS repository write access,
-- cannot qualify a case,
-- cannot authorize capital,
-- cannot create a paper or live order.
-
-## Default throughput bounds
-
-- Broad governed universe: official S&P 500 + Nasdaq-100 membership snapshot.
-- Yahoo screener rows: up to 100 per radar category.
-- Grok batches: 2 by default, 35 names each.
-- Kimi rapid finalists: 12 configured in core; operator launch may start with 8 for latency testing.
-- Kimi rapid workers: 4 by default.
-- Promotion evidence finalists: 8 by default.
-- Maximum case promotions per radar cycle: 5.
-- Maximum concurrent cases on 8-agent floor: 2.
-- Radar cadence target: 5 minutes.
-- Case-floor queue cadence: 30 seconds.
-- Kimi Swarm queue cadence: 60 seconds.
-
-All limits are bounded and fail closed.
-
-## Promotion authority
-
-Grok and Kimi can affect research ranking only.
-
-A 9E opportunity can be promoted only after the existing deterministic opportunity gate receives real governed evidence:
-
-- current market quote,
-- current news coverage,
-- existing `score_candidate` promotion checks,
-- no recent duplicate governed case for the ticker.
-
-External-model context is stored separately and marked:
+Grok and Gemini can affect research priority/ranking only. Their output is explicitly marked:
 
 - `context_only = true`,
 - `qualification_evidence = false`,
-- `fact_resolution_authority = false`.
+- `fact_resolution_authority = false`,
+- `capital_authority = false`,
+- `trade_execution_permission = false`,
+- `live_execution = false`.
+
+A 9E opportunity can only be promoted after the existing deterministic opportunity gate receives real governed evidence from current market quotes/current news and clears duplicate-case controls.
 
 ## Continuous worker lanes
 
-One 9E supervisor process runs three independent threads:
+One 9E supervisor runs three independent lanes:
 
-1. `RADAR` — high-speed discovery and Grok/Kimi ranking.
-2. `CASE FLOOR` — up to two promoted cases through the eight desks + Committee.
-3. `KIMI SWARM` — selective complex-finalist deep research.
+1. `RADAR` — broad discovery plus concurrent Grok/Gemini rapid research.
+2. `CASE FLOOR` — up to two promoted cases through the eight governed IIOS desks + Committee.
+3. `GEMINI PRO` — selective complex-finalist deep research outside the radar critical path.
 
-A slow swarm request therefore cannot block the radar or case floor.
+## Default throughput bounds
+
+- Broad production universe: verified official S&P 500 + Nasdaq-100 snapshot.
+- Yahoo screener rows: up to 100 per radar category.
+- Grok: 2 batches by default, 35 names each.
+- Gemini Flash finalists: 8 by default.
+- Gemini Flash workers: 4 by default.
+- Promotion evidence finalists: 8 by default.
+- Maximum case promotions per radar cycle: 5.
+- Maximum concurrent cases on 8-agent floor: 2.
+- Maximum Gemini Pro deep requests per radar cycle: 2.
+- Radar cadence target: 5 minutes.
+- Case-floor cadence: 30 seconds.
+- Gemini Pro queue cadence: 60 seconds.
+
+All limits are bounded and fail closed.
 
 ## Safety invariants
 
@@ -159,34 +135,18 @@ Batch 9E never grants:
 - Risk override,
 - Capital override,
 - automatic live-trade authority,
-- paper-order permission outside the existing governed downstream system,
+- direct paper-order permission,
 - live execution.
 
-The existing Batch 9B chain remains authoritative for any eventual mock paper position.
+Batch 9B remains authoritative for any eventual governed mock paper position.
 
-## First acceptance
+## Raw radar acceptance — 2026-08-26 PT
 
-The first acceptance intentionally runs:
-
-```text
---once --dry-run --no-models
-```
-
-It also uses a SQLite backup of the live ledger. Therefore:
-
-- live Batch8 working tree is unchanged,
-- live governed ledger is unchanged,
-- Grok/Kimi are not called,
-- no cases are promoted,
-- no eight-agent case-floor work is started,
-- no broker or execution authority exists.
-
-### Raw radar acceptance result — 2026-08-26 PT
+The first isolated acceptance ran `--once --dry-run --no-models` against a SQLite backup of the live ledger.
 
 - Acceptance-only non-production universe: 282 symbols.
-- Radar hits: 282 raw screener candidates.
-- Grok candidates: 0 by design.
-- Kimi candidates: 0 by design.
+- Raw radar hits: 282.
+- Model candidates: 0 by design.
 - Promoted cases: 0 by design.
 - Total radar cycle time: **16.745 seconds**.
 - Live branch unchanged: true.
@@ -194,32 +154,25 @@ It also uses a SQLite backup of the live ledger. Therefore:
 - Runner exit code: 0.
 - Result: **PASS**.
 
-The 282 hits are the raw acceptance candidate pool because the temporary fallback universe itself was built from the broad screeners; they are not 282 actionable cases. The result validates throughput of the new broad radar path.
+The 282 hits are raw screener candidates, not actionable investment cases. The temporary acceptance universe was explicitly non-production because the official index source encountered a local CA verification error.
 
-The fresh official S&P/Nasdaq capture in this acceptance bootstrap encountered a local CA-certificate verification error. The fallback universe was explicitly marked non-production and was never allowed to promote cases or create any trading authority.
+## Provider migration note
 
-## Second acceptance
+The initial 9E prototype used Kimi as the second external research provider. Grok successfully passed live X/Web acceptance, while the Kimi Open Platform key was valid but provider execution was blocked by an insufficient-balance billing suspension. Kimi remains in the repository as an optional future adapter, but it is no longer on the active 9E critical path.
 
-`run_batch9e_model_acceptance.py` uses the successful raw-acceptance ledger as its source, clones it to a second `/tmp` SQLite database, and then runs a model-enabled 9E dry run with promotions disabled.
+The active second-provider architecture is now **Gemini 3.7 Flash + selective Gemini 3.1 Pro**, chosen for Google Search grounding, URL Context, structured outputs, large-context research, and cleaner high-throughput integration.
 
-Acceptance breadth is deliberately bounded while preserving full useful provider capability:
+## Model acceptance
 
-- Grok: one batch of up to 20 names, X Search + Web Search.
-- Kimi: up to 4 finalists, provider model resolution, Formula Web Search, high reasoning, 2 parallel workers.
-- Grok and Kimi run concurrently.
+`run_batch9e_model_acceptance.py` clones the successful raw-acceptance ledger into a second `/tmp` SQLite database and runs a fresh Grok + Gemini cycle with promotions disabled.
+
+Acceptance breadth is bounded:
+
+- Grok: one batch of up to 20 names with X Search + Web Search.
+- Gemini Flash: up to 4 finalists with Google Search + URL Context, 2 parallel workers.
+- Fresh model execution is required for PASS.
 - No case promotions.
-- No eight-agent case-floor run.
-- No paper or live authority.
+- No eight-agent case-floor work.
+- No paper-order or live authority.
 
-The launcher also resolves the certifi CA bundle from the IIOS virtual environment and exports it for provider HTTPS calls.
-
-Measure:
-
-- Grok availability and candidate coverage,
-- Kimi availability and candidate coverage,
-- deep-research latency,
-- total cycle latency,
-- provider degradation behavior,
-- live checkout invariants.
-
-Only after both acceptances should continuous 9E be allowed to write research/case records to the shared governed ledger.
+Only after this acceptance passes should continuous Grok + Gemini 9E be allowed to write research/case records to the shared governed ledger.
