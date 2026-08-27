@@ -129,10 +129,11 @@ def run_gemini_rapid_research(
     if not finalists:
         return output, errors
 
-    # One cheap canary prevents many parallel failures when credentials, quota,
-    # billing, or model access are unavailable.
+    # One capability canary tests the same Search + URL Context lane before
+    # any parallel finalist requests launch. This fails closed on quota,
+    # billing, model-access, or request-contract problems.
     try:
-        gemini_provider.preflight()
+        gemini_provider.preflight(require_research_tools=True)
     except Exception as exc:  # noqa: BLE001
         return {}, {"PREFLIGHT": f"{type(exc).__name__}: {exc}"[:2500]}
 
