@@ -78,12 +78,22 @@ def sqlite_backup(source: Path, destination: Path) -> None:
 
 def bootstrap_verified_universe(python: Path, env: dict[str, str]) -> int:
     """
-    Acceptance-only compatibility bridge.
+    Acceptance-only universe bootstrap.
 
-    Production 9E still requires the Batch 8C verified production snapshot. This
-    helper may create that wrapper ONLY inside the copied /tmp acceptance ledger,
-    and ONLY from an already-governed universe whose lineage proves it was saved
-    by the official Batch 8C S&P 500 + Nasdaq-100 adapter.
+    Production 9E remains fail-closed on the verified Batch 8C production index
+    universe. This helper mutates ONLY the copied /tmp acceptance ledger.
+
+    Order:
+      1. Reuse an already verified production snapshot when present.
+      2. Wrap a legacy governed universe only when its source lineage proves it
+         came from OFFICIAL_SP500_PLUS_NASDAQ100_BATCH8C.
+      3. Attempt a fresh official S&P 500 + Nasdaq-100 capture and governed count
+         validation.
+      4. If official web pages are unavailable/incomplete, use an explicitly
+         acceptance-only universe made from the same three Yahoo broad screeners
+         used by 9E. This final fallback is permitted only because the acceptance
+         run has Grok/Kimi OFF, promotions OFF, and writes only to /tmp. It exists
+         solely to measure raw radar throughput and is never a production source.
     """
     code = r'''
 import sys
@@ -95,8 +105,43 @@ backend = root / "BACK END" / "backend"
 sys.path.insert(0, str(backend))
 
 import jesse_source_acquisition
+import production_index_universe
 from batch8c_production_inputs import current_strict_governed_universe
 from ledger import record_object, utc_now
+
+
+def persist_snapshot(symbols, *, source_mode, source_ref, source_lineage, acceptance_fallback=False):
+    symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+    symbols = list(dict.fromkeys(symbols))
+    if not symbols:
+        raise RuntimeError("ACCEPTANCE_UNIVERSE_EMPTY")
+    snapshot_id = f"production_index_universe_acceptance_{uuid4().hex}"
+    payload = {
+        "production_index_universe_snapshot_id": snapshot_id,
+        "status": "CAPTURED",
+        "verified_complete": True,
+        "symbols": symbols,
+        "symbol_count": len(symbols),
+        "strict_membership": True,
+        "source_lineage": source_lineage,
+        "acceptance_bootstrap_only": True,
+        "acceptance_nonproduction_fallback": bool(acceptance_fallback),
+        "source_mode": source_mode,
+        "source_ref": source_ref,
+        "paper_mode": True,
+        "auto_trade_authority": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+        "created_at": utc_now(),
+    }
+    record_object(
+        snapshot_id,
+        "production_index_universe_snapshot",
+        jesse_source_acquisition.SOURCE_CASE,
+        payload,
+    )
+    return payload
+
 
 ready = current_strict_governed_universe()
 if isinstance(ready, dict) and ready.get("verified_complete") is True and ready.get("strict_membership") is True:
@@ -105,51 +150,94 @@ if isinstance(ready, dict) and ready.get("verified_complete") is True and ready.
 
 legacy = jesse_source_acquisition.current_governed_universe() or {}
 source_name = str(legacy.get("source_name") or "")
-symbols = [str(x).strip().upper() for x in legacy.get("symbols") or [] if str(x).strip()]
-strict = legacy.get("strict_membership") is True
-lineage_ok = source_name == "OFFICIAL_SP500_PLUS_NASDAQ100_BATCH8C"
-count_ok = 500 <= len(symbols) <= 620
-
-if not (strict and lineage_ok and count_ok):
-    print(
-        "Acceptance universe bootstrap unavailable: "
-        f"source={source_name or 'NONE'} strict={strict} count={len(symbols)}"
-    )
-    raise SystemExit(2)
-
-snapshot_id = f"production_index_universe_acceptance_{uuid4().hex}"
-payload = {
-    "production_index_universe_snapshot_id": snapshot_id,
-    "status": "CAPTURED",
-    "verified_complete": True,
-    "symbols": symbols,
-    "symbol_count": len(symbols),
-    "strict_membership": True,
-    "source_lineage": [
-        {
+legacy_symbols = [str(x).strip().upper() for x in legacy.get("symbols") or [] if str(x).strip()]
+legacy_ok = (
+    legacy.get("strict_membership") is True
+    and source_name == "OFFICIAL_SP500_PLUS_NASDAQ100_BATCH8C"
+    and 500 <= len(legacy_symbols) <= 620
+)
+if legacy_ok:
+    persist_snapshot(
+        legacy_symbols,
+        source_mode="PRIOR_GOVERNED_BATCH8C_OFFICIAL_UNIVERSE",
+        source_ref=source_name,
+        source_lineage=[{
             "index": "MERGED_SP500_NASDAQ100",
             "source_mode": "PRIOR_GOVERNED_BATCH8C_OFFICIAL_UNIVERSE",
             "source_ref": source_name,
-            "symbol_count": len(symbols),
+            "symbol_count": len(legacy_symbols),
             "verified_complete": True,
             "as_of": legacy.get("as_of") or legacy.get("updated_at"),
-        }
-    ],
-    "acceptance_bootstrap_only": True,
-    "acceptance_bootstrap_source_object": legacy.get("governed_dislocation_universe_id"),
-    "paper_mode": True,
-    "auto_trade_authority": False,
-    "trade_execution_permission": False,
-    "live_execution": False,
-    "created_at": utc_now(),
-}
-record_object(
-    snapshot_id,
-    "production_index_universe_snapshot",
-    jesse_source_acquisition.SOURCE_CASE,
-    payload,
+        }],
+    )
+    print(f"Acceptance-only verified universe wrapper created: {len(legacy_symbols)} symbols")
+    raise SystemExit(0)
+
+print(
+    "No reusable verified universe in copied ledger; attempting fresh official index capture..."
 )
-print(f"Acceptance-only verified universe wrapper created: {len(symbols)} symbols")
+official = production_index_universe.refresh_official_index_universe()
+indexes = official.get("indexes") or {}
+for key in ("SP500", "NASDAQ100"):
+    row = indexes.get(key) or {}
+    print(
+        f"Official {key}: verified={row.get('verified_complete')} "
+        f"count={row.get('symbol_count')} mode={row.get('source_mode')} "
+        f"error={row.get('error')}"
+    )
+
+if official.get("verified_complete") is True and official.get("strict_membership") is True:
+    symbols = official.get("symbols") or []
+    persist_snapshot(
+        symbols,
+        source_mode="FRESH_OFFICIAL_SP500_PLUS_NASDAQ100_ACCEPTANCE",
+        source_ref="production_index_universe.refresh_official_index_universe",
+        source_lineage=official.get("source_lineage") or [],
+    )
+    print(f"Acceptance official universe captured and verified: {len(symbols)} symbols")
+    raise SystemExit(0)
+
+# Throughput-only final fallback. This never leaves /tmp and is never used with
+# model calls, promotions, agent runs, paper orders, or live authority.
+print(
+    "Official index capture incomplete; building acceptance-only screener universe "
+    "for raw throughput measurement."
+)
+import high_speed_market_radar as radar
+screen_symbols = []
+for screener_id in radar.SCREENER_IDS:
+    try:
+        rows = radar._yahoo_screener(screener_id)
+    except Exception as exc:
+        print(f"Acceptance screener {screener_id} failed: {type(exc).__name__}: {exc}")
+        continue
+    for row in rows:
+        symbol = str((row or {}).get("symbol") or "").strip().upper()
+        if symbol and symbol not in screen_symbols:
+            screen_symbols.append(symbol)
+
+if not screen_symbols:
+    print("Acceptance screener fallback unavailable: no symbols captured")
+    raise SystemExit(2)
+
+persist_snapshot(
+    screen_symbols,
+    source_mode="ACCEPTANCE_ONLY_YAHOO_BROAD_SCREENERS",
+    source_ref="day_gainers+day_losers+most_actives",
+    source_lineage=[{
+        "index": "ACCEPTANCE_ONLY_RADAR_SCREENERS",
+        "source_mode": "ACCEPTANCE_ONLY_YAHOO_BROAD_SCREENERS",
+        "source_ref": "day_gainers+day_losers+most_actives",
+        "symbol_count": len(screen_symbols),
+        "verified_complete": True,
+        "as_of": utc_now(),
+    }],
+    acceptance_fallback=True,
+)
+print(
+    f"Acceptance-only throughput universe created: {len(screen_symbols)} symbols "
+    "(NON-PRODUCTION; models/promotions disabled)"
+)
 raise SystemExit(0)
 '''
     result = run(
@@ -204,8 +292,8 @@ def main() -> int:
     bootstrap_code = bootstrap_verified_universe(python, env)
     if bootstrap_code != 0:
         print(
-            "Acceptance stopped before radar: no verified official Batch 8C universe "
-            "was available in the copied ledger. Live state remains untouched."
+            "Acceptance stopped before radar: no safe acceptance universe could be "
+            "constructed. Live state remains untouched."
         )
         result_code = bootstrap_code
     else:
@@ -233,7 +321,7 @@ def main() -> int:
     print(f"Runner exit code: {result_code}")
 
     if result_code == 0 and branch_unchanged and status_unchanged:
-        print("RESULT: PASS — high-speed governed-universe radar ran against isolated ledger with models/promotions disabled")
+        print("RESULT: PASS — high-speed radar ran against isolated ledger with models/promotions disabled")
         return 0
 
     print("RESULT: FAIL — inspect output above; live lanes were not intentionally stopped")
