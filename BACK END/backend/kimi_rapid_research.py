@@ -37,6 +37,48 @@ def _system_prompt() -> str:
     )
 
 
+def _is_billing_block(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return (
+        "kimi_http_429" in text
+        and (
+            "insufficient balance" in text
+            or "exceeded_current_quota_error" in text
+            or "suspended" in text
+            or "recharge your account" in text
+        )
+    )
+
+
+def _provider_preflight() -> None:
+    """Cheap provider canary so quota/billing failures abort before deep web research."""
+    model = kimi_provider.resolve_model()
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Return JSON only."},
+            {"role": "user", "content": "Return {\"ok\": true}."},
+        ],
+        "response_format": {"type": "json_object"},
+        "max_completion_tokens": 256,
+    }
+    if model.startswith("kimi-k3"):
+        payload["reasoning_effort"] = "low"
+    elif model.startswith("kimi-k2.6"):
+        payload["thinking"] = {"type": "disabled"}
+
+    try:
+        response = kimi_provider._request("POST", "/chat/completions", payload, timeout=45, retries=0)
+        content = kimi_provider._message_content(response)
+        value = kimi_provider._json_content(content)
+        if value.get("ok") is not True:
+            raise RuntimeError("KIMI_PREFLIGHT_INVALID_RESPONSE")
+    except Exception as exc:  # noqa: BLE001
+        if _is_billing_block(exc):
+            raise RuntimeError("KIMI_BILLING_BLOCKED: insufficient balance / quota") from exc
+        raise
+
+
 def _force_synthesis(messages: list[dict[str, Any]], model: str, tool_calls_used: int) -> dict[str, Any]:
     final_messages = list(messages)
     final_messages.append(
@@ -185,6 +227,12 @@ def run_kimi_rapid_research(
     errors: dict[str, str] = {}
     if not rows:
         return output, errors
+
+    try:
+        _provider_preflight()
+    except Exception as exc:  # noqa: BLE001
+        message = f"{type(exc).__name__}: {exc}"[:2000]
+        return output, {"PROVIDER": message}
 
     with ThreadPoolExecutor(max_workers=min(max(1, int(max_workers)), len(rows))) as pool:
         future_map = {
