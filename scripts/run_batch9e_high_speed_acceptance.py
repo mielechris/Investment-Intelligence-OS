@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
 LIVE = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8")
@@ -61,9 +59,9 @@ def load_dotenv(path: Path, env: dict[str, str]) -> None:
             continue
         try:
             parsed = shlex.split(value, posix=True)
-            env[key] = parsed[0] if len(parsed) == 1 else value.strip('"\'')
+            env[key] = parsed[0] if len(parsed) == 1 else value.strip("\"'")
         except ValueError:
-            env[key] = value.strip('"\'')
+            env[key] = value.strip("\"'")
 
 
 def sqlite_backup(source: Path, destination: Path) -> None:
