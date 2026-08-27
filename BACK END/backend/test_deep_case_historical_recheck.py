@@ -48,6 +48,7 @@ class DeepCaseHistoricalRecheckTests(unittest.TestCase):
     ):
         deep_case_state.return_value = {
             "case": {"topic": "Micron memory cycle"},
+            "ticker": "MU",
             "deep_case": True,
             "deep_reasons": ["COMMITTEE_WATCH", "CAPITAL_ENTRY_WATCH"],
             "historical": {"historical_signal": "MIXED_PRECEDENT"},
@@ -75,6 +76,7 @@ class DeepCaseHistoricalRecheckTests(unittest.TestCase):
 
         run_history.assert_called_once_with("case_mu")
         self.assertEqual(result["status"], "COMPLETE")
+        self.assertEqual(result["ticker"], "MU")
         self.assertTrue(result["triggered"])
         self.assertTrue(result["historical_signal_changed"])
         self.assertTrue(result["reunderwrite_required"])
@@ -84,6 +86,21 @@ class DeepCaseHistoricalRecheckTests(unittest.TestCase):
         self.assertFalse(result["live_execution"])
         record_object.assert_called_once()
         record_event.assert_called_once()
+
+    @patch.object(recheck, "run_historical_pattern_review")
+    @patch.object(recheck, "deep_case_state")
+    def test_force_never_pulls_shallow_case_into_history(self, state, run_history):
+        state.return_value = {
+            "case": {"topic": "shallow opportunity"},
+            "ticker": "TEST",
+            "deep_case": False,
+            "deep_reasons": [],
+        }
+
+        result = recheck.run_historical_recheck("case_shallow", force=True)
+
+        self.assertEqual(result["status"], "SKIPPED_NOT_DEEP_CASE")
+        run_history.assert_not_called()
 
     @patch.object(recheck, "run_historical_recheck")
     @patch.object(recheck, "_rows_by_type")
