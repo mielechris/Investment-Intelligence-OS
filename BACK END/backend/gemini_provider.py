@@ -14,6 +14,7 @@ DEFAULT_FLASH_MODEL = "gemini-3.7-flash"
 DEFAULT_PRO_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_TIMEOUT_SECONDS = 180
 APPROVED_HOSTS = {"generativelanguage.googleapis.com"}
+JSON_RESPONSE_MIME_ENUM = "APPLICATION_JSON"
 
 
 def _env(*names: str) -> str:
@@ -220,7 +221,9 @@ def research_json(
             "thinkingConfig": {"thinkingLevel": level},
             "responseFormat": {
                 "text": {
-                    "mimeType": "application/json",
+                    # The direct v1beta REST endpoint currently validates this
+                    # as TextResponseFormat.MimeType, so use the enum literal.
+                    "mimeType": JSON_RESPONSE_MIME_ENUM,
                     "schema": schema,
                 }
             },
