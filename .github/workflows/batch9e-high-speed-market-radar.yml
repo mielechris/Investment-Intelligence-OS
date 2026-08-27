@@ -21,6 +21,7 @@ jobs:
           python -m py_compile
           "BACK END/backend/high_speed_market_radar.py"
           "BACK END/backend/production_index_universe.py"
+          "BACK END/backend/production_index_universe_resilient.py"
           "BACK END/backend/index_tls_bootstrap.py"
           "BACK END/backend/gemini_provider.py"
           "BACK END/backend/gemini_rapid_research.py"
@@ -38,12 +39,20 @@ jobs:
         run: |
           grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/index_tls_bootstrap.py"
           grep -q 'check_hostname' "BACK END/backend/index_tls_bootstrap.py"
-          ! grep -Eq '_create_unverified_context|CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False' "BACK END/backend/index_tls_bootstrap.py"
+          grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'check_hostname' "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -ER '_create_unverified_context|CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False' "BACK END/backend/index_tls_bootstrap.py" "BACK END/backend/production_index_universe_resilient.py"
+      - name: Assert governed index source lineage
+        run: |
+          grep -q 'NASDAQ100_DIRECT_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'SP500_IVV_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'GOVERNED_INDEX_TRACKER_MIRROR' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'acceptance_screener_fallback_used' "BACK END/backend/production_index_universe_resilient.py"
       - name: Assert no live or broker authority
         run: |
-          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py"
-          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py"
-          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py"
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/production_index_universe_resilient.py"
       - name: Assert maximum throughput bounds
         run: |
           grep -q 'MAX_PROMOTIONS_PER_CYCLE.*"5"' "BACK END/backend/high_speed_market_radar.py"
