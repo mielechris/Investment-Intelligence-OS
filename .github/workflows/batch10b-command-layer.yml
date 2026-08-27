@@ -1,0 +1,37 @@
+name: Batch 10B Command Layer
+
+on:
+  pull_request:
+    paths:
+      - 'FRONT END/src/Batch10BCommandLayer.tsx'
+      - 'FRONT END/src/Batch10BCommandLayer.css'
+      - 'FRONT END/src/PaperFundOperationsShell.tsx'
+      - '.github/workflows/batch10b-command-layer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+      - name: Install frontend dependencies
+        working-directory: 'FRONT END'
+        run: npm ci
+      - name: Build frontend
+        working-directory: 'FRONT END'
+        run: npm run build
+      - name: Assert real-only semantics
+        run: |
+          grep -q 'GOVERNED TELEMETRY ONLY' 'FRONT END/src/Batch10BCommandLayer.tsx'
+          grep -q 'UNKNOWN ≠ ZERO' 'FRONT END/src/Batch10BCommandLayer.tsx'
+          grep -q 'No missing reason is inferred' 'FRONT END/src/Batch10BCommandLayer.tsx'
+          grep -q 'NO FAKE GREEN LIGHTS' 'FRONT END/src/Batch10BCommandLayer.tsx'
+          ! grep -q 'const CASES' 'FRONT END/src/Batch10BCommandLayer.tsx'
