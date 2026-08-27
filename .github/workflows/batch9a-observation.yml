@@ -1,0 +1,42 @@
+name: IIOS Batch 9A Observation Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9a-observation-paper-operations
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  observation-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile observation runner and acceptance tools
+        run: python -m py_compile scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py scripts/run_batch9a_observation_acceptance.py scripts/start_batch9a_observation_continuous.py scripts/test_batch9a_observation_contract.py
+      - name: Run Batch 9A safety contract
+        run: python scripts/test_batch9a_observation_contract.py
+      - name: Assert no live execution authority
+        run: |
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py scripts/start_batch9a_observation_continuous.py
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py scripts/start_batch9a_observation_continuous.py
+          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' scripts/iios_observation_runner.py scripts/iios_observation_acceptance_cycle.py scripts/start_batch9a_observation_continuous.py
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build
