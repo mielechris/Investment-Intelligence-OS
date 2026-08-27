@@ -32,6 +32,7 @@ jobs:
           scripts/run_batch9e_high_speed_acceptance.py
           scripts/run_batch9e_official_universe_acceptance.py
           scripts/run_batch9e_model_acceptance.py
+          scripts/run_batch9e_gemini_focused_acceptance.py
           scripts/run_batch9e_full_factory_acceptance.py
           scripts/run_batch9e_full_factory_acceptance_v2.py
           scripts/run_batch9e_case_floor_benchmark.py
@@ -46,7 +47,10 @@ jobs:
           grep -q 'check_hostname' "BACK END/backend/index_tls_bootstrap.py"
           grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/production_index_universe_resilient.py"
           grep -q 'check_hostname' "BACK END/backend/production_index_universe_resilient.py"
-          ! grep -ER '_create_unverified_context|CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False' "BACK END/backend/index_tls_bootstrap.py" "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'configure_verified_tls' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Certificate verification:' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Hostname verification:' scripts/run_batch9e_gemini_focused_acceptance.py
+          ! grep -ER '_create_unverified_context|CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False' "BACK END/backend/index_tls_bootstrap.py" "BACK END/backend/production_index_universe_resilient.py" scripts/run_batch9e_gemini_focused_acceptance.py
       - name: Assert governed index source lineage
         run: |
           grep -q 'NASDAQ100_DIRECT_URL' "BACK END/backend/production_index_universe_resilient.py"
@@ -60,6 +64,15 @@ jobs:
           grep -q 'Synthetic promotion fixture: FORBIDDEN' scripts/run_batch9e_full_factory_acceptance.py
           grep -q 'Authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
           grep -q 'Execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
+      - name: Assert Gemini focused acceptance bounds and safety
+        run: |
+          grep -q 'IIOS_GEMINI_TIMEOUT_SECONDS.*60' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'IIOS_GEMINI_RETRIES.*0' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Google Search grounding: REQUIRED' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'URL Context: REQUIRED' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Broker connected: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
       - name: Assert qualification-aware full-factory v2 safety
         run: |
           grep -q 'Qualification stage: REQUIRED' scripts/run_batch9e_full_factory_acceptance_v2.py
