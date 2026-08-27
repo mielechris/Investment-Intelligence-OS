@@ -1,0 +1,32 @@
+name: Batch 10 Resilience Learning
+
+on:
+  pull_request:
+    paths:
+      - 'BACK END/backend/resilience_health.py'
+      - 'BACK END/backend/decision_journal.py'
+      - 'scripts/run_batch10_resilience_acceptance.py'
+      - '.github/workflows/batch10-resilience-learning.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run Batch 10 resilience acceptance
+        run: python scripts/run_batch10_resilience_acceptance.py
+      - name: Assert safety invariants remain explicit
+        run: |
+          grep -q 'Paper order authority: FALSE' scripts/run_batch10_resilience_acceptance.py
+          grep -q 'Broker connected: FALSE' scripts/run_batch10_resilience_acceptance.py
+          grep -q 'Live execution: FALSE' scripts/run_batch10_resilience_acceptance.py
+          grep -q 'Automatic threshold mutation: FALSE' scripts/run_batch10_resilience_acceptance.py
+          grep -q 'broker_connected.*False' 'BACK END/backend/resilience_health.py'
+          grep -q 'live_execution.*False' 'BACK END/backend/resilience_health.py'
