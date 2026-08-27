@@ -34,6 +34,7 @@ jobs:
           scripts/run_batch9e_model_acceptance.py
           scripts/run_batch9e_full_factory_acceptance.py
           scripts/run_batch9e_case_floor_benchmark.py
+          scripts/run_batch9e_case_floor_scaling_benchmark.py
           scripts/test_batch9e_high_speed_contract.py
       - name: Run Batch 9E throughput and safety contract
         run: python scripts/test_batch9e_high_speed_contract.py
@@ -66,6 +67,16 @@ jobs:
           grep -q 'Paper order authority: FALSE' scripts/run_batch9e_case_floor_benchmark.py
           grep -q 'Live execution: FALSE' scripts/run_batch9e_case_floor_benchmark.py
           grep -q '7200.0 / mean_pair' scripts/run_batch9e_case_floor_benchmark.py
+      - name: Assert scaling benchmark reasoning order and safety
+        run: |
+          grep -q 'WORKER_SWEEP = (4, 5, 6)' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'CASE_SWEEP = (4, 6, 8)' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Skeptic remains after first wave; Portfolio remains after Skeptic; Committee remains last' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Broker connected: FALSE' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          ! grep -q 'submit_paper_order' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          ! grep -q 'prepare_paper_authorization' scripts/run_batch9e_case_floor_scaling_benchmark.py
       - name: Assert no live or broker authority
         run: |
           ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
