@@ -1,0 +1,41 @@
+name: IIOS Batch 9D Family Network Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9d-live-agent-cortex
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  family-network-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run Batch 9D read-only cortex contract
+        run: python scripts/test_batch9d_family_network_contract.py
+      - name: Assert no browser mutation authority
+        run: |
+          ! grep -R 'method:[[:space:]]*"POST"' "FRONT END/src/FamilyNetworkCortex.tsx"
+          ! grep -R "method:[[:space:]]*'POST'" "FRONT END/src/FamilyNetworkCortex.tsx"
+          ! grep -R 'trade_execution_permission:[[:space:]]*true' "FRONT END/src/FamilyNetworkCortex.tsx"
+          ! grep -R 'live_execution:[[:space:]]*true' "FRONT END/src/FamilyNetworkCortex.tsx"
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build
