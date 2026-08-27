@@ -19,6 +19,7 @@ from ledger import (
     record_event,
     record_object,
 )
+from paper_fund_operations_api import build_paper_fund_operations
 
 load_dotenv()
 
@@ -170,6 +171,11 @@ def root():
 @app.get("/agents")
 def get_agents():
     return {"agents":[{"key":key,"name":config["name"],"room":config["room"],"status":"idle"} for key, config in AGENT_CONFIGS.items()]}
+
+
+@app.get("/paper-fund/operations")
+def paper_fund_operations():
+    return build_paper_fund_operations()
 
 
 @app.post("/evidence/normalize")
