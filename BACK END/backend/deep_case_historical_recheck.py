@@ -100,8 +100,16 @@ def deep_case_state(case_id: str) -> dict[str, Any]:
     if monitor.get("enabled") is True and committee:
         reasons.append("ACTIVE_MONITORING")
 
+    ticker = str(
+        capital_watch.get("ticker")
+        or monitor.get("ticker")
+        or case.get("ticker")
+        or ""
+    ).upper() or None
+
     return {
         "case_id": case_id,
+        "ticker": ticker,
         "case": case,
         "committee": committee,
         "qualification": qualification,
@@ -168,9 +176,10 @@ def recheck_triggers(state: dict[str, Any], *, now: datetime | None = None) -> l
 
 def run_historical_recheck(case_id: str, *, force: bool = False) -> dict[str, Any]:
     state = deep_case_state(case_id)
-    if state.get("deep_case") is not True and not force:
+    if state.get("deep_case") is not True:
         return {
             "case_id": case_id,
+            "ticker": state.get("ticker"),
             "status": "SKIPPED_NOT_DEEP_CASE",
             "triggered": False,
             "deep_reasons": state.get("deep_reasons") or [],
@@ -185,6 +194,7 @@ def run_historical_recheck(case_id: str, *, force: bool = False) -> dict[str, An
     if not triggers:
         return {
             "case_id": case_id,
+            "ticker": state.get("ticker"),
             "status": "SKIPPED_NOT_DUE",
             "triggered": False,
             "deep_reasons": state.get("deep_reasons") or [],
@@ -220,6 +230,7 @@ def run_historical_recheck(case_id: str, *, force: bool = False) -> dict[str, An
         "historical_recheck_id": recheck_id,
         "policy_version": POLICY_VERSION,
         "case_id": case_id,
+        "ticker": state.get("ticker"),
         "topic": (state.get("case") or {}).get("topic"),
         "deep_reasons": state.get("deep_reasons") or [],
         "triggers": triggers,
@@ -258,6 +269,7 @@ def run_historical_recheck(case_id: str, *, force: bool = False) -> dict[str, An
         "DEEP_CASE_HISTORICAL_RECHECK_COMPLETE",
         entity_id=recheck_id,
         payload={
+            "ticker": payload.get("ticker"),
             "triggers": triggers,
             "historical_signal": current_signal,
             "historical_signal_changed": signal_changed,
