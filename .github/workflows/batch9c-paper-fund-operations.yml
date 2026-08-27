@@ -24,7 +24,7 @@ jobs:
         run: |
           ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_execution_api.py" "FRONT END/src/PaperFundOperationsDock.tsx"
           ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_execution_api.py" "FRONT END/src/PaperFundOperationsDock.tsx"
-          ! grep -R 'method:[[:space:]]*["'"']POST' "FRONT END/src/PaperFundOperationsDock.tsx"
+          ! grep -R 'method:.*POST' "FRONT END/src/PaperFundOperationsDock.tsx"
 
   frontend-regression:
     runs-on: ubuntu-latest
