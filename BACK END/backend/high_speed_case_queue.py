@@ -19,6 +19,10 @@ STATE_TYPE = "high_speed_case_floor_state"
 CYCLE_TYPE = "high_speed_case_floor_cycle"
 MAX_CONCURRENT_CASES = 2
 CASE_MAX_AGE_HOURS = 24
+ALLOWED_PROMOTION_CREATORS = {
+    "BATCH_9E_GROK_GEMINI_HIGH_SPEED_RADAR",
+    "BATCH_9E_HIGH_SPEED_MARKET_RADAR",
+}
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -61,7 +65,8 @@ def _nine_e_promoted_cases(limit: int = 50) -> list[dict[str, Any]]:
             continue
         if not isinstance(candidate, dict):
             continue
-        if candidate.get("created_by") != "BATCH_9E_HIGH_SPEED_MARKET_RADAR":
+        created_by = str(candidate.get("created_by") or "").strip()
+        if created_by not in ALLOWED_PROMOTION_CREATORS:
             continue
         case_id = str(candidate.get("promoted_case_id") or "").strip()
         if not case_id or case_id in seen:
@@ -76,6 +81,7 @@ def _nine_e_promoted_cases(limit: int = 50) -> list[dict[str, Any]]:
                 "ticker": str(candidate.get("ticker") or "").upper(),
                 "rank_score": candidate.get("radar_rank_score"),
                 "candidate_id": candidate.get("opportunity_candidate_id"),
+                "created_by": created_by,
                 "created_at": candidate.get("promoted_at") or candidate.get("created_at"),
             }
         )
@@ -113,6 +119,7 @@ def _run_case(item: dict[str, Any]) -> dict[str, Any]:
         entity_id=case_id,
         payload={
             "ticker": item.get("ticker"),
+            "created_by": item.get("created_by"),
             "trade_execution_permission": False,
         },
     )
@@ -186,6 +193,7 @@ def run_case_floor_cycle(max_cases: int = MAX_CONCURRENT_CASES) -> dict[str, Any
         "results": results,
         "cycle_duration_seconds": duration,
         "max_concurrent_cases": MAX_CONCURRENT_CASES,
+        "allowed_promotion_creators": sorted(ALLOWED_PROMOTION_CREATORS),
         "paper_mode": True,
         "committee_override": False,
         "risk_override": False,
