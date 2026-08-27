@@ -11,6 +11,9 @@ import gemini_provider
 DEFAULT_FINALIST_COUNT = max(4, min(int(os.getenv("IIOS_9E_GEMINI_FINALISTS", "8")), 20))
 DEFAULT_MAX_WORKERS = max(1, min(int(os.getenv("IIOS_9E_GEMINI_WORKERS", "4")), 8))
 DEFAULT_THINKING_LEVEL = str(os.getenv("IIOS_9E_GEMINI_THINKING", "medium")).strip().lower()
+DEFAULT_FALLBACK_MODEL = str(
+    os.getenv("IIOS_9E_GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+).strip()
 
 RESEARCH_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -34,6 +37,12 @@ RESEARCH_SCHEMA: dict[str, Any] = {
         "research_summary",
         "complexity_score",
     ],
+}
+
+PREFLIGHT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
 }
 
 
@@ -61,11 +70,32 @@ def _system_prompt() -> str:
     )
 
 
-def research_one(row: dict[str, Any]) -> dict[str, Any]:
-    ticker = str(row.get("ticker") or "").strip().upper()
-    if not ticker:
-        raise ValueError("Gemini finalist missing ticker")
-    result = gemini_provider.research_json(
+def _transient_provider_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        marker in text
+        for marker in (
+            "timeout",
+            "timed out",
+            "gemini_http_500",
+            "gemini_http_502",
+            "gemini_http_503",
+            "gemini_http_504",
+            "unavailable",
+            "temporarily",
+            "connection reset",
+            "remote end closed",
+        )
+    )
+
+
+def _fallback_model() -> str:
+    value = DEFAULT_FALLBACK_MODEL or "gemini-2.5-flash"
+    return value.strip()
+
+
+def _research_request(row: dict[str, Any], *, model: str) -> dict[str, Any]:
+    return gemini_provider.research_json(
         system=_system_prompt(),
         user=json.dumps(
             {
@@ -76,7 +106,7 @@ def research_one(row: dict[str, Any]) -> dict[str, Any]:
             default=str,
         ),
         schema=RESEARCH_SCHEMA,
-        model=gemini_provider.flash_model(),
+        model=model,
         thinking_level=(
             DEFAULT_THINKING_LEVEL
             if DEFAULT_THINKING_LEVEL in {"low", "medium", "high"}
@@ -86,6 +116,27 @@ def research_one(row: dict[str, Any]) -> dict[str, Any]:
         use_url_context=True,
         max_output_tokens=8000,
     )
+
+
+def research_one(row: dict[str, Any], *, preferred_model: str | None = None) -> dict[str, Any]:
+    ticker = str(row.get("ticker") or "").strip().upper()
+    if not ticker:
+        raise ValueError("Gemini finalist missing ticker")
+
+    primary_model = str(preferred_model or gemini_provider.flash_model()).strip()
+    fallback_model = _fallback_model()
+    fallback_used = False
+    primary_error: str | None = None
+
+    try:
+        result = _research_request(row, model=primary_model)
+    except Exception as exc:  # noqa: BLE001
+        if primary_model == fallback_model or not _transient_provider_error(exc):
+            raise
+        primary_error = f"{type(exc).__name__}: {exc}"[:2500]
+        result = _research_request(row, model=fallback_model)
+        fallback_used = True
+
     value = result.get("output") or {}
     if not isinstance(value, dict):
         raise ValueError("Gemini research output is not a JSON object")
@@ -102,6 +153,10 @@ def research_one(row: dict[str, Any]) -> dict[str, Any]:
         "research_summary": str(value.get("research_summary") or "")[:5000],
         "complexity_score": _safe_float(value.get("complexity_score")),
         "provider_model": result.get("model"),
+        "preferred_model": primary_model,
+        "fallback_model": fallback_model,
+        "fallback_used": fallback_used,
+        "preferred_model_error": primary_error,
         "latency_ms": result.get("latency_ms"),
         "usage": result.get("usage") or {},
         "web_search_queries": result.get("web_search_queries") or [],
@@ -117,6 +172,49 @@ def research_one(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _preflight_with_model(model: str) -> dict[str, Any]:
+    result = gemini_provider.research_json(
+        system=(
+            "This is an IIOS provider capability canary. Use Google Search to verify that the Gemini API documentation is publicly "
+            "available, then return the requested JSON only. Do not make any investment recommendation."
+        ),
+        user='Use Google Search and return {"ok": true}.',
+        schema=PREFLIGHT_SCHEMA,
+        model=model,
+        thinking_level="low",
+        use_google_search=True,
+        use_url_context=True,
+        max_output_tokens=512,
+    )
+    if (result.get("output") or {}).get("ok") is not True:
+        raise RuntimeError("GEMINI_PREFLIGHT_INVALID_RESPONSE")
+    return result
+
+
+def resilient_preflight() -> dict[str, Any]:
+    primary_model = gemini_provider.flash_model()
+    fallback_model = _fallback_model()
+    try:
+        result = _preflight_with_model(primary_model)
+        return {
+            "selected_model": primary_model,
+            "fallback_used": False,
+            "primary_error": None,
+            "result": result,
+        }
+    except Exception as exc:  # noqa: BLE001
+        if primary_model == fallback_model or not _transient_provider_error(exc):
+            raise
+        primary_error = f"{type(exc).__name__}: {exc}"[:2500]
+        result = _preflight_with_model(fallback_model)
+        return {
+            "selected_model": fallback_model,
+            "fallback_used": True,
+            "primary_error": primary_error,
+            "result": result,
+        }
+
+
 def run_gemini_rapid_research(
     rows: list[dict[str, Any]],
     *,
@@ -129,17 +227,17 @@ def run_gemini_rapid_research(
     if not finalists:
         return output, errors
 
-    # One capability canary tests the same Search + URL Context lane before
-    # any parallel finalist requests launch. This fails closed on quota,
-    # billing, model-access, or request-contract problems.
     try:
-        gemini_provider.preflight(require_research_tools=True)
+        preflight = resilient_preflight()
+        selected_model = str(preflight.get("selected_model") or gemini_provider.flash_model())
+        if preflight.get("fallback_used") is True:
+            errors["PREFLIGHT_PRIMARY_DEGRADED"] = str(preflight.get("primary_error") or "PRIMARY_MODEL_TRANSIENT_FAILURE")[:2500]
     except Exception as exc:  # noqa: BLE001
         return {}, {"PREFLIGHT": f"{type(exc).__name__}: {exc}"[:2500]}
 
     with ThreadPoolExecutor(max_workers=min(max(1, int(max_workers)), len(finalists))) as pool:
         future_map = {
-            pool.submit(research_one, row): str(row.get("ticker") or "").upper()
+            pool.submit(research_one, row, preferred_model=selected_model): str(row.get("ticker") or "").upper()
             for row in finalists
         }
         for future in as_completed(future_map):
