@@ -1,0 +1,55 @@
+name: IIOS Batch 9B Governed Paper Trading Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9b-governed-paper-trading
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  paper-trading-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile Batch 9B modules
+        run: |
+          python -m py_compile \
+            "BACK END/backend/governed_paper_trading_controller.py" \
+            scripts/iios_paper_trading_runner.py \
+            scripts/run_batch9b_paper_trading_acceptance.py \
+            scripts/start_batch9b_paper_trading_continuous.py \
+            scripts/test_batch9b_paper_trading_contract.py
+      - name: Run Batch 9B safety contract
+        run: python scripts/test_batch9b_paper_trading_contract.py
+      - name: Assert no live/broker authority
+        run: |
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_trading_controller.py" scripts/iios_paper_trading_runner.py
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_trading_controller.py" scripts/iios_paper_trading_runner.py
+          ! grep -R '"broker_connected"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_trading_controller.py" scripts/iios_paper_trading_runner.py
+      - name: Assert governed handoff only
+        run: |
+          grep -q 'prepare_paper_authorization' "BACK END/backend/governed_paper_trading_controller.py"
+          grep -q 'submit_governed_paper_order' "BACK END/backend/governed_paper_trading_controller.py"
+          grep -q 'MAX_PAPER_EXECUTIONS_PER_CYCLE = 1' "BACK END/backend/governed_paper_trading_controller.py"
+          grep -q 'BLOCKED_INSUFFICIENT_PAPER_CASH' "BACK END/backend/governed_paper_trading_controller.py"
+          grep -q 'BLOCKED_DUPLICATE_TICKER_POSITION' "BACK END/backend/governed_paper_trading_controller.py"
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build
