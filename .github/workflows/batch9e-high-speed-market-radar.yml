@@ -33,6 +33,7 @@ jobs:
           scripts/run_batch9e_official_universe_acceptance.py
           scripts/run_batch9e_model_acceptance.py
           scripts/run_batch9e_full_factory_acceptance.py
+          scripts/run_batch9e_case_floor_benchmark.py
           scripts/test_batch9e_high_speed_contract.py
       - name: Run Batch 9E throughput and safety contract
         run: python scripts/test_batch9e_high_speed_contract.py
@@ -56,6 +57,15 @@ jobs:
           grep -q 'Synthetic promotion fixture: FORBIDDEN' scripts/run_batch9e_full_factory_acceptance.py
           grep -q 'Authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
           grep -q 'Execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
+      - name: Assert throughput benchmark boundary and safety
+        run: |
+          grep -q 'DEFAULT_TRIALS = 10' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'CASES_PER_TRIAL = 2' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Included: all 8 agents + Committee' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Excluded: radar, evidence acquisition, Gap Hunter, Risk, Capital, execution' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q '7200.0 / mean_pair' scripts/run_batch9e_case_floor_benchmark.py
       - name: Assert no live or broker authority
         run: |
           ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
