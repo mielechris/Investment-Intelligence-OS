@@ -181,17 +181,41 @@ It also uses a SQLite backup of the live ledger. Therefore:
 - no eight-agent case-floor work is started,
 - no broker or execution authority exists.
 
-This acceptance measures the new broad governed-universe radar path before expensive model research is enabled.
+### Raw radar acceptance result — 2026-08-26 PT
+
+- Acceptance-only non-production universe: 282 symbols.
+- Radar hits: 282 raw screener candidates.
+- Grok candidates: 0 by design.
+- Kimi candidates: 0 by design.
+- Promoted cases: 0 by design.
+- Total radar cycle time: **16.745 seconds**.
+- Live branch unchanged: true.
+- Live tracked status unchanged: true.
+- Runner exit code: 0.
+- Result: **PASS**.
+
+The 282 hits are the raw acceptance candidate pool because the temporary fallback universe itself was built from the broad screeners; they are not 282 actionable cases. The result validates throughput of the new broad radar path.
+
+The fresh official S&P/Nasdaq capture in this acceptance bootstrap encountered a local CA-certificate verification error. The fallback universe was explicitly marked non-production and was never allowed to promote cases or create any trading authority.
 
 ## Second acceptance
 
-After the fast radar passes, run a model-enabled dry run against an isolated ledger copy to measure:
+Run Grok + Kimi together against a second isolated ledger copy with promotions disabled. The acceptance breadth is deliberately bounded while preserving full useful provider capability:
 
-- Grok availability and latency,
-- Kimi model resolution and Formula Web Search,
-- Kimi parallel-worker latency,
-- combined candidate ranking,
+- Grok: X Search + Web Search.
+- Kimi: provider model resolution, Formula Web Search, high reasoning.
+- Grok and Kimi run concurrently.
+- No case promotions.
+- No eight-agent case-floor run.
+- No paper or live authority.
+
+Measure:
+
+- Grok availability and candidate coverage,
+- Kimi availability and candidate coverage,
+- deep-research latency,
+- total cycle latency,
 - provider degradation behavior,
-- no case promotions.
+- live checkout invariants.
 
 Only after both acceptances should continuous 9E be allowed to write research/case records to the shared governed ledger.
