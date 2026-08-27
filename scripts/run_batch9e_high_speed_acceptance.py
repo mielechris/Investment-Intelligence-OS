@@ -76,6 +76,93 @@ def sqlite_backup(source: Path, destination: Path) -> None:
         source_db.close()
 
 
+def bootstrap_verified_universe(python: Path, env: dict[str, str]) -> int:
+    """
+    Acceptance-only compatibility bridge.
+
+    Production 9E still requires the Batch 8C verified production snapshot. This
+    helper may create that wrapper ONLY inside the copied /tmp acceptance ledger,
+    and ONLY from an already-governed universe whose lineage proves it was saved
+    by the official Batch 8C S&P 500 + Nasdaq-100 adapter.
+    """
+    code = r'''
+import sys
+from pathlib import Path
+from uuid import uuid4
+
+root = Path.cwd()
+backend = root / "BACK END" / "backend"
+sys.path.insert(0, str(backend))
+
+import jesse_source_acquisition
+from batch8c_production_inputs import current_strict_governed_universe
+from ledger import record_object, utc_now
+
+ready = current_strict_governed_universe()
+if isinstance(ready, dict) and ready.get("verified_complete") is True and ready.get("strict_membership") is True:
+    print(f"Acceptance universe already verified: {len(ready.get('symbols') or [])} symbols")
+    raise SystemExit(0)
+
+legacy = jesse_source_acquisition.current_governed_universe() or {}
+source_name = str(legacy.get("source_name") or "")
+symbols = [str(x).strip().upper() for x in legacy.get("symbols") or [] if str(x).strip()]
+strict = legacy.get("strict_membership") is True
+lineage_ok = source_name == "OFFICIAL_SP500_PLUS_NASDAQ100_BATCH8C"
+count_ok = 500 <= len(symbols) <= 620
+
+if not (strict and lineage_ok and count_ok):
+    print(
+        "Acceptance universe bootstrap unavailable: "
+        f"source={source_name or 'NONE'} strict={strict} count={len(symbols)}"
+    )
+    raise SystemExit(2)
+
+snapshot_id = f"production_index_universe_acceptance_{uuid4().hex}"
+payload = {
+    "production_index_universe_snapshot_id": snapshot_id,
+    "status": "CAPTURED",
+    "verified_complete": True,
+    "symbols": symbols,
+    "symbol_count": len(symbols),
+    "strict_membership": True,
+    "source_lineage": [
+        {
+            "index": "MERGED_SP500_NASDAQ100",
+            "source_mode": "PRIOR_GOVERNED_BATCH8C_OFFICIAL_UNIVERSE",
+            "source_ref": source_name,
+            "symbol_count": len(symbols),
+            "verified_complete": True,
+            "as_of": legacy.get("as_of") or legacy.get("updated_at"),
+        }
+    ],
+    "acceptance_bootstrap_only": True,
+    "acceptance_bootstrap_source_object": legacy.get("governed_dislocation_universe_id"),
+    "paper_mode": True,
+    "auto_trade_authority": False,
+    "trade_execution_permission": False,
+    "live_execution": False,
+    "created_at": utc_now(),
+}
+record_object(
+    snapshot_id,
+    "production_index_universe_snapshot",
+    jesse_source_acquisition.SOURCE_CASE,
+    payload,
+)
+print(f"Acceptance-only verified universe wrapper created: {len(symbols)} symbols")
+raise SystemExit(0)
+'''
+    result = run(
+        str(python),
+        "-c",
+        code,
+        cwd=WORKTREE,
+        check=False,
+        env=env,
+    )
+    return int(result.returncode)
+
+
 def main() -> int:
     if not LIVE.exists():
         raise SystemExit(f"Live checkout not found: {LIVE}")
@@ -114,17 +201,26 @@ def main() -> int:
     env["IIOS_9E_KIMI_FINALISTS"] = "8"
     env["IIOS_9E_KIMI_WORKERS"] = "4"
 
-    runner = WORKTREE / "scripts" / "iios_high_speed_factory_runner.py"
-    result = run(
-        str(python),
-        str(runner),
-        "--once",
-        "--dry-run",
-        "--no-models",
-        cwd=WORKTREE,
-        check=False,
-        env=env,
-    )
+    bootstrap_code = bootstrap_verified_universe(python, env)
+    if bootstrap_code != 0:
+        print(
+            "Acceptance stopped before radar: no verified official Batch 8C universe "
+            "was available in the copied ledger. Live state remains untouched."
+        )
+        result_code = bootstrap_code
+    else:
+        runner = WORKTREE / "scripts" / "iios_high_speed_factory_runner.py"
+        result = run(
+            str(python),
+            str(runner),
+            "--once",
+            "--dry-run",
+            "--no-models",
+            cwd=WORKTREE,
+            check=False,
+            env=env,
+        )
+        result_code = int(result.returncode)
 
     branch_after = capture("git", "branch", "--show-current", cwd=LIVE)
     status_after = capture("git", "status", "--porcelain", cwd=LIVE)
@@ -134,9 +230,9 @@ def main() -> int:
     print("\n=== BATCH 9E ACCEPTANCE SUMMARY ===")
     print(f"Live branch unchanged: {branch_unchanged} ({branch_after})")
     print(f"Live tracked status unchanged: {status_unchanged}")
-    print(f"Runner exit code: {result.returncode}")
+    print(f"Runner exit code: {result_code}")
 
-    if result.returncode == 0 and branch_unchanged and status_unchanged:
+    if result_code == 0 and branch_unchanged and status_unchanged:
         print("RESULT: PASS — high-speed governed-universe radar ran against isolated ledger with models/promotions disabled")
         return 0
 
