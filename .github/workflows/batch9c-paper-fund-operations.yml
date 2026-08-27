@@ -1,0 +1,48 @@
+name: IIOS Batch 9C Paper Fund Operations UI Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9c-paper-fund-operations-ui
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  paper-fund-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile read-only paper fund feed and preview
+        run: |
+          python -m py_compile \
+            "BACK END/backend/governed_paper_execution_api.py" \
+            scripts/batch9c_preview_api.py \
+            scripts/launch_batch9c_paper_fund_preview.py \
+            scripts/test_batch9c_paper_fund_operations_contract.py
+      - name: Run Batch 9C contract
+        run: python scripts/test_batch9c_paper_fund_operations_contract.py
+      - name: Assert read-only browser authority
+        run: |
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_execution_api.py" "FRONT END/src/PaperFundOperationsDock.tsx" scripts/batch9c_preview_api.py
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/governed_paper_execution_api.py" "FRONT END/src/PaperFundOperationsDock.tsx" scripts/batch9c_preview_api.py
+          ! grep -R 'method:.*POST' "FRONT END/src/PaperFundOperationsDock.tsx"
+          ! grep -R '@app.post' scripts/batch9c_preview_api.py
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build
