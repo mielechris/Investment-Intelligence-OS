@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import grok_provider
 import kimi_provider
+import kimi_rapid_research
 import kimi_swarm_bridge
 import high_speed_market_radar as core
 from ledger import latest_object, record_event, record_object, utc_now
@@ -47,6 +48,7 @@ def run_parallel_high_speed_cycle(
 
     grok: dict[str, dict[str, Any]] = {}
     kimi: dict[str, dict[str, Any]] = {}
+    kimi_diagnostics: dict[str, str] = {}
     provider_errors: dict[str, str] = {}
     deep_started = time.perf_counter()
     grok_execution_satisfied = False
@@ -55,6 +57,11 @@ def run_parallel_high_speed_cycle(
     if reuse:
         grok = reuse_packet.get("grok") if isinstance(reuse_packet.get("grok"), dict) else {}
         kimi = reuse_packet.get("kimi") if isinstance(reuse_packet.get("kimi"), dict) else {}
+        kimi_diagnostics = (
+            dict(reuse_packet.get("kimi_diagnostics") or {})
+            if isinstance(reuse_packet.get("kimi_diagnostics"), dict)
+            else {}
+        )
         provider_errors = (
             dict(reuse_packet.get("provider_errors") or {})
             if isinstance(reuse_packet.get("provider_errors"), dict)
@@ -84,7 +91,11 @@ def run_parallel_high_speed_cycle(
                 else None
             )
             kimi_future = (
-                pool.submit(core._run_kimi_research, kimi_input)
+                pool.submit(
+                    kimi_rapid_research.run_kimi_rapid_research,
+                    kimi_input,
+                    max_workers=core.KIMI_WORKERS,
+                )
                 if enable_kimi and kimi_status.get("configured") and kimi_input
                 else None
             )
@@ -97,7 +108,7 @@ def run_parallel_high_speed_cycle(
 
             if kimi_future is not None:
                 try:
-                    kimi = kimi_future.result()
+                    kimi, kimi_diagnostics = kimi_future.result()
                 except Exception as exc:  # noqa: BLE001
                     provider_errors["kimi"] = f"{type(exc).__name__}: {exc}"
 
@@ -138,6 +149,7 @@ def run_parallel_high_speed_cycle(
                 "force_model_refresh": bool(force_model_refresh),
                 "grok": grok,
                 "kimi": kimi,
+                "kimi_diagnostics": kimi_diagnostics,
                 "provider_errors": provider_errors,
                 "grok_provider": grok_status,
                 "kimi_provider": kimi_status,
@@ -221,6 +233,7 @@ def run_parallel_high_speed_cycle(
         "screener_hit_count": sweep.get("screener_hit_count"),
         "grok_candidate_count": len(grok),
         "kimi_candidate_count": len(kimi),
+        "kimi_diagnostics": kimi_diagnostics,
         "promotion_candidate_count": len(candidates),
         "promoted_case_count": len(promotions),
         "promoted_cases": [
