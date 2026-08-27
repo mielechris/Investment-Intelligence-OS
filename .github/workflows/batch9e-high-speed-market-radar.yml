@@ -1,0 +1,56 @@
+name: IIOS Batch 9E High-Speed Market Radar Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9e-high-speed-market-radar
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  high-speed-radar-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile Batch 9E modules
+        run: >-
+          python -m py_compile
+          "BACK END/backend/high_speed_market_radar.py"
+          "BACK END/backend/high_speed_market_pipeline.py"
+          "BACK END/backend/high_speed_case_queue.py"
+          "BACK END/backend/high_speed_kimi_swarm_worker.py"
+          scripts/iios_high_speed_factory_runner.py
+          scripts/run_batch9e_high_speed_acceptance.py
+          scripts/test_batch9e_high_speed_contract.py
+      - name: Run Batch 9E throughput and safety contract
+        run: python scripts/test_batch9e_high_speed_contract.py
+      - name: Assert no live or broker authority
+        run: |
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/high_speed_market_radar.py" "BACK END/backend/high_speed_market_pipeline.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/high_speed_kimi_swarm_worker.py"
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/high_speed_market_radar.py" "BACK END/backend/high_speed_market_pipeline.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/high_speed_kimi_swarm_worker.py"
+          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/high_speed_market_radar.py" "BACK END/backend/high_speed_market_pipeline.py"
+      - name: Assert maximum throughput bounds
+        run: |
+          grep -q 'MAX_PROMOTIONS_PER_CYCLE.*"5"' "BACK END/backend/high_speed_market_radar.py"
+          grep -q 'MAX_CONCURRENT_CASES = 2' "BACK END/backend/high_speed_case_queue.py"
+          grep -q 'GROK_AND_KIMI_PARALLEL' "BACK END/backend/high_speed_market_pipeline.py"
+          grep -q 'run_native_swarm' "BACK END/backend/high_speed_kimi_swarm_worker.py"
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build
