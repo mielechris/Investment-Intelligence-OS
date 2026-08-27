@@ -12,6 +12,7 @@ BACKEND = REPO_ROOT / "BACK END" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
+from batch9d_model_brains import build_model_brains  # noqa: E402
 from factory_intelligence_ui import build_case_detail, build_overview  # noqa: E402
 from governed_paper_execution_api import build_paper_fund_operations  # noqa: E402
 
@@ -49,6 +50,11 @@ def health():
 @app.get("/paper-fund/operations")
 def paper_fund_operations():
     return build_paper_fund_operations()
+
+
+@app.get("/family-network/model-brains")
+def family_network_model_brains():
+    return build_model_brains()
 
 
 @app.get("/experience/factory-intelligence/overview")
