@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body
 
+from deep_case_historical_recheck import historical_recheck_status, sweep_deep_cases
 from dislocation_intelligence import run_dislocation_scan
 from jesse_outcome_attribution import (
     outcome_status,
@@ -45,6 +46,7 @@ DEFAULTS = {
     "tariff_refresh_minutes": 60,
     "fed_refresh_minutes": 60,
     "inbox_refresh_minutes": 15,
+    "historical_recheck_minutes": 15,
     "followup_hour_pt": 13,
     "followup_minute_pt": 15,
 }
@@ -85,6 +87,7 @@ def default_state() -> dict[str, Any]:
         "last_tariff_at": None,
         "last_fed_at": None,
         "last_inbox_at": None,
+        "last_historical_recheck_at": None,
         "last_followup_date": None,
         "last_error": None,
         "paper_mode": True,
@@ -253,6 +256,18 @@ def run_cycle(force_jobs: list[str] | None = None) -> dict[str, Any]:
             return result
         jobs.append(("tariff", tariff))
 
+    recheck_elapsed = _elapsed_minutes(s.get("last_historical_recheck_at"), now)
+    if (
+        "historical_recheck" in force
+        or recheck_elapsed is None
+        or recheck_elapsed >= int(s.get("historical_recheck_minutes") or 15)
+    ):
+        def historical_recheck():
+            result = sweep_deep_cases()
+            s["last_historical_recheck_at"] = now.isoformat()
+            return result
+        jobs.append(("historical_recheck", historical_recheck))
+
     if "dislocation" in force or should_run_daily(
         s.get("last_dislocation_date"),
         hour=int(s.get("dislocation_hour_pt") or 11),
@@ -365,6 +380,19 @@ def jesse_outcomes_refresh(limit: int = 1000):
     return refresh_all_jesse_outcome_attributions(limit)
 
 
+@router.get("/intelligence/historical-recheck/status")
+def deep_historical_recheck_status(limit: int = 100):
+    return historical_recheck_status(limit)
+
+
+@router.post("/intelligence/historical-recheck/run-now")
+def deep_historical_recheck_run_now(request: dict[str, Any] = Body(default={})):
+    return sweep_deep_cases(
+        limit=int(request.get("limit") or 100),
+        force=bool(request.get("force", True)),
+    )
+
+
 @router.post("/intelligence/jesse-scheduler/run-now")
 def scheduler_run_now(request: dict[str, Any] = Body(default={})):
     jobs = request.get("jobs")
@@ -382,6 +410,7 @@ def scheduler_config(request: dict[str, Any] = Body(default={})):
         "tariff_refresh_minutes",
         "fed_refresh_minutes",
         "inbox_refresh_minutes",
+        "historical_recheck_minutes",
         "followup_hour_pt",
         "followup_minute_pt",
     }
