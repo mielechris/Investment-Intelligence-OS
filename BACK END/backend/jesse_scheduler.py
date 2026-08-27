@@ -12,8 +12,8 @@ from fastapi import APIRouter, Body
 
 from dislocation_intelligence import run_dislocation_scan
 from jesse_outcome_attribution import (
+    outcome_status,
     refresh_all_jesse_outcome_attributions,
-    router as jesse_outcome_router,
 )
 from jesse_paper_fund_bridge import dispatch_jesse_top_three
 from jesse_source_acquisition import (
@@ -28,7 +28,6 @@ from opportunity_acquisition import OPPORTUNITY_LEDGER_CASE
 from provider_hardening import fetch_market_quote
 
 router = APIRouter()
-router.include_router(jesse_outcome_router)
 SCHEDULER_CASE = "jesse_intelligence_scheduler"
 STATE_ID = "jesse_scheduler_state"
 STATE_TYPE = "jesse_scheduler_state"
@@ -354,6 +353,16 @@ def scheduler_status():
         "trade_execution_permission": False,
         "live_execution": False,
     }
+
+
+@router.get("/intelligence/jesse-outcomes/status")
+def jesse_outcomes_status(limit: int = 100):
+    return outcome_status(limit)
+
+
+@router.post("/intelligence/jesse-outcomes/refresh")
+def jesse_outcomes_refresh(limit: int = 1000):
+    return refresh_all_jesse_outcome_attributions(limit)
 
 
 @router.post("/intelligence/jesse-scheduler/run-now")
