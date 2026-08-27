@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import "./PaperFundOperationsDock.css";
 
 const API =
@@ -212,22 +212,20 @@ function countdown(value?: string | null): string {
 
 function tone(value?: string | null): string {
   const text = String(value || "UNKNOWN").toUpperCase();
-  if (
-    text.includes("COMPLETE") ||
-    text.includes("OPENED") ||
-    text.includes("QUALIFIED") ||
-    text.includes("READY") ||
-    text.includes("ON_CADENCE") ||
-    text.includes("WATCH")
-  ) {
-    return "good";
-  }
+
+  // Fail-closed / negative semantics must be evaluated before positive
+  // substrings such as QUALIFIED or WATCH. This prevents states like
+  // RESEARCH_NOT_QUALIFIED from ever rendering as a positive state.
   if (
     text.includes("ERROR") ||
     text.includes("REJECT") ||
     text.includes("BLOCKED") ||
     text.includes("OVERDUE") ||
-    text.includes("NO_TRADE")
+    text.includes("NO_TRADE") ||
+    text.includes("NOT_QUALIFIED") ||
+    text.includes("NOT_WATCH") ||
+    text.includes("VETO") ||
+    text.includes("INVALIDATED")
   ) {
     return "bad";
   }
@@ -236,9 +234,25 @@ function tone(value?: string | null): string {
     text.includes("PENDING") ||
     text.includes("LOCKED") ||
     text.includes("CLOSED") ||
-    text.includes("UNKNOWN")
+    text.includes("UNKNOWN") ||
+    text.includes("NOT_EXECUTED") ||
+    text.includes("NO_STATE") ||
+    text.includes("NO_SNAPSHOT")
   ) {
     return "warn";
+  }
+  if (
+    text.includes("COMPLETE") ||
+    text.includes("OPENED") ||
+    text.includes("QUALIFIED") ||
+    text.includes("READY") ||
+    text.includes("ON_CADENCE") ||
+    text.includes("WATCH") ||
+    text.includes("APPROVED") ||
+    text.includes("ACTIVE") ||
+    text === "OPEN"
+  ) {
+    return "good";
   }
   return "neutral";
 }
@@ -275,7 +289,7 @@ function WorkerCard({
   title: string;
   eyebrow: string;
   worker: Worker;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <article className="pfo-worker-card">
@@ -303,6 +317,28 @@ function WorkerCard({
       {children}
     </article>
   );
+}
+
+function governedGateState(
+  gate: JourneyRow,
+  detail: CaseDetail | null,
+): string {
+  if (!detail) return gate.status;
+  if (gate.key === "COMMITTEE") {
+    return detail.committee.disposition || "UNKNOWN";
+  }
+  if (gate.key === "RISK") {
+    return detail.risk.decision || "UNKNOWN";
+  }
+  if (gate.key === "QUALIFICATION") {
+    return detail.qualification.qualified_buy_candidate
+      ? "QUALIFIED"
+      : "NOT_QUALIFIED";
+  }
+  if (gate.key === "PAPER_EXECUTION") {
+    return detail.paper_execution.execution || "NOT_EXECUTED";
+  }
+  return gate.status;
 }
 
 export default function PaperFundOperationsDock() {
@@ -543,13 +579,19 @@ export default function PaperFundOperationsDock() {
             </div>
 
             <div className="pfo-gates">
-              {(caseDetail?.journey ?? []).map((gate) => (
-                <div className={`pfo-gate ${tone(gate.status)}`} key={gate.key}>
-                  <span>{displayState(gate.key)}</span>
-                  <strong>{displayState(gate.status)}</strong>
-                  <em>{gate.label}</em>
-                </div>
-              ))}
+              {(caseDetail?.journey ?? []).map((gate) => {
+                const actualState = governedGateState(gate, caseDetail);
+                return (
+                  <div
+                    className={`pfo-gate ${tone(actualState)}`}
+                    key={gate.key}
+                  >
+                    <span>{displayState(gate.key)}</span>
+                    <strong>{displayState(actualState)}</strong>
+                    <em>{gate.label}</em>
+                  </div>
+                );
+              })}
               {!caseDetail ? (
                 <div className="pfo-empty">
                   No governed focus case is available yet.
@@ -652,7 +694,10 @@ export default function PaperFundOperationsDock() {
 
               <div className="pfo-orders">
                 {(operations?.recent_paper_orders ?? []).slice(0, 5).map((order) => (
-                  <div className="pfo-order-row" key={order.execution_id ?? order.case_id ?? "order"}>
+                  <div
+                    className="pfo-order-row"
+                    key={order.execution_id ?? order.case_id ?? "order"}
+                  >
                     <div>
                       <strong>{order.shares ?? 0} shares</strong>
                       <span>{money(order.entry_price)} entry</span>
