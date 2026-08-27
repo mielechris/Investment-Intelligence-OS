@@ -20,14 +20,20 @@ VENV_CANDIDATES = (
 
 
 def ensure_iios_venv() -> None:
-    current = Path(sys.executable).resolve()
+    """Re-exec under an IIOS venv instead of system Python.
+
+    Do not resolve symlinks here. On macOS a venv's python executable commonly
+    resolves to the same framework binary as system Python even though the venv
+    supplies a different sys.prefix/site-packages/certifi bundle.
+    """
+    current = Path(sys.executable).absolute()
     for candidate in VENV_CANDIDATES:
+        candidate = candidate.absolute()
         if not candidate.exists() or not os.access(candidate, os.X_OK):
             continue
-        resolved = candidate.resolve()
-        if current == resolved:
+        if current == candidate:
             return
-        os.execv(str(resolved), [str(resolved), str(Path(__file__).resolve())])
+        os.execv(str(candidate), [str(candidate), str(Path(__file__).resolve())])
     raise SystemExit("No IIOS backend virtualenv Python found; refusing system Python TLS fallback")
 
 
@@ -74,6 +80,7 @@ def main() -> int:
     status = gemini_provider.configuration_status()
     print("IIOS BATCH 9E — GEMINI FOCUSED ACCEPTANCE", flush=True)
     print(f"Python: {sys.executable}", flush=True)
+    print(f"Python prefix: {sys.prefix}", flush=True)
     print(f"TLS configured: {tls.get('configured') is True}", flush=True)
     print(f"TLS mode: {tls.get('mode')}", flush=True)
     print(f"Certificate verification: {tls.get('certificate_verification') is True}", flush=True)
