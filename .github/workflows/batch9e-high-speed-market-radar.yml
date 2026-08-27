@@ -20,6 +20,8 @@ jobs:
         run: >-
           python -m py_compile
           "BACK END/backend/high_speed_market_radar.py"
+          "BACK END/backend/production_index_universe.py"
+          "BACK END/backend/index_tls_bootstrap.py"
           "BACK END/backend/gemini_provider.py"
           "BACK END/backend/gemini_rapid_research.py"
           "BACK END/backend/high_speed_gemini_pipeline.py"
@@ -27,10 +29,16 @@ jobs:
           "BACK END/backend/high_speed_case_queue.py"
           scripts/iios_high_speed_factory_runner.py
           scripts/run_batch9e_high_speed_acceptance.py
+          scripts/run_batch9e_official_universe_acceptance.py
           scripts/run_batch9e_model_acceptance.py
           scripts/test_batch9e_high_speed_contract.py
       - name: Run Batch 9E throughput and safety contract
         run: python scripts/test_batch9e_high_speed_contract.py
+      - name: Assert verified TLS policy
+        run: |
+          grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/index_tls_bootstrap.py"
+          grep -q 'check_hostname' "BACK END/backend/index_tls_bootstrap.py"
+          ! grep -Eq '_create_unverified_context|CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False' "BACK END/backend/index_tls_bootstrap.py"
       - name: Assert no live or broker authority
         run: |
           ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py"
