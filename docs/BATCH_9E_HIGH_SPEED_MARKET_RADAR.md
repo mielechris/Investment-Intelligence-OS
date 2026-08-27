@@ -200,14 +200,18 @@ The fresh official S&P/Nasdaq capture in this acceptance bootstrap encountered a
 
 ## Second acceptance
 
-Run Grok + Kimi together against a second isolated ledger copy with promotions disabled. The acceptance breadth is deliberately bounded while preserving full useful provider capability:
+`run_batch9e_model_acceptance.py` uses the successful raw-acceptance ledger as its source, clones it to a second `/tmp` SQLite database, and then runs a model-enabled 9E dry run with promotions disabled.
 
-- Grok: X Search + Web Search.
-- Kimi: provider model resolution, Formula Web Search, high reasoning.
+Acceptance breadth is deliberately bounded while preserving full useful provider capability:
+
+- Grok: one batch of up to 20 names, X Search + Web Search.
+- Kimi: up to 4 finalists, provider model resolution, Formula Web Search, high reasoning, 2 parallel workers.
 - Grok and Kimi run concurrently.
 - No case promotions.
 - No eight-agent case-floor run.
 - No paper or live authority.
+
+The launcher also resolves the certifi CA bundle from the IIOS virtual environment and exports it for provider HTTPS calls.
 
 Measure:
 
