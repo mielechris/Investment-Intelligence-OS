@@ -1,0 +1,174 @@
+.fmb-shell {
+  position: fixed;
+  left: 18px;
+  top: 62px;
+  z-index: 1192;
+  width: min(500px, calc(100vw - 36px));
+  border: 1px solid rgba(173, 127, 67, 0.45);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, rgba(11, 11, 12, 0.98), rgba(4, 9, 12, 0.98));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  color: #e9eef0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.fmb-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+.fmb-label span,
+.fmb-label strong,
+.fmb-locks span {
+  font-size: 7px;
+  letter-spacing: 0.15em;
+  font-weight: 900;
+}
+
+.fmb-label span { color: #9d7b4e; }
+.fmb-label strong { color: #78dfe8; }
+
+.fmb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fmb-brain {
+  min-width: 0;
+  border: 1px solid rgba(90, 105, 108, 0.28);
+  border-radius: 9px;
+  padding: 7px 8px;
+  background: rgba(5, 12, 15, 0.78);
+  transition: border-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+
+.fmb-brain-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fmb-brain-head i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #526065;
+}
+
+.fmb-brain-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #879398;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fmb-brain-head b {
+  margin-left: auto;
+  font-size: 6px;
+  letter-spacing: 0.09em;
+  color: #7c878b;
+}
+
+.fmb-brain > strong {
+  display: block;
+  margin-top: 4px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  color: #f0e3ce;
+}
+
+.fmb-brain p {
+  margin: 2px 0 0;
+  min-height: 20px;
+  font-size: 7px;
+  line-height: 1.35;
+  color: #6f7c80;
+}
+
+.fmb-brain small {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 6px;
+  letter-spacing: 0.06em;
+  color: #59676b;
+}
+
+.fmb-brain.state-working {
+  border-color: rgba(73, 225, 237, 0.72);
+  box-shadow: inset 0 0 22px rgba(73, 225, 237, 0.10), 0 0 16px rgba(73, 225, 237, 0.08);
+}
+
+.fmb-brain.state-working .fmb-brain-head i {
+  background: #50e5ef;
+  box-shadow: 0 0 12px rgba(80, 229, 239, 0.95);
+  animation: fmb-pulse 1s ease-in-out infinite;
+}
+
+.fmb-brain.state-working .fmb-brain-head b { color: #7df4fb; }
+
+.fmb-brain.state-recent {
+  border-color: rgba(193, 152, 83, 0.54);
+}
+
+.fmb-brain.state-recent .fmb-brain-head i {
+  background: #d0a35d;
+  box-shadow: 0 0 10px rgba(208, 163, 93, 0.7);
+}
+
+.fmb-brain.state-recent .fmb-brain-head b { color: #d7b579; }
+
+.fmb-brain.state-blocked {
+  border-color: rgba(190, 70, 83, 0.62);
+  box-shadow: inset 0 0 18px rgba(146, 33, 45, 0.09);
+}
+
+.fmb-brain.state-blocked .fmb-brain-head i {
+  background: #d85260;
+  box-shadow: 0 0 10px rgba(216, 82, 96, 0.7);
+}
+
+.fmb-brain.state-blocked .fmb-brain-head b { color: #e77884; }
+
+.fmb-brain.state-armed .fmb-brain-head i { background: #6db39f; }
+.fmb-brain.state-offline { opacity: 0.48; }
+
+.fmb-locks {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  border-top: 1px solid rgba(120, 101, 72, 0.16);
+  padding-top: 5px;
+}
+
+.fmb-locks span { color: #536064; }
+
+@keyframes fmb-pulse {
+  0%, 100% { transform: scale(0.82); opacity: 0.65; }
+  50% { transform: scale(1.25); opacity: 1; }
+}
+
+@media (max-width: 760px) {
+  .fmb-shell {
+    top: 54px;
+  }
+
+  .fmb-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fmb-brain p {
+    min-height: 0;
+  }
+}
