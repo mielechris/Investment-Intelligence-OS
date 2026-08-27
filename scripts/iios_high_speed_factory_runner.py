@@ -25,11 +25,13 @@ import app as _iios_bootstrap  # noqa: F401,E402
 from high_speed_case_queue import run_case_floor_cycle  # noqa: E402
 from high_speed_gemini_deep_worker import run_deep_once  # noqa: E402
 from high_speed_gemini_pipeline import run_parallel_high_speed_cycle  # noqa: E402
+from ledger import record_event  # noqa: E402
 
 
 DEFAULT_RADAR_MINUTES = 5
 DEFAULT_CASE_FLOOR_SECONDS = 30
 DEFAULT_DEEP_SECONDS = 60
+RADAR_TELEMETRY_CASE = "high_speed_market_radar"
 _STOP = threading.Event()
 _PRINT_LOCK = threading.Lock()
 
@@ -59,6 +61,64 @@ def _loop(name: str, interval_seconds: float, fn: Callable[[], Any]) -> None:
         _sleep_interruptible(max(1.0, interval_seconds - elapsed))
 
 
+def _run_model_radar_cycle(
+    *,
+    enable_models: bool,
+    enable_promotions: bool,
+    force_model_refresh: bool = False,
+) -> dict[str, Any]:
+    """Run one radar cycle with truthful provider-level start/finish telemetry."""
+    if enable_models:
+        record_event(
+            RADAR_TELEMETRY_CASE,
+            "HIGH_SPEED_MODEL_RESEARCH_STARTED",
+            payload={
+                "grok_requested": True,
+                "gemini_requested": True,
+                "trade_execution_permission": False,
+                "live_execution": False,
+            },
+        )
+
+    try:
+        cycle = run_parallel_high_speed_cycle(
+            enable_grok=enable_models,
+            enable_gemini=enable_models,
+            enable_promotions=enable_promotions,
+            force_model_refresh=bool(force_model_refresh),
+        )
+    except Exception as exc:
+        if enable_models:
+            record_event(
+                RADAR_TELEMETRY_CASE,
+                "HIGH_SPEED_MODEL_RESEARCH_FAILED_CLOSED",
+                payload={
+                    "error": f"{type(exc).__name__}: {exc}"[:1500],
+                    "grok_requested": True,
+                    "gemini_requested": True,
+                    "trade_execution_permission": False,
+                    "live_execution": False,
+                },
+            )
+        raise
+
+    if enable_models:
+        record_event(
+            RADAR_TELEMETRY_CASE,
+            "HIGH_SPEED_MODEL_RESEARCH_COMPLETE",
+            payload={
+                "grok_execution_satisfied": cycle.get("grok_execution_satisfied") is True,
+                "gemini_execution_satisfied": cycle.get("gemini_execution_satisfied") is True,
+                "grok_candidate_count": cycle.get("grok_candidate_count"),
+                "gemini_candidate_count": cycle.get("gemini_candidate_count"),
+                "provider_errors": cycle.get("provider_errors") or {},
+                "trade_execution_permission": False,
+                "live_execution": False,
+            },
+        )
+    return cycle
+
+
 def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = False) -> int:
     _log("=== IIOS BATCH 9E · ONE-SHOT HIGH-SPEED RADAR ===")
     _log(f"Promotions enabled: {not dry_run}")
@@ -68,9 +128,8 @@ def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = Fals
     _log("Certificate verification: TRUE")
     _log("Broker connected: FALSE")
     _log("Live execution: FALSE")
-    cycle = run_parallel_high_speed_cycle(
-        enable_grok=not no_models,
-        enable_gemini=not no_models,
+    cycle = _run_model_radar_cycle(
+        enable_models=not no_models,
         enable_promotions=not dry_run,
         force_model_refresh=bool(force_model_refresh),
     )
@@ -107,9 +166,8 @@ def run_continuous(
     _log("Live execution: FALSE")
     _log("Paper / Shadow only")
 
-    radar_fn = lambda: run_parallel_high_speed_cycle(  # noqa: E731
-        enable_grok=not no_models,
-        enable_gemini=not no_models,
+    radar_fn = lambda: _run_model_radar_cycle(  # noqa: E731
+        enable_models=not no_models,
         enable_promotions=True,
     )
 
