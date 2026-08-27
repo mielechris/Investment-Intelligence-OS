@@ -12,7 +12,14 @@ from urllib.request import Request, urlopen
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_FLASH_MODEL = "gemini-3.7-flash"
 DEFAULT_PRO_MODEL = "gemini-3.1-pro-preview"
-DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_TIMEOUT_SECONDS = max(
+    30,
+    min(int(os.getenv("IIOS_GEMINI_TIMEOUT_SECONDS", "90")), 180),
+)
+DEFAULT_RETRIES = max(
+    0,
+    min(int(os.getenv("IIOS_GEMINI_RETRIES", "1")), 2),
+)
 APPROVED_HOSTS = {"generativelanguage.googleapis.com"}
 JSON_RESPONSE_MIME_ENUM = "APPLICATION_JSON"
 
@@ -70,6 +77,8 @@ def configuration_status() -> dict[str, Any]:
         "base_url_host": _host(url),
         "flash_model": flash_model(),
         "pro_model": pro_model(),
+        "request_timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+        "request_retries": DEFAULT_RETRIES,
         "google_search_grounding": True,
         "url_context": True,
         "structured_outputs": True,
@@ -104,7 +113,7 @@ def _request(
     payload: dict[str, Any] | None = None,
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
-    retries: int = 2,
+    retries: int = DEFAULT_RETRIES,
 ) -> dict[str, Any]:
     key = api_key()
     if not key:
