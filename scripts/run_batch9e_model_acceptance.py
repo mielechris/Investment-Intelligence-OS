@@ -113,7 +113,7 @@ def main() -> int:
     print("Broker connected: FALSE")
     print("Live execution: FALSE")
     print("Grok: X SEARCH + WEB SEARCH — fresh execution REQUIRED for PASS")
-    print("Kimi: Formula Web Search + HIGH reasoning — fresh execution REQUIRED for PASS")
+    print("Kimi: Formula Web Search + HIGH reasoning + bounded forced synthesis — fresh execution REQUIRED for PASS")
 
     run("git", "fetch", "origin", BRANCH, cwd=LIVE)
     if WORKTREE.exists():
@@ -138,6 +138,7 @@ def main() -> int:
     env["IIOS_9E_GROK_BATCH_SIZE"] = "20"
     env["IIOS_9E_KIMI_FINALISTS"] = "4"
     env["IIOS_9E_KIMI_WORKERS"] = "2"
+    env["IIOS_9E_KIMI_TOOL_ROUNDS"] = "3"
 
     # Make direct official/provider HTTPS calls use the same CA bundle as the production app.
     cert = capture(str(python), "-c", "import certifi; print(certifi.where())")
@@ -159,6 +160,7 @@ def main() -> int:
     cycle = latest_object(MODEL_LEDGER, "high_speed_market_radar_cycle")
     model_context = latest_object(MODEL_LEDGER, "high_speed_market_model_context")
     provider_errors = cycle.get("provider_errors") or {}
+    kimi_diagnostics = cycle.get("kimi_diagnostics") or {}
 
     grok_configured = cycle.get("grok_configured") is True
     kimi_configured = cycle.get("kimi_configured") is True
@@ -182,6 +184,7 @@ def main() -> int:
     print(f"Kimi configured: {kimi_configured}")
     print(f"Kimi execution satisfied: {kimi_satisfied}")
     print(f"Kimi candidates: {kimi_count}")
+    print(f"Kimi finalist diagnostics: {kimi_diagnostics or 'NONE'}")
     print(f"Model execution satisfied: {model_satisfied}")
     print(f"Deep research seconds: {cycle.get('deep_research_duration_seconds')}")
     print(f"Total cycle seconds: {cycle.get('cycle_duration_seconds')}")
@@ -217,7 +220,7 @@ def main() -> int:
         )
     else:
         print(
-            "RESULT: FAIL — one or both configured providers did not return a valid fresh research result. Inspect provider errors above; live lanes were not intentionally stopped."
+            "RESULT: FAIL — one or both configured providers did not return a valid fresh research result. Inspect Kimi finalist diagnostics/provider errors above; live lanes were not intentionally stopped."
         )
     return 1
 
