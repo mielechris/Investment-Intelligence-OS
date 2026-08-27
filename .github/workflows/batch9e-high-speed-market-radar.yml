@@ -25,6 +25,7 @@ jobs:
           "BACK END/backend/high_speed_kimi_swarm_worker.py"
           scripts/iios_high_speed_factory_runner.py
           scripts/run_batch9e_high_speed_acceptance.py
+          scripts/run_batch9e_model_acceptance.py
           scripts/test_batch9e_high_speed_contract.py
       - name: Run Batch 9E throughput and safety contract
         run: python scripts/test_batch9e_high_speed_contract.py
