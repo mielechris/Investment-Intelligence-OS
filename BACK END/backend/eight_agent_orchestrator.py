@@ -9,6 +9,10 @@ from fastapi import APIRouter, HTTPException
 from openai import OpenAI
 
 from evidence_engine import build_packet
+from historical_pattern_analyst import AGENT_KEY as HISTORICAL_AGENT_KEY
+from historical_pattern_analyst import AGENT_NAME as HISTORICAL_AGENT_NAME
+from historical_pattern_analyst import ROOM as HISTORICAL_ROOM
+from historical_pattern_analyst import run_historical_pattern_review
 from ledger import get_object, latest_object, record_event, record_object, utc_now
 from main import AGENT_CONFIGS, clamp_confidence, normalize_disposition, run_specialist
 
@@ -25,6 +29,9 @@ FIRST_WAVE = (
     "geo_weather",
 )
 SECOND_WAVE = ("skeptic", "portfolio")
+THIRD_WAVE = (HISTORICAL_AGENT_KEY,)
+CORE_EIGHT = FIRST_WAVE + SECOND_WAVE
+ALL_REVIEW_DESKS = CORE_EIGHT + THIRD_WAVE
 MAX_PARALLEL_SPECIALISTS = 3
 
 
@@ -32,7 +39,11 @@ def agent_wave_plan() -> dict[str, Any]:
     return {
         "first_wave": list(FIRST_WAVE),
         "second_wave": list(SECOND_WAVE),
-        "all_agents": list(FIRST_WAVE + SECOND_WAVE),
+        "third_wave": list(THIRD_WAVE),
+        "core_eight_agents": list(CORE_EIGHT),
+        "all_agents": list(ALL_REVIEW_DESKS),
+        "historical_review_required": True,
+        "historical_review_position": "AFTER_SKEPTIC_AND_PORTFOLIO_BEFORE_COMMITTEE",
         "max_parallel_specialists": MAX_PARALLEL_SPECIALISTS,
         "paper_mode": True,
         "trade_execution_permission": False,
@@ -41,14 +52,20 @@ def agent_wave_plan() -> dict[str, Any]:
 
 
 def _error_result(agent_key: str, topic: str, exc: Exception) -> dict[str, Any]:
-    config = AGENT_CONFIGS[agent_key]
+    if agent_key == HISTORICAL_AGENT_KEY:
+        name = HISTORICAL_AGENT_NAME
+        room = HISTORICAL_ROOM
+    else:
+        config = AGENT_CONFIGS[agent_key]
+        name = config["name"]
+        room = config["room"]
     return {
         "agent_key": agent_key,
-        "agent": config["name"],
-        "room": config["room"],
+        "agent": name,
+        "room": room,
         "status": "error",
         "topic": topic,
-        "headline": f"{config['name']} unavailable",
+        "headline": f"{name} unavailable",
         "view": "The desk failed to return a governed analysis and cannot be counted as complete.",
         "confidence": 0.0,
         "disposition": "NO_TRADE",
@@ -64,6 +81,13 @@ def _run_one(agent_key: str, topic: str, evidence: list[dict[str, Any]]) -> dict
         return run_specialist(agent_key, topic, evidence)
     except Exception as exc:
         return _error_result(agent_key, topic, exc)
+
+
+def _run_historical(case_id: str, topic: str) -> dict[str, Any]:
+    try:
+        return run_historical_pattern_review(case_id)
+    except Exception as exc:
+        return _error_result(HISTORICAL_AGENT_KEY, topic, exc)
 
 
 def _peer_context_items(results: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -154,7 +178,7 @@ def committee_guard(
     evidence_summary: dict[str, Any],
     requested_disposition: str,
 ) -> dict[str, Any]:
-    required = set(FIRST_WAVE + SECOND_WAVE)
+    required_core = set(CORE_EIGHT)
     complete = {
         key
         for key, value in specialists.items()
@@ -162,9 +186,11 @@ def committee_guard(
     }
     flags = set(evidence_summary.get("critical_flags") or [])
     checks = {
-        "all_eight_agents_complete": required.issubset(complete),
+        "all_eight_agents_complete": required_core.issubset(complete),
         "skeptic_complete": "skeptic" in complete,
         "portfolio_complete": "portfolio" in complete,
+        "historical_pattern_complete": HISTORICAL_AGENT_KEY in complete,
+        "all_nine_review_desks_complete": set(ALL_REVIEW_DESKS).issubset(complete),
         "evidence_supplied": "NO_EVIDENCE_SUPPLIED" not in flags,
         "evidence_not_all_stale": "ALL_EVIDENCE_STALE" not in flags,
     }
@@ -221,7 +247,9 @@ def _synthesize_committee(
     }
     prompt = f"""
 You are the Investment Committee Chair inside a PAPER-ONLY Investment Intelligence OS.
-Eight specialist desks have completed a peer-aware two-wave review.
+Nine governed review desks have completed review: the core eight specialist desks plus
+a Historical Pattern & Precedent Analyst. The historical desk runs after Skeptic and
+Portfolio and before this Committee.
 
 CASE PACKET:
 {json.dumps(packet, indent=2, default=str)}
@@ -232,6 +260,8 @@ Rules:
 - Separate evidence from inference and unknowns.
 - Penalize stale, conflicting, missing, or low-quality evidence.
 - The Skeptic reviewed all six first-wave desks; Portfolio reviewed those desks plus the Skeptic challenge.
+- Historical precedent is context, not proof. Do not treat analogy as causation or as an external backtest unless the record explicitly says so.
+- A lack of historical precedent is an unknown, not evidence that the thesis is false.
 - Never recommend or execute a real-money trade.
 - Final disposition must be WATCH or NO_TRADE only.
 - Confidence must be 0.0 to 1.0.
@@ -294,6 +324,13 @@ Return ONLY JSON with exactly these fields:
 
 
 def run_eight_agent_orchestration(case_id: str) -> dict[str, Any]:
+    """
+    Backward-compatible entry point for the opportunity research floor.
+
+    The core eight specialists still run in their original two waves. A ninth,
+    required Historical Pattern & Precedent review now runs after Skeptic and
+    Portfolio and before Committee. No desk has execution authority.
+    """
     case = get_object(case_id)
     if not case or not str(case_id).startswith("case_"):
         raise ValueError("Unknown case_id")
@@ -340,8 +377,20 @@ def run_eight_agent_orchestration(case_id: str) -> dict[str, Any]:
             wave=2,
         )
 
-    # Present specialists in the canonical eight-desk order regardless of parallel completion order.
-    ordered = {key: results[key] for key in FIRST_WAVE + SECOND_WAVE if key in results}
+    # Third wave: historical precedent is reviewed only after the core eight have
+    # completed, and always before Committee. It consumes governed IIOS memory and
+    # paper-trade outcomes when available; it cannot create or authorize an order.
+    historical = _run_historical(case_id, topic)
+    results[HISTORICAL_AGENT_KEY] = _persist_agent_result(
+        case_id=case_id,
+        topic=topic,
+        evidence_packet_id=evidence_packet_id,
+        result=historical,
+        wave=3,
+    )
+
+    # Present specialists in canonical order regardless of parallel completion order.
+    ordered = {key: results[key] for key in ALL_REVIEW_DESKS if key in results}
     decision = _synthesize_committee(
         case_id=case_id,
         topic=topic,
@@ -368,6 +417,8 @@ def run_eight_agent_orchestration(case_id: str) -> dict[str, Any]:
         "committee_decision_id": decision["decision_id"],
         "committee_disposition": decision["disposition"],
         "committee_confidence": decision["confidence"],
+        "historical_pattern_review_id": historical.get("historical_pattern_review_id"),
+        "historical_pattern_signal": historical.get("historical_signal"),
         "agents": ordered,
         "created_at": utc_now(),
         "paper_mode": True,
@@ -381,14 +432,33 @@ def run_eight_agent_orchestration(case_id: str) -> dict[str, Any]:
         "EIGHT_AGENT_ORCHESTRATION_COMPLETE",
         entity_id=orchestration_id,
         payload={
-            "agent_count": len(ordered),
+            "legacy_event_name": True,
+            "core_agent_count": len([key for key in ordered if key in CORE_EIGHT]),
+            "review_desk_count": len(ordered),
+            "historical_pattern_complete": historical.get("status") == "complete",
             "committee_disposition": decision["disposition"],
             "committee_confidence": decision["confidence"],
             "failed_guard_checks": decision["orchestration_guard"]["failed_checks"],
             "trade_execution_permission": False,
         },
     )
-    return {"orchestration": orchestration, "committee": decision}
+    record_event(
+        case_id,
+        "NINE_DESK_GOVERNED_REVIEW_COMPLETE",
+        entity_id=orchestration_id,
+        payload={
+            "review_desk_count": len(ordered),
+            "historical_pattern_signal": historical.get("historical_signal"),
+            "committee_disposition": decision["disposition"],
+            "trade_execution_permission": False,
+            "live_execution": False,
+        },
+    )
+    return {
+        "orchestration": orchestration,
+        "historical_pattern": historical,
+        "committee": decision,
+    }
 
 
 @router.get("/orchestration/plan")
@@ -411,9 +481,11 @@ def orchestration_status(case_id: str):
         raise HTTPException(status_code=404, detail="Unknown case_id")
     orchestration = latest_object("agent_orchestration", case_id=case_id)
     committee = latest_object("committee_decision", case_id=case_id)
+    historical = latest_object("historical_pattern_review", case_id=case_id)
     return {
         "case_id": case_id,
         "latest_orchestration": orchestration,
+        "latest_historical_pattern": historical,
         "latest_committee": committee,
         "paper_mode": True,
         "paper_order_permission": False,

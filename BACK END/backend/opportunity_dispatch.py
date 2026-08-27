@@ -11,6 +11,19 @@ from opportunity_acquisition import OPPORTUNITY_LEDGER_CASE, opportunity_queue, 
 
 router = APIRouter()
 MAX_BATCH_DISPATCH = 3
+HISTORICAL_AGENT_KEY = "historical_pattern"
+
+
+def _orchestration_has_historical_review(orchestration: dict[str, Any] | None) -> bool:
+    orchestration = orchestration if isinstance(orchestration, dict) else {}
+    agents = orchestration.get("agents") if isinstance(orchestration.get("agents"), dict) else {}
+    historical = agents.get(HISTORICAL_AGENT_KEY) if isinstance(agents, dict) else None
+    return bool(
+        isinstance(historical, dict)
+        and historical.get("status") == "complete"
+        and historical.get("trade_execution_permission") is False
+        and historical.get("live_execution") is False
+    )
 
 
 def dispatch_candidate(candidate_id: str, *, force_research_rerun: bool = False) -> dict[str, Any]:
@@ -24,18 +37,26 @@ def dispatch_candidate(candidate_id: str, *, force_research_rerun: bool = False)
     case = promoted["case"]
     case_id = str(case["case_id"])
     existing = latest_object("agent_orchestration", case_id=case_id)
-    if existing and not force_research_rerun:
+    existing_has_history = _orchestration_has_historical_review(existing)
+
+    if existing and not force_research_rerun and existing_has_history:
         return {
             "candidate_id": candidate_id,
             "case": case,
             "orchestration": existing,
             "already_dispatched": True,
+            "historical_review_complete": True,
+            "upgraded_legacy_orchestration": False,
             "paper_mode": True,
             "paper_order_permission": False,
             "trade_execution_permission": False,
             "live_execution": False,
         }
 
+    # A pre-ninth-desk orchestration must not be allowed to masquerade as current.
+    # Redispatch upgrades it through the required historical review and a fresh
+    # Committee synthesis before any downstream paper-fund gate can rely on it.
+    upgrading_legacy = bool(existing and not force_research_rerun and not existing_has_history)
     result = run_eight_agent_orchestration(case_id)
     record_event(
         case_id,
@@ -43,9 +64,12 @@ def dispatch_candidate(candidate_id: str, *, force_research_rerun: bool = False)
         entity_id=result["orchestration"]["orchestration_id"],
         payload={
             "source_candidate_id": candidate_id,
+            "historical_review_complete": _orchestration_has_historical_review(result.get("orchestration")),
+            "upgraded_legacy_orchestration": upgrading_legacy,
             "committee_disposition": result["committee"]["disposition"],
             "committee_confidence": result["committee"]["confidence"],
             "trade_execution_permission": False,
+            "live_execution": False,
         },
     )
     return {
@@ -53,6 +77,8 @@ def dispatch_candidate(candidate_id: str, *, force_research_rerun: bool = False)
         "case": case,
         **result,
         "already_dispatched": False,
+        "historical_review_complete": _orchestration_has_historical_review(result.get("orchestration")),
+        "upgraded_legacy_orchestration": upgrading_legacy,
         "paper_mode": True,
         "paper_order_permission": False,
         "trade_execution_permission": False,

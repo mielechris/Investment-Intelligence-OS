@@ -18,14 +18,21 @@ class EightAgentOrchestratorTests(unittest.TestCase):
                 "view": f"{key} view",
                 "falsifier": f"{key} falsifier",
             }
-            for key in orch.FIRST_WAVE + orch.SECOND_WAVE
+            for key in orch.ALL_REVIEW_DESKS
         }
 
-    def test_wave_plan_contains_exactly_eight_agents(self):
+    def test_wave_plan_preserves_core_eight_and_adds_required_history_desk(self):
         plan = orch.agent_wave_plan()
-        self.assertEqual(len(plan["all_agents"]), 8)
-        self.assertEqual(len(set(plan["all_agents"])), 8)
+        self.assertEqual(len(plan["core_eight_agents"]), 8)
+        self.assertEqual(len(set(plan["core_eight_agents"])), 8)
+        self.assertEqual(len(plan["all_agents"]), 9)
         self.assertEqual(plan["second_wave"], ["skeptic", "portfolio"])
+        self.assertEqual(plan["third_wave"], ["historical_pattern"])
+        self.assertTrue(plan["historical_review_required"])
+        self.assertEqual(
+            plan["historical_review_position"],
+            "AFTER_SKEPTIC_AND_PORTFOLIO_BEFORE_COMMITTEE",
+        )
         self.assertFalse(plan["trade_execution_permission"])
         self.assertFalse(plan["live_execution"])
 
@@ -52,7 +59,7 @@ class EightAgentOrchestratorTests(unittest.TestCase):
         self.assertTrue(any("skeptic" in str(item.get("url") or "") for item in portfolio_evidence))
         self.assertTrue(all(item.get("gap_resolution_eligible") is False for item in portfolio_evidence))
 
-    def test_committee_guard_allows_watch_only_when_all_desks_complete(self):
+    def test_committee_guard_allows_watch_only_when_all_nine_desks_complete(self):
         result = orch.committee_guard(
             specialists=self._specialists(),
             evidence_summary={"critical_flags": []},
@@ -61,11 +68,14 @@ class EightAgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["final_disposition"], "WATCH")
         self.assertTrue(result["committee_can_watch"])
         self.assertEqual(result["failed_checks"], [])
+        self.assertTrue(result["checks"]["all_eight_agents_complete"])
+        self.assertTrue(result["checks"]["historical_pattern_complete"])
+        self.assertTrue(result["checks"]["all_nine_review_desks_complete"])
         self.assertFalse(result["paper_order_permission"])
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
 
-    def test_missing_agent_forces_no_trade(self):
+    def test_missing_core_agent_forces_no_trade(self):
         specialists = self._specialists()
         specialists.pop("portfolio")
         result = orch.committee_guard(
@@ -76,6 +86,20 @@ class EightAgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["final_disposition"], "NO_TRADE")
         self.assertIn("all_eight_agents_complete", result["failed_checks"])
         self.assertIn("portfolio_complete", result["failed_checks"])
+        self.assertIn("all_nine_review_desks_complete", result["failed_checks"])
+
+    def test_missing_historical_review_forces_no_trade(self):
+        specialists = self._specialists()
+        specialists.pop("historical_pattern")
+        result = orch.committee_guard(
+            specialists=specialists,
+            evidence_summary={"critical_flags": []},
+            requested_disposition="WATCH",
+        )
+        self.assertEqual(result["final_disposition"], "NO_TRADE")
+        self.assertTrue(result["checks"]["all_eight_agents_complete"])
+        self.assertIn("historical_pattern_complete", result["failed_checks"])
+        self.assertIn("all_nine_review_desks_complete", result["failed_checks"])
 
     def test_stale_or_missing_evidence_forces_no_trade(self):
         for flag in ("NO_EVIDENCE_SUPPLIED", "ALL_EVIDENCE_STALE"):
