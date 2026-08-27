@@ -84,6 +84,20 @@ def configuration_status() -> dict[str, Any]:
     }
 
 
+def _quota_or_billing_blocked(detail: str) -> bool:
+    text = str(detail or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "exceeded your current quota",
+            "check your plan and billing details",
+            "resource_exhausted",
+            "quota exceeded",
+            "billing",
+        )
+    )
+
+
 def _request(
     method: str,
     path: str,
@@ -124,6 +138,10 @@ def _request(
                 detail = exc.read().decode("utf-8")[:1500]
             except Exception:
                 pass
+            if exc.code == 429 and _quota_or_billing_blocked(detail):
+                raise RuntimeError(
+                    "GEMINI_QUOTA_OR_BILLING_BLOCKED: current project quota/billing tier does not permit this request"
+                ) from exc
             if exc.code not in {429, 500, 502, 503, 504} or attempt >= retries:
                 raise RuntimeError(f"GEMINI_HTTP_{exc.code}: {detail}") from exc
             retry_after = exc.headers.get("Retry-After") if exc.headers else None
@@ -221,8 +239,6 @@ def research_json(
             "thinkingConfig": {"thinkingLevel": level},
             "responseFormat": {
                 "text": {
-                    # The direct v1beta REST endpoint currently validates this
-                    # as TextResponseFormat.MimeType, so use the enum literal.
                     "mimeType": JSON_RESPONSE_MIME_ENUM,
                     "schema": schema,
                 }
@@ -263,20 +279,29 @@ def research_json(
     }
 
 
-def preflight() -> dict[str, Any]:
+def preflight(*, require_research_tools: bool = False) -> dict[str, Any]:
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
         "required": ["ok"],
     }
+    if require_research_tools:
+        system = (
+            "This is an IIOS provider capability canary. Use Google Search to verify that the Gemini API documentation is publicly "
+            "available, then return the requested JSON only. Do not make any investment recommendation."
+        )
+        user = 'Use Google Search and return {"ok": true}.'
+    else:
+        system = "Return the requested JSON only. Do not use external tools unless necessary."
+        user = 'Return {"ok": true}.'
     result = research_json(
-        system="Return the requested JSON only. Do not use external tools unless necessary.",
-        user='Return {"ok": true}.',
+        system=system,
+        user=user,
         schema=schema,
         model=flash_model(),
         thinking_level="low",
-        use_google_search=False,
-        use_url_context=False,
+        use_google_search=require_research_tools,
+        use_url_context=require_research_tools,
         max_output_tokens=512,
     )
     if (result.get("output") or {}).get("ok") is not True:
