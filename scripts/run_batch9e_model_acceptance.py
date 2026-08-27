@@ -112,8 +112,8 @@ def main() -> int:
     print("Paper order authority: FALSE")
     print("Broker connected: FALSE")
     print("Live execution: FALSE")
-    print("Grok: X SEARCH + WEB SEARCH ENABLED when configured")
-    print("Kimi: K3/available model + Formula Web Search + HIGH reasoning when configured")
+    print("Grok: X SEARCH + WEB SEARCH — fresh execution REQUIRED for PASS")
+    print("Kimi: Formula Web Search + HIGH reasoning — fresh execution REQUIRED for PASS")
 
     run("git", "fetch", "origin", BRANCH, cwd=LIVE)
     if WORKTREE.exists():
@@ -150,13 +150,24 @@ def main() -> int:
         str(runner),
         "--once",
         "--dry-run",
+        "--force-model-refresh",
         cwd=WORKTREE,
         check=False,
         env=env,
     )
 
     cycle = latest_object(MODEL_LEDGER, "high_speed_market_radar_cycle")
+    model_context = latest_object(MODEL_LEDGER, "high_speed_market_model_context")
     provider_errors = cycle.get("provider_errors") or {}
+
+    grok_configured = cycle.get("grok_configured") is True
+    kimi_configured = cycle.get("kimi_configured") is True
+    grok_satisfied = cycle.get("grok_execution_satisfied") is True
+    kimi_satisfied = cycle.get("kimi_execution_satisfied") is True
+    model_satisfied = cycle.get("model_execution_satisfied") is True
+    grok_count = int(cycle.get("grok_candidate_count") or 0)
+    kimi_count = int(cycle.get("kimi_candidate_count") or 0)
+    fresh_forced = cycle.get("model_refresh_forced") is True
 
     branch_after = capture("git", "branch", "--show-current", cwd=LIVE)
     status_after = capture("git", "status", "--porcelain", cwd=LIVE)
@@ -164,21 +175,50 @@ def main() -> int:
     status_unchanged = status_after == status_before
 
     print("\n=== BATCH 9E MODEL ACCEPTANCE SUMMARY ===")
-    print(f"Grok candidates: {cycle.get('grok_candidate_count')}")
-    print(f"Kimi candidates: {cycle.get('kimi_candidate_count')}")
+    print(f"Fresh model refresh forced: {fresh_forced}")
+    print(f"Grok configured: {grok_configured}")
+    print(f"Grok execution satisfied: {grok_satisfied}")
+    print(f"Grok candidates: {grok_count}")
+    print(f"Kimi configured: {kimi_configured}")
+    print(f"Kimi execution satisfied: {kimi_satisfied}")
+    print(f"Kimi candidates: {kimi_count}")
+    print(f"Model execution satisfied: {model_satisfied}")
     print(f"Deep research seconds: {cycle.get('deep_research_duration_seconds')}")
     print(f"Total cycle seconds: {cycle.get('cycle_duration_seconds')}")
     print(f"Provider errors: {provider_errors or 'NONE'}")
+    print(f"Model context stored: {bool(model_context)}")
     print(f"Promoted cases: {cycle.get('promoted_case_count')}")
     print(f"Live branch unchanged: {branch_unchanged} ({branch_after})")
     print(f"Live tracked status unchanged: {status_unchanged}")
     print(f"Runner exit code: {result.returncode}")
 
-    if result.returncode == 0 and branch_unchanged and status_unchanged:
-        print("RESULT: PASS — Grok/Kimi model-enabled 9E cycle completed on isolated ledger; promotions remained disabled")
+    passed = bool(
+        result.returncode == 0
+        and branch_unchanged
+        and status_unchanged
+        and fresh_forced
+        and grok_configured
+        and kimi_configured
+        and grok_satisfied
+        and kimi_satisfied
+        and model_satisfied
+        and grok_count > 0
+        and kimi_count > 0
+        and int(cycle.get("promoted_case_count") or 0) == 0
+    )
+
+    if passed:
+        print("RESULT: PASS — fresh Grok X/Web and Kimi web-research execution completed on isolated ledger; promotions remained disabled")
         return 0
 
-    print("RESULT: FAIL — inspect model/provider output above; live lanes were not intentionally stopped")
+    if not grok_configured or not kimi_configured:
+        print(
+            "RESULT: FAIL — provider configuration incomplete. Configure the missing provider credential in the local IIOS .env; do not paste secrets into chat."
+        )
+    else:
+        print(
+            "RESULT: FAIL — one or both configured providers did not return a valid fresh research result. Inspect provider errors above; live lanes were not intentionally stopped."
+        )
     return 1
 
 
