@@ -13,6 +13,22 @@ LIVE = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8")
 WORKTREE = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9e-radar")
 DOTENV = LIVE / "BACK END" / "backend" / ".env"
 BRANCH = "feature/batch9e-high-speed-market-radar"
+VENV_CANDIDATES = (
+    LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python",
+    Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
+)
+
+
+def ensure_iios_venv() -> None:
+    current = Path(sys.executable).resolve()
+    for candidate in VENV_CANDIDATES:
+        if not candidate.exists() or not os.access(candidate, os.X_OK):
+            continue
+        resolved = candidate.resolve()
+        if current == resolved:
+            return
+        os.execv(str(resolved), [str(resolved), str(Path(__file__).resolve())])
+    raise SystemExit("No IIOS backend virtualenv Python found; refusing system Python TLS fallback")
 
 
 def load_dotenv(path: Path) -> None:
@@ -36,6 +52,7 @@ def load_dotenv(path: Path) -> None:
 
 
 def main() -> int:
+    ensure_iios_venv()
     load_dotenv(DOTENV)
     os.environ["IIOS_GEMINI_TIMEOUT_SECONDS"] = "60"
     os.environ["IIOS_GEMINI_RETRIES"] = "0"
@@ -56,6 +73,7 @@ def main() -> int:
 
     status = gemini_provider.configuration_status()
     print("IIOS BATCH 9E — GEMINI FOCUSED ACCEPTANCE", flush=True)
+    print(f"Python: {sys.executable}", flush=True)
     print(f"TLS configured: {tls.get('configured') is True}", flush=True)
     print(f"TLS mode: {tls.get('mode')}", flush=True)
     print(f"Certificate verification: {tls.get('certificate_verification') is True}", flush=True)
