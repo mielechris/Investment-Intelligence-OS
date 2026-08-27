@@ -45,11 +45,21 @@ def main() -> int:
     backend = WORKTREE / "BACK END" / "backend"
     sys.path.insert(0, str(backend))
 
+    # Match the production 9E/full-factory network path. This keeps certificate
+    # and hostname verification enabled while selecting a trusted CA bundle.
+    from index_tls_bootstrap import configure_verified_tls
+
+    tls = configure_verified_tls()
+
     import gemini_provider
     import gemini_rapid_research
 
     status = gemini_provider.configuration_status()
     print("IIOS BATCH 9E — GEMINI FOCUSED ACCEPTANCE", flush=True)
+    print(f"TLS configured: {tls.get('configured') is True}", flush=True)
+    print(f"TLS mode: {tls.get('mode')}", flush=True)
+    print(f"Certificate verification: {tls.get('certificate_verification') is True}", flush=True)
+    print(f"Hostname verification: {tls.get('hostname_verification') is True}", flush=True)
     print(f"Gemini configured: {status.get('configured') is True}", flush=True)
     print(f"Flash model: {status.get('flash_model')}", flush=True)
     print(f"Request timeout seconds: {status.get('request_timeout_seconds')}", flush=True)
@@ -63,6 +73,13 @@ def main() -> int:
 
     if status.get("configured") is not True:
         print("RESULT: FAIL — Gemini provider not configured", flush=True)
+        return 1
+    if not (
+        tls.get("configured") is True
+        and tls.get("certificate_verification") is True
+        and tls.get("hostname_verification") is True
+    ):
+        print("RESULT: FAIL — verified TLS bootstrap unavailable", flush=True)
         return 1
 
     rows = [
@@ -100,7 +117,10 @@ def main() -> int:
         future = pool.submit(run_test)
         while not future.done():
             elapsed = time.perf_counter() - started
-            print(f"[GEMINI WAIT] elapsed={elapsed:.0f}s · bounded focused acceptance still running", flush=True)
+            print(
+                f"[GEMINI WAIT] elapsed={elapsed:.0f}s · bounded focused acceptance still running",
+                flush=True,
+            )
             heartbeat_stop.wait(15)
         try:
             output, diagnostics = future.result()
@@ -116,7 +136,14 @@ def main() -> int:
     print(f"Candidates: {sorted(output.keys())}", flush=True)
     print(f"Diagnostics: {diagnostics or 'NONE'}", flush=True)
     print(f"Total seconds: {elapsed:.3f}", flush=True)
-    grounded = all(bool((row or {}).get("grounding_sources") or (row or {}).get("web_search_queries")) for row in output.values()) if output else False
+    grounded = (
+        all(
+            bool((row or {}).get("grounding_sources") or (row or {}).get("web_search_queries"))
+            for row in output.values()
+        )
+        if output
+        else False
+    )
     print(f"Grounded research returned: {grounded}", flush=True)
     passed = bool(len(output) >= 1 and grounded)
     print(
