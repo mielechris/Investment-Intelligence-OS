@@ -125,6 +125,22 @@ def dispatch_jesse_top_three(scan: dict[str, Any] | None) -> dict[str, Any]:
         payload,
         topic="JESSE_DISLOCATION",
     )
+
+    # Persist the bridge summary onto the same governed dislocation scan so the
+    # existing read-only dislocation status endpoint can render the full Jesse
+    # handoff without a second telemetry API or inferred joins.
+    if scan_id:
+        record_object(
+            scan_id,
+            "dislocation_scan",
+            OPPORTUNITY_LEDGER_CASE,
+            {
+                **scan,
+                "bridge": payload,
+                "bridge_run_id": run_id,
+            },
+        )
+
     record_event(
         OPPORTUNITY_LEDGER_CASE,
         "JESSE_TOP_THREE_DISPATCH_COMPLETE",
