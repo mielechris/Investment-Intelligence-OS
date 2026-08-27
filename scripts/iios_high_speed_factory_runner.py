@@ -17,13 +17,13 @@ if str(BACKEND) not in sys.path:
 # Load production patches / governed adapters before worker modules.
 import app as _iios_bootstrap  # noqa: F401,E402
 from high_speed_case_queue import run_case_floor_cycle  # noqa: E402
-from high_speed_kimi_swarm_worker import run_swarm_once  # noqa: E402
-from high_speed_market_pipeline import run_parallel_high_speed_cycle  # noqa: E402
+from high_speed_gemini_deep_worker import run_deep_once  # noqa: E402
+from high_speed_gemini_pipeline import run_parallel_high_speed_cycle  # noqa: E402
 
 
 DEFAULT_RADAR_MINUTES = 5
 DEFAULT_CASE_FLOOR_SECONDS = 30
-DEFAULT_SWARM_SECONDS = 60
+DEFAULT_DEEP_SECONDS = 60
 _STOP = threading.Event()
 _PRINT_LOCK = threading.Lock()
 
@@ -56,13 +56,13 @@ def _loop(name: str, interval_seconds: float, fn: Callable[[], Any]) -> None:
 def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = False) -> int:
     _log("=== IIOS BATCH 9E · ONE-SHOT HIGH-SPEED RADAR ===")
     _log(f"Promotions enabled: {not dry_run}")
-    _log(f"Grok/Kimi enabled: {not no_models}")
+    _log(f"Grok/Gemini enabled: {not no_models}")
     _log(f"Force fresh model research: {bool(force_model_refresh)}")
     _log("Broker connected: FALSE")
     _log("Live execution: FALSE")
     cycle = run_parallel_high_speed_cycle(
         enable_grok=not no_models,
-        enable_kimi=not no_models,
+        enable_gemini=not no_models,
         enable_promotions=not dry_run,
         force_model_refresh=bool(force_model_refresh),
     )
@@ -71,7 +71,7 @@ def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = Fals
         f"universe={cycle.get('governed_universe_count')} "
         f"hits={cycle.get('screener_hit_count')} "
         f"grok={cycle.get('grok_candidate_count')} "
-        f"kimi={cycle.get('kimi_candidate_count')} "
+        f"gemini={cycle.get('gemini_candidate_count')} "
         f"promoted={cycle.get('promoted_case_count')} "
         f"seconds={cycle.get('cycle_duration_seconds')}"
     )
@@ -82,16 +82,16 @@ def run_continuous(
     *,
     radar_minutes: int,
     case_floor_seconds: int,
-    swarm_seconds: int,
+    deep_seconds: int,
     no_models: bool,
 ) -> int:
     _log("=== IIOS BATCH 9E · HIGH-SPEED INTELLIGENCE FACTORY ===")
     _log(f"Radar cadence: {radar_minutes} minutes")
     _log(f"Case-floor cadence: {case_floor_seconds} seconds")
-    _log(f"Kimi Swarm queue cadence: {swarm_seconds} seconds")
+    _log(f"Gemini Pro deep-research queue cadence: {deep_seconds} seconds")
     _log("Grok Wire Room: X SEARCH + WEB SEARCH when configured")
-    _log("Kimi K3: Formula Web Search + high reasoning when configured")
-    _log("Kimi Native Swarm: selective finalists only, separate lane")
+    _log("Gemini Flash: Google Search grounding + URL Context + structured research")
+    _log("Gemini Pro: selective complex finalists only, separate non-blocking lane")
     _log("Maximum concurrent governed cases on 8-agent floor: 2")
     _log("Broker connected: FALSE")
     _log("Live execution: FALSE")
@@ -99,7 +99,7 @@ def run_continuous(
 
     radar_fn = lambda: run_parallel_high_speed_cycle(  # noqa: E731
         enable_grok=not no_models,
-        enable_kimi=not no_models,
+        enable_gemini=not no_models,
         enable_promotions=True,
     )
 
@@ -118,8 +118,8 @@ def run_continuous(
         ),
         threading.Thread(
             target=_loop,
-            args=("KIMI SWARM", swarm_seconds, run_swarm_once),
-            name="iios-9e-kimi-swarm",
+            args=("GEMINI PRO", deep_seconds, run_deep_once),
+            name="iios-9e-gemini-pro",
             daemon=True,
         ),
     ]
@@ -147,15 +147,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="IIOS Batch 9E high-speed intelligence factory")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Do not promote cases")
-    parser.add_argument("--no-models", action="store_true", help="Skip Grok and Kimi provider calls")
+    parser.add_argument("--no-models", action="store_true", help="Skip Grok and Gemini provider calls")
     parser.add_argument(
         "--force-model-refresh",
         action="store_true",
-        help="Ignore cached model context and require a fresh Grok/Kimi attempt for this cycle",
+        help="Ignore cached model context and require a fresh Grok/Gemini attempt for this cycle",
     )
     parser.add_argument("--radar-minutes", type=int, default=DEFAULT_RADAR_MINUTES)
     parser.add_argument("--case-floor-seconds", type=int, default=DEFAULT_CASE_FLOOR_SECONDS)
-    parser.add_argument("--swarm-seconds", type=int, default=DEFAULT_SWARM_SECONDS)
+    parser.add_argument("--deep-seconds", type=int, default=DEFAULT_DEEP_SECONDS)
+    # Compatibility alias for old operator commands; now controls Gemini Pro cadence.
+    parser.add_argument("--swarm-seconds", type=int, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, _handle_stop)
@@ -168,10 +170,11 @@ def main() -> int:
             force_model_refresh=args.force_model_refresh,
         )
 
+    deep_value = args.deep_seconds if args.swarm_seconds is None else args.swarm_seconds
     return run_continuous(
         radar_minutes=max(2, min(int(args.radar_minutes), 60)),
         case_floor_seconds=max(15, min(int(args.case_floor_seconds), 300)),
-        swarm_seconds=max(30, min(int(args.swarm_seconds), 600)),
+        deep_seconds=max(30, min(int(deep_value), 600)),
         no_models=bool(args.no_models),
     )
 
