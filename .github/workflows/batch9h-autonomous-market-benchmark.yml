@@ -27,6 +27,7 @@ jobs:
           "BACK END/backend/market_validation_scorecard.py"
           scripts/iios_market_benchmark_collector.py
           scripts/iios_daily_market_validation.py
+          scripts/activate_batch9h_autonomous_market_validation.py
 
       - name: Run Batch 9G regression contracts
         run: |
@@ -50,7 +51,8 @@ jobs:
             "BACK END/backend/market_benchmark.py" \
             "BACK END/backend/market_validation_learning.py" \
             scripts/iios_market_benchmark_collector.py \
-            scripts/iios_daily_market_validation.py
+            scripts/iios_daily_market_validation.py \
+            scripts/activate_batch9h_autonomous_market_validation.py
 
       - name: Assert incomplete benchmark fails closed
         run: |
@@ -63,13 +65,25 @@ jobs:
         run: |
           grep -q 'ADVISORY_ONLY' "BACK END/backend/market_validation_learning.py"
           grep -q 'auto_apply_threshold_changes' "BACK END/backend/market_validation_learning.py"
-          ! grep -Eq 'auto_apply_threshold_changes"[[:space:]]*:[[:space:]]*True' "BACK END/backend/market_validation_learning.py" scripts/iios_daily_market_validation.py
+          ! grep -Eq 'auto_apply_threshold_changes"[[:space:]]*:[[:space:]]*True' "BACK END/backend/market_validation_learning.py" scripts/iios_daily_market_validation.py scripts/activate_batch9h_autonomous_market_validation.py
           ! grep -Eq 'committee_gate_change_authority"[[:space:]]*:[[:space:]]*True|risk_gate_change_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/market_validation_learning.py"
 
       - name: Assert private remote validation boundary
         run: |
           grep -q 'target GitHub repository must be private' scripts/iios_daily_market_validation.py
           grep -q 'IIOS MARKET VALIDATION — BATCH 9H READ ONLY' scripts/iios_daily_market_validation.py
+          grep -q 'validation_repo_private' scripts/activate_batch9h_autonomous_market_validation.py
+
+      - name: Assert isolated Mac activation contract
+        run: |
+          grep -q 'COLLECTOR_LABEL = "com.iios.market-benchmark"' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'VALIDATOR_LABEL = "com.iios.market-validation"' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'COLLECTOR_INTERVAL_SECONDS = 300' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'VALIDATOR_INTERVAL_SECONDS = 900' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'StartInterval' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'live_checkout_unchanged' scripts/activate_batch9h_autonomous_market_validation.py
+          ! grep -q 'com.iios.factory-telemetry' scripts/activate_batch9h_autonomous_market_validation.py
+          ! grep -Eq 'http\.server|uvicorn|FastAPI|listen\(|bind\(' scripts/activate_batch9h_autonomous_market_validation.py scripts/iios_market_benchmark_collector.py scripts/iios_daily_market_validation.py
 
       - name: Assert no live execution authority
         run: |
@@ -77,7 +91,8 @@ jobs:
             "BACK END/backend/market_benchmark.py" \
             "BACK END/backend/market_validation_learning.py" \
             scripts/iios_market_benchmark_collector.py \
-            scripts/iios_daily_market_validation.py
+            scripts/iios_daily_market_validation.py \
+            scripts/activate_batch9h_autonomous_market_validation.py
           ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
             "BACK END/backend/market_benchmark.py" \
             "BACK END/backend/market_validation_learning.py" \
