@@ -1,0 +1,76 @@
+name: IIOS Batch 9I Shadow Counterfactual Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9i-shadow-counterfactual-lab
+  pull_request:
+    branches:
+      - feature/batch9h-autonomous-market-benchmark
+
+jobs:
+  shadow-counterfactual-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile Batch 9I
+        run: >-
+          python -m py_compile
+          "BACK END/backend/shadow_counterfactual.py"
+          "BACK END/backend/test_shadow_counterfactual.py"
+          scripts/iios_shadow_counterfactual_lab.py
+
+      - name: Run Batch 9H regression contracts
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+
+      - name: Run Batch 9I shadow contracts
+        run: python "BACK END/backend/test_shadow_counterfactual.py"
+
+      - name: Assert ledger read-only boundary
+        run: |
+          grep -q '_connect_read_only' "BACK END/backend/shadow_counterfactual.py"
+          ! grep -Eq 'record_object|record_event|consume_authorization|consume_paper_authorization|submit_paper_order|create_governed_paper_order' \
+            "BACK END/backend/shadow_counterfactual.py" \
+            scripts/iios_shadow_counterfactual_lab.py
+
+      - name: Assert production baseline and hard evidence gates
+        run: |
+          grep -q 'BASELINE_PROMOTION_SCORE = 45.0' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'BASELINE_RADAR_BREADTH = 8' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'BASELINE_CASE_CAPACITY = 5' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'quote_ok' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'news_count' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'RECENT_GOVERNED_CASE_EXISTS' "BACK END/backend/shadow_counterfactual.py"
+
+      - name: Assert warmup and advisory-only learning
+        run: |
+          grep -q 'DEFAULT_MIN_COMPLETE_SESSIONS = 5' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'WARMUP_COLLECTING_COMPLETE_SESSIONS' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'HUMAN_REVIEW_ONLY' "BACK END/backend/shadow_counterfactual.py"
+          grep -q 'auto_apply_threshold_changes' "BACK END/backend/shadow_counterfactual.py"
+          ! grep -Eq 'auto_apply_threshold_changes"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/shadow_counterfactual.py" \
+            scripts/iios_shadow_counterfactual_lab.py
+
+      - name: Assert private remote shadow boundary
+        run: |
+          grep -q 'target GitHub repository must be private' scripts/iios_shadow_counterfactual_lab.py
+          grep -q 'IIOS SHADOW STRATEGY — BATCH 9I READ ONLY' scripts/iios_shadow_counterfactual_lab.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/shadow_counterfactual.py" \
+            scripts/iios_shadow_counterfactual_lab.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/shadow_counterfactual.py" \
+            scripts/iios_shadow_counterfactual_lab.py
