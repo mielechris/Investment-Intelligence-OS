@@ -42,19 +42,52 @@ class Batch10DObservationBackendBridgeTests(unittest.TestCase):
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
 
-    def test_install_replaces_only_monitoring_refresh_hook(self):
-        original = base_runner.refresh_due_profiles
+    def test_install_replaces_monitoring_radar_and_scan_hooks(self):
+        original_monitoring = base_runner.refresh_due_profiles
+        original_radar = base_runner.run_market_event_radar
+        original_scan = base_runner.scan_universe
         try:
             installed = bridge.install_backend_monitoring_bridge()
             self.assertIs(installed, base_runner)
             self.assertIs(base_runner.refresh_due_profiles, bridge.refresh_due_profiles_via_backend)
+            self.assertIs(base_runner.run_market_event_radar, bridge.run_market_event_radar_bounded)
+            self.assertIs(base_runner.scan_universe, bridge.scan_universe_bounded)
         finally:
-            base_runner.refresh_due_profiles = original
+            base_runner.refresh_due_profiles = original_monitoring
+            base_runner.run_market_event_radar = original_radar
+            base_runner.scan_universe = original_scan
+
+    @patch.object(bridge, "_run_with_timeout")
+    def test_external_stages_use_governed_wall_clock_ceilings(self, bounded):
+        bounded.side_effect = [{"event_count": 0}, {"scanned_count": 0}]
+
+        radar = bridge.run_market_event_radar_bounded()
+        scan = bridge.scan_universe_bounded(news_limit=8, max_candidates=10)
+
+        self.assertEqual(radar["event_count"], 0)
+        self.assertEqual(scan["scanned_count"], 0)
+        self.assertEqual(bounded.call_args_list[0].args[1], bridge.RADAR_TIMEOUT_SECONDS)
+        self.assertEqual(bounded.call_args_list[0].args[2], "MARKET_EVENT_RADAR")
+        self.assertEqual(bounded.call_args_list[1].args[1], bridge.OPPORTUNITY_SCAN_TIMEOUT_SECONDS)
+        self.assertEqual(bounded.call_args_list[1].args[2], "OPPORTUNITY_SCAN")
+        self.assertEqual(bridge.RADAR_TIMEOUT_SECONDS, 120)
+        self.assertEqual(bridge.OPPORTUNITY_SCAN_TIMEOUT_SECONDS, 180)
+
+    def test_timeout_exception_is_caught_by_existing_safe_call(self):
+        def timeout_stage():
+            raise bridge.ObservationStageTimeout("MARKET_EVENT_RADAR_TIMEOUT_120s")
+
+        result = base_runner._safe_call("market_event_radar", timeout_stage)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("ObservationStageTimeout", result["error"])
+        self.assertIn("TIMEOUT_120s", result["error"])
 
     def test_bridge_has_no_remote_or_broker_target(self):
         self.assertEqual(bridge.BACKEND_BASE_URL, "http://127.0.0.1:8002")
         self.assertNotIn("broker", bridge.MONITORING_PATH.lower())
         self.assertNotIn("execute", bridge.MONITORING_PATH.lower())
+        self.assertFalse(hasattr(bridge, "broker"))
 
 
 if __name__ == "__main__":
