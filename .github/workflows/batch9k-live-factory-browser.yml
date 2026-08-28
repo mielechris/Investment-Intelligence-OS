@@ -1,0 +1,89 @@
+name: IIOS Batch 9K Live Factory Browser Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9k-live-factory-browser
+  pull_request:
+    branches:
+      - feature/batch9j-outcome-labeling-memory
+
+jobs:
+  browser-preview-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile Batch 9K
+        run: >-
+          python -m py_compile
+          scripts/iios_factory_browser_preview.py
+          scripts/test_iios_factory_browser_preview.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run Batch 9J regression contracts
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+          python "BACK END/backend/test_shadow_counterfactual.py"
+          python "BACK END/backend/test_outcome_labeling_memory.py"
+
+      - name: Run Batch 9K bridge contract
+        run: python scripts/test_iios_factory_browser_preview.py
+
+      - name: Build browser preview
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert live browser composition
+        run: |
+          grep -q 'LiveFactoryBrowser' "FRONT END/src/main.tsx"
+          grep -q 'FactoryIntelligenceUI' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'MarketValidationStackPanel' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q '/validation/stack' "FRONT END/src/MarketValidationStackPanel.tsx"
+          grep -q '9E / 9G' "FRONT END/src/MarketValidationStackPanel.tsx"
+          grep -q 'Independent Market Scoreboard' "FRONT END/src/MarketValidationStackPanel.tsx"
+          grep -q 'Shadow Strategy Lab' "FRONT END/src/MarketValidationStackPanel.tsx"
+          grep -q 'Outcome Learning Memory' "FRONT END/src/MarketValidationStackPanel.tsx"
+
+      - name: Assert validation bridge is sidecar-only
+        run: |
+          grep -q 'DEFAULT_HOST = "127.0.0.1"' scripts/iios_factory_browser_preview.py
+          grep -q 'localhost only' scripts/iios_factory_browser_preview.py
+          grep -q 'ledger_access": "NONE"' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'sqlite3|from ledger|import ledger|record_object|record_event|submit_paper_order|consume_authorization' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'IIOS-Telemetry|gho_|github_token|GITHUB_TOKEN' "FRONT END/src/MarketValidationStackPanel.tsx" "FRONT END/src/LiveFactoryBrowser.tsx"
+
+      - name: Assert isolated Mac preview activation
+        run: |
+          grep -q 'PREVIEW_PORT = 5176' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'LABEL = "com.iios.factory-browser-preview"' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'com.iios.factory-telemetry.plist' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'com.iios.market-benchmark.plist' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'com.iios.market-validation.plist' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'com.iios.shadow-counterfactual.plist' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'com.iios.outcome-learning.plist' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'protected_launch_agents_unchanged' scripts/activate_batch9k_live_factory_browser.py
+          grep -q 'Backend 8002: UNCHANGED' scripts/activate_batch9k_live_factory_browser.py
+          ! grep -Eq 'killall|pkill|launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning' scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9k_live_factory_browser.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9k_live_factory_browser.py
