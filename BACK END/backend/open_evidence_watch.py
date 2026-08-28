@@ -303,3 +303,10 @@ def install_open_evidence_watch(primary_module: Any, monitoring_module: Any) -> 
     from closed_loop_case_lineage import router as closed_loop_router
 
     monitoring_module.router.include_router(closed_loop_router)
+
+    # Batch 10D operations visibility is also read-only. It aggregates the governed
+    # paper book, closed-loop lineage, Deep Watch and options-shadow state for the
+    # Command Layer without creating any new authority or execution surface.
+    from operations_visibility import router as operations_visibility_router
+
+    monitoring_module.router.include_router(operations_visibility_router)
