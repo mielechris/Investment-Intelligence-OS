@@ -5,7 +5,8 @@ import argparse
 import json
 from pathlib import Path
 
-import iios_data_expansion_factory as factory
+import iios_data_expansion_factory as base
+import iios_data_expansion_factory_exact as factory
 
 
 def main() -> int:
@@ -20,7 +21,7 @@ def main() -> int:
         Path(args.telemetry_dir).expanduser(),
     )
     output = Path(args.browser_output).expanduser()
-    factory._atomic_write(output, payload)
+    base._atomic_write(output, payload)
     summary = payload.get("summary") or {}
     print(
         json.dumps(
