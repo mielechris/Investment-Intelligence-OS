@@ -5,6 +5,7 @@ import argparse
 import json
 import mimetypes
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -107,8 +108,6 @@ def _normalize_outcome_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _outcome_learning_layer(state_dir: Path) -> dict[str, Any]:
-    # Prefer the full 9J aggregate because it preserves case_id and candidate_id.
-    # Fall back to the compact browser snapshot for backward-compatible warm-up.
     full_path = state_dir / "latest_outcome_learning.json"
     compact_path = state_dir / "browser" / "outcome_learning.json"
     path = full_path if full_path.exists() else compact_path
@@ -188,7 +187,7 @@ def _backend_get_json(path: str, *, timeout_seconds: float = 3.0) -> dict[str, A
         f"{DEFAULT_BACKEND}{safe_path}",
         headers={
             "Accept": "application/json",
-            "User-Agent": "IIOS-Batch9L-ReadOnly-Sidecar/1.1",
+            "User-Agent": "IIOS-Batch9L-ReadOnly-Sidecar/1.2",
         },
         method="GET",
     )
@@ -240,21 +239,37 @@ def build_living_factory_snapshot(
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
     state_dir: Path = DEFAULT_STATE_DIR,
 ) -> dict[str, Any]:
+    validation = build_validation_stack(
+        telemetry_dir=telemetry_dir,
+        state_dir=state_dir,
+    )
+
+    # The browser refreshes every five seconds. These two independent,
+    # read-only Backend 8002 lookups each have a three-second fail-closed
+    # timeout. Running them sequentially can exceed the browser refresh window
+    # and cause an otherwise healthy request to be repeatedly aborted.
+    # Parallelizing only these GETs preserves the exact read-only contract while
+    # keeping worst-case sidecar latency inside one refresh window.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="batch9l-readonly") as pool:
+        factory_future = pool.submit(
+            _backend_layer,
+            "BACKEND_8002_FACTORY_INTELLIGENCE_READ_ONLY",
+            "/experience/factory-intelligence/overview",
+        )
+        jesse_future = pool.submit(
+            _backend_layer,
+            "JESSE_DISLOCATION_PERSISTED_STATUS",
+            "/intelligence/dislocation/status",
+        )
+        factory = factory_future.result()
+        jesse_dislocation = jesse_future.result()
+
     return {
         "schema_version": LIVING_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "validation": build_validation_stack(
-            telemetry_dir=telemetry_dir,
-            state_dir=state_dir,
-        ),
-        "factory": _backend_layer(
-            "BACKEND_8002_FACTORY_INTELLIGENCE_READ_ONLY",
-            "/experience/factory-intelligence/overview",
-        ),
-        "jesse_dislocation": _backend_layer(
-            "JESSE_DISLOCATION_PERSISTED_STATUS",
-            "/intelligence/dislocation/status",
-        ),
+        "validation": validation,
+        "factory": factory,
+        "jesse_dislocation": jesse_dislocation,
         "safety": {
             "preview_only": True,
             "localhost_only": True,
@@ -277,7 +292,7 @@ def build_living_factory_snapshot(
 
 
 class PreviewHandler(SimpleHTTPRequestHandler):
-    server_version = "IIOSBatch9LPreview/1.1"
+    server_version = "IIOSBatch9LPreview/1.2"
 
     def __init__(self, *args, directory: str | None = None, **kwargs):
         super().__init__(*args, directory=directory, **kwargs)
