@@ -22,13 +22,14 @@ jobs:
           "BACK END/backend/factory_telemetry.py"
           "BACK END/backend/test_factory_telemetry.py"
           scripts/iios_factory_telemetry_exporter.py
+          scripts/activate_batch9f_factory_telemetry.py
       - name: Run read-only telemetry contract
         run: python "BACK END/backend/test_factory_telemetry.py"
       - name: Assert telemetry has no ledger mutation or execution authority
         run: |
           ! grep -Eq 'record_object|record_event|consume_authorization|consume_paper_authorization|submit_paper_order|create_governed_paper_order' "BACK END/backend/factory_telemetry.py"
-          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/factory_telemetry.py" scripts/iios_factory_telemetry_exporter.py
-          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/factory_telemetry.py" scripts/iios_factory_telemetry_exporter.py
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/factory_telemetry.py" scripts/iios_factory_telemetry_exporter.py scripts/activate_batch9f_factory_telemetry.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/factory_telemetry.py" scripts/iios_factory_telemetry_exporter.py scripts/activate_batch9f_factory_telemetry.py
           grep -q 'mode=ro' "BACK END/backend/factory_telemetry.py"
           grep -q 'Refusing telemetry publish' scripts/iios_factory_telemetry_exporter.py
           grep -q 'must be private' scripts/iios_factory_telemetry_exporter.py
@@ -38,3 +39,15 @@ jobs:
           grep -q '"raw_evidence_exported": False' "BACK END/backend/factory_telemetry.py"
           grep -q '"secrets_exported": False' "BACK END/backend/factory_telemetry.py"
           ! grep -Eq 'OPENAI_API_KEY|XAI_API_KEY|GEMINI_API_KEY|KIMI_API_KEY' "BACK END/backend/factory_telemetry.py"
+      - name: Assert private outbound bootstrap safety
+        run: |
+          grep -q 'gh.*repo.*create' scripts/activate_batch9f_factory_telemetry.py
+          grep -q '"--private"' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'Refusing activation: telemetry destination is not verified private' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'StartInterval' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'INTERVAL_SECONDS = 60' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'launchctl' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'LOCAL_LEDGER_READ_ONLY' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'Live execution: FALSE' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'Direction: OUTBOUND ONLY' scripts/activate_batch9f_factory_telemetry.py
+          ! grep -Eq 'http\.server|uvicorn|FastAPI|listen\(|bind\(' scripts/activate_batch9f_factory_telemetry.py
