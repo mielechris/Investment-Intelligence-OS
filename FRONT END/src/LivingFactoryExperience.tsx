@@ -1,18 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import "./LivingFactoryExperience.css";
 
-type BackendLayer<T> = {
-  name: string;
-  availability: string;
-  error_type?: string | null;
-  payload?: T | null;
-};
+type JsonObject = Record<string, unknown>;
 
 type ValidationLayer = {
   name: string;
   availability: string;
   age_seconds?: number | null;
-  payload?: Record<string, unknown> | null;
+  lineage_mode?: string;
+  payload?: JsonObject | null;
 };
 
 type ValidationStack = {
@@ -31,45 +27,52 @@ type DeskRow = {
   name: string;
   room: string;
   focus: string;
-  status: string;
-  recent_completions: number;
+  status?: string;
+  recent_completions?: number;
 };
 
 type CaseRow = {
   case_id: string;
   ticker?: string | null;
   topic?: string | null;
-  stage: string;
-  active_room: string;
+  stage?: string;
+  active_room?: string;
   latest_event?: string | null;
   latest_event_at?: string | null;
-  agent_count: number;
-  committee: string;
-  risk: string;
-  paper_execution: string;
-  live_execution: boolean;
+  agent_count?: number;
+  committee?: string;
+  risk?: string;
+  paper_execution?: string;
+  live_execution?: boolean;
 };
 
 type FactoryOverview = {
-  generated_at: string;
-  data_state: string;
-  factory: {
-    desks: DeskRow[];
+  generated_at?: string;
+  data_state?: string;
+  factory?: {
+    desks?: DeskRow[];
   };
-  cases: CaseRow[];
-  safety: {
-    paper_mode: boolean;
-    live_capital_locked: boolean;
-    trade_execution_permission: boolean;
-    live_execution: boolean;
+  cases?: CaseRow[];
+  safety?: {
+    paper_mode?: boolean;
+    live_capital_locked?: boolean;
+    trade_execution_permission?: boolean;
+    live_execution?: boolean;
   };
 };
 
 type JesseStatus = {
-  latest_scan?: Record<string, unknown> | null;
-  paper_mode: boolean;
-  trade_execution_permission: boolean;
-  live_execution: boolean;
+  latest_scan?: JsonObject | null;
+  paper_mode?: boolean;
+  trade_execution_permission?: boolean;
+  live_execution?: boolean;
+};
+
+type BackendLayer<T> = {
+  name: string;
+  availability: string;
+  error_type?: string | null;
+  payload?: T | null;
 };
 
 type LivingSnapshot = {
@@ -93,38 +96,34 @@ type CaseDetail = {
   case_id: string;
   ticker?: string | null;
   topic?: string | null;
-  journey: Array<{
+  journey?: Array<{
     key: string;
     status: string;
     label: string;
     object_id?: string | null;
   }>;
-  committee: {
+  committee?: {
     disposition: string;
     confidence?: number | null;
-    headline: string;
-    summary: string;
+    headline?: string;
+    summary?: string;
   };
-  risk: {
+  risk?: {
     decision: string;
-    triggered_rules: string[];
+    triggered_rules?: string[];
   };
-  council: {
-    packet_id?: string | null;
-    views: Array<Record<string, unknown>>;
-  };
-  monitoring: {
+  monitoring?: {
     status: string;
     created_at?: string | null;
     latest_return_pct?: number | null;
-    thesis_flags: string[];
+    thesis_flags?: string[];
   };
-  paper_execution: {
+  paper_execution?: {
     execution: string;
     reason?: string | null;
   };
-  trade_execution_permission: boolean;
-  live_execution: boolean;
+  trade_execution_permission?: boolean;
+  live_execution?: boolean;
 };
 
 type Provenance =
@@ -143,11 +142,12 @@ type Opportunity = {
   ticker: string;
   topic: string;
   caseId: string | null;
+  sourceCandidateId: string | null;
   provenance: Provenance;
-  radar: Record<string, unknown> | null;
-  jesse: Record<string, unknown> | null;
+  radar: JsonObject | null;
+  jesse: JsonObject | null;
   caseRow: CaseRow | null;
-  learning: Record<string, unknown> | null;
+  learning: JsonObject | null;
   stageIndex: number;
   stageLabel: string;
   stageStates: StageState[];
@@ -165,83 +165,67 @@ const STAGES = [
   "Learning",
 ] as const;
 
-const FALLBACK_AGENTS: DeskRow[] = [
+const AGENT_ROSTER: DeskRow[] = [
   {
     key: "policy",
     name: "Policy Analyst",
     room: "Policy Floor",
     focus: "Policy transmission, regulation, tariffs and government action.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "macro",
     name: "Macro & Rates Analyst",
     room: "Macro Desk",
     focus: "Rates, inflation, growth, liquidity and market regime.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "fundamentals",
     name: "Fundamentals Analyst",
     room: "Fundamentals Lab",
     focus: "Earnings, balance sheet, valuation and business durability.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "market_structure",
     name: "Market Structure Analyst",
     room: "Tape & Positioning",
     focus: "Price action, liquidity, volatility, flows and crowding.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "commodities",
     name: "Commodities & Supply Chain Analyst",
     room: "Physical Markets",
     focus: "Energy, agriculture, metals, freight and supply constraints.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "geo_weather",
     name: "Geopolitics & Weather Analyst",
     room: "Global Events Room",
     focus: "War, sanctions, chokepoints, weather and event shocks.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "skeptic",
     name: "Skeptic / Red Team",
     room: "Red Team",
     focus: "False causality, missing evidence, base rates and falsifiers.",
-    status: "WAITING",
-    recent_completions: 0,
   },
   {
     key: "portfolio",
     name: "Portfolio Context Analyst",
     room: "Portfolio Control",
     focus: "Concentration, correlation, drawdown and portfolio fit.",
-    status: "WAITING",
-    recent_completions: 0,
   },
 ];
 
-function record(value: unknown): Record<string, unknown> {
+function object(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? (value as JsonObject)
     : {};
 }
 
-function rows(value: unknown): Record<string, unknown>[] {
+function objectRows(value: unknown): JsonObject[] {
   return Array.isArray(value)
     ? value.filter(
-        (item): item is Record<string, unknown> =>
+        (item): item is JsonObject =>
           Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
     : [];
@@ -257,21 +241,36 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function percent(value: unknown, decimals = 1): string {
-  const n = numberValue(value);
-  return n === null ? "—" : `${n.toFixed(decimals)}%`;
+function pct(value: unknown, decimals = 1): string {
+  const numeric = numberValue(value);
+  return numeric === null ? "—" : `${numeric.toFixed(decimals)}%`;
 }
 
 function confidence(value: unknown): string {
-  const n = numberValue(value);
-  return n === null ? "—" : `${Math.round(n * 100)}%`;
+  const numeric = numberValue(value);
+  return numeric === null ? "—" : `${Math.round(numeric * 100)}%`;
+}
+
+function money(value: unknown): string {
+  const numeric = numberValue(value);
+  return numeric === null
+    ? "—"
+    : numeric.toLocaleString(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+      });
+}
+
+function tickerOf(value: JsonObject): string {
+  return text(value.ticker, "").trim().toUpperCase();
 }
 
 function timeLabel(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) return "WAITING";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "WAITING";
-  return date.toLocaleTimeString([], {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "WAITING";
+  return parsed.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -293,7 +292,8 @@ function stateTone(value: string): string {
     normalized.includes("ACTIVE") ||
     normalized.includes("HEALTHY") ||
     normalized.includes("READY") ||
-    normalized.includes("ON_CADENCE")
+    normalized.includes("ON_CADENCE") ||
+    normalized.includes("OBSERVED")
   ) {
     return "good";
   }
@@ -312,7 +312,8 @@ function stateTone(value: string): string {
     normalized.includes("OFFLINE") ||
     normalized.includes("FAIL") ||
     normalized.includes("STALE") ||
-    normalized.includes("REJECT")
+    normalized.includes("REJECT") ||
+    normalized.includes("VETO")
   ) {
     return "bad";
   }
@@ -328,10 +329,7 @@ function Status({ value }: { value: string }) {
 }
 
 function ProvenanceBadge({ value }: { value: Provenance }) {
-  const key = value
-    .toLowerCase()
-    .replaceAll(" ", "-")
-    .replaceAll("/", "-");
+  const key = value.toLowerCase().replaceAll(" ", "-").replaceAll("/", "-");
   return <span className={`lfx-provenance lfx-provenance--${key}`}>{value}</span>;
 }
 
@@ -348,102 +346,161 @@ async function sameOriginJson<T>(path: string, signal?: AbortSignal): Promise<T>
   return response.json() as Promise<T>;
 }
 
-function tickerOf(value: Record<string, unknown>): string {
-  return text(value.ticker, "").trim().toUpperCase();
+function isPersistedDecision(value: unknown): boolean {
+  const normalized = text(value, "").trim().toUpperCase();
+  return Boolean(normalized) && ![
+    "UNKNOWN",
+    "WAITING",
+    "PENDING",
+    "NOT_STARTED",
+    "NO_STATE",
+    "NO_SNAPSHOT",
+    "NONE",
+  ].includes(normalized);
 }
 
-function jesseSignalRows(status: JesseStatus | null): Record<string, unknown>[] {
-  const scan = record(status?.latest_scan);
-  const losers = rows(scan.losers);
-  const topThree = rows(scan.top_three);
-  const combined = [...topThree, ...losers];
-  const selected = new Map<string, Record<string, unknown>>();
+function isPersistedPaper(value: unknown): boolean {
+  const normalized = text(value, "").trim().toUpperCase();
+  return Boolean(normalized) && ![
+    "UNKNOWN",
+    "WAITING",
+    "PENDING",
+    "NOT_STARTED",
+    "NOT_EXECUTED",
+    "NO_ORDER",
+    "NONE",
+  ].includes(normalized);
+}
+
+function jesseSignalRows(status: JesseStatus | null): JsonObject[] {
+  const scan = object(status?.latest_scan);
+  const combined = [...objectRows(scan.top_three), ...objectRows(scan.losers)];
+  const selected = new Map<string, JsonObject>();
   for (const row of combined) {
     const ticker = tickerOf(row);
     if (!ticker) continue;
-    const decline = record(row.decline_analysis);
+    const decline = object(row.decline_analysis);
     const recommendation = text(row.recommendation, "NO_TRADE").toUpperCase();
     const classification = text(decline.classification, "UNRESOLVED").toUpperCase();
-    const isSignal =
+    const qualifies =
       recommendation === "BUY" ||
       recommendation === "WATCH" ||
       classification === "POSSIBLE_TEMPORARY_DISLOCATION";
-    if (isSignal && !selected.has(ticker)) selected.set(ticker, row);
+    if (qualifies && !selected.has(ticker)) selected.set(ticker, row);
   }
   return [...selected.values()].slice(0, 12);
 }
 
-function maxStageFromCase(caseRow: CaseRow | null): number {
-  if (!caseRow) return 0;
-  const stage = `${caseRow.stage} ${caseRow.active_room} ${caseRow.latest_event ?? ""}`.toUpperCase();
-  if (stage.includes("LEARN")) return 8;
-  if (stage.includes("MONITOR") || stage.includes("PORTFOLIO")) return 7;
-  if (stage.includes("PAPER") || stage.includes("AUTHORIZATION") || stage.includes("SIZING")) return 6;
-  if (stage.includes("RISK")) return 5;
-  if (stage.includes("COMMITTEE")) return 4;
-  if (stage.includes("AGENT") || caseRow.agent_count > 0) return 3;
-  if (stage.includes("RESEARCH") || stage.includes("EVIDENCE")) return 2;
-  return 0;
-}
-
 function buildStageStates(
-  radar: Record<string, unknown> | null,
-  jesse: Record<string, unknown> | null,
+  radar: JsonObject | null,
   caseRow: CaseRow | null,
-  learning: Record<string, unknown> | null,
+  learning: JsonObject | null,
 ): StageState[] {
-  const agentInfo = record(radar?.agents);
-  const committee = record(radar?.committee);
-  const risk = record(radar?.risk);
-  const paper = record(radar?.paper_execution);
-  const agentsCompleted = Number(agentInfo.completed_count ?? caseRow?.agent_count ?? 0);
-  const hasRadar = Boolean(radar);
-  const committeeDone = Boolean(committee.decision_id) || Boolean(caseRow && caseRow.committee !== "UNKNOWN");
-  const riskDone = Boolean(risk.risk_authorization_id) || Boolean(caseRow && caseRow.risk !== "UNKNOWN");
-  const paperDone = Boolean(paper.execution_id) || Boolean(caseRow && !["NOT_EXECUTED", "UNKNOWN", ""].includes(caseRow.paper_execution));
-  const overviewStage = maxStageFromCase(caseRow);
-  const monitoringDone = overviewStage >= 7;
+  const agents = object(radar?.agents);
+  const committee = object(radar?.committee);
+  const risk = object(radar?.risk);
+  const paper = object(radar?.paper_execution);
+  const completedAgents = Number(
+    agents.completed_count ?? caseRow?.agent_count ?? 0,
+  );
+  const committeeValue = text(
+    committee.disposition,
+    caseRow?.committee ?? "UNKNOWN",
+  );
+  const riskValue = text(risk.decision, caseRow?.risk ?? "UNKNOWN");
+  const paperValue = text(
+    paper.execution,
+    caseRow?.paper_execution ?? "NOT_EXECUTED",
+  );
+  const stageText = `${caseRow?.stage ?? ""} ${caseRow?.active_room ?? ""} ${
+    caseRow?.latest_event ?? ""
+  }`.toUpperCase();
+  const monitoringObserved =
+    stageText.includes("MONITOR") || stageText.includes("PORTFOLIO");
+  const committeeObserved =
+    Boolean(committee.decision_id) || isPersistedDecision(committeeValue);
+  const riskObserved =
+    Boolean(risk.risk_authorization_id) || isPersistedDecision(riskValue);
+  const paperObserved =
+    Boolean(paper.execution_id) || isPersistedPaper(paperValue);
+
   return [
     { label: "Market", state: "COMPLETE" },
-    { label: "9E Radar", state: hasRadar ? "COMPLETE" : jesse ? "WAITING" : "WARM-UP" },
-    { label: "Research", state: overviewStage >= 2 || agentsCompleted > 0 ? "OBSERVED" : "WAITING" },
+    { label: "9E Radar", state: radar ? "COMPLETE" : "WAITING" },
+    {
+      label: "Research",
+      state: radar || caseRow ? "OBSERVED" : "WAITING",
+    },
     {
       label: "8 Agents",
       state:
-        agentsCompleted >= 8
+        completedAgents >= 8
           ? "8 / 8 COMPLETE"
-          : agentsCompleted > 0
-            ? `${agentsCompleted} / 8 COMPLETE`
+          : completedAgents > 0
+            ? `${completedAgents} / 8 COMPLETE`
             : "WAITING",
     },
-    { label: "Committee", state: committeeDone ? text(committee.disposition, caseRow?.committee ?? "COMPLETE") : "WAITING" },
-    { label: "Risk", state: riskDone ? text(risk.decision, caseRow?.risk ?? "COMPLETE") : "WAITING" },
-    { label: "Paper", state: paperDone ? text(paper.execution, caseRow?.paper_execution ?? "RECORDED") : "WAITING" },
-    { label: "Monitoring", state: monitoringDone ? "OBSERVED" : learning ? "OBSERVED VIA 9J" : "WAITING" },
-    { label: "Learning", state: learning ? text(learning.decision_quality_label, text(learning.market_outcome_label, "RECORDED")) : "WARM-UP" },
+    {
+      label: "Committee",
+      state: committeeObserved ? committeeValue : "WAITING",
+    },
+    {
+      label: "Risk",
+      state: riskObserved ? riskValue : "WAITING",
+    },
+    {
+      label: "Paper",
+      state: paperObserved ? paperValue : "WAITING",
+    },
+    {
+      label: "Monitoring",
+      state: monitoringObserved
+        ? "OBSERVED"
+        : learning
+          ? "OBSERVED VIA 9J"
+          : "WAITING",
+    },
+    {
+      label: "Learning",
+      state: learning
+        ? text(
+            learning.decision_quality,
+            text(learning.market_outcome, "RECORDED"),
+          )
+        : "WARM-UP",
+    },
   ];
 }
 
-function advancedStageIndex(states: StageState[], caseRow: CaseRow | null, learning: Record<string, unknown> | null): number {
-  if (learning) return 8;
-  const caseStage = maxStageFromCase(caseRow);
+function mostAdvancedStage(states: StageState[]): number {
   for (let index = states.length - 1; index >= 0; index -= 1) {
     const state = states[index].state.toUpperCase();
-    if (!state.includes("WAIT") && !state.includes("WARM")) return Math.max(index, caseStage);
+    if (!state.includes("WAIT") && !state.includes("WARM")) return index;
   }
-  return caseStage;
+  return 0;
 }
 
-function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
-  const telemetry = record(snapshot.validation.layers.factory_telemetry.payload);
-  const promotions = rows(telemetry.recent_promotions);
-  const outcome = record(snapshot.validation.layers.outcome_learning.payload);
-  const learningRows = rows(outcome.recent_outcomes);
-  const learningByTicker = new Map(
-    learningRows
-      .map((row) => [tickerOf(row), row] as const)
-      .filter(([ticker]) => Boolean(ticker)),
+function buildOpportunities(snapshot: LivingSnapshot): Opportunity[] {
+  const telemetry = object(snapshot.validation.layers.factory_telemetry.payload);
+  const promotions = objectRows(telemetry.recent_promotions);
+  const outcomePayload = object(
+    snapshot.validation.layers.outcome_learning.payload,
   );
+  const outcomes = objectRows(outcomePayload.recent_outcomes);
+  const learningByCaseId = new Map<string, JsonObject>();
+  const learningByCandidateId = new Map<string, JsonObject>();
+
+  for (const outcome of outcomes) {
+    const caseId = text(outcome.case_id, "").trim();
+    const candidateId = text(outcome.candidate_id, "").trim();
+    if (caseId && !learningByCaseId.has(caseId)) {
+      learningByCaseId.set(caseId, outcome);
+    }
+    if (candidateId && !learningByCandidateId.has(candidateId)) {
+      learningByCandidateId.set(candidateId, outcome);
+    }
+  }
+
   const overview = snapshot.factory.payload ?? null;
   const cases = overview?.cases ?? [];
   const caseById = new Map(cases.map((row) => [row.case_id, row]));
@@ -453,16 +510,22 @@ function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
   const seenTickers = new Set<string>();
   const output: Opportunity[] = [];
 
-  const push = (
+  const append = (
     key: string,
     ticker: string,
     topic: string,
     caseId: string | null,
-    radar: Record<string, unknown> | null,
-    jesse: Record<string, unknown> | null,
+    radar: JsonObject | null,
+    jesse: JsonObject | null,
     caseRow: CaseRow | null,
   ) => {
-    const learning = learningByTicker.get(ticker) ?? null;
+    const sourceCandidateId = text(radar?.source_candidate_id, "").trim() || null;
+    const learning =
+      (caseId ? learningByCaseId.get(caseId) : undefined) ??
+      (sourceCandidateId
+        ? learningByCandidateId.get(sourceCandidateId)
+        : undefined) ??
+      null;
     const provenance: Provenance = radar
       ? jesse
         ? "BOTH"
@@ -470,16 +533,14 @@ function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
       : jesse
         ? "JESSE DISLOCATION"
         : "MANUAL / OTHER";
-    const stageStates = buildStageStates(radar, jesse, caseRow, learning);
-    const stageIndex = Math.min(
-      STAGES.length - 1,
-      advancedStageIndex(stageStates, caseRow, learning),
-    );
+    const stageStates = buildStageStates(radar, caseRow, learning);
+    const stageIndex = mostAdvancedStage(stageStates);
     output.push({
       key,
       ticker: ticker || "NO TICKER",
-      topic,
+      topic: topic || ticker || key,
       caseId,
+      sourceCandidateId,
       provenance,
       radar,
       jesse,
@@ -493,16 +554,16 @@ function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
 
   for (const promotion of promotions) {
     const caseId = text(promotion.case_id, "").trim() || null;
-    const ticker = tickerOf(promotion) || text(caseById.get(caseId ?? "")?.ticker, "").toUpperCase();
     const caseRow = caseId ? caseById.get(caseId) ?? null : null;
-    const jesse = jesseByTicker.get(ticker) ?? null;
-    push(
+    const ticker =
+      tickerOf(promotion) || text(caseRow?.ticker, "").trim().toUpperCase();
+    append(
       caseId ?? `radar:${ticker}:${text(promotion.source_candidate_id, "unknown")}`,
       ticker,
       text(promotion.topic, caseRow?.topic ?? ticker),
       caseId,
       promotion,
-      jesse,
+      jesseByTicker.get(ticker) ?? null,
       caseRow,
     );
     if (caseId) seenCaseIds.add(caseId);
@@ -512,14 +573,13 @@ function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
   for (const caseRow of cases) {
     if (seenCaseIds.has(caseRow.case_id)) continue;
     const ticker = text(caseRow.ticker, "").trim().toUpperCase();
-    const jesse = jesseByTicker.get(ticker) ?? null;
-    push(
+    append(
       caseRow.case_id,
       ticker,
-      caseRow.topic ?? ticker ?? caseRow.case_id,
+      caseRow.topic ?? ticker || caseRow.case_id,
       caseRow.case_id,
       null,
-      jesse,
+      jesseByTicker.get(ticker) ?? null,
       caseRow,
     );
     seenCaseIds.add(caseRow.case_id);
@@ -529,7 +589,7 @@ function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
   for (const jesse of jesseRows) {
     const ticker = tickerOf(jesse);
     if (!ticker || seenTickers.has(ticker)) continue;
-    push(
+    append(
       `jesse:${ticker}`,
       ticker,
       text(jesse.company, ticker),
@@ -538,18 +598,27 @@ function mergeOpportunities(snapshot: LivingSnapshot): Opportunity[] {
       jesse,
       null,
     );
-    seenTickers.add(ticker);
   }
 
   return output
     .sort((left, right) => {
-      if (right.stageIndex !== left.stageIndex) return right.stageIndex - left.stageIndex;
+      if (right.stageIndex !== left.stageIndex) {
+        return right.stageIndex - left.stageIndex;
+      }
       return left.ticker.localeCompare(right.ticker);
     })
-    .slice(0, 18);
+    .slice(0, 24);
 }
 
-function Metric({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
+function Metric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string | number;
+  detail?: string;
+}) {
   return (
     <div className="lfx-metric">
       <span>{label}</span>
@@ -561,30 +630,33 @@ function Metric({ label, value, detail }: { label: string; value: string | numbe
 
 function IntelligenceDock({ snapshot }: { snapshot: LivingSnapshot }) {
   const telemetryLayer = snapshot.validation.layers.factory_telemetry;
-  const telemetry = record(telemetryLayer.payload);
+  const telemetry = object(telemetryLayer.payload);
   const validationLayer = snapshot.validation.layers.market_validation;
-  const validation = record(validationLayer.payload);
-  const validationMetrics = record(validation.metrics);
+  const validation = object(validationLayer.payload);
+  const validationMetrics = object(validation.metrics);
   const shadowLayer = snapshot.validation.layers.shadow_strategy;
-  const shadow = record(shadowLayer.payload);
+  const shadow = object(shadowLayer.payload);
   const outcomeLayer = snapshot.validation.layers.outcome_learning;
-  const outcome = record(outcomeLayer.payload);
+  const outcome = object(outcomeLayer.payload);
+  const reviewCount =
+    numberValue(outcome.judgment_bank_review_queue_count) ??
+    objectRows(outcome.judgment_bank_review_queue).length;
   const cards = [
     {
       code: "9G",
       title: "Factory Telemetry",
       state: telemetryLayer.availability,
       age: ageLabel(telemetryLayer.age_seconds),
-      metric: `${rows(telemetry.recent_meaningful_events).length} events`,
-      detail: text(record(telemetry.health).state, "WARM-UP"),
+      metric: `${objectRows(telemetry.recent_meaningful_events).length} events`,
+      detail: text(object(telemetry.health).state, "WARM-UP"),
     },
     {
       code: "9H",
       title: "Independent Grading",
       state: validationLayer.availability,
       age: ageLabel(validationLayer.age_seconds),
-      metric: `Detect ${percent(validationMetrics.detection_rate_pct)}`,
-      detail: `Miss ${percent(validationMetrics.opportunity_miss_rate_pct)}`,
+      metric: `Detect ${pct(validationMetrics.detection_rate_pct)}`,
+      detail: `Miss ${pct(validationMetrics.opportunity_miss_rate_pct)}`,
     },
     {
       code: "9I",
@@ -592,7 +664,7 @@ function IntelligenceDock({ snapshot }: { snapshot: LivingSnapshot }) {
       state: shadowLayer.availability,
       age: ageLabel(shadowLayer.age_seconds),
       metric: `${text(shadow.complete_session_count, "0")} sessions`,
-      detail: `${rows(shadow.recommendations).length} advisory recs`,
+      detail: `${objectRows(shadow.recommendations).length} advisory recs`,
     },
     {
       code: "9J",
@@ -600,9 +672,10 @@ function IntelligenceDock({ snapshot }: { snapshot: LivingSnapshot }) {
       state: outcomeLayer.availability,
       age: ageLabel(outcomeLayer.age_seconds),
       metric: `${text(outcome.outcome_count, "0")} outcomes`,
-      detail: `${text(outcome.mature_5d_count, "0")} mature 5-day`,
+      detail: `${reviewCount} review inputs · ${outcomeLayer.lineage_mode ?? "WAITING"}`,
     },
   ];
+
   return (
     <section className="lfx-dock">
       {cards.map((card) => (
@@ -623,12 +696,19 @@ function IntelligenceDock({ snapshot }: { snapshot: LivingSnapshot }) {
   );
 }
 
-function FactoryConveyor({ opportunities, selectedKey, onSelect }: {
+function FactoryConveyor({
+  opportunities,
+  selectedKey,
+  onSelect,
+}: {
   opportunities: Opportunity[];
   selectedKey: string | null;
   onSelect: (opportunity: Opportunity) => void;
 }) {
-  const stageCounts = STAGES.map((_, index) => opportunities.filter((item) => item.stageIndex === index).length);
+  const stageCounts = STAGES.map(
+    (_, index) => opportunities.filter((item) => item.stageIndex === index).length,
+  );
+
   return (
     <section className="lfx-conveyor-panel">
       <div className="lfx-section-heading">
@@ -649,13 +729,15 @@ function FactoryConveyor({ opportunities, selectedKey, onSelect }: {
       </div>
       <div className="lfx-opportunity-list">
         {opportunities.map((item) => {
-          const progress = STAGES.length <= 1 ? 0 : (item.stageIndex / (STAGES.length - 1)) * 100;
+          const progress = (item.stageIndex / (STAGES.length - 1)) * 100;
           const radar = item.radar ?? {};
           const jesse = item.jesse ?? {};
-          const decline = record(jesse.decline_analysis);
+          const decline = object(jesse.decline_analysis);
           return (
             <button
-              className={`lfx-opportunity ${item.key === selectedKey ? "is-selected" : ""}`}
+              className={`lfx-opportunity ${
+                item.key === selectedKey ? "is-selected" : ""
+              }`}
               key={item.key}
               onClick={() => onSelect(item)}
               type="button"
@@ -668,10 +750,15 @@ function FactoryConveyor({ opportunities, selectedKey, onSelect }: {
                 <ProvenanceBadge value={item.provenance} />
               </div>
               <div className="lfx-progress-track">
-                <div className="lfx-progress-fill" style={{ width: `${progress}%` }} />
+                <div
+                  className="lfx-progress-fill"
+                  style={{ width: `${progress}%` }}
+                />
                 {STAGES.map((stage, index) => (
                   <span
-                    className={`lfx-progress-node ${index <= item.stageIndex ? "is-reached" : ""}`}
+                    className={`lfx-progress-node ${
+                      index <= item.stageIndex ? "is-reached" : ""
+                    }`}
                     key={stage}
                     style={{ left: `${(index / (STAGES.length - 1)) * 100}%` }}
                   />
@@ -681,10 +768,18 @@ function FactoryConveyor({ opportunities, selectedKey, onSelect }: {
                 <span>NOW · {item.stageLabel.toUpperCase()}</span>
                 <span>CASE · {item.caseId ?? "NOT PROMOTED"}</span>
                 <span>
-                  SCORE · {text(radar.opportunity_score, text(jesse.financial_strength_score, "—"))}
+                  SCORE ·{" "}
+                  {text(
+                    radar.opportunity_score,
+                    text(jesse.financial_strength_score, "—"),
+                  )}
                 </span>
                 <span>
-                  JESSE · {text(decline.classification, item.jesse ? text(jesse.recommendation, "OBSERVED") : "—")}
+                  JESSE ·{" "}
+                  {text(
+                    decline.classification,
+                    item.jesse ? text(jesse.recommendation, "OBSERVED") : "—",
+                  )}
                 </span>
               </div>
             </button>
@@ -693,7 +788,10 @@ function FactoryConveyor({ opportunities, selectedKey, onSelect }: {
         {!opportunities.length ? (
           <div className="lfx-empty">
             <strong>WAITING FOR PERSISTED OPPORTUNITIES</strong>
-            <p>No 9E promotion, governed factory case, or qualifying persisted Jesse dislocation signal is available to render.</p>
+            <p>
+              No 9E promotion, governed factory case, or qualifying persisted
+              Jesse dislocation signal is available to render.
+            </p>
           </div>
         ) : null}
       </div>
@@ -701,19 +799,28 @@ function FactoryConveyor({ opportunities, selectedKey, onSelect }: {
   );
 }
 
-function CharacterFloor({ snapshot, selected }: { snapshot: LivingSnapshot; selected: Opportunity | null }) {
-  const overview = snapshot.factory.payload ?? null;
-  const desks = overview?.factory?.desks?.length ? overview.factory.desks : FALLBACK_AGENTS;
-  const telemetry = record(snapshot.validation.layers.factory_telemetry.payload);
-  const latestEvent = rows(telemetry.recent_meaningful_events)[0] ?? null;
-  const latestPayload = record(latestEvent?.payload);
-  const latestCase = text(latestEvent?.case_id, "NO CASE");
-  const latestTicker = text(latestPayload.ticker, selected?.ticker ?? "NO TICKER");
+function CharacterFloor({
+  snapshot,
+  selected,
+}: {
+  snapshot: LivingSnapshot;
+  selected: Opportunity | null;
+}) {
+  const backendDesks = snapshot.factory.payload?.factory?.desks ?? [];
+  const deskByKey = new Map(backendDesks.map((desk) => [desk.key, desk]));
+  const desks = AGENT_ROSTER.map((base) => ({
+    ...base,
+    ...(deskByKey.get(base.key) ?? {}),
+  }));
+  const telemetry = object(snapshot.validation.layers.factory_telemetry.payload);
+  const latestEvent = objectRows(telemetry.recent_meaningful_events)[0] ?? null;
+  const latestPayload = object(latestEvent?.payload);
   const selectedAgentKeys = new Set(
-    Array.isArray(record(selected?.radar?.agents).agent_keys)
-      ? (record(selected?.radar?.agents).agent_keys as unknown[]).map((item) => String(item))
+    Array.isArray(object(selected?.radar?.agents).agent_keys)
+      ? (object(selected?.radar?.agents).agent_keys as unknown[]).map(String)
       : [],
   );
+
   return (
     <section className="lfx-character-floor">
       <div className="lfx-max-card">
@@ -726,19 +833,38 @@ function CharacterFloor({ snapshot, selected }: { snapshot: LivingSnapshot; sele
           <h3>MAX</h3>
           {latestEvent ? (
             <p>
-              Latest persisted event: <strong>{text(latestEvent.event_type, "UNKNOWN EVENT").replaceAll("_", " ")}</strong>
-              {latestTicker !== "NO TICKER" ? ` · ${latestTicker}` : ""} · {latestCase}. Recorded {timeLabel(latestEvent.created_at)}.
+              Latest persisted event:{" "}
+              <strong>
+                {text(latestEvent.event_type, "UNKNOWN EVENT").replaceAll(
+                  "_",
+                  " ",
+                )}
+              </strong>
+              {text(latestPayload.ticker, "")
+                ? ` · ${text(latestPayload.ticker, "")}`
+                : ""}
+              {text(latestEvent.case_id, "")
+                ? ` · ${text(latestEvent.case_id, "")}`
+                : ""}
+              . Recorded {timeLabel(latestEvent.created_at)}.
             </p>
           ) : (
-            <p>WAITING — no persisted 9G factory event is available in the current telemetry window.</p>
+            <p>
+              WAITING — no persisted 9G factory event is available in the
+              current telemetry window.
+            </p>
           )}
-          <footer>No trading activity, movement, or dialogue is inferred beyond persisted state.</footer>
+          <footer>
+            No trading activity, movement, or dialogue is inferred beyond
+            persisted state.
+          </footer>
         </div>
       </div>
       <div className="lfx-agent-grid">
-        {desks.slice(0, 8).map((desk, index) => {
-          const completedSelected = selectedAgentKeys.has(desk.key);
-          const active = desk.recent_completions > 0 || completedSelected;
+        {desks.map((desk, index) => {
+          const selectedCompletion = selectedAgentKeys.has(desk.key);
+          const recentCompletions = desk.recent_completions ?? 0;
+          const active = selectedCompletion || recentCompletions > 0;
           const monogram = desk.name
             .split(/\s+/)
             .filter(Boolean)
@@ -746,18 +872,23 @@ function CharacterFloor({ snapshot, selected }: { snapshot: LivingSnapshot; sele
             .map((part) => part[0]?.toUpperCase())
             .join("");
           return (
-            <article className={`lfx-agent-card ${active ? "is-active" : ""}`} key={desk.key}>
+            <article
+              className={`lfx-agent-card ${active ? "is-active" : ""}`}
+              key={desk.key}
+            >
               <header>
-                <div className="lfx-agent-avatar">{monogram || String(index + 1)}</div>
+                <div className="lfx-agent-avatar">
+                  {monogram || String(index + 1)}
+                </div>
                 <Status value={active ? "ACTIVE" : "WAITING"} />
               </header>
               <span>{desk.room}</span>
               <h4>{desk.name}</h4>
               <p>
-                {completedSelected && selected
+                {selectedCompletion && selected
                   ? `Persisted on ${selected.ticker} lineage.`
-                  : desk.recent_completions > 0
-                    ? `${desk.recent_completions} persisted completion(s) in the backend activity window.`
+                  : recentCompletions > 0
+                    ? `${recentCompletions} persisted completion(s) in the backend activity window.`
                     : "WAITING — no persisted completion in the current activity window."}
               </p>
               <footer>{desk.focus}</footer>
@@ -771,8 +902,9 @@ function CharacterFloor({ snapshot, selected }: { snapshot: LivingSnapshot; sele
 
 function JesseSourceRoom({ snapshot }: { snapshot: LivingSnapshot }) {
   const status = snapshot.jesse_dislocation.payload ?? null;
-  const scan = record(status?.latest_scan);
+  const scan = object(status?.latest_scan);
   const signals = jesseSignalRows(status);
+
   return (
     <section className="lfx-jesse-room">
       <div className="lfx-section-heading">
@@ -786,7 +918,9 @@ function JesseSourceRoom({ snapshot }: { snapshot: LivingSnapshot }) {
         <article className="lfx-logic-card">
           <strong>Deterministic rebound heuristic</strong>
           <p>
-            Day losers → financial strength → structural vs temporary decline → deterministic next-day +5% rebound estimate → BUY / WATCH / NO_TRADE.
+            Day losers → financial strength → structural vs temporary decline →
+            deterministic next-day +5% rebound estimate → BUY / WATCH /
+            NO_TRADE.
           </p>
           <div className="lfx-formula">
             <span>Base 10%</span>
@@ -798,7 +932,8 @@ function JesseSourceRoom({ snapshot }: { snapshot: LivingSnapshot }) {
             <span>Clamp 3%–65%</span>
           </div>
           <footer>
-            BUY: strength ≥75 + estimate ≥30% + non-structural · WATCH: strength ≥60 + non-structural · probability calibrated: FALSE
+            BUY: strength ≥75 + estimate ≥30% + non-structural · WATCH:
+            strength ≥60 + non-structural · probability calibrated: FALSE
           </footer>
         </article>
         <article className="lfx-scan-card">
@@ -811,17 +946,27 @@ function JesseSourceRoom({ snapshot }: { snapshot: LivingSnapshot }) {
           </header>
           <div className="lfx-signal-list">
             {signals.slice(0, 8).map((row) => {
-              const decline = record(row.decline_analysis);
+              const decline = object(row.decline_analysis);
               return (
                 <div key={tickerOf(row)}>
                   <strong>{tickerOf(row)}</strong>
                   <span>{text(row.recommendation, "—")}</span>
                   <span>strength {text(row.financial_strength_score, "—")}</span>
-                  <em>{text(decline.classification, "UNRESOLVED").replaceAll("_", " ")}</em>
+                  <em>
+                    {text(
+                      decline.classification,
+                      "UNRESOLVED",
+                    ).replaceAll("_", " ")}
+                  </em>
                 </div>
               );
             })}
-            {!signals.length ? <p>WARM-UP — no qualifying persisted Jesse dislocation rows are available.</p> : null}
+            {!signals.length ? (
+              <p>
+                WARM-UP — no qualifying persisted Jesse dislocation rows are
+                available.
+              </p>
+            ) : null}
           </div>
         </article>
       </div>
@@ -835,7 +980,12 @@ function JesseSourceRoom({ snapshot }: { snapshot: LivingSnapshot }) {
   );
 }
 
-function LineageInspector({ opportunity, detail, loading, error }: {
+function LineageInspector({
+  opportunity,
+  detail,
+  loading,
+  error,
+}: {
   opportunity: Opportunity | null;
   detail: CaseDetail | null;
   loading: boolean;
@@ -845,52 +995,76 @@ function LineageInspector({ opportunity, detail, loading, error }: {
     return (
       <section className="lfx-lineage-panel lfx-empty">
         <strong>SELECT AN OPPORTUNITY</strong>
-        <p>Click a ticker/case card to open its persisted source-to-learning lineage.</p>
+        <p>
+          Click a ticker/case card to open its persisted source-to-learning
+          lineage.
+        </p>
       </section>
     );
   }
+
   const radar = opportunity.radar ?? {};
-  const agents = record(radar.agents);
-  const committee = record(radar.committee);
-  const risk = record(radar.risk);
-  const paper = record(radar.paper_execution);
+  const agents = object(radar.agents);
+  const committee = object(radar.committee);
+  const risk = object(radar.risk);
+  const paper = object(radar.paper_execution);
   const jesse = opportunity.jesse ?? {};
-  const decline = record(jesse.decline_analysis);
+  const decline = object(jesse.decline_analysis);
+  const learning = opportunity.learning;
+  const journey = detail?.journey ?? [];
+
   return (
     <section className="lfx-lineage-panel">
       <div className="lfx-lineage-hero">
         <div>
           <span>SIGNAL → DECISION LINEAGE</span>
-          <h3>{opportunity.ticker} · {opportunity.topic}</h3>
-          <em>{opportunity.caseId ?? "JESSE SIGNAL · NOT PROMOTED TO CASE"}</em>
+          <h3>
+            {opportunity.ticker} · {opportunity.topic}
+          </h3>
+          <em>
+            {opportunity.caseId ?? "JESSE SIGNAL · NOT PROMOTED TO CASE"}
+          </em>
         </div>
         <div>
           <ProvenanceBadge value={opportunity.provenance} />
           <Status value={loading ? "LOADING CASE" : opportunity.stageLabel} />
         </div>
       </div>
-      {error ? <div className="lfx-inline-warning">CASE DETAIL WARM-UP · {error}</div> : null}
+      {error ? (
+        <div className="lfx-inline-warning">CASE DETAIL WARM-UP · {error}</div>
+      ) : null}
       <div className="lfx-lineage-grid">
         <article>
           <span>SIGNAL PROVENANCE</span>
           <strong>{opportunity.provenance}</strong>
           <p>
-            Radar candidate: {text(radar.source_candidate_id, "—")}<br />
-            Jesse scan: {opportunity.jesse ? text(record(opportunity.jesse).ticker, opportunity.ticker) : "—"}<br />
-            Jesse classification: {text(decline.classification, "—").replaceAll("_", " ")}
+            Radar candidate: {opportunity.sourceCandidateId ?? "—"}
+            <br />
+            Jesse ticker: {opportunity.jesse ? opportunity.ticker : "—"}
+            <br />
+            Jesse classification:{" "}
+            {text(decline.classification, "—").replaceAll("_", " ")}
           </p>
         </article>
         <article>
           <span>9E RADAR / RESEARCH</span>
           <strong>{text(radar.opportunity_score, "—")}</strong>
           <p>
-            Radar rank: {text(radar.radar_rank_score, "—")} · Priority {text(radar.priority, "—")}<br />
+            Radar rank: {text(radar.radar_rank_score, "—")} · Priority{" "}
+            {text(radar.priority, "—")}
+            <br />
             Promoted: {timeLabel(radar.promoted_at)}
           </p>
         </article>
         <article>
           <span>EIGHT AGENTS</span>
-          <strong>{text(agents.completed_count, String(opportunity.caseRow?.agent_count ?? 0))} / 8</strong>
+          <strong>
+            {text(
+              agents.completed_count,
+              String(opportunity.caseRow?.agent_count ?? 0),
+            )}{" "}
+            / 8
+          </strong>
           <p>
             {Array.isArray(agents.agent_keys) && agents.agent_keys.length
               ? agents.agent_keys.map(String).join(" · ")
@@ -899,41 +1073,83 @@ function LineageInspector({ opportunity, detail, loading, error }: {
         </article>
         <article>
           <span>COMMITTEE</span>
-          <strong>{text(committee.disposition, opportunity.caseRow?.committee ?? "WAITING")}</strong>
-          <p>ID {text(committee.decision_id, "—")} · confidence {confidence(committee.confidence)}</p>
+          <strong>
+            {text(
+              committee.disposition,
+              opportunity.caseRow?.committee ?? "WAITING",
+            )}
+          </strong>
+          <p>
+            ID {text(committee.decision_id, "—")} · confidence{" "}
+            {confidence(committee.confidence)}
+          </p>
         </article>
         <article>
           <span>RISK</span>
-          <strong>{text(risk.decision, opportunity.caseRow?.risk ?? "WAITING")}</strong>
+          <strong>
+            {text(risk.decision, opportunity.caseRow?.risk ?? "WAITING")}
+          </strong>
           <p>ID {text(risk.risk_authorization_id, "—")}</p>
         </article>
         <article>
           <span>PAPER</span>
-          <strong>{text(paper.execution, opportunity.caseRow?.paper_execution ?? "WAITING")}</strong>
-          <p>ID {text(paper.execution_id, "—")} · notional {text(paper.notional, "—")}</p>
+          <strong>
+            {text(
+              paper.execution,
+              opportunity.caseRow?.paper_execution ?? "WAITING",
+            )}
+          </strong>
+          <p>
+            ID {text(paper.execution_id, "—")} · notional{" "}
+            {text(paper.notional, "—")}
+          </p>
         </article>
         <article>
           <span>MONITORING</span>
-          <strong>{detail ? detail.monitoring.status : opportunity.learning ? "OBSERVED VIA 9J" : "WARM-UP"}</strong>
+          <strong>
+            {detail?.monitoring?.status ??
+              (learning ? "OBSERVED VIA 9J" : "WARM-UP")}
+          </strong>
           <p>
-            {detail
-              ? `Snapshot ${timeLabel(detail.monitoring.created_at)} · return ${percent(detail.monitoring.latest_return_pct)}`
+            {detail?.monitoring
+              ? `Snapshot ${timeLabel(
+                  detail.monitoring.created_at,
+                )} · return ${pct(detail.monitoring.latest_return_pct)}`
               : "Open a promoted case to resolve its backend monitoring object."}
           </p>
         </article>
         <article>
-          <span>9J LEARNING</span>
-          <strong>{opportunity.learning ? text(opportunity.learning.decision_quality_label, text(opportunity.learning.market_outcome_label, "RECORDED")) : "WARM-UP"}</strong>
+          <span>9J EXACT LINEAGE</span>
+          <strong>
+            {learning
+              ? text(
+                  learning.decision_quality,
+                  text(learning.market_outcome, "RECORDED"),
+                )
+              : "WARM-UP"}
+          </strong>
           <p>
-            {opportunity.learning
-              ? `Market outcome ${text(opportunity.learning.market_outcome_label, "—")} · session ${text(opportunity.learning.session_id, "—")}`
-              : "No persisted 9J outcome label matched this ticker."}
+            {learning
+              ? `Case ${text(learning.case_id, "—")} · candidate ${text(
+                  learning.candidate_id,
+                  "—",
+                )} · opportunity ${text(
+                  learning.opportunity_id,
+                  "—",
+                )} · outcome ${text(
+                  learning.market_outcome,
+                  "—",
+                )} · return ${pct(learning.forward_return_pct)}`
+              : "No persisted 9J outcome matched this exact case or source candidate."}
           </p>
         </article>
       </div>
       <div className="lfx-stage-detail">
         {opportunity.stageStates.map((stage, index) => (
-          <div key={stage.label} className={index <= opportunity.stageIndex ? "is-reached" : ""}>
+          <div
+            key={stage.label}
+            className={index <= opportunity.stageIndex ? "is-reached" : ""}
+          >
             <span>{String(index + 1).padStart(2, "0")}</span>
             <strong>{stage.label}</strong>
             <em>{stage.state.replaceAll("_", " ")}</em>
@@ -944,15 +1160,21 @@ function LineageInspector({ opportunity, detail, loading, error }: {
         <div className="lfx-case-detail-strip">
           <div>
             <span>BACKEND CASE JOURNEY</span>
-            <strong>{detail.journey.filter((row) => row.status === "COMPLETE").length} persisted objects complete</strong>
+            <strong>
+              {journey.filter((row) => row.status === "COMPLETE").length}{" "}
+              persisted objects complete
+            </strong>
           </div>
           <div>
             <span>COMMITTEE</span>
-            <strong>{detail.committee.disposition} · {confidence(detail.committee.confidence)}</strong>
+            <strong>
+              {detail.committee?.disposition ?? "UNKNOWN"} ·{" "}
+              {confidence(detail.committee?.confidence)}
+            </strong>
           </div>
           <div>
             <span>RISK</span>
-            <strong>{detail.risk.decision}</strong>
+            <strong>{detail.risk?.decision ?? "UNKNOWN"}</strong>
           </div>
           <div>
             <span>LIVE EXECUTION</span>
@@ -979,13 +1201,25 @@ export default function LivingFactoryExperience() {
       controller?.abort();
       controller = new AbortController();
       try {
-        const next = await sameOriginJson<LivingSnapshot>("/living/overview", controller.signal);
+        const next = await sameOriginJson<LivingSnapshot>(
+          "/living/overview",
+          controller.signal,
+        );
         if (disposed) return;
         setSnapshot(next);
         setError(null);
       } catch (reason) {
-        if (disposed || (reason instanceof DOMException && reason.name === "AbortError")) return;
-        setError(reason instanceof Error ? reason.message : "Living factory sidecar unavailable");
+        if (
+          disposed ||
+          (reason instanceof DOMException && reason.name === "AbortError")
+        ) {
+          return;
+        }
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Living factory sidecar unavailable",
+        );
       }
     };
     void load();
@@ -998,37 +1232,47 @@ export default function LivingFactoryExperience() {
   }, []);
 
   const opportunities = useMemo(
-    () => (snapshot ? mergeOpportunities(snapshot) : []),
+    () => (snapshot ? buildOpportunities(snapshot) : []),
     [snapshot],
   );
-
   const selected = useMemo(
-    () => opportunities.find((item) => item.key === selectedKey) ?? opportunities[0] ?? null,
+    () =>
+      opportunities.find((item) => item.key === selectedKey) ??
+      opportunities[0] ??
+      null,
     [opportunities, selectedKey],
   );
 
   useEffect(() => {
+    setDetail(null);
+    setDetailError(null);
     if (!selected?.caseId) {
-      setDetail(null);
-      setDetailError(null);
       setDetailLoading(false);
       return;
     }
     let disposed = false;
     const controller = new AbortController();
     setDetailLoading(true);
-    setDetailError(null);
-    void sameOriginJson<CaseDetail>(`/living/case/${encodeURIComponent(selected.caseId)}`, controller.signal)
+    void sameOriginJson<CaseDetail>(
+      `/living/case/${encodeURIComponent(selected.caseId)}`,
+      controller.signal,
+    )
       .then((next) => {
         if (disposed) return;
         setDetail(next);
         setDetailLoading(false);
       })
       .catch((reason: unknown) => {
-        if (disposed || (reason instanceof DOMException && reason.name === "AbortError")) return;
-        setDetail(null);
+        if (
+          disposed ||
+          (reason instanceof DOMException && reason.name === "AbortError")
+        ) {
+          return;
+        }
         setDetailLoading(false);
-        setDetailError(reason instanceof Error ? reason.message : "Case detail unavailable");
+        setDetailError(
+          reason instanceof Error ? reason.message : "Case detail unavailable",
+        );
       });
     return () => {
       disposed = true;
@@ -1041,17 +1285,25 @@ export default function LivingFactoryExperience() {
       <section className="lfx-shell">
         <div className="lfx-loading">
           <span>BATCH 9L · LIVING FACTORY + SIGNAL PROVENANCE</span>
-          <h2>{error ? "SIDECAR WARM-UP" : "CONNECTING TO PERSISTED FACTORY STATE"}</h2>
-          <p>{error ?? "Opening 9G/9H/9I/9J plus read-only backend lineage…"}</p>
+          <h2>
+            {error
+              ? "SIDECAR WARM-UP"
+              : "CONNECTING TO PERSISTED FACTORY STATE"}
+          </h2>
+          <p>
+            {error ??
+              "Opening 9G/9H/9I/9J plus read-only backend lineage…"}
+          </p>
         </div>
       </section>
     );
   }
 
-  const telemetry = record(snapshot.validation.layers.factory_telemetry.payload);
-  const radar = record(telemetry.radar);
-  const fund = record(telemetry.paper_fund);
-  const overview = snapshot.factory.payload ?? null;
+  const telemetry = object(snapshot.validation.layers.factory_telemetry.payload);
+  const radar = object(telemetry.radar);
+  const fund = object(telemetry.paper_fund);
+  const overviewCases = snapshot.factory.payload?.cases ?? [];
+
   return (
     <section className="lfx-shell">
       <div className="lfx-hero">
@@ -1059,30 +1311,57 @@ export default function LivingFactoryExperience() {
           <span>BATCH 9L · LIVING FACTORY EXPERIENCE + SIGNAL PROVENANCE</span>
           <h2>THE INVESTMENT FACTORY IS NOW A TRACEABLE FLOOR</h2>
           <p>
-            MAX, eight specialist characters, real case movement, Jesse + 9E signal provenance, and 9G/9H/9I/9J intelligence — driven only by persisted IIOS state.
+            MAX, eight specialist characters, real case movement, Jesse + 9E
+            signal provenance, and 9G/9H/9I/9J intelligence — driven only by
+            persisted IIOS state.
           </p>
         </div>
         <div className="lfx-hero-safety">
           <Status value={snapshot.factory.availability} />
-          <strong>LIVE EXECUTION {snapshot.safety.live_execution ? "TRUE" : "FALSE"}</strong>
+          <strong>
+            LIVE EXECUTION {snapshot.safety.live_execution ? "TRUE" : "FALSE"}
+          </strong>
           <span>BACKEND 8002 · READ-ONLY GETS</span>
         </div>
       </div>
 
       <div className="lfx-safety-rail">
-        <span>DIRECT LEDGER ACCESS · {snapshot.safety.direct_ledger_access ? "YES" : "NONE"}</span>
-        <span>BACKEND WRITE PERMISSION · {snapshot.safety.backend_write_permission ? "YES" : "NONE"}</span>
-        <span>TRADE EXECUTION PERMISSION · {snapshot.safety.trade_execution_permission ? "TRUE" : "FALSE"}</span>
+        <span>
+          DIRECT LEDGER ACCESS ·{" "}
+          {snapshot.safety.direct_ledger_access ? "YES" : "NONE"}
+        </span>
+        <span>
+          BACKEND WRITE PERMISSION ·{" "}
+          {snapshot.safety.backend_write_permission ? "YES" : "NONE"}
+        </span>
+        <span>
+          TRADE EXECUTION PERMISSION ·{" "}
+          {snapshot.safety.trade_execution_permission ? "TRUE" : "FALSE"}
+        </span>
         <span>NO FABRICATED EVENTS</span>
       </div>
 
       <div className="lfx-headline-metrics">
-        <Metric label="Market universe" value={text(radar.governed_universe_count, "0")} detail="persisted 9G" />
-        <Metric label="9E radar hits" value={text(radar.screener_hit_count, "0")} />
-        <Metric label="Visible opportunities" value={opportunities.length} detail="persisted sources only" />
-        <Metric label="Governed cases" value={overview?.cases.length ?? 0} />
-        <Metric label="Paper NAV" value={numberValue(fund.nav)?.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }) ?? "—"} />
-        <Metric label="Paper positions" value={text(fund.position_count, "0")} />
+        <Metric
+          label="Market universe"
+          value={text(radar.governed_universe_count, "0")}
+          detail="persisted 9G"
+        />
+        <Metric
+          label="9E radar hits"
+          value={text(radar.screener_hit_count, "0")}
+        />
+        <Metric
+          label="Visible opportunities"
+          value={opportunities.length}
+          detail="persisted sources only"
+        />
+        <Metric label="Governed cases" value={overviewCases.length} />
+        <Metric label="Paper NAV" value={money(fund.nav)} />
+        <Metric
+          label="Paper positions"
+          value={text(fund.position_count, "0")}
+        />
       </div>
 
       <div className="lfx-provenance-legend">
@@ -1091,7 +1370,10 @@ export default function LivingFactoryExperience() {
         <ProvenanceBadge value="9E RADAR" />
         <ProvenanceBadge value="BOTH" />
         <ProvenanceBadge value="MANUAL / OTHER" />
-        <span>BOTH means the ticker is independently present in persisted Jesse and 9E records; it does not claim one caused the other.</span>
+        <span>
+          BOTH means the ticker is independently present in persisted Jesse and
+          9E records; it does not claim one caused the other.
+        </span>
       </div>
 
       <IntelligenceDock snapshot={snapshot} />
@@ -1110,7 +1392,9 @@ export default function LivingFactoryExperience() {
         loading={detailLoading}
         error={detailError}
       />
-      {error ? <div className="lfx-inline-warning">LATEST REFRESH WARNING · {error}</div> : null}
+      {error ? (
+        <div className="lfx-inline-warning">LATEST REFRESH WARNING · {error}</div>
+      ) : null}
     </section>
   );
 }
