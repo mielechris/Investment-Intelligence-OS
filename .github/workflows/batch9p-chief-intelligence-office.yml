@@ -1,0 +1,95 @@
+name: IIOS Batch 9P Chief Intelligence Office Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9p-chief-intelligence-office
+  pull_request:
+    branches:
+      - feature/batch9o-daily-factory-episode
+
+jobs:
+  chief-intelligence-office-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 9P
+        run: >-
+          python -m py_compile
+          scripts/iios_chief_intelligence_office.py
+          scripts/iios_chief_intelligence_office_publisher.py
+          scripts/test_batch9p_chief_intelligence_office.py
+          scripts/activate_batch9p_chief_intelligence_office.py
+
+      - name: Run inherited 9O regression contracts
+        run: |
+          python scripts/test_iios_factory_browser_preview.py
+          python scripts/test_batch9l_living_factory_contract.py
+          python scripts/test_batch9m_character_story_contract.py
+          python scripts/test_batch9n_interactive_case_theater_contract.py
+          python scripts/test_batch9o_daily_factory_episode.py
+          python scripts/test_batch9o_exact_learning_source.py
+
+      - name: Run 9P advisory engine contract
+        run: python scripts/test_batch9p_chief_intelligence_office.py
+
+      - name: Build 9P browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert 9P browser room and memo fields
+        run: |
+          grep -q 'ChiefIntelligenceOffice' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9P · CHIEF INTELLIGENCE OFFICE' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+          grep -q 'Top five upgrades' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+          grep -q 'Expected impact' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+          grep -q 'Engineering effort' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+          grep -q 'Data/provider cost' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+          grep -q 'Safety/governance risk' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+          grep -q 'Suggested batch' "FRONT END/src/ChiefIntelligenceOffice.tsx"
+
+      - name: Assert advisory-only governance
+        run: |
+          grep -q '"advisory_only": True' scripts/iios_chief_intelligence_office.py
+          grep -q '"human_approval_required": True' scripts/iios_chief_intelligence_office.py
+          grep -q '"auto_apply_thresholds": False' scripts/iios_chief_intelligence_office.py
+          grep -q '"agent_weight_change_authority": False' scripts/iios_chief_intelligence_office.py
+          grep -q '"committee_change_authority": False' scripts/iios_chief_intelligence_office.py
+          grep -q '"risk_rule_change_authority": False' scripts/iios_chief_intelligence_office.py
+          grep -q '"capital_authority": False' scripts/iios_chief_intelligence_office.py
+          grep -q '"trade_execution_permission": False' scripts/iios_chief_intelligence_office.py
+          grep -q '"live_execution": False' scripts/iios_chief_intelligence_office.py
+          grep -q 'AUTO_TUNE_THRESHOLDS' scripts/iios_chief_intelligence_office.py
+          grep -q 'AUTO_REWEIGHT_AGENTS' scripts/iios_chief_intelligence_office.py
+
+      - name: Assert read-only source contract
+        run: |
+          grep -q 'latest_market_validation.json' scripts/iios_chief_intelligence_office.py
+          grep -q 'latest_shadow_counterfactual.json' scripts/iios_chief_intelligence_office.py
+          grep -q 'latest_outcome_learning.json' scripts/iios_chief_intelligence_office.py
+          grep -q 'telemetry_dir / "latest.json"' scripts/iios_chief_intelligence_office.py
+          ! grep -Eq 'sqlite3|record_object|record_event|submit_paper_order|consume_authorization|method="(POST|PUT|PATCH|DELETE)"' scripts/iios_chief_intelligence_office.py scripts/iios_chief_intelligence_office_publisher.py
+
+      - name: Assert isolated activation
+        run: |
+          grep -q 'BRANCH = "feature/batch9p-chief-intelligence-office"' scripts/activate_batch9p_chief_intelligence_office.py
+          grep -q 'OFFICE_LABEL = "com.iios.chief-intelligence-office"' scripts/activate_batch9p_chief_intelligence_office.py
+          grep -q 'OFFICE_INTERVAL_SECONDS = 1800' scripts/activate_batch9p_chief_intelligence_office.py
+          grep -q 'Parent Batch 9O: PRESERVED' scripts/activate_batch9p_chief_intelligence_office.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9p_chief_intelligence_office.py
+          ! grep -Eq 'launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning|launchctl.*daily-factory-episode' scripts/activate_batch9p_chief_intelligence_office.py
+
+      - name: Assert no live authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_chief_intelligence_office.py scripts/iios_chief_intelligence_office_publisher.py scripts/activate_batch9p_chief_intelligence_office.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_chief_intelligence_office.py scripts/iios_chief_intelligence_office_publisher.py scripts/activate_batch9p_chief_intelligence_office.py
