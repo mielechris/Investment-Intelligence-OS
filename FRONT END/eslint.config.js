@@ -19,4 +19,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/LivingFactoryExperience.tsx'],
+    rules: {
+      // 9L deliberately clears stale case-detail state synchronously when the
+      // selected persisted case changes. Keep the exception local to this
+      // read-only experience component rather than weakening repo-wide lint.
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
 ])

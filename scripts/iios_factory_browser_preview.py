@@ -4,19 +4,28 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
-import os
+import re
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, urlparse
+from urllib.request import Request, urlopen
 
 SCHEMA_VERSION = "batch9k-live-factory-browser-v1"
+LIVING_SCHEMA_VERSION = "batch9l-living-factory-provenance-v1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5176
+DEFAULT_BACKEND = "http://127.0.0.1:8002"
 DEFAULT_STATE_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "market-validation"
 DEFAULT_TELEMETRY_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "telemetry"
+CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+BACKEND_EXACT_PATHS = {
+    "/experience/factory-intelligence/overview",
+    "/intelligence/dislocation/status",
+}
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -77,6 +86,50 @@ def _layer(name: str, path: Path, *, fresh_seconds: int | None = None) -> dict[s
     }
 
 
+def _normalize_outcome_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep 9K display compatibility while retaining exact 9J lineage fields."""
+    normalized = dict(payload)
+    recent: list[dict[str, Any]] = []
+    for value in payload.get("recent_outcomes") or []:
+        if not isinstance(value, dict):
+            continue
+        row = dict(value)
+        if not row.get("decision_quality_label") and row.get("decision_quality"):
+            row["decision_quality_label"] = row.get("decision_quality")
+        if not row.get("market_outcome_label") and row.get("market_outcome"):
+            row["market_outcome_label"] = row.get("market_outcome")
+        recent.append(row)
+    normalized["recent_outcomes"] = recent
+    queue = payload.get("judgment_bank_review_queue")
+    if isinstance(queue, list):
+        normalized["judgment_bank_review_queue_count"] = len(queue)
+    return normalized
+
+
+def _outcome_learning_layer(state_dir: Path) -> dict[str, Any]:
+    # Prefer the full 9J aggregate because it preserves case_id and candidate_id.
+    # Fall back to the compact browser snapshot for backward-compatible warm-up.
+    full_path = state_dir / "latest_outcome_learning.json"
+    compact_path = state_dir / "browser" / "outcome_learning.json"
+    path = full_path if full_path.exists() else compact_path
+    layer = _layer(
+        "BATCH_9J_OUTCOME_LEARNING",
+        path,
+        fresh_seconds=2 * 60 * 60,
+    )
+    payload = layer.get("payload")
+    if isinstance(payload, dict):
+        layer["payload"] = _normalize_outcome_payload(payload)
+        layer["lineage_mode"] = (
+            "CASE_AND_CANDIDATE_LINKED"
+            if path == full_path
+            else "COMPACT_BROWSER_FALLBACK"
+        )
+    else:
+        layer["lineage_mode"] = "WAITING"
+    return layer
+
+
 def build_validation_stack(
     *,
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
@@ -96,11 +149,7 @@ def build_validation_stack(
             "BATCH_9I_SHADOW_STRATEGY",
             state_dir / "shadow_strategy" / "latest_shadow_counterfactual.json",
         ),
-        "outcome_learning": _layer(
-            "BATCH_9J_OUTCOME_LEARNING",
-            state_dir / "browser" / "outcome_learning.json",
-            fresh_seconds=2 * 60 * 60,
-        ),
+        "outcome_learning": _outcome_learning_layer(state_dir),
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -121,8 +170,114 @@ def build_validation_stack(
     }
 
 
+def _validate_backend_path(path: str) -> str:
+    if path in BACKEND_EXACT_PATHS:
+        return path
+    prefix = "/experience/factory-intelligence/case/"
+    if path.startswith(prefix):
+        case_id = unquote(path.removeprefix(prefix))
+        if not CASE_ID_PATTERN.fullmatch(case_id):
+            raise ValueError("Invalid IIOS case identifier")
+        return prefix + quote(case_id, safe="")
+    raise ValueError("Backend path is not allow-listed for Batch 9L")
+
+
+def _backend_get_json(path: str, *, timeout_seconds: float = 3.0) -> dict[str, Any]:
+    safe_path = _validate_backend_path(path)
+    request = Request(
+        f"{DEFAULT_BACKEND}{safe_path}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "IIOS-Batch9L-ReadOnly-Sidecar/1.1",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            value = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:600]
+        raise RuntimeError(
+            f"Backend GET {safe_path} returned HTTP {exc.code}: {detail}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(
+            f"Backend GET {safe_path} unavailable: {exc.reason}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Backend GET {safe_path} returned non-JSON content"
+        ) from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(
+            f"Backend GET {safe_path} returned a non-object payload"
+        )
+    return value
+
+
+def _backend_layer(name: str, path: str) -> dict[str, Any]:
+    try:
+        payload = _backend_get_json(path)
+    except Exception as exc:  # noqa: BLE001 - fail closed into explicit waiting
+        return {
+            "name": name,
+            "availability": "WAITING",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:800],
+            "payload": None,
+        }
+    return {
+        "name": name,
+        "availability": "AVAILABLE",
+        "error_type": None,
+        "error": None,
+        "payload": payload,
+    }
+
+
+def build_living_factory_snapshot(
+    *,
+    telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
+    state_dir: Path = DEFAULT_STATE_DIR,
+) -> dict[str, Any]:
+    return {
+        "schema_version": LIVING_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "validation": build_validation_stack(
+            telemetry_dir=telemetry_dir,
+            state_dir=state_dir,
+        ),
+        "factory": _backend_layer(
+            "BACKEND_8002_FACTORY_INTELLIGENCE_READ_ONLY",
+            "/experience/factory-intelligence/overview",
+        ),
+        "jesse_dislocation": _backend_layer(
+            "JESSE_DISLOCATION_PERSISTED_STATUS",
+            "/intelligence/dislocation/status",
+        ),
+        "safety": {
+            "preview_only": True,
+            "localhost_only": True,
+            "direct_ledger_access": False,
+            "backend_access": "READ_ONLY_GET_ONLY",
+            "backend_write_permission": False,
+            "allowed_backend_paths": [
+                "/experience/factory-intelligence/overview",
+                "/experience/factory-intelligence/case/{case_id}",
+                "/intelligence/dislocation/status",
+            ],
+            "threshold_change_authority": False,
+            "committee_gate_change_authority": False,
+            "risk_gate_change_authority": False,
+            "capital_authority": False,
+            "trade_execution_permission": False,
+            "live_execution": False,
+        },
+    }
+
+
 class PreviewHandler(SimpleHTTPRequestHandler):
-    server_version = "IIOSBatch9KPreview/1.0"
+    server_version = "IIOSBatch9LPreview/1.1"
 
     def __init__(self, *args, directory: str | None = None, **kwargs):
         super().__init__(*args, directory=directory, **kwargs)
@@ -132,7 +287,12 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
-        body = json.dumps(payload, indent=2, sort_keys=True, default=str).encode("utf-8")
+        body = json.dumps(
+            payload,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -145,10 +305,12 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/health":
             self._send_json(
                 {
-                    "status": "BATCH9K_BROWSER_PREVIEW_HEALTHY",
+                    "status": "BATCH9L_BROWSER_PREVIEW_HEALTHY",
                     "host": self.preview_server.server_address[0],
                     "port": self.preview_server.server_address[1],
                     "ledger_access": "NONE",
+                    "backend_access": "READ_ONLY_GET_ONLY",
+                    "backend_write_permission": False,
                     "live_execution": False,
                 }
             )
@@ -160,6 +322,48 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                     state_dir=self.preview_server.state_dir,
                 )
             )
+            return
+        if parsed.path == "/living/overview":
+            self._send_json(
+                build_living_factory_snapshot(
+                    telemetry_dir=self.preview_server.telemetry_dir,
+                    state_dir=self.preview_server.state_dir,
+                )
+            )
+            return
+        if parsed.path.startswith("/living/case/"):
+            case_id = unquote(parsed.path.removeprefix("/living/case/"))
+            if not CASE_ID_PATTERN.fullmatch(case_id):
+                self._send_json(
+                    {
+                        "status": "INVALID_CASE_ID",
+                        "detail": (
+                            "Case identifier was rejected by the Batch 9L "
+                            "read-only proxy."
+                        ),
+                        "live_execution": False,
+                    },
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            try:
+                payload = _backend_get_json(
+                    "/experience/factory-intelligence/case/"
+                    + quote(case_id, safe="")
+                )
+            except Exception as exc:  # noqa: BLE001 - explicit warm-up response
+                self._send_json(
+                    {
+                        "status": "CASE_DETAIL_WAITING",
+                        "error_type": type(exc).__name__,
+                        "detail": str(exc)[:800],
+                        "trade_execution_permission": False,
+                        "live_execution": False,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            self._send_json(payload)
             return
 
         target = self.translate_path(parsed.path)
@@ -181,12 +385,12 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def end_headers(self) -> None:
-        self.send_header("X-IIOS-Preview", "BATCH9K_READ_ONLY")
+        self.send_header("X-IIOS-Preview", "BATCH9L_READ_ONLY")
         super().end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:
         message = format % args
-        print(f"[batch9k] {self.address_string()} {message}", flush=True)
+        print(f"[batch9l] {self.address_string()} {message}", flush=True)
 
 
 class PreviewServer(ThreadingHTTPServer):
@@ -202,13 +406,21 @@ class PreviewServer(ThreadingHTTPServer):
         self.state_dir = state_dir
 
         def handler(*args, **kwargs):
-            return PreviewHandler(*args, directory=str(static_root), **kwargs)
+            return PreviewHandler(
+                *args,
+                directory=str(static_root),
+                **kwargs,
+            )
 
         super().__init__(server_address, handler)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve the Batch 9K localhost-only IIOS browser preview.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Serve the Batch 9L localhost-only living IIOS browser preview."
+        )
+    )
     parser.add_argument("--root", required=True, help="Built frontend dist directory")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -224,18 +436,25 @@ def main() -> int:
         raise SystemExit(f"Built frontend index.html not found: {static_root}")
     host = str(args.host).strip()
     if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise SystemExit("Batch 9K preview must bind to localhost only")
+        raise SystemExit("Batch 9L preview must bind to localhost only")
     telemetry_dir = Path(args.telemetry_dir).expanduser()
     state_dir = Path(args.state_dir).expanduser()
     mimetypes.init()
-    server = PreviewServer((host, int(args.port)), static_root, telemetry_dir, state_dir)
+    server = PreviewServer(
+        (host, int(args.port)),
+        static_root,
+        telemetry_dir,
+        state_dir,
+    )
     print(
         json.dumps(
             {
-                "status": "BATCH9K_BROWSER_PREVIEW_SERVING",
+                "status": "BATCH9L_BROWSER_PREVIEW_SERVING",
                 "url": f"http://{host}:{int(args.port)}",
                 "static_root": str(static_root),
                 "ledger_access": "NONE",
+                "backend_access": "READ_ONLY_GET_ONLY",
+                "backend_write_permission": False,
                 "live_execution": False,
             },
             sort_keys=True,
