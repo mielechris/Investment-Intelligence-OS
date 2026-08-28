@@ -30,7 +30,8 @@ jobs:
           ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/factory_telemetry.py" scripts/iios_factory_telemetry_exporter.py
           ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/factory_telemetry.py" scripts/iios_factory_telemetry_exporter.py
           grep -q 'mode=ro' "BACK END/backend/factory_telemetry.py"
-          grep -q 'target GitHub repository.*must be private' scripts/iios_factory_telemetry_exporter.py
+          grep -q 'Refusing telemetry publish' scripts/iios_factory_telemetry_exporter.py
+          grep -q 'must be private' scripts/iios_factory_telemetry_exporter.py
       - name: Assert sanitized telemetry boundaries
         run: |
           grep -q '"raw_prompts_exported": False' "BACK END/backend/factory_telemetry.py"
