@@ -15,21 +15,14 @@ DEFAULT_STATE_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "
 DEFAULT_TELEMETRY_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "telemetry"
 FINAL_WINDOW = clock_time(16, 45)
 
-BEST_QUALITY = {
-    "PAPER_ENTRY_FAVORABLE",
-    "WATCH_VALIDATED_BY_UPSIDE",
-}
-SAVE_QUALITY = {
-    "NO_TRADE_AVOIDED_DOWNSIDE",
-}
+BEST_QUALITY = {"PAPER_ENTRY_FAVORABLE", "WATCH_VALIDATED_BY_UPSIDE"}
+SAVE_QUALITY = {"NO_TRADE_AVOIDED_DOWNSIDE"}
 DUMB_QUALITY = {
     "PAPER_ENTRY_ADVERSE",
     "WATCH_FALSE_POSITIVE_OR_REVERSAL",
     "NO_TRADE_FOREGONE_UPSIDE",
 }
-MISS_QUALITY = {
-    "FACTORY_MISS_WITH_UPSIDE",
-}
+MISS_QUALITY = {"FACTORY_MISS_WITH_UPSIDE"}
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -71,9 +64,10 @@ def _ticker(value: Any) -> str:
 
 
 def _session_id(scorecard: dict[str, Any], learning: dict[str, Any]) -> str | None:
+    input_payload = scorecard.get("input") if isinstance(scorecard.get("input"), dict) else {}
     for value in (
         scorecard.get("session_id"),
-        (scorecard.get("input") or {}).get("session_id") if isinstance(scorecard.get("input"), dict) else None,
+        input_payload.get("session_id"),
         learning.get("latest_session_id"),
     ):
         text = str(value or "").strip()
@@ -84,21 +78,21 @@ def _session_id(scorecard: dict[str, Any], learning: dict[str, Any]) -> str | No
 
 def _session_outcomes(learning: dict[str, Any], session_id: str | None) -> list[dict[str, Any]]:
     rows = learning.get("recent_outcomes")
-    rows = rows if isinstance(rows, list) else []
-    clean = [row for row in rows if isinstance(row, dict)]
+    clean = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     if not session_id:
         return clean
-    matched = [row for row in clean if str(row.get("session_id") or "") == session_id]
-    return matched if matched else []
+    return [row for row in clean if str(row.get("session_id") or "") == session_id]
 
 
 def _outcome_card(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "ticker": _ticker(row.get("ticker")),
         "case_id": row.get("case_id"),
+        "candidate_id": row.get("candidate_id"),
+        "opportunity_id": row.get("opportunity_id"),
         "session_id": row.get("session_id"),
-        "decision_quality": row.get("decision_quality"),
-        "market_outcome": row.get("market_outcome"),
+        "decision_quality": row.get("decision_quality", row.get("decision_quality_label")),
+        "market_outcome": row.get("market_outcome", row.get("market_outcome_label")),
         "final_disposition": row.get("final_disposition"),
         "longest_available_horizon": row.get("longest_available_horizon"),
         "forward_return_pct": _safe_float(row.get("forward_return_pct")),
@@ -165,6 +159,41 @@ def _validation_misses(scorecard: dict[str, Any]) -> list[dict[str, Any]]:
     return misses[:12]
 
 
+def _validation_metrics(scorecard: dict[str, Any]) -> dict[str, Any]:
+    metrics = scorecard.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    benchmark = _safe_int(metrics.get("benchmark_opportunity_count", metrics.get("opportunity_count")))
+    detected = _safe_int(
+        metrics.get("eventual_detected_count", metrics.get("radar_detected_count", metrics.get("detected_count")))
+    )
+    explicit_miss = None
+    for key in (
+        "eventual_opportunity_miss_count",
+        "opportunity_miss_count",
+        "missed_opportunity_count",
+        "miss_count",
+    ):
+        if metrics.get(key) is not None:
+            explicit_miss = _safe_int(metrics.get(key))
+            break
+    aggregate_miss = explicit_miss if explicit_miss is not None else max(0, benchmark - detected)
+    return {
+        "benchmark_opportunity_count": benchmark,
+        "detected_count": detected,
+        "aggregate_miss_count": aggregate_miss,
+        "promoted_count": _safe_int(
+            metrics.get("eventual_promotion_count", metrics.get("promotion_count", metrics.get("promoted_count")))
+        ),
+        "detection_rate_pct": _safe_float(metrics.get("eventual_detection_rate_pct", metrics.get("detection_rate_pct"))),
+        "opportunity_miss_rate_pct": _safe_float(
+            metrics.get("eventual_opportunity_miss_rate_pct", metrics.get("opportunity_miss_rate_pct"))
+        ),
+        "false_positive_rate_pct": _safe_float(metrics.get("false_positive_rate_pct")),
+        "average_detection_latency_minutes": _safe_float(metrics.get("average_detection_latency_minutes")),
+        "provider_error_count": _safe_int(metrics.get("provider_error_count")),
+    }
+
+
 def _paper_performance(telemetry: dict[str, Any]) -> dict[str, Any]:
     fund = telemetry.get("paper_fund")
     fund = fund if isinstance(fund, dict) else {}
@@ -188,31 +217,6 @@ def _paper_performance(telemetry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validation_metrics(scorecard: dict[str, Any]) -> dict[str, Any]:
-    metrics = scorecard.get("metrics")
-    metrics = metrics if isinstance(metrics, dict) else {}
-    return {
-        "benchmark_opportunity_count": _safe_int(
-            metrics.get("benchmark_opportunity_count", metrics.get("opportunity_count"))
-        ),
-        "detected_count": _safe_int(
-            metrics.get("eventual_detected_count", metrics.get("radar_detected_count", metrics.get("detected_count")))
-        ),
-        "promoted_count": _safe_int(
-            metrics.get("eventual_promotion_count", metrics.get("promotion_count", metrics.get("promoted_count")))
-        ),
-        "detection_rate_pct": _safe_float(
-            metrics.get("eventual_detection_rate_pct", metrics.get("detection_rate_pct"))
-        ),
-        "opportunity_miss_rate_pct": _safe_float(
-            metrics.get("eventual_opportunity_miss_rate_pct", metrics.get("opportunity_miss_rate_pct"))
-        ),
-        "false_positive_rate_pct": _safe_float(metrics.get("false_positive_rate_pct")),
-        "average_detection_latency_minutes": _safe_float(metrics.get("average_detection_latency_minutes")),
-        "provider_error_count": _safe_int(metrics.get("provider_error_count")),
-    }
-
-
 def _tomorrow_focus(
     *,
     validation: dict[str, Any],
@@ -222,12 +226,17 @@ def _tomorrow_focus(
     misses: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
+    aggregate_miss = _safe_int(validation.get("aggregate_miss_count"))
     miss_rate = _safe_float(validation.get("opportunity_miss_rate_pct"))
-    if misses:
+    if aggregate_miss > 0:
         output.append(
             {
                 "priority": "RADAR_MISS_REVIEW",
-                "why": f"{len(misses)} persisted validation miss(es) are visible; miss rate {miss_rate if miss_rate is not None else 'unreported'}%.",
+                "why": (
+                    f"9H reports {aggregate_miss} aggregate validation miss(es), "
+                    f"with {len(misses)} detailed miss row(s) exposed; miss rate "
+                    f"{miss_rate if miss_rate is not None else 'unreported'}%."
+                ),
                 "action": "REVIEW_MISSES_BEFORE_ANY_THRESHOLD_CHANGE",
                 "authority": "HUMAN_REVIEW_ONLY",
             }
@@ -248,8 +257,7 @@ def _tomorrow_focus(
             }
         )
 
-    providers = telemetry.get("providers")
-    providers = providers if isinstance(providers, dict) else {}
+    providers = telemetry.get("providers") if isinstance(telemetry.get("providers"), dict) else {}
     provider_errors = _safe_int(providers.get("provider_error_count"))
     if provider_errors:
         output.append(
@@ -294,17 +302,19 @@ def _story_lines(
     best = sections["best_calls"]
     saves = sections["saves"]
     dumb = sections["dumb_calls"]
-    lines: list[dict[str, str]] = []
-    lines.append(
+    aggregate_miss = _safe_int(validation.get("aggregate_miss_count"))
+    detailed_miss = len(misses)
+    lines: list[dict[str, str]] = [
         {
             "speaker": "MAX",
             "line": (
                 f"Factory close: {validation.get('benchmark_opportunity_count', 0)} benchmark opportunities, "
-                f"{validation.get('detected_count', 0)} detected, {len(misses)} still sitting in the 'we should have seen that' pile."
+                f"{validation.get('detected_count', 0)} detected, {aggregate_miss} missed by the aggregate 9H metric. "
+                f"Detailed miss records exposed: {detailed_miss}."
             ),
-            "basis": "9H persisted validation metrics and miss rows.",
+            "basis": "9H persisted aggregate validation metrics plus any detailed miss rows exposed by the scorecard.",
         }
-    )
+    ]
     if best:
         row = best[0]
         lines.append(
@@ -361,6 +371,8 @@ def build_daily_episode(
     misses = _validation_misses(scorecard)
     validation = _validation_metrics(scorecard)
     paper = _paper_performance(telemetry)
+    aggregate_miss_count = max(_safe_int(validation.get("aggregate_miss_count")), len(misses))
+    validation["aggregate_miss_count"] = aggregate_miss_count
     quality_counts = Counter(str(row.get("decision_quality") or "UNKNOWN") for row in outcomes)
     learning_session_match = bool(session_id and outcomes)
     status = "FINAL" if final_requested and learning_session_match else (
@@ -392,7 +404,8 @@ def build_daily_episode(
             "best_call_count": len(sections["best_calls"]),
             "save_count": len(sections["saves"]),
             "dumb_call_count": len(sections["dumb_calls"]),
-            "validation_miss_count": len(misses),
+            "validation_miss_count": aggregate_miss_count,
+            "validation_miss_detail_count": len(misses),
             "learning_outcome_count": len(outcomes),
         },
         "best_calls": sections["best_calls"],
@@ -410,12 +423,7 @@ def build_daily_episode(
             "shadow_complete_session_count": shadow.get("complete_session_count"),
         },
         "tomorrow_focus": tomorrow,
-        "story": _story_lines(
-            sections=sections,
-            validation=validation,
-            paper=paper,
-            misses=misses,
-        ),
+        "story": _story_lines(sections=sections, validation=validation, paper=paper, misses=misses),
         "safety": {
             "report_only": True,
             "source_mode": "PERSISTED_9G_9H_9I_9J_READ_ONLY",
@@ -466,9 +474,7 @@ def build_from_state(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Build the Batch 9O persisted-data daily IIOS factory episode."
-    )
+    parser = argparse.ArgumentParser(description="Build the Batch 9O persisted-data daily IIOS factory episode.")
     parser.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
     parser.add_argument("--telemetry-dir", default=str(DEFAULT_TELEMETRY_DIR))
     parser.add_argument("--preview", action="store_true", help="Build a read-only LIVE_DRAFT and do not write final episode JSON")
@@ -524,6 +530,7 @@ def main() -> int:
         return 0
 
     _atomic_write(output_path, payload)
+    scoreboard = payload.get("scoreboard") if isinstance(payload.get("scoreboard"), dict) else {}
     summary = {
         "status": "BATCH9O_DAILY_FACTORY_EPISODE_WRITTEN",
         "episode_status": payload.get("status"),
@@ -532,7 +539,8 @@ def main() -> int:
         "best_call_count": len(payload.get("best_calls") or []),
         "save_count": len(payload.get("saves") or []),
         "dumb_call_count": len(payload.get("dumb_calls") or []),
-        "validation_miss_count": len(payload.get("misses") or []),
+        "validation_miss_count": scoreboard.get("validation_miss_count", 0),
+        "validation_miss_detail_count": scoreboard.get("validation_miss_detail_count", 0),
         "direct_ledger_access": False,
         "trade_execution_permission": False,
         "live_execution": False,
