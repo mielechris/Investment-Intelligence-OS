@@ -287,13 +287,12 @@ def install_open_evidence_watch(primary_module: Any, monitoring_module: Any) -> 
     primary_module._lane_status = lane_status_with_watch
     monitoring_module.refresh_profile = refresh_profile_with_evidence_watch
 
-    # Deep Watch extends this exact monitor chain. It runs after the narrow public-source
-    # candidate watcher, persists Committee/Risk obligations, and only invokes the costly
-    # nine-desk re-underwrite when governed obligation state materially changes.
-    from deep_watch_obligations import (
-        install_deep_watch_obligation_engine,
-        router as deep_watch_router,
-    )
+    # Deep Watch extends this exact monitor chain. The mapping upgrade keeps the six
+    # Committee requirements human-readable while allowing one obligation to watch
+    # multiple authoritative primary-evidence lanes when its scope spans them.
+    import deep_watch_obligations as deep_watch_module
+    from deep_watch_lane_mapping import install_deep_watch_lane_mapping
 
-    install_deep_watch_obligation_engine(primary_module, monitoring_module)
-    monitoring_module.router.include_router(deep_watch_router)
+    install_deep_watch_lane_mapping(deep_watch_module)
+    deep_watch_module.install_deep_watch_obligation_engine(primary_module, monitoring_module)
+    monitoring_module.router.include_router(deep_watch_module.router)
