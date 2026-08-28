@@ -1,0 +1,61 @@
+name: IIOS Batch 9T Market Regime Intelligence Gate
+
+on:
+  push:
+    branches: [feature/batch9t-market-regime-intelligence]
+  pull_request:
+    branches: [feature/batch9s-agent-performance-league]
+
+jobs:
+  market-regime-intelligence-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Compile 9T
+        run: python -m py_compile scripts/iios_market_regime_intelligence.py scripts/iios_market_regime_intelligence_publisher.py scripts/test_batch9t_market_regime_intelligence.py scripts/activate_batch9t_market_regime_intelligence.py scripts/activate_batch9k_live_factory_browser.py
+      - name: Run inherited 9S regressions
+        run: |
+          python scripts/test_batch9p_chief_intelligence_office.py
+          python scripts/test_batch9q_experiment_ab_laboratory.py
+          python scripts/test_batch9r_data_expansion_factory.py
+          python scripts/test_batch9s_agent_performance_league.py
+      - name: Run 9T contracts
+        run: python scripts/test_batch9t_market_regime_intelligence.py
+      - name: Build 9T browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/ExperimentABLaboratory.tsx src/DataExpansionFactory.tsx src/AgentPerformanceLeague.tsx src/MarketRegimeIntelligence.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+      - name: Assert regime UI and persisted 9H source
+        run: |
+          grep -q 'MarketRegimeIntelligence' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9T · MARKET REGIME INTELLIGENCE' "FRONT END/src/MarketRegimeIntelligence.tsx"
+          grep -q 'latest_market_validation.json' scripts/iios_market_regime_intelligence.py
+          grep -q '9H_SIGNIFICANT_MOVER_CROSS_SECTION_ONLY' scripts/iios_market_regime_intelligence.py
+      - name: Assert macro dimensions stay measurement gaps
+        run: |
+          grep -q 'RATES_LIQUIDITY' scripts/iios_market_regime_intelligence.py
+          grep -q 'VOLATILITY_INDEX_TERM_STRUCTURE' scripts/iios_market_regime_intelligence.py
+          grep -q 'INFLATION_GROWTH_MACRO' scripts/iios_market_regime_intelligence.py
+          grep -q 'MEASUREMENT_GAP' scripts/iios_market_regime_intelligence.py
+          grep -q 'MACRO / LIQUIDITY / VOL · NOT INVENTED' "FRONT END/src/MarketRegimeIntelligence.tsx"
+      - name: Assert classification-only governance
+        run: |
+          grep -q 'classification_only": True' scripts/iios_market_regime_intelligence.py
+          grep -q 'auto_change_portfolio_exposure": False' scripts/iios_market_regime_intelligence.py
+          grep -q 'auto_change_thresholds": False' scripts/iios_market_regime_intelligence.py
+          grep -q 'capital_authority": False' scripts/iios_market_regime_intelligence.py
+      - name: Assert isolated activation preserves prior workers
+        run: |
+          grep -q 'BRANCH = "feature/batch9t-market-regime-intelligence"' scripts/activate_batch9t_market_regime_intelligence.py
+          grep -q 'REGIME_LABEL = "com.iios.market-regime-intelligence"' scripts/activate_batch9t_market_regime_intelligence.py
+          grep -q 'Parent Batch 9S: PRESERVED' scripts/activate_batch9t_market_regime_intelligence.py
+          grep -q '9O/9P/9Q/9R/9S LaunchAgents changed' scripts/activate_batch9t_market_regime_intelligence.py
+      - name: Assert no live authority
+        run: |
+          ! grep -Eq '"(auto_change_thresholds|auto_change_agent_weights|auto_change_model_routing|auto_change_portfolio_exposure|capital_authority|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_market_regime_intelligence.py scripts/activate_batch9t_market_regime_intelligence.py

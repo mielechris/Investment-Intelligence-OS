@@ -7,6 +7,7 @@ import ExperimentABLaboratory from "./ExperimentABLaboratory";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
+import MarketRegimeIntelligence from "./MarketRegimeIntelligence";
 import MarketValidationStackPanel from "./MarketValidationStackPanel";
 import "./LiveFactoryBrowser.css";
 import "./Batch9MVisualSeal.css";
@@ -16,11 +17,11 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9S · AGENT PERFORMANCE LEAGUE</span>
-          <strong>Outcome alignment · calibration evidence · no automatic reweighting</strong>
+          <span>BATCH 9T · MARKET REGIME INTELLIGENCE</span>
+          <strong>Cross-sectional regime · measured dimensions only · advisory metadata</strong>
         </div>
         <div>
-          <span>9R DATA EXPANSION FACTORY PRESERVED · BACKEND 8002 UNCHANGED</span>
+          <span>9S AGENT PERFORMANCE LEAGUE PRESERVED · BACKEND 8002 UNCHANGED</span>
           <strong>LIVE EXECUTION FALSE</strong>
         </div>
       </div>
@@ -39,6 +40,8 @@ export default function LiveFactoryBrowser() {
       <DataExpansionFactory />
       <div className="lfb-divider"><span>9S AGENT PERFORMANCE LEAGUE · SCOREBOARD ONLY</span></div>
       <AgentPerformanceLeague />
+      <div className="lfb-divider"><span>9T MARKET REGIME INTELLIGENCE · CLASSIFICATION ONLY</span></div>
+      <MarketRegimeIntelligence />
       <div className="lfb-divider"><span>9K VALIDATION STACK · PRESERVED</span></div>
       <MarketValidationStackPanel />
       <div className="lfb-divider"><span>EXISTING FACTORY INTELLIGENCE UI · PRESERVED</span></div>
