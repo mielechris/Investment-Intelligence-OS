@@ -287,33 +287,15 @@ def install_open_evidence_watch(primary_module: Any, monitoring_module: Any) -> 
     primary_module._lane_status = lane_status_with_watch
     monitoring_module.refresh_profile = refresh_profile_with_evidence_watch
 
-    # Batch 10D paper-fund portfolio context runs before Deep Watch. That makes the
-    # current governed paper book available to the portfolio obligation in the same
-    # monitoring cycle, without asking the user to enter holdings manually.
-    from paper_fund_portfolio_context_bridge import (
-        install_paper_fund_portfolio_context_bridge,
-        router as paper_fund_portfolio_context_router,
-    )
-
-    install_paper_fund_portfolio_context_bridge(monitoring_module)
-    monitoring_module.router.include_router(paper_fund_portfolio_context_router)
-
-    # Deep Watch extends this exact monitor chain. The mapping upgrade keeps the six
-    # Committee requirements human-readable while allowing one obligation to watch
-    # multiple authoritative primary-evidence lanes when its scope spans them.
+    # Deep Watch extends this exact monitor chain. Paper-fund portfolio context is
+    # installed earlier by portfolio_context.py, so Deep Watch sees the current book
+    # in the same refresh without duplicating routes or wrapping the monitor twice.
     import deep_watch_obligations as deep_watch_module
     from deep_watch_lane_mapping import install_deep_watch_lane_mapping
 
     install_deep_watch_lane_mapping(deep_watch_module)
     deep_watch_module.install_deep_watch_obligation_engine(primary_module, monitoring_module)
     monitoring_module.router.include_router(deep_watch_module.router)
-
-    # Options are observation-only during Batch 10D. Mounting this read-only surface
-    # exposes governed OCC positioning context but provides no contract selection,
-    # option order, broker, authorization or live-execution capability.
-    from options_shadow_observation import router as options_shadow_router
-
-    monitoring_module.router.include_router(options_shadow_router)
 
     # Closed-loop lineage is a read-only operations spine. It treats monitored
     # NO_TRADE/WATCH outcomes as valid closed-loop states and flags only genuine
