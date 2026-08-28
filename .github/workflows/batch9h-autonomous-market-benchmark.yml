@@ -25,6 +25,7 @@ jobs:
           "BACK END/backend/test_market_benchmark.py"
           "BACK END/backend/test_market_validation_learning.py"
           "BACK END/backend/market_validation_scorecard.py"
+          "BACK END/backend/production_index_universe.py"
           scripts/iios_market_benchmark_collector.py
           scripts/iios_daily_market_validation.py
           scripts/activate_batch9h_autonomous_market_validation.py
@@ -46,13 +47,26 @@ jobs:
         run: |
           grep -q 'yahoo_9h_independent_benchmark' "BACK END/backend/market_benchmark.py"
           grep -q 'independent_of_iios_promotion_decisions' "BACK END/backend/market_benchmark.py"
-          ! grep -Eq 'high_speed_market_radar|opportunity_acquisition|promote_candidate|score_candidate' "BACK END/backend/market_benchmark.py"
+          grep -q 'OFFICIAL_SP500_PLUS_NASDAQ100_BENCHMARK_SIDECAR' scripts/iios_market_benchmark_collector.py
+          grep -q 'production_index_universe' scripts/iios_market_benchmark_collector.py
+          ! grep -Eq 'batch8c_production_inputs|high_speed_market_radar|opportunity_acquisition|promote_candidate|score_candidate' "BACK END/backend/market_benchmark.py" scripts/iios_market_benchmark_collector.py
+          ! grep -Eq 'sqlite3|from ledger|import ledger|IIOS_DB_PATH' scripts/iios_market_benchmark_collector.py
           ! grep -Eq 'record_object|record_event|consume_authorization|submit_paper_order|create_governed_paper_order' \
             "BACK END/backend/market_benchmark.py" \
             "BACK END/backend/market_validation_learning.py" \
             scripts/iios_market_benchmark_collector.py \
             scripts/iios_daily_market_validation.py \
             scripts/activate_batch9h_autonomous_market_validation.py
+
+      - name: Assert verified universe seed is read only and collector stays ledger free
+        run: |
+          grep -q 'production_index_universe_snapshot' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'benchmark_universe.json' scripts/activate_batch9h_autonomous_market_validation.py scripts/iios_market_benchmark_collector.py
+          grep -q 'mode=ro' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'LIVE_VERIFIED_PRODUCTION_UNIVERSE_SEED' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'collector_ledger_access.*NONE' scripts/activate_batch9h_autonomous_market_validation.py
+          grep -q 'ledger_read.*False' scripts/iios_market_benchmark_collector.py
+          grep -q 'ledger_write.*False' scripts/iios_market_benchmark_collector.py
 
       - name: Assert incomplete benchmark fails closed
         run: |
