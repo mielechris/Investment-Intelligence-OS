@@ -1,0 +1,86 @@
+name: IIOS Batch 9S Agent Performance League Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9s-agent-performance-league
+  pull_request:
+    branches:
+      - feature/batch9r-data-expansion-factory
+
+jobs:
+  agent-performance-league-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 9S
+        run: >-
+          python -m py_compile
+          scripts/iios_agent_performance_league.py
+          scripts/iios_agent_performance_league_publisher.py
+          scripts/test_batch9s_agent_performance_league.py
+          scripts/activate_batch9s_agent_performance_league.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run inherited 9R regressions
+        run: |
+          python scripts/test_batch9p_chief_intelligence_office.py
+          python scripts/test_batch9q_experiment_ab_laboratory.py
+          python scripts/test_batch9r_data_expansion_factory.py
+
+      - name: Run 9S league contracts
+        run: python scripts/test_batch9s_agent_performance_league.py
+
+      - name: Build 9S browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/ExperimentABLaboratory.tsx src/DataExpansionFactory.tsx src/AgentPerformanceLeague.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert league UI and exact persisted inputs
+        run: |
+          grep -q 'AgentPerformanceLeague' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9S · AGENT PERFORMANCE LEAGUE' "FRONT END/src/AgentPerformanceLeague.tsx"
+          grep -q 'latest_outcome_learning.json' scripts/iios_agent_performance_league.py
+          grep -q 'recent_promotions' scripts/iios_agent_performance_league.py
+          grep -q 'OFFICIAL SAMPLE GATE · 20 DECISIVE OUTCOMES PER DESK' "FRONT END/src/AgentPerformanceLeague.tsx"
+
+      - name: Assert miss attribution and no fake model rankings
+        run: |
+          grep -q 'UNATTRIBUTED_TO_AGENTS' scripts/iios_agent_performance_league.py
+          grep -q 'UNRANKED_MEASUREMENT_GAP' scripts/iios_agent_performance_league.py
+          grep -q 'per-agent research latency' scripts/iios_agent_performance_league.py
+          grep -q 'Committee marginal influence' scripts/iios_agent_performance_league.py
+          grep -q 'cost per useful agent result' scripts/iios_agent_performance_league.py
+          grep -q 'market-regime-specific performance' scripts/iios_agent_performance_league.py
+
+      - name: Assert scoreboard-only governance
+        run: |
+          grep -q 'automatic_agent_weight_changes": False' scripts/iios_agent_performance_league.py
+          grep -q 'agent_weight_change_authority": False' scripts/iios_agent_performance_league.py
+          grep -q 'automatic_model_routing_changes": False' scripts/iios_agent_performance_league.py
+          grep -q 'model_routing_change_authority": False' scripts/iios_agent_performance_league.py
+          grep -q 'human_approval_required": True' scripts/iios_agent_performance_league.py
+          grep -q 'AUTO REWEIGHT AGENTS · FALSE' "FRONT END/src/AgentPerformanceLeague.tsx"
+          grep -q 'AUTO ROUTE MODELS · FALSE' "FRONT END/src/AgentPerformanceLeague.tsx"
+
+      - name: Assert isolated Mac activation preserves prior workers
+        run: |
+          grep -q 'BRANCH = "feature/batch9s-agent-performance-league"' scripts/activate_batch9s_agent_performance_league.py
+          grep -q 'LEAGUE_LABEL = "com.iios.agent-performance-league"' scripts/activate_batch9s_agent_performance_league.py
+          grep -q 'Parent Batch 9R: PRESERVED' scripts/activate_batch9s_agent_performance_league.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9s_agent_performance_league.py
+          grep -q 'one or more 9O/9P/9Q/9R LaunchAgents changed' scripts/activate_batch9s_agent_performance_league.py
+          ! grep -Eq 'launchctl.*(daily-factory-episode|chief-intelligence-office|experiment-ab-laboratory|data-expansion-factory)' scripts/activate_batch9s_agent_performance_league.py
+
+      - name: Assert no live authority
+        run: |
+          ! grep -Eq '"(agent_weight_change_authority|model_routing_change_authority|committee_change_authority|risk_rule_change_authority|capital_authority|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_agent_performance_league.py scripts/activate_batch9s_agent_performance_league.py
