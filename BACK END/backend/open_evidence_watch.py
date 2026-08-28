@@ -310,3 +310,11 @@ def install_open_evidence_watch(primary_module: Any, monitoring_module: Any) -> 
     from operations_visibility import router as operations_visibility_router
 
     monitoring_module.router.include_router(operations_visibility_router)
+
+    # The isolated 9A runner writes its own local ledger. This telemetry-only bridge
+    # accepts the completed cycle checkpoint into Backend 8002's ledger so the 10B
+    # heartbeat reads the process that is actually running. It cannot create cases,
+    # authorize capital, select orders, or enable live execution.
+    from observation_heartbeat_sync import router as observation_heartbeat_router
+
+    monitoring_module.router.include_router(observation_heartbeat_router)
