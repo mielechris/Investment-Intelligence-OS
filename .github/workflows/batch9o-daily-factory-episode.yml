@@ -25,12 +25,14 @@ jobs:
           python -m py_compile
           scripts/iios_factory_browser_preview.py
           scripts/iios_daily_factory_episode.py
+          scripts/iios_daily_factory_episode_exact.py
           scripts/iios_daily_factory_episode_publisher.py
           scripts/test_iios_factory_browser_preview.py
           scripts/test_batch9l_living_factory_contract.py
           scripts/test_batch9m_character_story_contract.py
           scripts/test_batch9n_interactive_case_theater_contract.py
           scripts/test_batch9o_daily_factory_episode.py
+          scripts/test_batch9o_exact_learning_source.py
           scripts/activate_batch9k_live_factory_browser.py
           scripts/activate_batch9l_living_factory.py
           scripts/activate_batch9m_character_story_engine.py
@@ -54,8 +56,10 @@ jobs:
           python scripts/test_batch9m_character_story_contract.py
           python scripts/test_batch9n_interactive_case_theater_contract.py
 
-      - name: Run 9O deterministic episode contract
-        run: python scripts/test_batch9o_daily_factory_episode.py
+      - name: Run 9O deterministic episode contracts
+        run: |
+          python scripts/test_batch9o_daily_factory_episode.py
+          python scripts/test_batch9o_exact_learning_source.py
 
       - name: Build Batch 9O browser
         working-directory: FRONT END
@@ -86,15 +90,25 @@ jobs:
           grep -q 'NO_TRADE_FOREGONE_UPSIDE' scripts/iios_daily_factory_episode.py
           grep -q 'FACTORY_MISS_WITH_UPSIDE' scripts/iios_daily_factory_episode.py
 
+      - name: Assert exact-linked 9J source preference
+        run: |
+          grep -q 'latest_outcome_learning.json' scripts/iios_daily_factory_episode_exact.py
+          grep -q 'CASE_AND_CANDIDATE_LINKED' scripts/iios_daily_factory_episode_exact.py
+          grep -q 'COMPACT_BROWSER_FALLBACK' scripts/iios_daily_factory_episode_exact.py
+          grep -q 'PERSISTED_9G_9H_9I_9J_EXACT_LINKED_READ_ONLY' scripts/iios_daily_factory_episode_exact.py
+          grep -q 'iios_daily_factory_episode_exact.py' scripts/iios_daily_factory_episode_publisher.py
+          grep -q 'iios_daily_factory_episode_exact.py' scripts/activate_batch9o_daily_factory_episode.py
+
       - name: Assert episode sources and story grounding
         run: |
-          grep -q 'latest_market_validation.json' scripts/iios_daily_factory_episode.py
-          grep -q 'latest_shadow_counterfactual.json' scripts/iios_daily_factory_episode.py
-          grep -q 'outcome_learning.json' scripts/iios_daily_factory_episode.py
-          grep -q 'telemetry_dir / "latest.json"' scripts/iios_daily_factory_episode.py
+          grep -q 'latest_market_validation.json' scripts/iios_daily_factory_episode_exact.py
+          grep -q 'latest_shadow_counterfactual.json' scripts/iios_daily_factory_episode_exact.py
+          grep -q 'telemetry_dir / "latest.json"' scripts/iios_daily_factory_episode_exact.py
           grep -q '"basis"' scripts/iios_daily_factory_episode.py
-          grep -q 'PERSISTED_9G_9H_9I_9J_READ_ONLY' scripts/iios_daily_factory_episode.py
-          ! grep -Eq 'sqlite3|127\.0\.0\.1:8002|record_object|record_event|submit_paper_order|consume_authorization' scripts/iios_daily_factory_episode.py scripts/iios_daily_factory_episode_publisher.py
+          ! grep -Eq 'sqlite3|127\.0\.0\.1:8002|record_object|record_event|submit_paper_order|consume_authorization' \
+            scripts/iios_daily_factory_episode.py \
+            scripts/iios_daily_factory_episode_exact.py \
+            scripts/iios_daily_factory_episode_publisher.py
 
       - name: Assert tomorrow focus stays advisory
         run: |
@@ -126,10 +140,12 @@ jobs:
         run: |
           ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
             scripts/iios_daily_factory_episode.py \
+            scripts/iios_daily_factory_episode_exact.py \
             scripts/iios_daily_factory_episode_publisher.py \
             scripts/activate_batch9o_daily_factory_episode.py
           ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
             scripts/iios_daily_factory_episode.py \
+            scripts/iios_daily_factory_episode_exact.py \
             scripts/iios_daily_factory_episode_publisher.py \
             scripts/activate_batch9o_daily_factory_episode.py
           ! grep -Eq '"backend_write_permission"[[:space:]]*:[[:space:]]*True' \
