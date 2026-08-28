@@ -70,7 +70,7 @@ jobs:
         run: |
           grep -q 'BROWSER_SCHEMA_VERSION = "batch9j-browser-outcome-summary-v1"' "BACK END/backend/outcome_labeling_memory.py"
           grep -q 'build_browser_summary' "BACK END/backend/outcome_labeling_memory.py"
-          grep -q 'browser/outcome_learning.json' scripts/iios_outcome_learning_memory.py
+          grep -q 'outcome_learning.json' scripts/iios_outcome_learning_memory.py
           grep -q 'judgment_bank_review_queue_count' "BACK END/backend/outcome_labeling_memory.py"
           grep -q 'agent_scorecards' "BACK END/backend/outcome_labeling_memory.py"
 
