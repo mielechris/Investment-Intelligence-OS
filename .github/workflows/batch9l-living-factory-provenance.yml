@@ -95,7 +95,8 @@ jobs:
           grep -q 'probability calibrated: FALSE' "FRONT END/src/LivingFactoryExperience.tsx"
           grep -q 'TRADE SIGNAL FALSE' "FRONT END/src/LivingFactoryExperience.tsx"
           grep -q 'PAPER ORDER PERMISSION FALSE' "FRONT END/src/LivingFactoryExperience.tsx"
-          grep -q 'BOTH means the ticker is independently present in persisted Jesse and 9E records' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'BOTH means the ticker is independently present' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q '9E records; it does not claim one caused the other' "FRONT END/src/LivingFactoryExperience.tsx"
 
       - name: Assert isolated Mac 9L activation
         run: |
