@@ -9,10 +9,35 @@ import market_benchmark as benchmark
 
 class MarketBenchmarkTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.start = datetime(2026, 8, 28, 13, 30, tzinfo=timezone.utc)
-        self.end = datetime(2026, 8, 28, 20, 0, tzinfo=timezone.utc)
+        self.start = datetime(
+            2026,
+            8,
+            28,
+            13,
+            30,
+            tzinfo=timezone.utc,
+        )
+        self.end = datetime(
+            2026,
+            8,
+            28,
+            20,
+            0,
+            tzinfo=timezone.utc,
+        )
+        self.governed = {
+            "source": "TEST_VERIFIED_UNIVERSE",
+            "verified_complete": True,
+            "strict_membership": True,
+            "symbols": ["TEST"],
+            "cached_at": self.start.isoformat(),
+        }
 
-    def _snapshot(self, observed: datetime, change: float = 1.0) -> dict:
+    def _snapshot(
+        self,
+        observed: datetime,
+        change: float = 1.0,
+    ) -> dict:
         return {
             "observed_at": observed.isoformat(),
             "screeners_successful": list(benchmark.SCREENER_IDS),
@@ -29,11 +54,17 @@ class MarketBenchmarkTest(unittest.TestCase):
             ],
         }
 
-    def test_full_session_builds_complete_truth_set_with_first_seen_time(self) -> None:
+    def test_full_session_builds_complete_truth_set_with_first_seen_time(
+        self,
+    ) -> None:
         snapshots = []
         for index in range(79):
             observed = self.start + timedelta(minutes=5 * index)
-            change = 1.0 if index < 2 else 3.2 + (index / 100.0)
+            change = (
+                1.0
+                if index < 2
+                else 3.2 + (index / 100.0)
+            )
             snapshots.append(self._snapshot(observed, change))
 
         result = benchmark.build_opportunity_benchmark(
@@ -43,7 +74,10 @@ class MarketBenchmarkTest(unittest.TestCase):
         )
 
         self.assertTrue(result["benchmark_complete"])
-        self.assertEqual(result["opportunities"][0]["ticker"], "TEST")
+        self.assertEqual(
+            result["opportunities"][0]["ticker"],
+            "TEST",
+        )
         self.assertEqual(
             result["opportunities"][0]["event_at"],
             (self.start + timedelta(minutes=10)).isoformat(),
@@ -53,14 +87,23 @@ class MarketBenchmarkTest(unittest.TestCase):
             benchmark.SOURCE,
         )
         self.assertTrue(
-            result["benchmark_meta"]["independent_of_iios_promotion_decisions"]
+            result["benchmark_meta"][
+                "independent_of_iios_promotion_decisions"
+            ]
         )
-        self.assertFalse(result["benchmark_meta"]["ledger_read"])
-        self.assertFalse(result["benchmark_meta"]["ledger_write"])
+        self.assertFalse(
+            result["benchmark_meta"]["ledger_read"]
+        )
+        self.assertFalse(
+            result["benchmark_meta"]["ledger_write"]
+        )
 
     def test_partial_session_is_explicitly_incomplete(self) -> None:
         snapshots = [
-            self._snapshot(self.start + timedelta(minutes=5 * index), 4.0)
+            self._snapshot(
+                self.start + timedelta(minutes=5 * index),
+                4.0,
+            )
             for index in range(8)
         ]
         result = benchmark.build_opportunity_benchmark(
@@ -69,12 +112,12 @@ class MarketBenchmarkTest(unittest.TestCase):
             session_end=self.end,
         )
         self.assertFalse(result["benchmark_complete"])
-        self.assertFalse(result["benchmark_meta"]["closing_coverage"])
+        self.assertFalse(
+            result["benchmark_meta"]["closing_coverage"]
+        )
 
-    @patch.object(benchmark, "_strict_universe_aliases")
     @patch.object(benchmark, "_yahoo_screener")
-    def test_collector_has_no_ledger_dependency(self, screener, universe) -> None:
-        universe.return_value = ({"TEST"}, {"TEST": "TEST"})
+    def test_collector_has_no_ledger_dependency(self, screener) -> None:
         screener.return_value = [
             {
                 "symbol": "TEST",
@@ -85,12 +128,38 @@ class MarketBenchmarkTest(unittest.TestCase):
                 "averageDailyVolume3Month": 1_000_000,
             }
         ]
-        result = benchmark.collect_independent_snapshot(observed_at=self.start)
+        result = benchmark.collect_independent_snapshot(
+            governed_universe=self.governed,
+            observed_at=self.start,
+        )
         self.assertTrue(result["snapshot_complete"])
-        self.assertTrue(result["independent_of_iios_promotion_decisions"])
+        self.assertEqual(
+            result["governed_universe_count"],
+            1,
+        )
+        self.assertEqual(
+            result["governed_universe_source"],
+            "TEST_VERIFIED_UNIVERSE",
+        )
+        self.assertTrue(
+            result["independent_of_iios_promotion_decisions"]
+        )
         self.assertFalse(result["ledger_read"])
         self.assertFalse(result["ledger_write"])
         self.assertFalse(result["live_execution"])
+
+    def test_unverified_universe_fails_closed(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "STRICT_GOVERNED_UNIVERSE_NOT_VERIFIED",
+        ):
+            benchmark._strict_universe_aliases(
+                {
+                    "verified_complete": False,
+                    "strict_membership": False,
+                    "symbols": ["TEST"],
+                }
+            )
 
 
 if __name__ == "__main__":
