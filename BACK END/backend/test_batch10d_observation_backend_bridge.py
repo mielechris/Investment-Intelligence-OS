@@ -1,8 +1,10 @@
 import io
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -95,8 +97,8 @@ class Batch10DObservationBackendBridgeTests(unittest.TestCase):
             base_runner.scan_universe = original_scan
             base_runner.run_cycle = original_cycle
 
-    @patch.object(bridge, "_run_with_timeout")
-    def test_external_stages_use_governed_wall_clock_ceilings(self, bounded):
+    @patch.object(bridge, "_run_stage_in_subprocess")
+    def test_external_stages_use_hard_process_ceilings(self, bounded):
         bounded.side_effect = [{"event_count": 0}, {"scanned_count": 0}]
 
         radar = bridge.run_market_event_radar_bounded()
@@ -104,12 +106,48 @@ class Batch10DObservationBackendBridgeTests(unittest.TestCase):
 
         self.assertEqual(radar["event_count"], 0)
         self.assertEqual(scan["scanned_count"], 0)
+        self.assertEqual(bounded.call_args_list[0].args[0], "market_event_radar")
         self.assertEqual(bounded.call_args_list[0].args[1], bridge.RADAR_TIMEOUT_SECONDS)
-        self.assertEqual(bounded.call_args_list[0].args[2], "MARKET_EVENT_RADAR")
+        self.assertEqual(bounded.call_args_list[1].args[0], "opportunity_scan")
         self.assertEqual(bounded.call_args_list[1].args[1], bridge.OPPORTUNITY_SCAN_TIMEOUT_SECONDS)
-        self.assertEqual(bounded.call_args_list[1].args[2], "OPPORTUNITY_SCAN")
         self.assertEqual(bridge.RADAR_TIMEOUT_SECONDS, 120)
         self.assertEqual(bridge.OPPORTUNITY_SCAN_TIMEOUT_SECONDS, 180)
+
+    @patch.object(bridge.subprocess, "run")
+    def test_subprocess_timeout_becomes_observation_stage_timeout(self, run):
+        run.side_effect = subprocess.TimeoutExpired(["python", "worker"], 180)
+
+        with self.assertRaises(bridge.ObservationStageTimeout) as caught:
+            bridge._run_stage_in_subprocess(
+                "opportunity_scan",
+                180,
+                "OPPORTUNITY_SCAN",
+                news_limit=8,
+                max_candidates=10,
+            )
+
+        self.assertIn("OPPORTUNITY_SCAN_TIMEOUT_180s", str(caught.exception))
+
+    @patch.object(bridge.subprocess, "run")
+    def test_subprocess_success_returns_machine_readable_result(self, run):
+        run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"scanned_count": 16, "queued_count": 10}),
+            stderr="",
+        )
+
+        result = bridge._run_stage_in_subprocess(
+            "opportunity_scan",
+            180,
+            "OPPORTUNITY_SCAN",
+            news_limit=8,
+            max_candidates=10,
+        )
+
+        self.assertEqual(result["scanned_count"], 16)
+        self.assertEqual(result["queued_count"], 10)
+        self.assertEqual(run.call_args.kwargs["timeout"], 180)
+        self.assertIn("iios_observation_stage_worker.py", run.call_args.args[0][1])
 
     def test_timeout_exception_is_caught_by_existing_safe_call(self):
         def timeout_stage():
@@ -145,6 +183,7 @@ class Batch10DObservationBackendBridgeTests(unittest.TestCase):
             self.assertNotIn("broker", path.lower())
             self.assertNotIn("execute", path.lower())
         self.assertFalse(hasattr(bridge, "broker"))
+        self.assertEqual(bridge.STAGE_WORKER.name, "iios_observation_stage_worker.py")
 
 
 if __name__ == "__main__":
