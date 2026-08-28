@@ -27,7 +27,7 @@ def _route_rows(router):
 
 
 class Batch10DMonitorWiringTests(unittest.TestCase):
-    def test_monitor_chain_mounts_deep_watch_and_closed_loop_lineage(self):
+    def test_monitor_chain_mounts_deep_watch_closed_loop_and_visibility(self):
         primary = Mock()
         primary._lane_status = lambda case_id, lane, records: {"facts": [], "note": ""}
 
@@ -44,6 +44,7 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
         self.assertIn("/deep-watch/{case_id}/run", paths)
         self.assertIn("/closed-loop/{case_id}/status", paths)
         self.assertIn("/closed-loop/overview", paths)
+        self.assertIn("/operations-visibility/overview", paths)
 
         self.assertNotIn("/portfolio-context/{case_id}/paper-fund", paths)
         self.assertNotIn("/options-shadow/plan", paths)
@@ -56,7 +57,7 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
             )
         )
 
-    def test_closed_loop_surface_is_read_only(self):
+    def test_closed_loop_and_visibility_surfaces_are_read_only(self):
         primary = Mock()
         primary._lane_status = lambda case_id, lane, records: {"facts": [], "note": ""}
 
@@ -69,7 +70,7 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
         self.assertTrue(callable(monitoring.refresh_profile))
 
         for path, methods in _route_rows(monitoring.router):
-            if "closed-loop" in path:
+            if "closed-loop" in path or "operations-visibility" in path:
                 self.assertEqual(methods, {"GET"})
 
 
