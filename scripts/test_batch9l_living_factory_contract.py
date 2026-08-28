@@ -45,8 +45,31 @@ class Batch9LLivingFactoryContractTest(unittest.TestCase):
                 {"status": "WARM-UP", "complete_session_count": 1},
             )
             self._write(
+                state / "latest_outcome_learning.json",
+                {
+                    "generated_at": "2099-01-01T00:00:00+00:00",
+                    "status": "OUTCOME_LEARNING_MEMORY_AVAILABLE",
+                    "outcome_count": 1,
+                    "judgment_bank_review_queue": [],
+                    "recent_outcomes": [
+                        {
+                            "opportunity_id": "benchmark_nvda_01",
+                            "ticker": "NVDA",
+                            "case_id": "case_nvda",
+                            "candidate_id": "candidate_9e_nvda",
+                            "market_outcome": "UPSIDE",
+                            "decision_quality": "WATCH_VALIDATED_BY_UPSIDE",
+                        }
+                    ],
+                },
+            )
+            self._write(
                 state / "browser" / "outcome_learning.json",
-                {"status": "WARM-UP", "outcome_count": 0},
+                {
+                    "generated_at": "2099-01-01T00:00:00+00:00",
+                    "status": "COMPACT_SHOULD_NOT_WIN",
+                    "recent_outcomes": [{"ticker": "NVDA"}],
+                },
             )
 
             def fake_get(path: str, *, timeout_seconds: float = 3.0) -> dict[str, Any]:
@@ -88,6 +111,14 @@ class Batch9LLivingFactoryContractTest(unittest.TestCase):
                 snapshot["validation"]["layers"]["factory_telemetry"]["payload"]["radar"]["governed_universe_count"],
                 518,
             )
+            outcome = snapshot["validation"]["layers"]["outcome_learning"]
+            self.assertEqual(outcome["lineage_mode"], "CASE_AND_CANDIDATE_LINKED")
+            self.assertTrue(str(outcome["path"]).endswith("latest_outcome_learning.json"))
+            row = outcome["payload"]["recent_outcomes"][0]
+            self.assertEqual(row["case_id"], "case_nvda")
+            self.assertEqual(row["candidate_id"], "candidate_9e_nvda")
+            self.assertEqual(row["decision_quality_label"], "WATCH_VALIDATED_BY_UPSIDE")
+            self.assertEqual(row["market_outcome_label"], "UPSIDE")
             self.assertFalse(snapshot["safety"]["direct_ledger_access"])
             self.assertEqual(snapshot["safety"]["backend_access"], "READ_ONLY_GET_ONLY")
             self.assertFalse(snapshot["safety"]["backend_write_permission"])
@@ -100,25 +131,36 @@ class Batch9LLivingFactoryContractTest(unittest.TestCase):
             "/intelligence/dislocation/status",
         )
         self.assertEqual(
-            preview._validate_backend_path("/experience/factory-intelligence/case/case_nvda-01"),
+            preview._validate_backend_path(
+                "/experience/factory-intelligence/case/case_nvda-01"
+            ),
             "/experience/factory-intelligence/case/case_nvda-01",
         )
         with self.assertRaises(ValueError):
             preview._validate_backend_path("/committee/run")
         with self.assertRaises(ValueError):
-            preview._validate_backend_path("/experience/factory-intelligence/case/../../etc/passwd")
+            preview._validate_backend_path(
+                "/experience/factory-intelligence/case/../../etc/passwd"
+            )
 
     def test_backend_failure_is_explicit_waiting_not_synthetic_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch.object(preview, "_backend_get_json", side_effect=RuntimeError("backend unavailable")):
+            with patch.object(
+                preview,
+                "_backend_get_json",
+                side_effect=RuntimeError("backend unavailable"),
+            ):
                 snapshot = preview.build_living_factory_snapshot(
                     telemetry_dir=root / "telemetry",
                     state_dir=root / "market-validation",
                 )
             self.assertEqual(snapshot["factory"]["availability"], "WAITING")
             self.assertIsNone(snapshot["factory"]["payload"])
-            self.assertEqual(snapshot["jesse_dislocation"]["availability"], "WAITING")
+            self.assertEqual(
+                snapshot["jesse_dislocation"]["availability"],
+                "WAITING",
+            )
             self.assertIsNone(snapshot["jesse_dislocation"]["payload"])
             self.assertFalse(snapshot["safety"]["live_execution"])
 
