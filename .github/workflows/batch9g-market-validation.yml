@@ -30,6 +30,7 @@ jobs:
           scripts/iios_factory_telemetry_exporter_v2.py
           scripts/test_iios_factory_telemetry_exporter_v2.py
           scripts/iios_market_validation_scorecard.py
+          scripts/activate_batch9g_market_validation.py
 
       - name: Run Batch 9F regression contract
         run: python "BACK END/backend/test_factory_telemetry.py"
@@ -52,7 +53,8 @@ jobs:
             "BACK END/backend/factory_telemetry_v2.py" \
             "BACK END/backend/market_validation_scorecard.py" \
             scripts/iios_factory_telemetry_exporter_v2.py \
-            scripts/iios_market_validation_scorecard.py
+            scripts/iios_market_validation_scorecard.py \
+            scripts/activate_batch9g_market_validation.py
 
       - name: Assert no live execution authority
         run: |
@@ -60,12 +62,14 @@ jobs:
             "BACK END/backend/factory_telemetry_v2.py" \
             "BACK END/backend/market_validation_scorecard.py" \
             scripts/iios_factory_telemetry_exporter_v2.py \
-            scripts/iios_market_validation_scorecard.py
+            scripts/iios_market_validation_scorecard.py \
+            scripts/activate_batch9g_market_validation.py
           ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
             "BACK END/backend/factory_telemetry_v2.py" \
             "BACK END/backend/market_validation_scorecard.py" \
             scripts/iios_factory_telemetry_exporter_v2.py \
-            scripts/iios_market_validation_scorecard.py
+            scripts/iios_market_validation_scorecard.py \
+            scripts/activate_batch9g_market_validation.py
 
       - name: Assert heartbeat and fill provenance
         run: |
@@ -83,3 +87,20 @@ jobs:
           grep -q 'paper_fill_count' "BACK END/backend/market_validation_scorecard.py"
           grep -q 'cadence_reliability_pct' "BACK END/backend/market_validation_scorecard.py"
           grep -q 'provider_error_count' "BACK END/backend/market_validation_scorecard.py"
+
+      - name: Assert safe Mac activation contract
+        run: |
+          grep -q 'BRANCH = "feature/batch9g-market-validation-superbatch"' scripts/activate_batch9g_market_validation.py
+          grep -q 'SCHEMA_VERSION = "batch9g-factory-telemetry-v2"' scripts/activate_batch9g_market_validation.py
+          grep -q 'LABEL = "com.iios.factory-telemetry"' scripts/activate_batch9g_market_validation.py
+          grep -q 'INTERVAL_SECONDS = 60' scripts/activate_batch9g_market_validation.py
+          grep -q 'HEARTBEAT_SECONDS = 300' scripts/activate_batch9g_market_validation.py
+          grep -q 'iios_factory_telemetry_exporter_v2.py' scripts/activate_batch9g_market_validation.py
+          grep -q 'batch9f-backup.plist' scripts/activate_batch9g_market_validation.py
+          grep -q 'Refusing activation: telemetry destination is not verified private' scripts/activate_batch9g_market_validation.py
+          grep -q 'live IIOS checkout changed' scripts/activate_batch9g_market_validation.py
+          grep -q 'LOCAL_LEDGER_READ_ONLY' scripts/activate_batch9g_market_validation.py
+          grep -q 'BATCH9G_MARKET_VALIDATION_TELEMETRY_LIVE' scripts/activate_batch9g_market_validation.py
+          grep -q 'Broker connected: FALSE' scripts/activate_batch9g_market_validation.py
+          grep -q 'Live execution: FALSE' scripts/activate_batch9g_market_validation.py
+          ! grep -Eq 'http\.server|uvicorn|FastAPI|listen\(|bind\(' scripts/activate_batch9g_market_validation.py
