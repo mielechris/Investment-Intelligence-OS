@@ -1,0 +1,137 @@
+name: IIOS Batch 9O Daily Factory Episode Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9o-daily-factory-episode
+  pull_request:
+    branches:
+      - feature/batch9n-interactive-case-theater
+
+jobs:
+  daily-factory-episode-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile Batch 9O
+        run: >-
+          python -m py_compile
+          scripts/iios_factory_browser_preview.py
+          scripts/iios_daily_factory_episode.py
+          scripts/iios_daily_factory_episode_publisher.py
+          scripts/test_iios_factory_browser_preview.py
+          scripts/test_batch9l_living_factory_contract.py
+          scripts/test_batch9m_character_story_contract.py
+          scripts/test_batch9n_interactive_case_theater_contract.py
+          scripts/test_batch9o_daily_factory_episode.py
+          scripts/activate_batch9k_live_factory_browser.py
+          scripts/activate_batch9l_living_factory.py
+          scripts/activate_batch9m_character_story_engine.py
+          scripts/activate_batch9n_interactive_case_theater.py
+          scripts/activate_batch9o_daily_factory_episode.py
+
+      - name: Run inherited factory learning regressions
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+          python "BACK END/backend/test_shadow_counterfactual.py"
+          python "BACK END/backend/test_outcome_labeling_memory.py"
+
+      - name: Run inherited 9K through 9N contracts
+        run: |
+          python scripts/test_iios_factory_browser_preview.py
+          python scripts/test_batch9l_living_factory_contract.py
+          python scripts/test_batch9m_character_story_contract.py
+          python scripts/test_batch9n_interactive_case_theater_contract.py
+
+      - name: Run 9O deterministic episode contract
+        run: python scripts/test_batch9o_daily_factory_episode.py
+
+      - name: Build Batch 9O browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert browser composition and final/draft semantics
+        run: |
+          grep -q 'DailyFactoryEpisode' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'LivingFactoryExperience' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'CharacterStoryEngine' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'InteractiveCaseTheater' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9O · DAILY FACTORY EPISODE' "FRONT END/src/DailyFactoryEpisode.tsx"
+          grep -q 'LIVE READ-ONLY DRAFT' "FRONT END/src/DailyFactoryEpisode.tsx"
+          grep -q 'PERSISTED END-OF-DAY ARTIFACT' "FRONT END/src/DailyFactoryEpisode.tsx"
+          grep -q '/daily_factory_episode.json' "FRONT END/src/DailyFactoryEpisode.tsx"
+          grep -q 'episode_session_id === draft.episode_session_id' "FRONT END/src/DailyFactoryEpisode.tsx"
+
+      - name: Assert exact 9J quality categories
+        run: |
+          grep -q 'PAPER_ENTRY_FAVORABLE' scripts/iios_daily_factory_episode.py
+          grep -q 'WATCH_VALIDATED_BY_UPSIDE' scripts/iios_daily_factory_episode.py
+          grep -q 'NO_TRADE_AVOIDED_DOWNSIDE' scripts/iios_daily_factory_episode.py
+          grep -q 'PAPER_ENTRY_ADVERSE' scripts/iios_daily_factory_episode.py
+          grep -q 'WATCH_FALSE_POSITIVE_OR_REVERSAL' scripts/iios_daily_factory_episode.py
+          grep -q 'NO_TRADE_FOREGONE_UPSIDE' scripts/iios_daily_factory_episode.py
+          grep -q 'FACTORY_MISS_WITH_UPSIDE' scripts/iios_daily_factory_episode.py
+
+      - name: Assert episode sources and story grounding
+        run: |
+          grep -q 'latest_market_validation.json' scripts/iios_daily_factory_episode.py
+          grep -q 'latest_shadow_counterfactual.json' scripts/iios_daily_factory_episode.py
+          grep -q 'outcome_learning.json' scripts/iios_daily_factory_episode.py
+          grep -q 'telemetry_dir / "latest.json"' scripts/iios_daily_factory_episode.py
+          grep -q '"basis"' scripts/iios_daily_factory_episode.py
+          grep -q 'PERSISTED_9G_9H_9I_9J_READ_ONLY' scripts/iios_daily_factory_episode.py
+          ! grep -Eq 'sqlite3|127\.0\.0\.1:8002|record_object|record_event|submit_paper_order|consume_authorization' scripts/iios_daily_factory_episode.py scripts/iios_daily_factory_episode_publisher.py
+
+      - name: Assert tomorrow focus stays advisory
+        run: |
+          grep -q 'HUMAN_REVIEW_ONLY' scripts/iios_daily_factory_episode.py
+          grep -q 'ADVISORY_ONLY' scripts/iios_daily_factory_episode.py
+          grep -q 'OPERATIONS_REVIEW_ONLY' scripts/iios_daily_factory_episode.py
+          grep -q 'NO_CHANGE' scripts/iios_daily_factory_episode.py
+          grep -q 'auto_apply_threshold_changes": False' scripts/iios_daily_factory_episode.py
+          grep -q 'agent_weight_change_authority": False' scripts/iios_daily_factory_episode.py
+
+      - name: Assert automated final worker is isolated
+        run: |
+          grep -q 'EPISODE_LABEL = "com.iios.daily-factory-episode"' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q 'EPISODE_INTERVAL_SECONDS = 1800' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q 'Episode final window: 16:45 America/New_York' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q 'daily_factory_episode.json' scripts/iios_daily_factory_episode_publisher.py
+          grep -q 'published' scripts/iios_daily_factory_episode_publisher.py
+          ! grep -Eq 'launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning' scripts/activate_batch9o_daily_factory_episode.py
+
+      - name: Assert isolated Mac 9O activation
+        run: |
+          grep -q 'BRANCH = "feature/batch9o-daily-factory-episode"' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q 'PREVIEW_PORT = 5176' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q 'protected_launch_agents_unchanged' scripts/activate_batch9o_daily_factory_episode.py
+          grep -q '"backend_write_permission": False' scripts/activate_batch9o_daily_factory_episode.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_daily_factory_episode.py \
+            scripts/iios_daily_factory_episode_publisher.py \
+            scripts/activate_batch9o_daily_factory_episode.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_daily_factory_episode.py \
+            scripts/iios_daily_factory_episode_publisher.py \
+            scripts/activate_batch9o_daily_factory_episode.py
+          ! grep -Eq '"backend_write_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_daily_factory_episode_publisher.py \
+            scripts/activate_batch9o_daily_factory_episode.py
