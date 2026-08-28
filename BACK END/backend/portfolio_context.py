@@ -281,3 +281,19 @@ def create_portfolio_snapshot(case_id: str, payload: dict[str, Any]):
         "paper_mode": True,
         "live_execution": False,
     }
+
+
+# Batch 10D installation point. portfolio_context is imported after monitoring_engine
+# and before open_evidence_watch installs Deep Watch. Installing here guarantees the
+# refresh order is: base monitoring -> paper-fund portfolio context -> evidence watch
+# -> Deep Watch. The options surface is read-only shadow observation during 10D.
+import monitoring_engine as _monitoring_engine
+from options_shadow_observation import router as _options_shadow_router
+from paper_fund_portfolio_context_bridge import (
+    install_paper_fund_portfolio_context_bridge as _install_paper_fund_bridge,
+    router as _paper_fund_bridge_router,
+)
+
+_install_paper_fund_bridge(_monitoring_engine)
+router.include_router(_paper_fund_bridge_router)
+router.include_router(_options_shadow_router)
