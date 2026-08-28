@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import "./DailyFactoryEpisode.css";
+import "./Batch9OTruthSeal.css";
 
-type Layer = { availability?: string; payload?: Record<string, unknown> | null };
+type JsonObject = Record<string, unknown>;
+type Layer = { availability?: string; payload?: JsonObject | null };
 type LivingSnapshot = {
   generated_at?: string;
   validation?: {
@@ -20,21 +22,22 @@ type LivingSnapshot = {
   };
 };
 
-type EpisodeRow = Record<string, unknown>;
+type EpisodeRow = JsonObject;
 type Episode = {
   schema_version?: string;
   generated_at?: string;
   episode_session_id?: string | null;
   status?: string;
   title?: string;
-  source_freshness?: Record<string, unknown>;
+  source_freshness?: JsonObject;
   scoreboard?: {
-    validation?: Record<string, unknown>;
-    paper?: Record<string, unknown>;
+    validation?: JsonObject;
+    paper?: JsonObject;
     best_call_count?: number;
     save_count?: number;
     dumb_call_count?: number;
     validation_miss_count?: number;
+    validation_miss_detail_count?: number;
     learning_outcome_count?: number;
   };
   best_calls?: EpisodeRow[];
@@ -42,10 +45,10 @@ type Episode = {
   dumb_calls?: EpisodeRow[];
   misses?: EpisodeRow[];
   learning_misses?: EpisodeRow[];
-  what_we_learned?: Record<string, unknown>;
+  what_we_learned?: JsonObject;
   tomorrow_focus?: EpisodeRow[];
   story?: Array<{ speaker?: string; line?: string; basis?: string }>;
-  safety?: Record<string, unknown>;
+  safety?: JsonObject;
 };
 
 const BEST = new Set(["PAPER_ENTRY_FAVORABLE", "WATCH_VALIDATED_BY_UPSIDE"]);
@@ -57,16 +60,17 @@ const DUMB = new Set([
 ]);
 const LEARNING_MISS = new Set(["FACTORY_MISS_WITH_UPSIDE"]);
 
-function record(value: unknown): Record<string, unknown> {
+function record(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? (value as JsonObject)
     : {};
 }
 
 function rows(value: unknown): EpisodeRow[] {
   return Array.isArray(value)
     ? value.filter(
-        (item): item is EpisodeRow => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+        (item): item is EpisodeRow =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
     : [];
 }
@@ -103,8 +107,7 @@ function sessionIdFromLiving(snapshot: LivingSnapshot): string | null {
   const scorecard = record(layers?.market_validation?.payload);
   const learning = record(layers?.outcome_learning?.payload);
   const input = record(scorecard.input);
-  const candidates = [scorecard.session_id, input.session_id, learning.latest_session_id];
-  for (const candidate of candidates) {
+  for (const candidate of [scorecard.session_id, input.session_id, learning.latest_session_id]) {
     const value = text(candidate, "");
     if (value) return value;
   }
@@ -119,6 +122,8 @@ function compactOutcome(row: EpisodeRow): EpisodeRow {
   return {
     ticker: text(row.ticker, "NO TICKER").toUpperCase(),
     case_id: row.case_id,
+    candidate_id: row.candidate_id,
+    opportunity_id: row.opportunity_id,
     session_id: row.session_id,
     decision_quality: row.decision_quality ?? row.decision_quality_label,
     market_outcome: row.market_outcome ?? row.market_outcome_label,
@@ -130,6 +135,26 @@ function compactOutcome(row: EpisodeRow): EpisodeRow {
     benchmark_source: row.benchmark_source,
     measured_at: row.measured_at,
   };
+}
+
+function aggregateMissCount(metrics: JsonObject, detailCount: number): number {
+  for (const key of [
+    "eventual_opportunity_miss_count",
+    "opportunity_miss_count",
+    "missed_opportunity_count",
+    "miss_count",
+  ]) {
+    const explicit = numberValue(metrics[key]);
+    if (explicit !== null) return Math.max(detailCount, Math.max(0, Math.round(explicit)));
+  }
+  const benchmark = numberValue(metrics.benchmark_opportunity_count ?? metrics.opportunity_count) ?? 0;
+  const detected =
+    numberValue(
+      metrics.eventual_detected_count ??
+        metrics.radar_detected_count ??
+        metrics.detected_count,
+    ) ?? 0;
+  return Math.max(detailCount, Math.max(0, Math.round(benchmark - detected)));
 }
 
 function buildDraft(snapshot: LivingSnapshot): Episode {
@@ -146,17 +171,21 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
     ? allOutcomes.filter((row) => text(row.session_id, "") === sessionId)
     : allOutcomes;
   const outcomes = matchingOutcomes.map(compactOutcome);
-  const best = outcomes.filter((row) => BEST.has(text(row.decision_quality, ""))).sort((a, b) => sortReturn(b) - sortReturn(a));
-  const saves = outcomes.filter((row) => SAVES.has(text(row.decision_quality, ""))).sort((a, b) => sortReturn(a) - sortReturn(b));
-  const dumb = outcomes.filter((row) => DUMB.has(text(row.decision_quality, ""))).sort((a, b) => Math.abs(sortReturn(b)) - Math.abs(sortReturn(a)));
-  const learningMisses = outcomes.filter((row) => LEARNING_MISS.has(text(row.decision_quality, ""))).sort((a, b) => sortReturn(b) - sortReturn(a));
+  const best = outcomes
+    .filter((row) => BEST.has(text(row.decision_quality, "")))
+    .sort((a, b) => sortReturn(b) - sortReturn(a));
+  const saves = outcomes
+    .filter((row) => SAVES.has(text(row.decision_quality, "")))
+    .sort((a, b) => sortReturn(a) - sortReturn(b));
+  const dumb = outcomes
+    .filter((row) => DUMB.has(text(row.decision_quality, "")))
+    .sort((a, b) => Math.abs(sortReturn(b)) - Math.abs(sortReturn(a)));
+  const learningMisses = outcomes
+    .filter((row) => LEARNING_MISS.has(text(row.decision_quality, "")))
+    .sort((a, b) => sortReturn(b) - sortReturn(a));
 
-  const opportunities = rows(scorecard.opportunities);
-  const misses = opportunities
-    .filter((row) => {
-      const detected = row.eventually_detected ?? row.detected;
-      return detected !== true;
-    })
+  const misses = rows(scorecard.opportunities)
+    .filter((row) => (row.eventually_detected ?? row.detected) !== true)
     .map((row) => ({
       ticker: text(row.ticker, "NO TICKER").toUpperCase(),
       opportunity_id: row.opportunity_id,
@@ -166,13 +195,28 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
       miss_reason: row.miss_reason ?? "NOT_DETECTED_IN_VALIDATION_WINDOW",
       case_id: row.case_id,
     }))
-    .sort((a, b) => Math.abs(numberValue(b.move_pct) ?? 0) - Math.abs(numberValue(a.move_pct) ?? 0));
+    .sort(
+      (a, b) =>
+        Math.abs(numberValue(b.move_pct) ?? 0) -
+        Math.abs(numberValue(a.move_pct) ?? 0),
+    );
 
   const benchmarkCount = numberValue(metrics.benchmark_opportunity_count ?? metrics.opportunity_count) ?? 0;
-  const detectedCount = numberValue(metrics.eventual_detected_count ?? metrics.radar_detected_count ?? metrics.detected_count) ?? 0;
-  const promotedCount = numberValue(metrics.eventual_promotion_count ?? metrics.promotion_count ?? metrics.promoted_count) ?? 0;
+  const detectedCount =
+    numberValue(
+      metrics.eventual_detected_count ??
+        metrics.radar_detected_count ??
+        metrics.detected_count,
+    ) ?? 0;
+  const promotedCount =
+    numberValue(
+      metrics.eventual_promotion_count ??
+        metrics.promotion_count ??
+        metrics.promoted_count,
+    ) ?? 0;
   const detectionRate = metrics.eventual_detection_rate_pct ?? metrics.detection_rate_pct;
   const missRate = metrics.eventual_opportunity_miss_rate_pct ?? metrics.opportunity_miss_rate_pct;
+  const aggregateMiss = aggregateMissCount(metrics, misses.length);
 
   const qualityCounts: Record<string, number> = {};
   for (const row of outcomes) {
@@ -181,10 +225,10 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
   }
 
   const focus: EpisodeRow[] = [];
-  if (misses.length) {
+  if (aggregateMiss > 0) {
     focus.push({
       priority: "RADAR_MISS_REVIEW",
-      why: `${misses.length} persisted validation miss(es) are visible; miss rate ${percent(missRate)}.`,
+      why: `9H reports ${aggregateMiss} aggregate validation miss(es), with ${misses.length} detailed miss row(s) exposed; miss rate ${percent(missRate)}.`,
       action: "REVIEW_MISSES_BEFORE_ANY_THRESHOLD_CHANGE",
       authority: "HUMAN_REVIEW_ONLY",
     });
@@ -198,19 +242,10 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
       authority: "ADVISORY_ONLY",
     });
   }
-  const providers = record(telemetry.providers);
-  if ((numberValue(providers.provider_error_count) ?? 0) > 0) {
-    focus.push({
-      priority: "PROVIDER_RELIABILITY",
-      why: `9G reports ${text(providers.provider_error_count)} provider error(s).`,
-      action: "REVIEW_PROVIDER_ERRORS",
-      authority: "OPERATIONS_REVIEW_ONLY",
-    });
-  }
   if (!focus.length) {
     focus.push({
       priority: "HOLD_GOVERNED_BASELINE",
-      why: "No persisted miss, provider or shadow condition currently demands a change.",
+      why: "No persisted miss or shadow condition currently demands a change.",
       action: "KEEP_CURRENT_GOVERNED_CONFIGURATION",
       authority: "NO_CHANGE",
     });
@@ -219,8 +254,8 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
   const story: Episode["story"] = [
     {
       speaker: "MAX",
-      line: `Live draft: ${benchmarkCount} benchmark opportunities, ${detectedCount} detected, ${misses.length} still in the 'we should have seen that' pile.`,
-      basis: "Current persisted 9H validation metrics and miss rows.",
+      line: `Factory close: ${benchmarkCount} benchmark opportunities, ${detectedCount} detected, ${aggregateMiss} missed by the aggregate 9H metric. Detailed miss records exposed: ${misses.length}.`,
+      basis: "Current persisted 9H aggregate validation metrics plus any detailed miss rows exposed by the scorecard.",
     },
   ];
   if (best[0]) {
@@ -272,12 +307,14 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
         promoted_count: promotedCount,
         detection_rate_pct: detectionRate,
         opportunity_miss_rate_pct: missRate,
+        aggregate_miss_count: aggregateMiss,
       },
       paper,
       best_call_count: best.length,
       save_count: saves.length,
       dumb_call_count: dumb.length,
-      validation_miss_count: misses.length,
+      validation_miss_count: aggregateMiss,
+      validation_miss_detail_count: misses.length,
       learning_outcome_count: outcomes.length,
     },
     best_calls: best,
@@ -318,7 +355,15 @@ async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function EpisodeMetric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function EpisodeMetric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+}) {
   return (
     <div className="dfe-metric">
       <span>{label}</span>
@@ -328,7 +373,19 @@ function EpisodeMetric({ label, value, detail }: { label: string; value: string;
   );
 }
 
-function OutcomeList({ title, subtitle, rows: list, empty }: { title: string; subtitle: string; rows: EpisodeRow[]; empty: string }) {
+function OutcomeList({
+  title,
+  subtitle,
+  rows: list,
+  empty,
+  count,
+}: {
+  title: string;
+  subtitle: string;
+  rows: EpisodeRow[];
+  empty: string;
+  count?: number;
+}) {
   return (
     <article className="dfe-list-card">
       <header>
@@ -336,20 +393,58 @@ function OutcomeList({ title, subtitle, rows: list, empty }: { title: string; su
           <span>{subtitle}</span>
           <h4>{title}</h4>
         </div>
-        <strong>{list.length}</strong>
+        <strong>{count ?? list.length}</strong>
       </header>
       <div className="dfe-rows">
         {list.slice(0, 6).map((row, index) => (
           <div key={`${text(row.ticker)}:${text(row.case_id, String(index))}`}>
             <strong>{text(row.ticker, "NO TICKER")}</strong>
             <span>{text(row.decision_quality, text(row.miss_reason, "PERSISTED"))}</span>
-            <em>{row.forward_return_pct !== undefined ? percent(row.forward_return_pct) : percent(row.move_pct)}</em>
+            <em>
+              {row.forward_return_pct !== undefined
+                ? percent(row.forward_return_pct)
+                : percent(row.move_pct)}
+            </em>
           </div>
         ))}
         {!list.length ? <p>{empty}</p> : null}
       </div>
     </article>
   );
+}
+
+function normalizedMissCount(episode: Episode): number {
+  const validation = record(episode.scoreboard?.validation);
+  const detail = episode.misses?.length ?? 0;
+  const reported = episode.scoreboard?.validation_miss_count ?? 0;
+  const metricAggregate = numberValue(validation.aggregate_miss_count);
+  const benchmark = numberValue(validation.benchmark_opportunity_count) ?? 0;
+  const detected = numberValue(validation.detected_count) ?? 0;
+  return Math.max(
+    detail,
+    reported,
+    metricAggregate ?? 0,
+    Math.max(0, Math.round(benchmark - detected)),
+  );
+}
+
+function normalizeStory(episode: Episode): Episode["story"] {
+  const validation = record(episode.scoreboard?.validation);
+  const benchmark = numberValue(validation.benchmark_opportunity_count) ?? 0;
+  const detected = numberValue(validation.detected_count) ?? 0;
+  const aggregate = normalizedMissCount(episode);
+  const detail = episode.misses?.length ?? 0;
+  const rest = (episode.story ?? []).filter(
+    (line, index) => !(index === 0 && text(line.speaker, "").toUpperCase() === "MAX"),
+  );
+  return [
+    {
+      speaker: "MAX",
+      line: `Factory close: ${benchmark} benchmark opportunities, ${detected} detected, ${aggregate} missed by the aggregate 9H metric. Detailed miss records exposed: ${detail}.`,
+      basis: "9H persisted aggregate validation metrics plus any detailed miss rows exposed by the scorecard.",
+    },
+    ...rest,
+  ];
 }
 
 export default function DailyFactoryEpisode() {
@@ -359,15 +454,21 @@ export default function DailyFactoryEpisode() {
 
   useEffect(() => {
     let disposed = false;
+    let timer: number | null = null;
     let controller: AbortController | null = null;
     const refresh = async () => {
-      controller?.abort();
       controller = new AbortController();
       try {
-        const nextLiving = await fetchJson<LivingSnapshot>("/living/overview", controller.signal);
+        const nextLiving = await fetchJson<LivingSnapshot>(
+          "/living/overview",
+          controller.signal,
+        );
         let nextPersisted: Episode | null = null;
         try {
-          nextPersisted = await fetchJson<Episode>(`/daily_factory_episode.json?ts=${Date.now()}`, controller.signal);
+          nextPersisted = await fetchJson<Episode>(
+            `/daily_factory_episode.json?ts=${Date.now()}`,
+            controller.signal,
+          );
         } catch {
           nextPersisted = null;
         }
@@ -376,16 +477,26 @@ export default function DailyFactoryEpisode() {
         setPersisted(nextPersisted);
         setError(null);
       } catch (reason) {
-        if (disposed || (reason instanceof DOMException && reason.name === "AbortError")) return;
-        setError(reason instanceof Error ? reason.message : "Daily episode source unavailable");
+        if (
+          disposed ||
+          (reason instanceof DOMException && reason.name === "AbortError")
+        ) {
+          return;
+        }
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Daily episode source unavailable",
+        );
+      } finally {
+        if (!disposed) timer = window.setTimeout(() => void refresh(), 15_000);
       }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 15_000);
     return () => {
       disposed = true;
       controller?.abort();
-      window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, []);
 
@@ -395,9 +506,11 @@ export default function DailyFactoryEpisode() {
     const persistedStatus = text(persisted?.status, "");
     const sameSession = Boolean(
       persisted?.episode_session_id &&
-      persisted.episode_session_id === draft.episode_session_id,
+        persisted.episode_session_id === draft.episode_session_id,
     );
-    if (persisted && sameSession && persistedStatus.startsWith("FINAL")) return persisted;
+    if (persisted && sameSession && persistedStatus.startsWith("FINAL")) {
+      return persisted;
+    }
     return draft;
   }, [draft, persisted]);
 
@@ -405,8 +518,15 @@ export default function DailyFactoryEpisode() {
     return (
       <section className="dfe-shell dfe-waiting">
         <span>BATCH 9O · DAILY FACTORY EPISODE</span>
-        <h2>{error ? "EPISODE SOURCE WARM-UP" : "ASSEMBLING TODAY'S PERSISTED FACTORY STORY"}</h2>
-        <p>{error ?? "No episode claim is rendered until 9G/9H/9I/9J state exists."}</p>
+        <h2>
+          {error
+            ? "EPISODE SOURCE WARM-UP"
+            : "ASSEMBLING TODAY'S PERSISTED FACTORY STORY"}
+        </h2>
+        <p>
+          {error ??
+            "No episode claim is rendered until 9G/9H/9I/9J state exists."}
+        </p>
       </section>
     );
   }
@@ -417,6 +537,9 @@ export default function DailyFactoryEpisode() {
   const qualityCounts = record(learned.decision_quality_counts);
   const final = text(episode.status).startsWith("FINAL");
   const sourceFreshness = record(episode.source_freshness);
+  const missCount = normalizedMissCount(episode);
+  const missDetailCount = episode.misses?.length ?? 0;
+  const story = normalizeStory(episode);
 
   return (
     <section className="dfe-shell">
@@ -425,29 +548,58 @@ export default function DailyFactoryEpisode() {
           <span>BATCH 9O · DAILY FACTORY EPISODE</span>
           <h2>{episode.title ?? "IIOS Daily Factory Episode"}</h2>
           <p>
-            Best calls, saves, misses, dumb calls, governed paper performance, what the factory learned, and tomorrow's focus — all derived from persisted IIOS evidence.
+            Best calls, saves, misses, dumb calls, governed paper performance,
+            what the factory learned, and tomorrow's focus — all derived from
+            persisted IIOS evidence.
           </p>
         </div>
         <div className={`dfe-status ${final ? "is-final" : "is-draft"}`}>
           <strong>{text(episode.status, "WARM-UP").replaceAll("_", " ")}</strong>
-          <span>{final ? "PERSISTED END-OF-DAY ARTIFACT" : "LIVE READ-ONLY DRAFT"}</span>
+          <span>
+            {final ? "PERSISTED END-OF-DAY ARTIFACT" : "LIVE READ-ONLY DRAFT"}
+          </span>
           <em>LIVE EXECUTION FALSE</em>
         </div>
       </div>
 
       <div className="dfe-contract">
         <span>SOURCES · 9G + 9H + 9I + 9J PERSISTED DATA</span>
-        <span>LEARNING SESSION MATCH · {text(sourceFreshness.learning_session_match, "FALSE")}</span>
+        <span>
+          LEARNING SESSION MATCH · {text(sourceFreshness.learning_session_match, "FALSE")}
+        </span>
         <span>REPORT ONLY · NO THRESHOLD / WEIGHT / CAPITAL AUTHORITY</span>
       </div>
 
       <div className="dfe-scoreboard">
-        <EpisodeMetric label="Benchmark opportunities" value={text(validation.benchmark_opportunity_count, "0")} />
-        <EpisodeMetric label="Detected" value={text(validation.detected_count, "0")} detail={percent(validation.detection_rate_pct)} />
-        <EpisodeMetric label="Validation misses" value={text(episode.scoreboard?.validation_miss_count, "0")} detail={percent(validation.opportunity_miss_rate_pct)} />
-        <EpisodeMetric label="Paper NAV" value={money(paper.nav)} detail={`P&L ${money(paper.total_pnl)}`} />
-        <EpisodeMetric label="Paper positions" value={text(paper.position_count, "0")} detail={`Drawdown ${percent(paper.current_drawdown_pct)}`} />
-        <EpisodeMetric label="9J outcomes" value={text(episode.scoreboard?.learning_outcome_count, "0")} detail={`${text(learned.mature_5d_count, "0")} mature 5d`} />
+        <EpisodeMetric
+          label="Benchmark opportunities"
+          value={text(validation.benchmark_opportunity_count, "0")}
+        />
+        <EpisodeMetric
+          label="Detected"
+          value={text(validation.detected_count, "0")}
+          detail={percent(validation.detection_rate_pct)}
+        />
+        <EpisodeMetric
+          label="Validation misses"
+          value={String(missCount)}
+          detail={`${percent(validation.opportunity_miss_rate_pct)} · ${missDetailCount} detailed`}
+        />
+        <EpisodeMetric
+          label="Paper NAV"
+          value={money(paper.nav)}
+          detail={`P&L ${money(paper.total_pnl)}`}
+        />
+        <EpisodeMetric
+          label="Paper positions"
+          value={text(paper.position_count, "0")}
+          detail={`Drawdown ${percent(paper.current_drawdown_pct)}`}
+        />
+        <EpisodeMetric
+          label="9J outcomes"
+          value={text(episode.scoreboard?.learning_outcome_count, "0")}
+          detail={`${text(learned.mature_5d_count, "0")} mature 5d`}
+        />
       </div>
 
       <div className="dfe-story">
@@ -459,22 +611,46 @@ export default function DailyFactoryEpisode() {
           <strong>{final ? "FINAL CUT" : "LIVE CUT"}</strong>
         </div>
         <div className="dfe-story-lines">
-          {(episode.story ?? []).map((line, index) => (
+          {(story ?? []).map((line, index) => (
             <div key={`${line.speaker ?? "FACTORY"}:${index}`}>
               <strong>{line.speaker ?? "FACTORY"}</strong>
               <p>“{line.line ?? "Persisted event available."}”</p>
               <small>{line.basis ?? "Persisted IIOS source."}</small>
             </div>
           ))}
-          {!episode.story?.length ? <p className="dfe-empty">WAITING — no evidence-backed story line can be rendered yet.</p> : null}
         </div>
       </div>
 
       <div className="dfe-four-grid">
-        <OutcomeList title="Best Calls" subtitle="9J FAVORABLE DECISIONS" rows={episode.best_calls ?? []} empty="No favorable persisted decision-quality label for this session yet." />
-        <OutcomeList title="Saves" subtitle="NO-TRADE DOWNSIDE AVOIDED" rows={episode.saves ?? []} empty="No persisted NO_TRADE_AVOIDED_DOWNSIDE save yet." />
-        <OutcomeList title="Dumb Calls" subtitle="ADVERSE / FOREGONE UPSIDE" rows={episode.dumb_calls ?? []} empty="No persisted adverse or foregone-upside label to put under glass." />
-        <OutcomeList title="Misses" subtitle="9H VALIDATION" rows={episode.misses ?? []} empty="No persisted validation miss in the current episode." />
+        <OutcomeList
+          title="Best Calls"
+          subtitle="9J FAVORABLE DECISIONS"
+          rows={episode.best_calls ?? []}
+          empty="No favorable persisted decision-quality label for this session yet."
+        />
+        <OutcomeList
+          title="Saves"
+          subtitle="NO-TRADE DOWNSIDE AVOIDED"
+          rows={episode.saves ?? []}
+          empty="No persisted NO_TRADE_AVOIDED_DOWNSIDE save yet."
+        />
+        <OutcomeList
+          title="Dumb Calls"
+          subtitle="ADVERSE / FOREGONE UPSIDE"
+          rows={episode.dumb_calls ?? []}
+          empty="No persisted adverse or foregone-upside label to put under glass."
+        />
+        <OutcomeList
+          title="Misses"
+          subtitle="9H VALIDATION"
+          rows={episode.misses ?? []}
+          count={missCount}
+          empty={
+            missCount > 0
+              ? `${missCount} aggregate miss(es) reported by 9H; detailed miss records are not exposed in the current scorecard.`
+              : "No persisted validation miss in the current episode."
+          }
+        />
       </div>
 
       <div className="dfe-bottom-grid">
@@ -493,10 +669,13 @@ export default function DailyFactoryEpisode() {
                 <strong>{text(count, "0")}</strong>
               </div>
             ))}
-            {!Object.keys(qualityCounts).length ? <p>WARM-UP — no current-session 9J quality labels.</p> : null}
+            {!Object.keys(qualityCounts).length ? (
+              <p>WARM-UP — no current-session 9J quality labels.</p>
+            ) : null}
           </div>
           <footer>
-            9I · {text(learned.shadow_status, "WARM-UP")} · {text(learned.shadow_complete_session_count, "0")} complete session(s)
+            9I · {text(learned.shadow_status, "WARM-UP")} ·{" "}
+            {text(learned.shadow_complete_session_count, "0")} complete session(s)
           </footer>
         </article>
 
@@ -513,7 +692,10 @@ export default function DailyFactoryEpisode() {
               <div key={`${text(row.priority)}:${index}`}>
                 <strong>{text(row.priority).replaceAll("_", " ")}</strong>
                 <p>{text(row.why, "Persisted evidence requires review.")}</p>
-                <span>{text(row.action, "HUMAN_REVIEW_ONLY")} · {text(row.authority, "ADVISORY_ONLY")}</span>
+                <span>
+                  {text(row.action, "HUMAN_REVIEW_ONLY")} ·{" "}
+                  {text(row.authority, "ADVISORY_ONLY")}
+                </span>
               </div>
             ))}
           </div>
@@ -528,7 +710,9 @@ export default function DailyFactoryEpisode() {
         <span>TRADE EXECUTION FALSE</span>
         <span>LIVE CAPITAL FALSE</span>
       </div>
-      {error ? <div className="dfe-warning">LATEST REFRESH WARNING · {error}</div> : null}
+      {error ? (
+        <div className="dfe-warning">LATEST REFRESH WARNING · {error}</div>
+      ) : null}
     </section>
   );
 }
