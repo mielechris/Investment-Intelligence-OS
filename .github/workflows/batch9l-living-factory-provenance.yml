@@ -68,6 +68,15 @@ jobs:
           grep -q '9I' "FRONT END/src/LivingFactoryExperience.tsx"
           grep -q '9J' "FRONT END/src/LivingFactoryExperience.tsx"
 
+      - name: Assert exact 9J lineage and prohibit ticker-only outcome joins
+        run: |
+          grep -q 'learningByCaseId' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'learningByCandidateId' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'No persisted 9J outcome matched this exact case or source candidate' "FRONT END/src/LivingFactoryExperience.tsx"
+          ! grep -q 'learningByTicker' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'latest_outcome_learning.json' scripts/iios_factory_browser_preview.py
+          grep -q 'CASE_AND_CANDIDATE_LINKED' scripts/iios_factory_browser_preview.py
+
       - name: Assert 9L sidecar is GET-only and has no direct ledger access
         run: |
           grep -q 'DEFAULT_HOST = "127.0.0.1"' scripts/iios_factory_browser_preview.py
