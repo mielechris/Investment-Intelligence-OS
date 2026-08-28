@@ -27,7 +27,7 @@ def _route_rows(router):
 
 
 class Batch10DMonitorWiringTests(unittest.TestCase):
-    def test_monitor_chain_mounts_deep_watch_closed_loop_and_visibility(self):
+    def test_monitor_chain_mounts_deep_watch_closed_loop_visibility_and_heartbeat(self):
         primary = Mock()
         primary._lane_status = lambda case_id, lane, records: {"facts": [], "note": ""}
 
@@ -38,13 +38,18 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
 
         install_open_evidence_watch(primary, monitoring)
 
-        paths = {path for path, _ in _route_rows(monitoring.router)}
+        rows = _route_rows(monitoring.router)
+        paths = {path for path, _ in rows}
 
         self.assertIn("/deep-watch/{case_id}/status", paths)
         self.assertIn("/deep-watch/{case_id}/run", paths)
         self.assertIn("/closed-loop/{case_id}/status", paths)
         self.assertIn("/closed-loop/overview", paths)
         self.assertIn("/operations-visibility/overview", paths)
+        self.assertIn("/observation-heartbeat/checkpoint", paths)
+
+        heartbeat_methods = dict(rows)["/observation-heartbeat/checkpoint"]
+        self.assertEqual(heartbeat_methods, {"POST"})
 
         self.assertNotIn("/portfolio-context/{case_id}/paper-fund", paths)
         self.assertNotIn("/options-shadow/plan", paths)
