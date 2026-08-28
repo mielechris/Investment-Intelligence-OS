@@ -1,0 +1,61 @@
+.lfb-shell {
+  min-height: 100vh;
+  background: #080b10;
+}
+
+.lfb-preview-banner {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  background: rgba(7, 10, 15, .94);
+  backdrop-filter: blur(16px);
+  color: #d8dee8;
+}
+
+.lfb-preview-banner > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lfb-preview-banner span {
+  color: #7f8ca0;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .12em;
+}
+
+.lfb-preview-banner strong {
+  font-size: 11px;
+}
+
+.lfb-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  border-top: 1px solid rgba(255,255,255,.05);
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  background: #06080c;
+  color: #738198;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .18em;
+}
+
+@media (max-width: 760px) {
+  .lfb-preview-banner {
+    position: static;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .lfb-preview-banner > div {
+    flex-wrap: wrap;
+  }
+}
