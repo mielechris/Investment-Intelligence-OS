@@ -1,0 +1,110 @@
+name: IIOS Batch 9L Living Factory + Provenance Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-living-factory-provenance
+  pull_request:
+    branches:
+      - feature/batch9k-live-factory-browser
+
+jobs:
+  living-factory-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile Batch 9L
+        run: >-
+          python -m py_compile
+          scripts/iios_factory_browser_preview.py
+          scripts/test_iios_factory_browser_preview.py
+          scripts/test_batch9l_living_factory_contract.py
+          scripts/activate_batch9k_live_factory_browser.py
+          scripts/activate_batch9l_living_factory.py
+
+      - name: Run Batch 9J regression contracts
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+          python "BACK END/backend/test_shadow_counterfactual.py"
+          python "BACK END/backend/test_outcome_labeling_memory.py"
+
+      - name: Run inherited 9K bridge contract
+        run: python scripts/test_iios_factory_browser_preview.py
+
+      - name: Run 9L living factory contract
+        run: python scripts/test_batch9l_living_factory_contract.py
+
+      - name: Build Batch 9L browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert living browser composition
+        run: |
+          grep -q 'LivingFactoryExperience' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9L · LIVING FACTORY / PROVENANCE' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'FactoryIntelligenceUI' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'MarketValidationStackPanel' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'MAX' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'JESSE DISLOCATION' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q '9E RADAR' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'MANUAL / OTHER' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'NO SYNTHETIC MOVEMENT' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q '9G' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q '9H' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q '9I' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q '9J' "FRONT END/src/LivingFactoryExperience.tsx"
+
+      - name: Assert 9L sidecar is GET-only and has no direct ledger access
+        run: |
+          grep -q 'DEFAULT_HOST = "127.0.0.1"' scripts/iios_factory_browser_preview.py
+          grep -q 'DEFAULT_BACKEND = "http://127.0.0.1:8002"' scripts/iios_factory_browser_preview.py
+          grep -q 'READ_ONLY_GET_ONLY' scripts/iios_factory_browser_preview.py
+          grep -q 'backend_write_permission": False' scripts/iios_factory_browser_preview.py
+          grep -q 'direct_ledger_access": False' scripts/iios_factory_browser_preview.py
+          grep -q 'method="GET"' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'sqlite3|from ledger|import ledger|record_object|record_event|submit_paper_order|consume_authorization' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'method="(POST|PUT|PATCH|DELETE)"' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'IIOS-Telemetry|gho_|github_token|GITHUB_TOKEN' "FRONT END/src/LivingFactoryExperience.tsx" "FRONT END/src/LiveFactoryBrowser.tsx"
+
+      - name: Assert Jesse provenance remains governed context only
+        run: |
+          grep -q '/intelligence/dislocation/status' scripts/iios_factory_browser_preview.py
+          grep -q 'probability calibrated: FALSE' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'TRADE SIGNAL FALSE' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'PAPER ORDER PERMISSION FALSE' "FRONT END/src/LivingFactoryExperience.tsx"
+          grep -q 'BOTH means the ticker is independently present in persisted Jesse and 9E records' "FRONT END/src/LivingFactoryExperience.tsx"
+
+      - name: Assert isolated Mac 9L activation
+        run: |
+          grep -q 'BRANCH = "feature/batch9l-living-factory-provenance"' scripts/activate_batch9l_living_factory.py
+          grep -q 'PREVIEW_PORT = 5176' scripts/activate_batch9l_living_factory.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9l_living_factory.py
+          grep -q 'protected_launch_agents_unchanged' scripts/activate_batch9l_living_factory.py
+          grep -q 'backend_write_permission": False' scripts/activate_batch9l_living_factory.py
+          ! grep -Eq 'killall|pkill|launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning' scripts/activate_batch9l_living_factory.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9l_living_factory.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9l_living_factory.py
+          ! grep -Eq '"backend_write_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9l_living_factory.py
