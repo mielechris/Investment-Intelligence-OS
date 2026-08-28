@@ -8,7 +8,7 @@ from open_evidence_watch import install_open_evidence_watch
 
 
 class Batch10DMonitorWiringTests(unittest.TestCase):
-    def test_monitor_chain_mounts_portfolio_deep_watch_options_and_lineage(self):
+    def test_monitor_chain_mounts_deep_watch_and_closed_loop_lineage(self):
         primary = Mock()
         primary._lane_status = lambda case_id, lane, records: {"facts": [], "note": ""}
 
@@ -21,16 +21,14 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
 
         paths = {route.path.lower() for route in monitoring.router.routes}
 
-        self.assertIn("/portfolio-context/{case_id}/paper-fund", paths)
-        self.assertIn("/portfolio-context/{case_id}/sync-paper-fund", paths)
         self.assertIn("/deep-watch/{case_id}/status", paths)
         self.assertIn("/deep-watch/{case_id}/run", paths)
-        self.assertIn("/options-shadow/plan", paths)
-        self.assertIn("/options-shadow/{case_id}/status", paths)
         self.assertIn("/closed-loop/{case_id}/status", paths)
         self.assertIn("/closed-loop/overview", paths)
 
-        self.assertTrue(getattr(monitoring, "_paper_fund_portfolio_context_installed", False))
+        self.assertNotIn("/portfolio-context/{case_id}/paper-fund", paths)
+        self.assertNotIn("/options-shadow/plan", paths)
+
         self.assertFalse(
             any(
                 token in path
@@ -39,7 +37,7 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
             )
         )
 
-    def test_read_only_10d_surfaces_have_no_execution_methods(self):
+    def test_closed_loop_surface_is_read_only(self):
         primary = Mock()
         primary._lane_status = lambda case_id, lane, records: {"facts": [], "note": ""}
 
@@ -54,7 +52,7 @@ class Batch10DMonitorWiringTests(unittest.TestCase):
         for route in monitoring.router.routes:
             path = route.path.lower()
             methods = {method.upper() for method in (route.methods or set())}
-            if "options-shadow" in path or "closed-loop" in path:
+            if "closed-loop" in path:
                 self.assertEqual(methods, {"GET"})
 
 
