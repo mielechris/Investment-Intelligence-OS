@@ -1,0 +1,127 @@
+name: IIOS Batch 9M Character & Story Engine Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9m-character-story-engine
+  pull_request:
+    branches:
+      - feature/batch9l-living-factory-provenance
+
+jobs:
+  character-story-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile Batch 9M
+        run: >-
+          python -m py_compile
+          scripts/iios_factory_browser_preview.py
+          scripts/test_iios_factory_browser_preview.py
+          scripts/test_batch9l_living_factory_contract.py
+          scripts/test_batch9m_character_story_contract.py
+          scripts/activate_batch9k_live_factory_browser.py
+          scripts/activate_batch9l_living_factory.py
+          scripts/activate_batch9m_character_story_engine.py
+
+      - name: Run inherited factory learning regressions
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+          python "BACK END/backend/test_shadow_counterfactual.py"
+          python "BACK END/backend/test_outcome_labeling_memory.py"
+
+      - name: Run inherited 9K and 9L contracts
+        run: |
+          python scripts/test_iios_factory_browser_preview.py
+          python scripts/test_batch9l_living_factory_contract.py
+
+      - name: Run 9M story grounding contract
+        run: python scripts/test_batch9m_character_story_contract.py
+
+      - name: Build Batch 9M browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert story engine browser composition
+        run: |
+          grep -q 'CharacterStoryEngine' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'LivingFactoryExperience' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9M · CHARACTER & STORY ENGINE' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'PERSISTED EVENTS ONLY' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'NO EVENT → NO DIALOGUE' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'NARRATIVE RENDERING ONLY' "FRONT END/src/CharacterStoryEngine.tsx"
+
+      - name: Assert persistent cast and adult voice
+        run: |
+          grep -q 'name: "MAX"' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Policy Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Macro & Rates Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Fundamentals Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Market Structure Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Commodities & Supply Chain Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Geopolitics & Weather Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Skeptic / Red Team' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Portfolio Context Analyst' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'Cute thesis. Now tell me how it dies.' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'No backdoor bullshit' "FRONT END/src/CharacterStoryEngine.tsx"
+
+      - name: Assert every 9G meaningful event has story handling
+        run: |
+          grep -q 'OPPORTUNITY_PROMOTED_TO_CASE' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'COMMITTEE_COMPLETE' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'RISK_COMPLETE' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'GOVERNED_PAPER_ORDER_CREATED' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'AUTO_MONITOR_FAILED' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'OPPORTUNITY_AUTOMATION_CYCLE_FAILED' "FRONT END/src/CharacterStoryEngine.tsx"
+          grep -q 'HIGH_SPEED_MARKET_RADAR_COMPLETE' "FRONT END/src/CharacterStoryEngine.tsx"
+
+      - name: Assert story component is read-only and same-origin
+        run: |
+          grep -q 'fetch("/living/overview"' "FRONT END/src/CharacterStoryEngine.tsx"
+          ! grep -Eq '127\.0\.0\.1:8002|sqlite3' "FRONT END/src/CharacterStoryEngine.tsx"
+          ! grep -Eq 'method:[[:space:]].*(POST|PUT|PATCH|DELETE)' "FRONT END/src/CharacterStoryEngine.tsx"
+          ! grep -Eq 'record_object|record_event|submit_paper_order|consume_authorization' "FRONT END/src/CharacterStoryEngine.tsx"
+
+      - name: Assert 9L sidecar safety remains intact
+        run: |
+          grep -q 'DEFAULT_HOST = "127.0.0.1"' scripts/iios_factory_browser_preview.py
+          grep -q 'READ_ONLY_GET_ONLY' scripts/iios_factory_browser_preview.py
+          grep -q 'backend_write_permission": False' scripts/iios_factory_browser_preview.py
+          grep -q 'direct_ledger_access": False' scripts/iios_factory_browser_preview.py
+          grep -q 'method="GET"' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'method="(POST|PUT|PATCH|DELETE)"' scripts/iios_factory_browser_preview.py
+
+      - name: Assert isolated Mac 9M activation
+        run: |
+          grep -q 'BRANCH = "feature/batch9m-character-story-engine"' scripts/activate_batch9m_character_story_engine.py
+          grep -q 'PREVIEW_PORT = 5176' scripts/activate_batch9m_character_story_engine.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9m_character_story_engine.py
+          grep -q 'protected_launch_agents_unchanged' scripts/activate_batch9m_character_story_engine.py
+          grep -q 'narrative_write_authority": False' scripts/activate_batch9m_character_story_engine.py
+          ! grep -Eq 'killall|pkill|launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning' scripts/activate_batch9m_character_story_engine.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9m_character_story_engine.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9m_character_story_engine.py
+          ! grep -Eq '"backend_write_permission"[[:space:]]*:[[:space:]]*True' \
+            scripts/iios_factory_browser_preview.py \
+            scripts/activate_batch9m_character_story_engine.py

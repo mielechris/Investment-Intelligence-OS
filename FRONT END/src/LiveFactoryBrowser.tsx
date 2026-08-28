@@ -1,22 +1,28 @@
+import CharacterStoryEngine from "./CharacterStoryEngine";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
 import LivingFactoryExperience from "./LivingFactoryExperience";
 import MarketValidationStackPanel from "./MarketValidationStackPanel";
 import "./LiveFactoryBrowser.css";
+import "./Batch9MVisualSeal.css";
 
 export default function LiveFactoryBrowser() {
   return (
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9L · LIVING FACTORY / PROVENANCE</span>
-          <strong>Event-driven characters · traceable signal lineage · 9G/9H/9I/9J inside the floor</strong>
+          <span>BATCH 9M · CHARACTER & STORY ENGINE</span>
+          <strong>Persistent personalities · event-bound debate · dark/adult factory commentary</strong>
         </div>
         <div>
-          <span>BACKEND 8002 UNCHANGED · GET-ONLY SIDECAR</span>
+          <span>9L PROVENANCE PRESERVED · BACKEND 8002 UNCHANGED</span>
           <strong>LIVE EXECUTION FALSE</strong>
         </div>
       </div>
       <LivingFactoryExperience />
+      <div className="lfb-divider">
+        <span>9M CHARACTER & STORY ENGINE · PERSISTED EVENTS ONLY</span>
+      </div>
+      <CharacterStoryEngine />
       <div className="lfb-divider">
         <span>9K VALIDATION STACK · PRESERVED</span>
       </div>
