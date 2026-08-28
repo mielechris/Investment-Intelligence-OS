@@ -1,3 +1,4 @@
+import AgentPerformanceLeague from "./AgentPerformanceLeague";
 import CharacterStoryEngine from "./CharacterStoryEngine";
 import ChiefIntelligenceOffice from "./ChiefIntelligenceOffice";
 import DailyFactoryEpisode from "./DailyFactoryEpisode";
@@ -15,11 +16,11 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9R · DATA EXPANSION FACTORY</span>
-          <strong>Measured gaps → source research → shadow validation → human approval</strong>
+          <span>BATCH 9S · AGENT PERFORMANCE LEAGUE</span>
+          <strong>Outcome alignment · calibration evidence · no automatic reweighting</strong>
         </div>
         <div>
-          <span>9Q EXPERIMENT LAB PRESERVED · BACKEND 8002 UNCHANGED</span>
+          <span>9R DATA EXPANSION FACTORY PRESERVED · BACKEND 8002 UNCHANGED</span>
           <strong>LIVE EXECUTION FALSE</strong>
         </div>
       </div>
@@ -36,6 +37,8 @@ export default function LiveFactoryBrowser() {
       <ExperimentABLaboratory />
       <div className="lfb-divider"><span>9R DATA EXPANSION FACTORY · RESEARCH + SHADOW ONLY</span></div>
       <DataExpansionFactory />
+      <div className="lfb-divider"><span>9S AGENT PERFORMANCE LEAGUE · SCOREBOARD ONLY</span></div>
+      <AgentPerformanceLeague />
       <div className="lfb-divider"><span>9K VALIDATION STACK · PRESERVED</span></div>
       <MarketValidationStackPanel />
       <div className="lfb-divider"><span>EXISTING FACTORY INTELLIGENCE UI · PRESERVED</span></div>
