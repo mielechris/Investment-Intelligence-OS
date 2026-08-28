@@ -50,12 +50,21 @@ jobs:
           grep -q 'AgentPerformanceLeague' "FRONT END/src/LiveFactoryBrowser.tsx"
           grep -q 'BATCH 9S · AGENT PERFORMANCE LEAGUE' "FRONT END/src/AgentPerformanceLeague.tsx"
           grep -q 'latest_outcome_learning.json' scripts/iios_agent_performance_league.py
+          grep -q 'latest_market_validation.json' scripts/iios_agent_performance_league.py
           grep -q 'recent_promotions' scripts/iios_agent_performance_league.py
           grep -q 'OFFICIAL SAMPLE GATE · 20 DECISIVE OUTCOMES PER DESK' "FRONT END/src/AgentPerformanceLeague.tsx"
 
+      - name: Assert aggregate factory misses are separate from agent attribution
+        run: |
+          grep -q 'aggregate_factory_miss_count' scripts/iios_agent_performance_league.py
+          grep -q 'agent_attributed_factory_miss_count' scripts/iios_agent_performance_league.py
+          grep -q 'outcome_unattributed_factory_miss_count' scripts/iios_agent_performance_league.py
+          grep -q 'AGGREGATE 9H MISSES' "FRONT END/src/AgentPerformanceLeague.tsx"
+          grep -q 'AGENT-ATTRIBUTED MISSES' "FRONT END/src/AgentPerformanceLeague.tsx"
+          grep -q 'UNATTRIBUTED_TO_AGENTS' scripts/iios_agent_performance_league.py
+
       - name: Assert miss attribution and no fake model rankings
         run: |
-          grep -q 'UNATTRIBUTED_TO_AGENTS' scripts/iios_agent_performance_league.py
           grep -q 'UNRANKED_MEASUREMENT_GAP' scripts/iios_agent_performance_league.py
           grep -q 'per-agent research latency' scripts/iios_agent_performance_league.py
           grep -q 'Committee marginal influence' scripts/iios_agent_performance_league.py
