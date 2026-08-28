@@ -576,7 +576,7 @@ function buildOpportunities(snapshot: LivingSnapshot): Opportunity[] {
     append(
       caseRow.case_id,
       ticker,
-      caseRow.topic ?? ticker || caseRow.case_id,
+      caseRow.topic ?? (ticker || caseRow.case_id),
       caseRow.case_id,
       null,
       jesseByTicker.get(ticker) ?? null,
