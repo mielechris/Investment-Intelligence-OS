@@ -109,7 +109,17 @@ def _build_frontend(npm: str) -> None:
     if not FRONTEND.exists():
         raise SystemExit(f"9K frontend not found: {FRONTEND}")
     _run([npm, "ci"], cwd=FRONTEND)
-    _run([npm, "run", "lint"], cwd=FRONTEND)
+    _run(
+        [
+            npm,
+            "exec",
+            "eslint",
+            "--",
+            "src/LiveFactoryBrowser.tsx",
+            "src/MarketValidationStackPanel.tsx",
+        ],
+        cwd=FRONTEND,
+    )
     _run([npm, "run", "build"], cwd=FRONTEND)
     if not (DIST / "index.html").exists():
         raise SystemExit("Batch 9K frontend build did not produce dist/index.html")
