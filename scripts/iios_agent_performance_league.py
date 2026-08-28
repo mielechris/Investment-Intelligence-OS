@@ -61,6 +61,30 @@ def _rows(value: Any) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def _validation_miss_summary(scorecard: dict[str, Any]) -> dict[str, Any]:
+    metrics = scorecard.get("metrics") if isinstance(scorecard.get("metrics"), dict) else {}
+    benchmark = _int(metrics.get("benchmark_opportunity_count", metrics.get("opportunity_count")))
+    detected = _int(
+        metrics.get(
+            "eventual_detected_count",
+            metrics.get("radar_detected_count", metrics.get("detected_count")),
+        )
+    )
+    aggregate_misses = max(0, benchmark - detected)
+    miss_rate = _float(
+        metrics.get(
+            "eventual_opportunity_miss_rate_pct",
+            metrics.get("opportunity_miss_rate_pct"),
+        )
+    )
+    return {
+        "benchmark_opportunity_count": benchmark,
+        "detected_count": detected,
+        "aggregate_factory_miss_count": aggregate_misses,
+        "opportunity_miss_rate_pct": miss_rate,
+    }
+
+
 def _recent_participation(telemetry: dict[str, Any]) -> Counter[str]:
     counts: Counter[str] = Counter()
     for promotion in _rows(telemetry.get("recent_promotions")):
@@ -100,7 +124,13 @@ def _agent_case_stats(learning: dict[str, Any]) -> dict[str, dict[str, int]]:
     return {key: dict(value) for key, value in stats.items()}
 
 
-def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generated_at: datetime | None = None) -> dict[str, Any]:
+def build_league(
+    *,
+    learning: dict[str, Any],
+    telemetry: dict[str, Any],
+    scorecard: dict[str, Any] | None = None,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
     scorecards = {
         str(row.get("agent_key") or ""): row
         for row in _rows(learning.get("agent_scorecards"))
@@ -108,6 +138,7 @@ def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generat
     }
     participation = _recent_participation(telemetry)
     case_stats = _agent_case_stats(learning)
+    validation = _validation_miss_summary(scorecard or {})
     standings: list[dict[str, Any]] = []
 
     for key, name in AGENTS:
@@ -150,11 +181,20 @@ def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generat
     for index, row in enumerate(standings, start=1):
         row["display_rank"] = index if row["status"] != "WARM_UP" else None
 
-    factory_misses = [
-        row for row in _rows(learning.get("recent_outcomes"))
+    outcome_factory_misses = [
+        row
+        for row in _rows(learning.get("recent_outcomes"))
         if str(row.get("decision_quality") or "").startswith("FACTORY_MISS")
     ]
-    unattributed_misses = sum(1 for row in factory_misses if not row.get("case_id"))
+    outcome_unattributed_misses = sum(
+        1 for row in outcome_factory_misses if not row.get("case_id")
+    )
+    outcome_agent_attributed_misses = sum(
+        1
+        for row in outcome_factory_misses
+        if row.get("case_id") and _rows(row.get("agents"))
+    )
+    aggregate_factory_misses = _int(validation.get("aggregate_factory_miss_count"))
 
     model_league = [
         {
@@ -175,6 +215,7 @@ def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generat
             "9J aligned vs misaligned outcome rate",
             "average persisted agent confidence",
             "recent 9G case participation",
+            "9H aggregate benchmark miss count",
             "aligned downside-avoidance and adverse-call attribution when exact agent lineage exists",
         ],
         "measurement_gaps": [
@@ -186,7 +227,8 @@ def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generat
             "market-regime-specific performance",
             "Grok/Gemini/OpenAI/Kimi task-level accuracy, latency and cost under one persisted rubric",
         ],
-        "miss_attribution_rule": "A factory miss with no governed case/agent lineage is UNATTRIBUTED_TO_AGENTS and cannot reduce an agent score.",
+        "miss_attribution_rule": "9H aggregate factory misses are UNATTRIBUTED_TO_AGENTS unless exact governed case plus agent plus outcome lineage exists. A factory miss with no such lineage cannot reduce an agent score.",
+        "miss_count_semantics": "Aggregate 9H misses describe factory detection performance. Agent-attributed misses require exact 9J case/agent/outcome lineage and are reported separately.",
     }
 
     official_count = sum(1 for row in standings if row["status"] == "OFFICIAL")
@@ -203,7 +245,11 @@ def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generat
             "warm_up_count": len(standings) - official_count - provisional_count,
             "model_count": len(model_league),
             "ranked_model_count": 0,
-            "unattributed_factory_miss_count": unattributed_misses,
+            "aggregate_factory_miss_count": aggregate_factory_misses,
+            "aggregate_factory_miss_rate_pct": validation.get("opportunity_miss_rate_pct"),
+            "outcome_unattributed_factory_miss_count": outcome_unattributed_misses,
+            "agent_attributed_factory_miss_count": outcome_agent_attributed_misses,
+            "unattributed_factory_miss_count": aggregate_factory_misses,
             "automatic_weight_changes": 0,
             "automatic_model_routing_changes": 0,
         },
@@ -215,6 +261,10 @@ def build_league(*, learning: dict[str, Any], telemetry: dict[str, Any], generat
             "learning_outcome_count": learning.get("outcome_count"),
             "learning_mature_5d_count": learning.get("mature_5d_count"),
             "learning_complete_session_count": learning.get("complete_session_count"),
+            "validation_benchmark_opportunity_count": validation.get("benchmark_opportunity_count"),
+            "validation_detected_count": validation.get("detected_count"),
+            "validation_aggregate_factory_miss_count": aggregate_factory_misses,
+            "validation_opportunity_miss_rate_pct": validation.get("opportunity_miss_rate_pct"),
             "telemetry_generated_at": telemetry.get("generated_at"),
         },
         "safety": {
@@ -238,6 +288,7 @@ def build_from_state(state_dir: Path, telemetry_dir: Path) -> dict[str, Any]:
     return build_league(
         learning=_read_json(state_dir / "latest_outcome_learning.json"),
         telemetry=_read_json(telemetry_dir / "latest.json"),
+        scorecard=_read_json(state_dir / "latest_market_validation.json"),
     )
 
 
