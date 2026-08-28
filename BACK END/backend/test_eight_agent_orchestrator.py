@@ -1,4 +1,6 @@
+import json
 import unittest
+from unittest.mock import patch
 
 import eight_agent_orchestrator as orch
 
@@ -74,6 +76,41 @@ class EightAgentOrchestratorTests(unittest.TestCase):
         self.assertFalse(result["paper_order_permission"])
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
+
+    def test_committee_persists_evidence_summary_for_downstream_risk(self):
+        summary = {
+            "evidence_count": 14,
+            "average_quality_score": 0.8594,
+            "stale_count": 0,
+            "critical_flags": [],
+        }
+        model_output = {
+            "headline": "Governed watch",
+            "summary": "Evidence remains sufficient for governed review.",
+            "agreement": "Core desks agree evidence is usable.",
+            "dissent": "Skeptic remains cautious.",
+            "bull_case": "Demand remains constructive.",
+            "bear_case": "Cycle risk remains.",
+            "key_disagreements": [],
+            "required_evidence": [],
+            "confidence": 0.82,
+            "disposition": "WATCH",
+            "floor_comment": "Committee complete.",
+        }
+        with patch.object(orch, "OpenAI") as openai:
+            openai.return_value.responses.create.return_value.output_text = json.dumps(model_output)
+            decision = orch._synthesize_committee(
+                case_id="case_test",
+                topic="test",
+                evidence_summary=summary,
+                specialists=self._specialists(),
+            )
+
+        self.assertEqual(decision["evidence_summary"], summary)
+        self.assertEqual(decision["evidence_summary"]["evidence_count"], 14)
+        self.assertEqual(decision["evidence_summary"]["average_quality_score"], 0.8594)
+        self.assertFalse(decision["trade_execution_permission"])
+        self.assertFalse(decision["live_execution"])
 
     def test_missing_core_agent_forces_no_trade(self):
         specialists = self._specialists()
