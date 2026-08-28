@@ -1,0 +1,102 @@
+name: IIOS Batch 9Q Experiment and A/B Laboratory Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9q-experiment-ab-laboratory
+  pull_request:
+    branches:
+      - feature/batch9p-chief-intelligence-office
+
+jobs:
+  experiment-ab-laboratory-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 9Q
+        run: >-
+          python -m py_compile
+          scripts/iios_chief_intelligence_office.py
+          scripts/iios_experiment_ab_laboratory.py
+          scripts/iios_experiment_ab_laboratory_publisher.py
+          scripts/test_batch9p_chief_intelligence_office.py
+          scripts/test_batch9q_experiment_ab_laboratory.py
+          scripts/activate_batch9q_experiment_ab_laboratory.py
+
+      - name: Run inherited 9O and 9P regressions
+        run: |
+          python scripts/test_batch9o_daily_factory_episode.py
+          python scripts/test_batch9o_exact_learning_source.py
+          python scripts/test_batch9p_chief_intelligence_office.py
+
+      - name: Run 9Q experiment contracts
+        run: python scripts/test_batch9q_experiment_ab_laboratory.py
+
+      - name: Build 9Q browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/ExperimentABLaboratory.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert lab UI and verdict semantics
+        run: |
+          grep -q 'ExperimentABLaboratory' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9Q · EXPERIMENT & A/B LABORATORY' "FRONT END/src/ExperimentABLaboratory.tsx"
+          grep -q 'SHADOW ONLY' "FRONT END/src/ExperimentABLaboratory.tsx"
+          grep -q 'KEEP' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'REJECT' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'NEED_MORE_DATA' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'KEEP_VARIANT_FOR_HUMAN_REVIEW_NOT_PRODUCTION' scripts/iios_experiment_ab_laboratory.py
+
+      - name: Assert persisted shadow evidence only
+        run: |
+          grep -q 'latest_shadow_counterfactual.json' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'latest_outcome_learning.json' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'chief.build_from_state' scripts/iios_experiment_ab_laboratory.py
+          ! grep -Eq 'sqlite3|record_object|record_event|submit_paper_order|consume_authorization|requests\.(post|put|patch|delete)' scripts/iios_experiment_ab_laboratory.py scripts/iios_experiment_ab_laboratory_publisher.py
+
+      - name: Assert 9Q never fabricates unmeasured A/B results
+        run: |
+          grep -q 'BLOCKED_BY_MEASUREMENT_GAP' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'will not manufacture a comparison' scripts/iios_experiment_ab_laboratory.py
+          grep -q 'MODEL_TASK_LEAGUE' scripts/test_batch9q_experiment_ab_laboratory.py
+          grep -q 'NEED_MORE_DATA' scripts/test_batch9q_experiment_ab_laboratory.py
+
+      - name: Assert advisory-only governance
+        run: |
+          grep -q '"shadow_only": True' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"advisory_only": True' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"browser_controls_execute_factory": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"auto_apply_variants": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"auto_apply_thresholds": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"agent_weight_change_authority": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"committee_change_authority": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"risk_rule_change_authority": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"capital_authority": False' scripts/iios_experiment_ab_laboratory.py
+          grep -q '"human_approval_required": True' scripts/iios_experiment_ab_laboratory.py
+
+      - name: Assert isolated Mac activation
+        run: |
+          grep -q 'BRANCH = "feature/batch9q-experiment-ab-laboratory"' scripts/activate_batch9q_experiment_ab_laboratory.py
+          grep -q 'LAB_LABEL = "com.iios.experiment-ab-laboratory"' scripts/activate_batch9q_experiment_ab_laboratory.py
+          grep -q 'LAB_INTERVAL_SECONDS = 1800' scripts/activate_batch9q_experiment_ab_laboratory.py
+          grep -q 'Parent Batch 9P: PRESERVED' scripts/activate_batch9q_experiment_ab_laboratory.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9q_experiment_ab_laboratory.py
+          grep -q 'chief_office_launch_agent_unchanged' scripts/activate_batch9q_experiment_ab_laboratory.py
+          grep -q 'episode_launch_agent_unchanged' scripts/activate_batch9q_experiment_ab_laboratory.py
+          ! grep -Eq 'launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning|launchctl.*chief-intelligence-office|launchctl.*daily-factory-episode' scripts/activate_batch9q_experiment_ab_laboratory.py
+
+      - name: Assert no live authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_experiment_ab_laboratory.py scripts/iios_experiment_ab_laboratory_publisher.py scripts/activate_batch9q_experiment_ab_laboratory.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_experiment_ab_laboratory.py scripts/iios_experiment_ab_laboratory_publisher.py scripts/activate_batch9q_experiment_ab_laboratory.py
+          ! grep -Eq '"capital_authority"[[:space:]]*:[[:space:]]*True' scripts/iios_experiment_ab_laboratory.py scripts/activate_batch9q_experiment_ab_laboratory.py
+          ! grep -Eq '"auto_apply_variants"[[:space:]]*:[[:space:]]*True' scripts/iios_experiment_ab_laboratory.py scripts/activate_batch9q_experiment_ab_laboratory.py
