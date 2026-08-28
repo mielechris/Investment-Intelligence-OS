@@ -5,9 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
-from batch8c_production_inputs import current_strict_governed_universe
-from provider_hardening import _json_request
-
 SCHEMA_VERSION = "batch9h-independent-market-benchmark-v1"
 SOURCE = "BATCH_9H_INDEPENDENT_YAHOO_SCREENER_SIDECAR"
 SCREENER_IDS = ("day_gainers", "day_losers", "most_actives")
@@ -46,6 +43,9 @@ def _canonical_symbol(value: Any) -> str:
 
 
 def _strict_universe_aliases() -> tuple[set[str], dict[str, str]]:
+    # Lazy import keeps the benchmark engine testable without loading the API stack.
+    from batch8c_production_inputs import current_strict_governed_universe
+
     governed = current_strict_governed_universe()
     if not isinstance(governed, dict):
         raise RuntimeError("STRICT_GOVERNED_UNIVERSE_UNAVAILABLE")
@@ -65,6 +65,9 @@ def _strict_universe_aliases() -> tuple[set[str], dict[str, str]]:
 
 
 def _yahoo_screener(scr_id: str, count: int = 100) -> list[dict[str, Any]]:
+    # Lazy import avoids coupling pure benchmark tests to provider/API dependencies.
+    from provider_hardening import _json_request
+
     params = urlencode(
         {
             "formatted": "false",
