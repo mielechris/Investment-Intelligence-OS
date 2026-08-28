@@ -1,4 +1,5 @@
 import CharacterStoryEngine from "./CharacterStoryEngine";
+import DailyFactoryEpisode from "./DailyFactoryEpisode";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
@@ -11,11 +12,11 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9N · INTERACTIVE CASE THEATER</span>
-          <strong>Persisted case replay · exact lineage · browser cursor only</strong>
+          <span>BATCH 9O · DAILY FACTORY EPISODE</span>
+          <strong>Evidence-backed daily close · measured calls, misses, saves and learning</strong>
         </div>
         <div>
-          <span>9M STORY ENGINE PRESERVED · BACKEND 8002 UNCHANGED</span>
+          <span>9N CASE THEATER PRESERVED · BACKEND 8002 UNCHANGED</span>
           <strong>LIVE EXECUTION FALSE</strong>
         </div>
       </div>
@@ -28,6 +29,10 @@ export default function LiveFactoryBrowser() {
         <span>9N INTERACTIVE CASE THEATER · REPLAY DOES NOT EXECUTE</span>
       </div>
       <InteractiveCaseTheater />
+      <div className="lfb-divider">
+        <span>9O DAILY FACTORY EPISODE · REPORT ONLY</span>
+      </div>
+      <DailyFactoryEpisode />
       <div className="lfb-divider">
         <span>9K VALIDATION STACK · PRESERVED</span>
       </div>
