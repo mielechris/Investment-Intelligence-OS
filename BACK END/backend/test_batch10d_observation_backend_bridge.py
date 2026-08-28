@@ -42,20 +42,58 @@ class Batch10DObservationBackendBridgeTests(unittest.TestCase):
         self.assertFalse(result["trade_execution_permission"])
         self.assertFalse(result["live_execution"])
 
-    def test_install_replaces_monitoring_radar_and_scan_hooks(self):
+    @patch.object(bridge, "urlopen")
+    def test_heartbeat_sync_posts_completed_checkpoint_and_stays_locked(self, urlopen):
+        urlopen.return_value = _Response(
+            json.dumps(
+                {
+                    "status": "accepted",
+                    "paper_mode": True,
+                    "trade_execution_permission": False,
+                    "live_execution": False,
+                }
+            ).encode()
+        )
+        state = {
+            "last_cycle_completed_at": "2026-08-28T16:00:00+00:00",
+            "market_phase": "REGULAR_SESSION",
+            "last_scan_status": "complete",
+            "last_scan_count": 518,
+        }
+
+        result = bridge.sync_observation_checkpoint_via_backend(state)
+
+        request = urlopen.call_args.args[0]
+        sent = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(
+            request.full_url,
+            "http://127.0.0.1:8002/observation-heartbeat/checkpoint",
+        )
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(sent["market_phase"], "REGULAR_SESSION")
+        self.assertFalse(sent["auto_trade_authority"])
+        self.assertFalse(sent["paper_order_permission"])
+        self.assertFalse(sent["trade_execution_permission"])
+        self.assertFalse(sent["live_execution"])
+        self.assertEqual(result["status"], "accepted")
+
+    def test_install_replaces_monitoring_radar_scan_and_cycle_hooks(self):
         original_monitoring = base_runner.refresh_due_profiles
         original_radar = base_runner.run_market_event_radar
         original_scan = base_runner.scan_universe
+        original_cycle = base_runner.run_cycle
         try:
             installed = bridge.install_backend_monitoring_bridge()
             self.assertIs(installed, base_runner)
             self.assertIs(base_runner.refresh_due_profiles, bridge.refresh_due_profiles_via_backend)
             self.assertIs(base_runner.run_market_event_radar, bridge.run_market_event_radar_bounded)
             self.assertIs(base_runner.scan_universe, bridge.scan_universe_bounded)
+            self.assertIs(base_runner.run_cycle, bridge.run_cycle_with_backend_heartbeat)
         finally:
             base_runner.refresh_due_profiles = original_monitoring
             base_runner.run_market_event_radar = original_radar
             base_runner.scan_universe = original_scan
+            base_runner.run_cycle = original_cycle
 
     @patch.object(bridge, "_run_with_timeout")
     def test_external_stages_use_governed_wall_clock_ceilings(self, bounded):
@@ -83,10 +121,29 @@ class Batch10DObservationBackendBridgeTests(unittest.TestCase):
         self.assertIn("ObservationStageTimeout", result["error"])
         self.assertIn("TIMEOUT_120s", result["error"])
 
+    @patch.object(bridge, "sync_observation_checkpoint_via_backend")
+    @patch.object(bridge, "_ORIGINAL_RUN_CYCLE")
+    def test_heartbeat_failure_does_not_fail_completed_observation_cycle(
+        self,
+        original_cycle,
+        heartbeat,
+    ):
+        original_cycle.return_value = {
+            "last_cycle_completed_at": "2026-08-28T16:00:00+00:00",
+            "market_phase": "REGULAR_SESSION",
+        }
+        heartbeat.side_effect = RuntimeError("backend unavailable")
+
+        result = bridge.run_cycle_with_backend_heartbeat()
+
+        self.assertEqual(result["market_phase"], "REGULAR_SESSION")
+        heartbeat.assert_called_once_with(result)
+
     def test_bridge_has_no_remote_or_broker_target(self):
         self.assertEqual(bridge.BACKEND_BASE_URL, "http://127.0.0.1:8002")
-        self.assertNotIn("broker", bridge.MONITORING_PATH.lower())
-        self.assertNotIn("execute", bridge.MONITORING_PATH.lower())
+        for path in (bridge.MONITORING_PATH, bridge.HEARTBEAT_PATH):
+            self.assertNotIn("broker", path.lower())
+            self.assertNotIn("execute", path.lower())
         self.assertFalse(hasattr(bridge, "broker"))
 
 
