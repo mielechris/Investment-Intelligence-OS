@@ -5,9 +5,10 @@ Discovery/orchestration remain in the isolated 9A worktree. Monitoring refreshes
 are delegated to Backend 8002 so the authoritative installed chain runs:
 base monitoring -> paper-fund portfolio context -> evidence watch -> Deep Watch.
 
-Slow external discovery stages are bounded on the main runner thread. A radar or
-opportunity-scan timeout is raised back into the existing runner's `_safe_call`,
-which records the stage as an error and continues fail-closed.
+Slow external discovery stages are executed in child processes with hard wall-
+clock deadlines. If a provider call wedges, only that child process is terminated;
+the parent 9A loop records the stage as an error through the existing `_safe_call`
+and continues fail-closed.
 
 After a local 9A cycle completes, its already-governed observation checkpoint is
 mirrored to Backend 8002 for command-layer heartbeat visibility. Heartbeat sync is
@@ -17,8 +18,10 @@ or enable live execution.
 from __future__ import annotations
 
 import json
-import signal
-from typing import Any, Callable
+from pathlib import Path
+import subprocess
+import sys
+from typing import Any
 from urllib.request import Request, urlopen
 
 import iios_observation_runner as runner
@@ -30,14 +33,13 @@ MONITORING_TIMEOUT_SECONDS = 900
 HEARTBEAT_TIMEOUT_SECONDS = 10
 RADAR_TIMEOUT_SECONDS = 120
 OPPORTUNITY_SCAN_TIMEOUT_SECONDS = 180
+STAGE_WORKER = Path(__file__).with_name("iios_observation_stage_worker.py")
 
-_ORIGINAL_RADAR = runner.run_market_event_radar
-_ORIGINAL_SCAN = runner.scan_universe
 _ORIGINAL_RUN_CYCLE = runner.run_cycle
 
 
 class ObservationStageTimeout(TimeoutError):
-    """Raised when a bounded external 9A stage exceeds its wall-clock ceiling."""
+    """Raised when an isolated 9A stage exceeds its hard wall-clock ceiling."""
 
 
 def refresh_due_profiles_via_backend() -> dict:
@@ -110,40 +112,49 @@ def run_cycle_with_backend_heartbeat(*args: Any, **kwargs: Any) -> dict[str, Any
     return state
 
 
-def _run_with_timeout(
-    function: Callable[..., Any],
+def _run_stage_in_subprocess(
+    stage: str,
     timeout_seconds: int,
     label: str,
     *args: Any,
     **kwargs: Any,
-) -> Any:
-    """Bound one synchronous external stage on macOS/POSIX main-thread execution."""
-
-    if timeout_seconds <= 0:
-        return function(*args, **kwargs)
-
-    previous_handler = signal.getsignal(signal.SIGALRM)
-    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
-
-    def _timeout_handler(_signum: int, _frame: Any) -> None:
-        raise ObservationStageTimeout(f"{label}_TIMEOUT_{timeout_seconds}s")
-
-    signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+) -> dict[str, Any]:
+    payload = json.dumps({"args": list(args), "kwargs": kwargs}, default=str)
+    command = [sys.executable, str(STAGE_WORKER), stage]
 
     try:
-        return function(*args, **kwargs)
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
-        delay, interval = previous_timer
-        if delay > 0 or interval > 0:
-            signal.setitimer(signal.ITIMER_REAL, delay, interval)
+        completed = subprocess.run(
+            command,
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=max(1, int(timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ObservationStageTimeout(
+            f"{label}_TIMEOUT_{timeout_seconds}s"
+        ) from exc
+
+    if completed.returncode != 0:
+        detail = str(completed.stderr or "").strip()[-1200:]
+        raise RuntimeError(
+            f"{label}_WORKER_FAILED_{completed.returncode}: {detail or 'no stderr'}"
+        )
+
+    try:
+        result = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{label}_WORKER_INVALID_JSON") from exc
+
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{label}_WORKER_INVALID_RESPONSE")
+    return result
 
 
 def run_market_event_radar_bounded(*args: Any, **kwargs: Any) -> dict:
-    return _run_with_timeout(
-        _ORIGINAL_RADAR,
+    return _run_stage_in_subprocess(
+        "market_event_radar",
         RADAR_TIMEOUT_SECONDS,
         "MARKET_EVENT_RADAR",
         *args,
@@ -152,8 +163,8 @@ def run_market_event_radar_bounded(*args: Any, **kwargs: Any) -> dict:
 
 
 def scan_universe_bounded(*args: Any, **kwargs: Any) -> dict:
-    return _run_with_timeout(
-        _ORIGINAL_SCAN,
+    return _run_stage_in_subprocess(
+        "opportunity_scan",
         OPPORTUNITY_SCAN_TIMEOUT_SECONDS,
         "OPPORTUNITY_SCAN",
         *args,
