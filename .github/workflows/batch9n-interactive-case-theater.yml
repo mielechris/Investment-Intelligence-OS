@@ -1,0 +1,116 @@
+name: IIOS Batch 9N Interactive Case Theater Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9n-interactive-case-theater
+  pull_request:
+    branches:
+      - feature/batch9m-character-story-engine
+
+jobs:
+  interactive-case-theater-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile Batch 9N
+        run: >-
+          python -m py_compile
+          scripts/iios_factory_browser_preview.py
+          scripts/test_iios_factory_browser_preview.py
+          scripts/test_batch9l_living_factory_contract.py
+          scripts/test_batch9m_character_story_contract.py
+          scripts/test_batch9n_interactive_case_theater_contract.py
+          scripts/activate_batch9k_live_factory_browser.py
+          scripts/activate_batch9l_living_factory.py
+          scripts/activate_batch9m_character_story_engine.py
+          scripts/activate_batch9n_interactive_case_theater.py
+
+      - name: Run inherited learning regressions
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+          python "BACK END/backend/test_shadow_counterfactual.py"
+          python "BACK END/backend/test_outcome_labeling_memory.py"
+
+      - name: Run inherited browser contracts
+        run: |
+          python scripts/test_iios_factory_browser_preview.py
+          python scripts/test_batch9l_living_factory_contract.py
+          python scripts/test_batch9m_character_story_contract.py
+
+      - name: Run 9N replay contract
+        run: python scripts/test_batch9n_interactive_case_theater_contract.py
+
+      - name: Build Batch 9N browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert additive browser composition
+        run: |
+          grep -q 'InteractiveCaseTheater' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'CharacterStoryEngine' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'LivingFactoryExperience' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9N · INTERACTIVE CASE THEATER' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'REPLAY DOES NOT EXECUTE' "FRONT END/src/LiveFactoryBrowser.tsx"
+
+      - name: Assert exact lineage and no ticker-only 9J join
+        run: |
+          grep -q 'outcomeByCaseId' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'outcomeByCandidateId' "FRONT END/src/InteractiveCaseTheater.tsx"
+          ! grep -q 'outcomeByTicker' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'no outcome is borrowed from another case with the same ticker' "FRONT END/src/InteractiveCaseTheater.tsx"
+
+      - name: Assert replay is UI-only and read-only
+        run: |
+          grep -q '/living/overview' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q '/living/case/' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'NO FACTORY COMMANDS SENT' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'changes only a browser cursor' "FRONT END/src/InteractiveCaseTheater.tsx"
+          ! grep -Eq '127\.0\.0\.1:8002|sqlite3|record_object|record_event|submit_paper_order|consume_authorization' "FRONT END/src/InteractiveCaseTheater.tsx"
+          ! grep -Eq 'method:[[:space:]].*(POST|PUT|PATCH|DELETE)' "FRONT END/src/InteractiveCaseTheater.tsx"
+
+      - name: Assert missing artifacts fail visibly closed
+        run: |
+          grep -q 'will not invent a Skeptic challenge' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'never fabricates a transcript' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'does not imply a paper order occurred' "FRONT END/src/InteractiveCaseTheater.tsx"
+          grep -q 'does not generate demonstration cases' "FRONT END/src/InteractiveCaseTheater.tsx"
+
+      - name: Assert 9M and 9L sidecar safety remains intact
+        run: |
+          grep -q 'DEFAULT_HOST = "127.0.0.1"' scripts/iios_factory_browser_preview.py
+          grep -q 'READ_ONLY_GET_ONLY' scripts/iios_factory_browser_preview.py
+          grep -q 'backend_write_permission": False' scripts/iios_factory_browser_preview.py
+          grep -q 'direct_ledger_access": False' scripts/iios_factory_browser_preview.py
+          grep -q 'method="GET"' scripts/iios_factory_browser_preview.py
+          grep -q 'ThreadPoolExecutor' scripts/iios_factory_browser_preview.py
+          ! grep -Eq 'method="(POST|PUT|PATCH|DELETE)"' scripts/iios_factory_browser_preview.py
+
+      - name: Assert isolated Mac 9N activation
+        run: |
+          grep -q 'BRANCH = "feature/batch9n-interactive-case-theater"' scripts/activate_batch9n_interactive_case_theater.py
+          grep -q 'PREVIEW_PORT = 5176' scripts/activate_batch9n_interactive_case_theater.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9n_interactive_case_theater.py
+          grep -q 'protected_launch_agents_unchanged' scripts/activate_batch9n_interactive_case_theater.py
+          grep -q 'replay_authority": "BROWSER_CURSOR_ONLY"' scripts/activate_batch9n_interactive_case_theater.py
+          ! grep -Eq 'killall|pkill|launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning' scripts/activate_batch9n_interactive_case_theater.py
+
+      - name: Assert no execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_factory_browser_preview.py scripts/activate_batch9n_interactive_case_theater.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_factory_browser_preview.py scripts/activate_batch9n_interactive_case_theater.py
+          ! grep -Eq '"backend_write_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_factory_browser_preview.py scripts/activate_batch9n_interactive_case_theater.py
