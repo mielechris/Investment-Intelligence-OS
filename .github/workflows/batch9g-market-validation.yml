@@ -1,0 +1,85 @@
+name: IIOS Batch 9G Market Validation Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9g-market-validation-superbatch
+  pull_request:
+    branches:
+      - feature/batch9f-factory-telemetry
+
+jobs:
+  market-validation-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile Batch 9G market validation
+        run: >-
+          python -m py_compile
+          "BACK END/backend/factory_telemetry.py"
+          "BACK END/backend/factory_telemetry_v2.py"
+          "BACK END/backend/market_validation_scorecard.py"
+          "BACK END/backend/test_factory_telemetry.py"
+          "BACK END/backend/test_factory_telemetry_v2.py"
+          "BACK END/backend/test_market_validation_scorecard.py"
+          scripts/iios_factory_telemetry_exporter.py
+          scripts/iios_factory_telemetry_exporter_v2.py
+          scripts/test_iios_factory_telemetry_exporter_v2.py
+          scripts/iios_market_validation_scorecard.py
+
+      - name: Run Batch 9F regression contract
+        run: python "BACK END/backend/test_factory_telemetry.py"
+
+      - name: Run Batch 9G telemetry fill contract
+        run: python "BACK END/backend/test_factory_telemetry_v2.py"
+
+      - name: Run Batch 9G opportunity scorecard contract
+        run: python "BACK END/backend/test_market_validation_scorecard.py"
+
+      - name: Run Batch 9G heartbeat contract
+        run: python scripts/test_iios_factory_telemetry_exporter_v2.py
+
+      - name: Assert read-only ledger boundary
+        run: |
+          grep -q 'mode=ro' "BACK END/backend/factory_telemetry.py"
+          grep -q '_connect_read_only' "BACK END/backend/factory_telemetry_v2.py"
+          grep -q '_connect_read_only' "BACK END/backend/market_validation_scorecard.py"
+          ! grep -Eq 'record_object|record_event|consume_authorization|consume_paper_authorization|submit_paper_order|create_governed_paper_order' \
+            "BACK END/backend/factory_telemetry_v2.py" \
+            "BACK END/backend/market_validation_scorecard.py" \
+            scripts/iios_factory_telemetry_exporter_v2.py \
+            scripts/iios_market_validation_scorecard.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/factory_telemetry_v2.py" \
+            "BACK END/backend/market_validation_scorecard.py" \
+            scripts/iios_factory_telemetry_exporter_v2.py \
+            scripts/iios_market_validation_scorecard.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/factory_telemetry_v2.py" \
+            "BACK END/backend/market_validation_scorecard.py" \
+            scripts/iios_factory_telemetry_exporter_v2.py \
+            scripts/iios_market_validation_scorecard.py
+
+      - name: Assert heartbeat and fill provenance
+        run: |
+          grep -q 'HEARTBEAT_PUBLISHED' scripts/iios_factory_telemetry_exporter_v2.py
+          grep -q 'iios-heartbeat:' scripts/iios_factory_telemetry_exporter_v2.py
+          grep -q 'paper_portfolio_transaction' "BACK END/backend/factory_telemetry_v2.py"
+          grep -q 'PAPER_PORTFOLIO_TRANSACTION_INGESTED' "BACK END/backend/factory_telemetry_v2.py"
+          grep -q 'PERSISTED_GOVERNED_PAPER_TRANSACTION' "BACK END/backend/market_validation_scorecard.py"
+
+      - name: Assert scorecard metrics contract
+        run: |
+          grep -q 'opportunity_miss_rate_pct' "BACK END/backend/market_validation_scorecard.py"
+          grep -q 'detection_rate_pct' "BACK END/backend/market_validation_scorecard.py"
+          grep -q 'median_detection_latency_minutes' "BACK END/backend/market_validation_scorecard.py"
+          grep -q 'paper_fill_count' "BACK END/backend/market_validation_scorecard.py"
+          grep -q 'cadence_reliability_pct' "BACK END/backend/market_validation_scorecard.py"
+          grep -q 'provider_error_count' "BACK END/backend/market_validation_scorecard.py"
