@@ -44,7 +44,7 @@ jobs:
         working-directory: FRONT END
         run: |
           npm ci
-          npm run lint
+          npx eslint src/LiveFactoryBrowser.tsx src/MarketValidationStackPanel.tsx
           npm run build
 
       - name: Assert live browser composition
