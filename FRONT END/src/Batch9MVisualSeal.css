@@ -1,0 +1,33 @@
+/* Batch 9M visual seal: explicit high-contrast hierarchy over the inherited 9L floor. */
+.lfx-hero h2,
+.lfx-section-heading h3,
+.lfx-lineage-hero h3,
+.cse-hero h2,
+.cse-theater h3 {
+  color: #f4f8fc !important;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+}
+
+.lfx-hero p,
+.cse-hero p {
+  color: #c3ceda !important;
+}
+
+.lfx-hero-safety > span:last-child,
+.lfx-provenance-legend > span:last-child,
+.cse-contract span,
+.cse-source-rail span {
+  color: #93a3b6;
+}
+
+.lfx-status--warm,
+.cse-source-rail .tone-warm {
+  filter: saturate(1.08) brightness(1.08);
+}
+
+.lfx-stage strong,
+.lfx-opportunity-head > div > strong,
+.cse-feed button div strong,
+.cse-persona-head strong {
+  color: #edf4fb;
+}
