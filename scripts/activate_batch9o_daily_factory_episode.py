@@ -6,6 +6,7 @@ import os
 import plistlib
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import activate_batch9k_live_factory_browser as base
@@ -105,6 +106,57 @@ def _install_episode_agent(python: Path) -> None:
     base._run(["launchctl", "print", f"{domain}/{EPISODE_LABEL}"], capture=True)
 
 
+def _tail(path: Path, max_chars: int = 4000) -> str:
+    try:
+        value = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "<log unavailable>"
+    return value[-max_chars:] if value else "<log empty>"
+
+
+def _preview_health_with_recovery() -> tuple[dict, bool]:
+    """Wait through launchd startup throttling and recover the preview once.
+
+    Batch 9O replaces only the localhost preview LaunchAgent. macOS can briefly
+    throttle a KeepAlive job after rapid 9N→9O replacement. Do not mistake that
+    transient localhost gap for a factory failure.
+    """
+    url = f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/health"
+    time.sleep(2.0)
+    try:
+        return base._json_url(url, attempts=80), False
+    except RuntimeError as first_error:
+        domain = f"gui/{os.getuid()}"
+        label = f"{domain}/{base.LABEL}"
+        launch_state = base._run(
+            ["launchctl", "print", label],
+            check=False,
+            capture=True,
+        )
+        print("Batch 9O preview startup recovery: first health wait expired.")
+        print((launch_state.stdout or launch_state.stderr or "<launchctl state unavailable>")[-4000:])
+        print("Preview stdout tail:")
+        print(_tail(LOG_DIR / "factory-browser-preview.out.log"))
+        print("Preview stderr tail:")
+        print(_tail(LOG_DIR / "factory-browser-preview.err.log"))
+        base._run(
+            ["launchctl", "kickstart", "-k", label],
+            check=False,
+            capture=True,
+        )
+        time.sleep(2.0)
+        try:
+            return base._json_url(url, attempts=80), True
+        except RuntimeError as second_error:
+            raise SystemExit(
+                "Batch 9O localhost preview failed to become healthy after one "
+                "launchd recovery kick. The factory workers were not changed.\n"
+                f"First error: {first_error}\n"
+                f"Second error: {second_error}\n"
+                "Inspect ~/Library/Logs/IIOS/factory-browser-preview.err.log"
+            ) from second_error
+
+
 def _episode_preview(python: Path) -> dict:
     result = base._run(
         [
@@ -178,8 +230,11 @@ def main() -> int:
 
     _install_episode_agent(python)
     base._install_preview_agent(python)
-    health = base._json_url(f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/health")
-    living = base._json_url(f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/living/overview")
+    health, preview_startup_recovery = _preview_health_with_recovery()
+    living = base._json_url(
+        f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/living/overview",
+        attempts=60,
+    )
 
     if health.get("ledger_access") != "NONE":
         raise SystemExit("Batch 9O preview unexpectedly reports ledger access")
@@ -228,6 +283,7 @@ def main() -> int:
         "episode_preview_status": episode_preview.get("status"),
         "episode_session_id": episode_preview.get("episode_session_id"),
         "learning_lineage_mode": freshness.get("learning_lineage_mode"),
+        "preview_startup_recovery": preview_startup_recovery,
         "direct_ledger_access": "NONE",
         "backend_access": "READ_ONLY_GET_ONLY",
         "backend_write_permission": False,
