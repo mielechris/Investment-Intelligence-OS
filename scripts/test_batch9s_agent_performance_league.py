@@ -55,21 +55,36 @@ class Batch9SAgentPerformanceLeagueTest(unittest.TestCase):
         payload = league.build_league(
             learning=learning,
             telemetry=telemetry,
+            scorecard={
+                "metrics": {
+                    "benchmark_opportunity_count": 36,
+                    "eventual_detected_count": 17,
+                    "eventual_opportunity_miss_rate_pct": 52.8,
+                }
+            },
             generated_at=datetime(2026, 8, 28, 22, 30, tzinfo=timezone.utc),
         )
-        skeptic = next(row for row in payload["agent_standings"] if row["agent_key"] == "skeptic")
-        policy = next(row for row in payload["agent_standings"] if row["agent_key"] == "policy")
+        skeptic = next(
+            row for row in payload["agent_standings"] if row["agent_key"] == "skeptic"
+        )
+        policy = next(
+            row for row in payload["agent_standings"] if row["agent_key"] == "policy"
+        )
         self.assertEqual(skeptic["status"], "OFFICIAL")
         self.assertTrue(skeptic["official_ranking_eligible"])
         self.assertEqual(skeptic["recent_case_participation"], 2)
-        self.assertEqual(skeptic["outcome_attribution"]["downside_avoidance_alignment"], 1)
+        self.assertEqual(
+            skeptic["outcome_attribution"]["downside_avoidance_alignment"], 1
+        )
         self.assertEqual(policy["status"], "PROVISIONAL")
+        self.assertEqual(payload["summary"]["aggregate_factory_miss_count"], 19)
+        self.assertEqual(payload["summary"]["agent_attributed_factory_miss_count"], 0)
         self.assertFalse(payload["safety"]["agent_weight_change_authority"])
         self.assertFalse(payload["safety"]["model_routing_change_authority"])
         self.assertEqual(payload["summary"]["automatic_weight_changes"], 0)
         self.assertEqual(payload["summary"]["automatic_model_routing_changes"], 0)
 
-    def test_factory_miss_without_case_is_not_blamed_on_agents(self) -> None:
+    def test_9h_factory_misses_are_unattributed_without_exact_agent_lineage(self) -> None:
         payload = league.build_league(
             learning={
                 "status": "OUTCOME_LEARNING_MEMORY_AVAILABLE",
@@ -85,13 +100,32 @@ class Batch9SAgentPerformanceLeagueTest(unittest.TestCase):
                 ],
             },
             telemetry={},
+            scorecard={
+                "metrics": {
+                    "benchmark_opportunity_count": 36,
+                    "eventual_detected_count": 17,
+                    "eventual_opportunity_miss_rate_pct": 52.8,
+                }
+            },
         )
-        self.assertEqual(payload["summary"]["unattributed_factory_miss_count"], 1)
-        self.assertTrue(all(row["status"] == "WARM_UP" for row in payload["agent_standings"]))
-        self.assertIn("UNATTRIBUTED_TO_AGENTS", payload["measurement_contract"]["miss_attribution_rule"])
+        self.assertEqual(payload["summary"]["aggregate_factory_miss_count"], 19)
+        self.assertEqual(payload["summary"]["unattributed_factory_miss_count"], 19)
+        self.assertEqual(payload["summary"]["outcome_unattributed_factory_miss_count"], 1)
+        self.assertEqual(payload["summary"]["agent_attributed_factory_miss_count"], 0)
+        self.assertTrue(
+            all(row["status"] == "WARM_UP" for row in payload["agent_standings"])
+        )
+        self.assertIn(
+            "UNATTRIBUTED_TO_AGENTS",
+            payload["measurement_contract"]["miss_attribution_rule"],
+        )
+        self.assertIn(
+            "reported separately",
+            payload["measurement_contract"]["miss_count_semantics"],
+        )
 
     def test_model_league_refuses_fake_performance_scores(self) -> None:
-        payload = league.build_league(learning={}, telemetry={})
+        payload = league.build_league(learning={}, telemetry={}, scorecard={})
         self.assertEqual(len(payload["model_league"]), 4)
         self.assertEqual(payload["summary"]["ranked_model_count"], 0)
         for row in payload["model_league"]:
