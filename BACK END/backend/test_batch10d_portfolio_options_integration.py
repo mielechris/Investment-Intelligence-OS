@@ -1,39 +1,27 @@
 import unittest
 
+from fastapi import FastAPI
+
 import monitoring_engine
 import portfolio_context
 
 
+_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "TRACE"}
+
+
 def _route_rows(router):
-    """Flatten FastAPI/APIRouter routes across deferred included routers."""
+    """Read the public mounted-route contract through FastAPI OpenAPI."""
+    app = FastAPI()
+    app.include_router(router)
+    schema = app.openapi()
     rows = []
-    stack = list(getattr(router, "routes", []) or [])
-    seen = set()
-
-    while stack:
-        route = stack.pop()
-        marker = id(route)
-        if marker in seen:
-            continue
-        seen.add(marker)
-
-        path = getattr(route, "path", None)
-        if path:
-            rows.append(
-                (
-                    str(path).lower(),
-                    {str(method).upper() for method in (getattr(route, "methods", None) or set())},
-                )
-            )
-
-        nested_router = getattr(route, "router", None)
-        if nested_router is not None:
-            stack.extend(list(getattr(nested_router, "routes", []) or []))
-
-        nested_routes = getattr(route, "routes", None)
-        if nested_routes:
-            stack.extend(list(nested_routes))
-
+    for path, operations in (schema.get("paths") or {}).items():
+        methods = {
+            str(method).upper()
+            for method in operations.keys()
+            if str(method).upper() in _HTTP_METHODS
+        }
+        rows.append((str(path).lower(), methods))
     return rows
 
 
