@@ -1,0 +1,103 @@
+name: IIOS Batch 9J Outcome Learning Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9j-outcome-labeling-memory
+  pull_request:
+    branches:
+      - feature/batch9i-shadow-counterfactual-lab
+
+jobs:
+  outcome-learning-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile Batch 9J
+        run: >-
+          python -m py_compile
+          "BACK END/backend/outcome_labeling_memory.py"
+          "BACK END/backend/test_outcome_labeling_memory.py"
+          scripts/iios_outcome_learning_memory.py
+          scripts/activate_batch9j_outcome_labeling_memory.py
+
+      - name: Run Batch 9I regression contracts
+        run: |
+          python "BACK END/backend/test_factory_telemetry.py"
+          python "BACK END/backend/test_factory_telemetry_v2.py"
+          python "BACK END/backend/test_market_validation_scorecard.py"
+          python "BACK END/backend/test_market_benchmark.py"
+          python "BACK END/backend/test_market_validation_learning.py"
+          python "BACK END/backend/test_shadow_counterfactual.py"
+
+      - name: Run Batch 9J outcome contracts
+        run: python "BACK END/backend/test_outcome_labeling_memory.py"
+
+      - name: Assert read-only and sidecar boundaries
+        run: |
+          grep -q '_connect_read_only' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'price_collection_sidecar_only' "BACK END/backend/outcome_labeling_memory.py"
+          ! grep -Eq 'record_object|record_event|consume_authorization|consume_paper_authorization|submit_paper_order|create_governed_paper_order' \
+            "BACK END/backend/outcome_labeling_memory.py" \
+            scripts/iios_outcome_learning_memory.py \
+            scripts/activate_batch9j_outcome_labeling_memory.py
+
+      - name: Assert outcome horizons and decision-quality separation
+        run: |
+          grep -q 'plus_1h' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'session_close' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'next_session_close' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'fifth_session_close' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'NO_TRADE_FOREGONE_UPSIDE' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'NO_TRADE_AVOIDED_DOWNSIDE' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'FACTORY_MISS_WITH_UPSIDE' "BACK END/backend/outcome_labeling_memory.py"
+
+      - name: Assert Judgment Bank remains governed
+        run: |
+          grep -q 'auto_write_judgment_bank' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'human_review_required' "BACK END/backend/outcome_labeling_memory.py"
+          ! grep -Eq 'auto_write_judgment_bank"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/outcome_labeling_memory.py" \
+            scripts/iios_outcome_learning_memory.py \
+            scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'automatic_agent_weight_changes' scripts/iios_outcome_learning_memory.py
+
+      - name: Assert browser-ready contract
+        run: |
+          grep -q 'BROWSER_SCHEMA_VERSION = "batch9j-browser-outcome-summary-v1"' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'build_browser_summary' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'browser/outcome_learning.json' scripts/iios_outcome_learning_memory.py
+          grep -q 'judgment_bank_review_queue_count' "BACK END/backend/outcome_labeling_memory.py"
+          grep -q 'agent_scorecards' "BACK END/backend/outcome_labeling_memory.py"
+
+      - name: Assert private remote outcome boundary
+        run: |
+          grep -q 'target GitHub repository must be private' scripts/iios_outcome_learning_memory.py
+          grep -q 'IIOS OUTCOME LEARNING — BATCH 9J READ ONLY' scripts/iios_outcome_learning_memory.py
+          grep -q 'IIOS Outcome Learning - Latest' scripts/activate_batch9j_outcome_labeling_memory.py
+
+      - name: Assert isolated Mac activation preserves 9G 9H 9I
+        run: |
+          grep -q 'LABEL = "com.iios.outcome-learning"' scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'INTERVAL_SECONDS = 3600' scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'com.iios.factory-telemetry.plist' scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'com.iios.market-benchmark.plist' scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'com.iios.market-validation.plist' scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'com.iios.shadow-counterfactual.plist' scripts/activate_batch9j_outcome_labeling_memory.py
+          grep -q 'protected_launch_agents_unchanged' scripts/activate_batch9j_outcome_labeling_memory.py
+          ! grep -Eq 'http\.server|uvicorn|FastAPI|listen\(|bind\(' scripts/activate_batch9j_outcome_labeling_memory.py scripts/iios_outcome_learning_memory.py
+
+      - name: Assert no live execution authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/outcome_labeling_memory.py" \
+            scripts/iios_outcome_learning_memory.py \
+            scripts/activate_batch9j_outcome_labeling_memory.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
+            "BACK END/backend/outcome_labeling_memory.py" \
+            scripts/iios_outcome_learning_memory.py \
+            scripts/activate_batch9j_outcome_labeling_memory.py
