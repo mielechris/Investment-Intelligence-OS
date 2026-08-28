@@ -23,6 +23,7 @@ DEFAULT_BACKEND = "http://127.0.0.1:8002"
 DEFAULT_STATE_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "market-validation"
 DEFAULT_TELEMETRY_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "telemetry"
 CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+HORIZON_PATTERN = re.compile(r"^(\d+)d$", re.IGNORECASE)
 BACKEND_EXACT_PATHS = {
     "/experience/factory-intelligence/overview",
     "/intelligence/dislocation/status",
@@ -87,6 +88,62 @@ def _layer(name: str, path: Path, *, fresh_seconds: int | None = None) -> dict[s
     }
 
 
+def _normalize_outcome_learning_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expose the current 9J browser schema first and add truthful legacy aliases.
+
+    Batch 9J's browser summary uses market_outcome, decision_quality,
+    forward_return_pct, benchmark_return_pct, relative_return_pct,
+    longest_available_horizon and measured_at. Older experience components used
+    *_label and fixed 1d/3d/5d names. Preserve the current persisted fields as
+    canonical, while adding only aliases that can be derived without invention.
+    """
+    recent = payload.get("recent_outcomes")
+    if not isinstance(recent, list):
+        return payload
+
+    normalized_rows: list[Any] = []
+    for value in recent:
+        if not isinstance(value, dict):
+            normalized_rows.append(value)
+            continue
+        row = dict(value)
+        current_first: dict[str, Any] = {
+            "ticker": row.get("ticker"),
+            "case_id": row.get("case_id"),
+            "session_id": row.get("session_id"),
+            "market_outcome": row.get("market_outcome"),
+            "decision_quality": row.get("decision_quality"),
+            "longest_available_horizon": row.get("longest_available_horizon"),
+            "forward_return_pct": row.get("forward_return_pct"),
+            "benchmark_return_pct": row.get("benchmark_return_pct"),
+            "relative_return_pct": row.get("relative_return_pct"),
+            "measured_at": row.get("measured_at"),
+            "benchmark_source": row.get("benchmark_source"),
+        }
+        normalized = {**current_first, **row}
+
+        market_outcome = row.get("market_outcome")
+        if market_outcome is not None and "market_outcome_label" not in normalized:
+            normalized["market_outcome_label"] = market_outcome
+        decision_quality = row.get("decision_quality")
+        if decision_quality is not None and "decision_quality_label" not in normalized:
+            normalized["decision_quality_label"] = decision_quality
+        measured_at = row.get("measured_at")
+        if measured_at is not None and "labeled_at" not in normalized:
+            normalized["labeled_at"] = measured_at
+
+        horizon = str(row.get("longest_available_horizon") or "").strip().lower()
+        forward_return = row.get("forward_return_pct")
+        horizon_match = HORIZON_PATTERN.fullmatch(horizon)
+        if horizon_match and forward_return is not None:
+            alias_key = f"return_{horizon_match.group(1)}d_pct"
+            normalized.setdefault(alias_key, forward_return)
+
+        normalized_rows.append(normalized)
+
+    return {**payload, "recent_outcomes": normalized_rows}
+
+
 def build_validation_stack(
     *,
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
@@ -112,6 +169,10 @@ def build_validation_stack(
             fresh_seconds=2 * 60 * 60,
         ),
     }
+    outcome_layer = layers["outcome_learning"]
+    outcome_payload = outcome_layer.get("payload")
+    if isinstance(outcome_payload, dict):
+        outcome_layer["payload"] = _normalize_outcome_learning_payload(outcome_payload)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
