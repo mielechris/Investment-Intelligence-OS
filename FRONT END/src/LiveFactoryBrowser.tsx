@@ -1,6 +1,7 @@
 import CharacterStoryEngine from "./CharacterStoryEngine";
 import ChiefIntelligenceOffice from "./ChiefIntelligenceOffice";
 import DailyFactoryEpisode from "./DailyFactoryEpisode";
+import ExperimentABLaboratory from "./ExperimentABLaboratory";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
@@ -13,11 +14,11 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9P · CHIEF INTELLIGENCE OFFICE</span>
-          <strong>Continuous improvement · evidence-backed upgrades · advisory only</strong>
+          <span>BATCH 9Q · EXPERIMENT & A/B LABORATORY</span>
+          <strong>Baseline vs shadow variants · persisted evidence · human approval only</strong>
         </div>
         <div>
-          <span>9O DAILY EPISODE PRESERVED · BACKEND 8002 UNCHANGED</span>
+          <span>9P CHIEF INTELLIGENCE OFFICE PRESERVED · BACKEND 8002 UNCHANGED</span>
           <strong>LIVE EXECUTION FALSE</strong>
         </div>
       </div>
@@ -30,6 +31,8 @@ export default function LiveFactoryBrowser() {
       <DailyFactoryEpisode />
       <div className="lfb-divider"><span>9P CHIEF INTELLIGENCE OFFICE · ADVISORY ONLY</span></div>
       <ChiefIntelligenceOffice />
+      <div className="lfb-divider"><span>9Q EXPERIMENT & A/B LABORATORY · SHADOW ONLY</span></div>
+      <ExperimentABLaboratory />
       <div className="lfb-divider"><span>9K VALIDATION STACK · PRESERVED</span></div>
       <MarketValidationStackPanel />
       <div className="lfb-divider"><span>EXISTING FACTORY INTELLIGENCE UI · PRESERVED</span></div>
