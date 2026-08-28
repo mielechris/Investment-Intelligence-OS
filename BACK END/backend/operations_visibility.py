@@ -28,6 +28,9 @@ def _capital_reason(case_id: str, lineage: dict[str, Any]) -> dict[str, Any]:
     risk = latest_object("risk_authorization", case_id=case_id) or {}
     gap_hunt = latest_object("gap_hunt", case_id=case_id) or {}
 
+    risk_decision = risk.get("decision") or (gap_hunt.get("risk") or {}).get("decision")
+    committee_disposition = lineage.get("committee_disposition") or committee.get("disposition")
+
     unmet = [
         str(item).strip()
         for item in qualification.get("unmet_requirements") or []
@@ -57,12 +60,12 @@ def _capital_reason(case_id: str, lineage: dict[str, Any]) -> dict[str, Any]:
     elif unmet:
         state = "RESEARCH_NOT_QUALIFIED"
         reason = f"{len(unmet)} qualification requirements remain unmet."
-    elif str(lineage.get("risk_decision") or "").upper() in {"VETOED", "WATCH_ONLY"}:
+    elif str(risk_decision or "").upper() in {"VETOED", "WATCH_ONLY"}:
         state = "RISK_BLOCKED"
-        reason = f"Risk decision is {lineage.get('risk_decision')}."
-    elif str(lineage.get("committee_disposition") or "").upper() in {"NO_TRADE", "WATCH"}:
+        reason = f"Risk decision is {risk_decision}."
+    elif str(committee_disposition or "").upper() in {"NO_TRADE", "WATCH"}:
         state = "COMMITTEE_NOT_CAPITAL_READY"
-        reason = f"Committee disposition is {lineage.get('committee_disposition')}."
+        reason = f"Committee disposition is {committee_disposition}."
     else:
         state = "NO_CAPITAL_DECISION_YET"
         reason = "No governed capital-ready decision is present."
@@ -70,6 +73,8 @@ def _capital_reason(case_id: str, lineage: dict[str, Any]) -> dict[str, Any]:
     return {
         "state": state,
         "reason": reason,
+        "committee_disposition": committee_disposition,
+        "risk_decision": risk_decision,
         "unmet_requirements": unmet,
         "required_evidence": required,
         "risk_triggered_rules": triggered,
@@ -124,10 +129,10 @@ def _case_row(source: dict[str, Any]) -> dict[str, Any]:
         "valid_no_capital_outcome": bool(source.get("valid_no_capital_outcome")),
         "dead_end": bool(source.get("dead_end")),
         "missing_continuation": source.get("missing_continuation") or [],
-        "committee_disposition": source.get("committee_disposition"),
-        "risk_decision": source.get("risk_decision"),
+        "committee_disposition": reason.get("committee_disposition"),
+        "risk_decision": reason.get("risk_decision"),
         "qualified_buy_candidate": bool(source.get("qualified_buy_candidate")),
-        "capital_stage": source.get("capital_stage"),
+        "capital_stage": source.get("capital_stage") or reason.get("state"),
         "paper_execution_complete": bool(source.get("paper_execution_complete")),
         "monitoring_active": bool(source.get("monitoring_active")),
         "deep_watch": {
