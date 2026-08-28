@@ -109,7 +109,7 @@ def _episode_preview(python: Path) -> dict:
     result = base._run(
         [
             str(python),
-            str(WORKTREE / "scripts" / "iios_daily_factory_episode.py"),
+            str(WORKTREE / "scripts" / "iios_daily_factory_episode_exact.py"),
             "--state-dir",
             str(STATE_DIR),
             "--telemetry-dir",
@@ -123,7 +123,9 @@ def _episode_preview(python: Path) -> dict:
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Batch 9O preview builder did not return JSON: {result.stdout[:1000]}") from exc
+        raise SystemExit(
+            f"Batch 9O preview builder did not return JSON: {result.stdout[:1000]}"
+        ) from exc
     if not isinstance(value, dict):
         raise SystemExit("Batch 9O preview builder returned a non-object payload")
     return value
@@ -142,7 +144,7 @@ def main() -> int:
     print("Parent Batch 9N: PRESERVED")
     print("Existing Backend 8002: UNCHANGED")
     print(f"Preview URL: http://{PREVIEW_HOST}:{PREVIEW_PORT}")
-    print("Episode source: PERSISTED 9G/9H/9I/9J READ-ONLY STATE")
+    print("Episode source: PERSISTED 9G/9H/9I/9J EXACT-LINKED READ-ONLY STATE")
     print("Episode final window: 16:45 America/New_York")
     print(f"Episode check interval: {EPISODE_INTERVAL_SECONDS} seconds")
     print("Episode write scope: local browser/report artifacts only")
@@ -212,6 +214,7 @@ def main() -> int:
     if opener:
         base._run([opener, f"http://{PREVIEW_HOST}:{PREVIEW_PORT}"], check=False)
 
+    freshness = episode_preview.get("source_freshness") or {}
     summary = {
         "status": "BATCH9O_DAILY_FACTORY_EPISODE_PREVIEW",
         "preview_url": f"http://{PREVIEW_HOST}:{PREVIEW_PORT}",
@@ -224,6 +227,7 @@ def main() -> int:
         "episode_final_window_ny": "16:45",
         "episode_preview_status": episode_preview.get("status"),
         "episode_session_id": episode_preview.get("episode_session_id"),
+        "learning_lineage_mode": freshness.get("learning_lineage_mode"),
         "direct_ledger_access": "NONE",
         "backend_access": "READ_ONLY_GET_ONLY",
         "backend_write_permission": False,
