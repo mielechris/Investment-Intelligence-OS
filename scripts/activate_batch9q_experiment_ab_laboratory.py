@@ -26,6 +26,8 @@ LAB_LABEL = "com.iios.experiment-ab-laboratory"
 LAB_INTERVAL_SECONDS = 1800
 LAB_PLIST = LAUNCH_DIR / f"{LAB_LABEL}.plist"
 BROWSER_OUTPUT = DIST / "experiment_ab_laboratory.json"
+OFFICE_BROWSER_OUTPUT = DIST / "chief_intelligence_office.json"
+EPISODE_BROWSER_OUTPUT = DIST / "daily_factory_episode.json"
 OFFICE_PLIST = LAUNCH_DIR / "com.iios.chief-intelligence-office.plist"
 EPISODE_PLIST = LAUNCH_DIR / "com.iios.daily-factory-episode.plist"
 
@@ -68,18 +70,24 @@ def _build_frontend(npm: str) -> None:
         raise SystemExit("Batch 9Q frontend build did not produce dist/index.html")
 
 
+def _publisher_args(python: Path) -> list[str]:
+    return [
+        str(python),
+        str(WORKTREE / "scripts" / "iios_experiment_ab_laboratory_publisher.py"),
+        "--state-dir", str(STATE_DIR),
+        "--telemetry-dir", str(TELEMETRY_DIR),
+        "--browser-output", str(BROWSER_OUTPUT),
+        "--office-output", str(OFFICE_BROWSER_OUTPUT),
+        "--episode-output", str(EPISODE_BROWSER_OUTPUT),
+    ]
+
+
 def _install_lab_agent(python: Path) -> None:
     LAUNCH_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "Label": LAB_LABEL,
-        "ProgramArguments": [
-            str(python),
-            str(WORKTREE / "scripts" / "iios_experiment_ab_laboratory_publisher.py"),
-            "--state-dir", str(STATE_DIR),
-            "--telemetry-dir", str(TELEMETRY_DIR),
-            "--browser-output", str(BROWSER_OUTPUT),
-        ],
+        "ProgramArguments": _publisher_args(python),
         "WorkingDirectory": str(WORKTREE),
         "RunAtLoad": True,
         "StartInterval": LAB_INTERVAL_SECONDS,
@@ -99,13 +107,9 @@ def _install_lab_agent(python: Path) -> None:
 
 
 def _publish_once(python: Path) -> dict:
-    base._run([
-        str(python),
-        str(WORKTREE / "scripts" / "iios_experiment_ab_laboratory_publisher.py"),
-        "--state-dir", str(STATE_DIR),
-        "--telemetry-dir", str(TELEMETRY_DIR),
-        "--browser-output", str(BROWSER_OUTPUT),
-    ], cwd=WORKTREE)
+    base._run(_publisher_args(python), cwd=WORKTREE)
+    if not OFFICE_BROWSER_OUTPUT.exists():
+        raise SystemExit("Batch 9Q failed to publish the preserved 9P browser artifact")
     return json.loads(BROWSER_OUTPUT.read_text(encoding="utf-8"))
 
 
@@ -204,6 +208,8 @@ def main() -> int:
         "protected_launch_agents_unchanged": True,
         "chief_office_launch_agent_unchanged": True,
         "episode_launch_agent_unchanged": True,
+        "chief_office_browser_artifact_refreshed": True,
+        "episode_browser_artifact_preserved_if_available": EPISODE_BROWSER_OUTPUT.exists(),
         "lab_launch_agent": LAB_LABEL,
         "lab_refresh_interval_seconds": LAB_INTERVAL_SECONDS,
         "experiment_count": summary.get("experiment_count"),
