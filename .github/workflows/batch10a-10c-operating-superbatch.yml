@@ -1,0 +1,62 @@
+name: IIOS Batch 10A-10C Operating Superbatch Gate
+
+on:
+  push:
+    branches: [feature/batch10a-10c-operating-superbatch]
+  pull_request:
+    branches: [feature/batch9t-market-regime-intelligence]
+
+jobs:
+  operating-superbatch-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Compile 10A-10C
+        run: python -m py_compile scripts/iios_paper_performance_qualification.py scripts/iios_portfolio_intelligence.py scripts/iios_unified_production_browser.py scripts/iios_operating_superbatch_publisher.py scripts/test_batch10a_10c_operating_superbatch.py scripts/activate_batch10a_10c_operating_superbatch.py scripts/activate_batch9k_live_factory_browser.py
+      - name: Run inherited 9T regressions
+        run: |
+          python scripts/test_batch9p_chief_intelligence_office.py
+          python scripts/test_batch9q_experiment_ab_laboratory.py
+          python scripts/test_batch9r_data_expansion_factory.py
+          python scripts/test_batch9s_agent_performance_league.py
+          python scripts/test_batch9t_market_regime_intelligence.py
+      - name: Run operating contracts
+        run: python scripts/test_batch10a_10c_operating_superbatch.py
+      - name: Build operating browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/ExperimentABLaboratory.tsx src/DataExpansionFactory.tsx src/AgentPerformanceLeague.tsx src/MarketRegimeIntelligence.tsx src/OperatingSuperbatch.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+      - name: Assert 10A unified view is not a command surface
+        run: |
+          grep -q 'OperatingSuperbatch' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 10A · UNIFIED PRODUCTION BROWSER' "FRONT END/src/OperatingSuperbatch.tsx"
+          grep -q 'browser_is_command_surface": False' scripts/iios_unified_production_browser.py
+          grep -q 'GOVERNED_PAPER_RESEARCH_ONLY' scripts/iios_unified_production_browser.py
+      - name: Assert 10B qualification cannot authorize capital
+        run: |
+          grep -q 'INSUFFICIENT_PAPER_SAMPLE' scripts/iios_paper_performance_qualification.py
+          grep -q 'PAPER_QUALIFIED_FOR_HUMAN_READINESS_REVIEW' scripts/iios_paper_performance_qualification.py
+          grep -q 'auto_advance_to_live": False' scripts/iios_paper_performance_qualification.py
+          grep -q 'broker_connection_authority": False' scripts/iios_paper_performance_qualification.py
+          grep -q 'capital_authority": False' scripts/iios_paper_performance_qualification.py
+      - name: Assert 10C portfolio intelligence stays advisory
+        run: |
+          grep -q 'CASH_ONLY_WARM_UP' scripts/iios_portfolio_intelligence.py
+          grep -q 'auto_rebalance": False' scripts/iios_portfolio_intelligence.py
+          grep -q 'position_change_authority": False' scripts/iios_portfolio_intelligence.py
+          grep -q 'regime-conditioned portfolio behavior' scripts/iios_portfolio_intelligence.py
+      - name: Assert activation preserves 9O through 9T workers
+        run: |
+          grep -q 'BRANCH="feature/batch10a-10c-operating-superbatch"' scripts/activate_batch10a_10c_operating_superbatch.py
+          grep -q 'OPERATING_LABEL="com.iios.operating-superbatch"' scripts/activate_batch10a_10c_operating_superbatch.py
+          grep -q 'Parent Batch 9T: PRESERVED' scripts/activate_batch10a_10c_operating_superbatch.py
+          grep -q 'One or more 9O-9T workers changed' scripts/activate_batch10a_10c_operating_superbatch.py
+      - name: Assert no live authority
+        run: |
+          ! grep -Eq '"(capital_authority|broker_connection_authority|trade_execution_permission|live_execution|auto_advance_to_live|auto_rebalance|position_change_authority)"[[:space:]]*:[[:space:]]*True' scripts/iios_paper_performance_qualification.py scripts/iios_portfolio_intelligence.py scripts/iios_unified_production_browser.py scripts/activate_batch10a_10c_operating_superbatch.py
