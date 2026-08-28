@@ -23,6 +23,7 @@ jobs:
           "BACK END/backend/shadow_counterfactual.py"
           "BACK END/backend/test_shadow_counterfactual.py"
           scripts/iios_shadow_counterfactual_lab.py
+          scripts/activate_batch9i_shadow_counterfactual.py
 
       - name: Run Batch 9H regression contracts
         run: |
@@ -40,7 +41,8 @@ jobs:
           grep -q '_connect_read_only' "BACK END/backend/shadow_counterfactual.py"
           ! grep -Eq 'record_object|record_event|consume_authorization|consume_paper_authorization|submit_paper_order|create_governed_paper_order' \
             "BACK END/backend/shadow_counterfactual.py" \
-            scripts/iios_shadow_counterfactual_lab.py
+            scripts/iios_shadow_counterfactual_lab.py \
+            scripts/activate_batch9i_shadow_counterfactual.py
 
       - name: Assert production baseline and hard evidence gates
         run: |
@@ -59,18 +61,32 @@ jobs:
           grep -q 'auto_apply_threshold_changes' "BACK END/backend/shadow_counterfactual.py"
           ! grep -Eq 'auto_apply_threshold_changes"[[:space:]]*:[[:space:]]*True' \
             "BACK END/backend/shadow_counterfactual.py" \
-            scripts/iios_shadow_counterfactual_lab.py
+            scripts/iios_shadow_counterfactual_lab.py \
+            scripts/activate_batch9i_shadow_counterfactual.py
 
       - name: Assert private remote shadow boundary
         run: |
           grep -q 'target GitHub repository must be private' scripts/iios_shadow_counterfactual_lab.py
           grep -q 'IIOS SHADOW STRATEGY — BATCH 9I READ ONLY' scripts/iios_shadow_counterfactual_lab.py
+          grep -q 'shadow_repo_private' scripts/activate_batch9i_shadow_counterfactual.py
+
+      - name: Assert isolated Mac activation
+        run: |
+          grep -q 'SHADOW_LABEL = "com.iios.shadow-counterfactual"' scripts/activate_batch9i_shadow_counterfactual.py
+          grep -q 'INTERVAL_SECONDS = 1800' scripts/activate_batch9i_shadow_counterfactual.py
+          grep -q 'StartInterval' scripts/activate_batch9i_shadow_counterfactual.py
+          grep -q 'batch9g_telemetry_untouched' scripts/activate_batch9i_shadow_counterfactual.py
+          grep -q 'batch9h_validation_untouched' scripts/activate_batch9i_shadow_counterfactual.py
+          ! grep -Eq 'bootout.*com\.iios\.factory-telemetry|bootout.*com\.iios\.market-benchmark|bootout.*com\.iios\.market-validation' scripts/activate_batch9i_shadow_counterfactual.py
+          ! grep -Eq 'http\.server|uvicorn|FastAPI|listen\(|bind\(' scripts/activate_batch9i_shadow_counterfactual.py scripts/iios_shadow_counterfactual_lab.py
 
       - name: Assert no live execution authority
         run: |
           ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' \
             "BACK END/backend/shadow_counterfactual.py" \
-            scripts/iios_shadow_counterfactual_lab.py
+            scripts/iios_shadow_counterfactual_lab.py \
+            scripts/activate_batch9i_shadow_counterfactual.py
           ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' \
             "BACK END/backend/shadow_counterfactual.py" \
-            scripts/iios_shadow_counterfactual_lab.py
+            scripts/iios_shadow_counterfactual_lab.py \
+            scripts/activate_batch9i_shadow_counterfactual.py
