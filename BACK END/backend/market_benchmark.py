@@ -42,30 +42,39 @@ def _canonical_symbol(value: Any) -> str:
     return str(value or "").strip().upper().replace(".", "-")
 
 
-def _strict_universe_aliases() -> tuple[set[str], dict[str, str]]:
-    # Lazy import keeps the benchmark engine testable without loading the API stack.
-    from batch8c_production_inputs import current_strict_governed_universe
-
-    governed = current_strict_governed_universe()
+def _strict_universe_aliases(
+    governed: dict[str, Any],
+) -> tuple[set[str], dict[str, str]]:
+    """Validate an already-governed universe payload without doing any I/O."""
     if not isinstance(governed, dict):
         raise RuntimeError("STRICT_GOVERNED_UNIVERSE_UNAVAILABLE")
-    if governed.get("verified_complete") is not True or governed.get("strict_membership") is not True:
+    if (
+        governed.get("verified_complete") is not True
+        or governed.get("strict_membership") is not True
+    ):
         raise RuntimeError("STRICT_GOVERNED_UNIVERSE_NOT_VERIFIED")
+
     symbols: set[str] = set()
     aliases: dict[str, str] = {}
     for row in governed.get("symbols") or []:
-        ticker = str(row.get("ticker") if isinstance(row, dict) else row or "").strip().upper()
+        ticker = str(
+            row.get("ticker") if isinstance(row, dict) else row or ""
+        ).strip().upper()
         if not ticker:
             continue
         symbols.add(ticker)
         aliases[_canonical_symbol(ticker)] = ticker
+
     if not symbols:
         raise RuntimeError("STRICT_GOVERNED_UNIVERSE_EMPTY")
     return symbols, aliases
 
 
-def _yahoo_screener(scr_id: str, count: int = 100) -> list[dict[str, Any]]:
-    # Lazy import avoids coupling pure benchmark tests to provider/API dependencies.
+def _yahoo_screener(
+    scr_id: str,
+    count: int = 100,
+) -> list[dict[str, Any]]:
+    # Lazy import keeps pure benchmark tests independent from provider runtime.
     from provider_hardening import _json_request
 
     params = urlencode(
@@ -79,31 +88,50 @@ def _yahoo_screener(scr_id: str, count: int = 100) -> list[dict[str, Any]]:
         }
     )
     errors: list[str] = []
-    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+    for host in (
+        "query1.finance.yahoo.com",
+        "query2.finance.yahoo.com",
+    ):
         try:
             payload = _json_request(
-                url=f"https://{host}/v1/finance/screener/predefined/saved?{params}",
+                url=(
+                    f"https://{host}/v1/finance/screener/"
+                    f"predefined/saved?{params}"
+                ),
                 provider="yahoo_9h_independent_benchmark",
                 minimum_interval_seconds=0.18,
                 retries=1,
                 cache_ttl_seconds=45,
             )
-            result = ((payload.get("finance") or {}).get("result") or [None])[0]
-            quotes = result.get("quotes") if isinstance(result, dict) else None
+            result = (
+                ((payload.get("finance") or {}).get("result") or [None])[0]
+            )
+            quotes = (
+                result.get("quotes")
+                if isinstance(result, dict)
+                else None
+            )
             if isinstance(quotes, list):
                 return [row for row in quotes if isinstance(row, dict)]
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{host}:{type(exc).__name__}:{exc}")
-    raise RuntimeError(" | ".join(errors) or f"Yahoo screener unavailable: {scr_id}")
+    raise RuntimeError(
+        " | ".join(errors)
+        or f"Yahoo screener unavailable: {scr_id}"
+    )
 
 
 def collect_independent_snapshot(
     *,
+    governed_universe: dict[str, Any],
     observed_at: datetime | None = None,
     count: int = 100,
 ) -> dict[str, Any]:
-    observed_at = (observed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    symbols, aliases = _strict_universe_aliases()
+    """Collect market movement independently of IIOS ranking/promotion logic."""
+    observed_at = (
+        observed_at or datetime.now(timezone.utc)
+    ).astimezone(timezone.utc)
+    symbols, aliases = _strict_universe_aliases(governed_universe)
     collected: dict[str, dict[str, Any]] = {}
     successful: list[str] = []
     errors: list[str] = []
@@ -113,17 +141,26 @@ def collect_independent_snapshot(
             rows = _yahoo_screener(screener_id, count=count)
             successful.append(screener_id)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{screener_id}:{type(exc).__name__}:{exc}")
+            errors.append(
+                f"{screener_id}:{type(exc).__name__}:{exc}"
+            )
             continue
+
         for row in rows:
-            ticker = aliases.get(_canonical_symbol(row.get("symbol")))
+            ticker = aliases.get(
+                _canonical_symbol(row.get("symbol"))
+            )
             if not ticker:
                 continue
             item = collected.setdefault(
                 ticker,
                 {
                     "ticker": ticker,
-                    "company": str(row.get("shortName") or row.get("longName") or ticker)[:240],
+                    "company": str(
+                        row.get("shortName")
+                        or row.get("longName")
+                        or ticker
+                    )[:240],
                     "screeners": set(),
                     "quote": row,
                 },
@@ -135,33 +172,61 @@ def collect_independent_snapshot(
     candidates: list[dict[str, Any]] = []
     for ticker, item in collected.items():
         quote = item.get("quote") or {}
-        volume = _safe_float(quote.get("regularMarketVolume"), 0.0) or 0.0
+        volume = (
+            _safe_float(
+                quote.get("regularMarketVolume"),
+                0.0,
+            )
+            or 0.0
+        )
         average_volume = (
             _safe_float(quote.get("averageDailyVolume3Month"))
             or _safe_float(quote.get("averageDailyVolume10Day"))
             or 0.0
         )
-        volume_ratio = volume / average_volume if volume > 0 and average_volume > 0 else None
+        volume_ratio = (
+            volume / average_volume
+            if volume > 0 and average_volume > 0
+            else None
+        )
         candidates.append(
             {
                 "ticker": ticker,
                 "company": item["company"],
                 "screeners": sorted(item["screeners"]),
-                "current_price": _safe_float(quote.get("regularMarketPrice")),
-                "change_pct": _safe_float(quote.get("regularMarketChangePercent")),
+                "current_price": _safe_float(
+                    quote.get("regularMarketPrice")
+                ),
+                "change_pct": _safe_float(
+                    quote.get("regularMarketChangePercent")
+                ),
                 "volume": volume or None,
                 "average_volume": average_volume or None,
-                "volume_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
+                "volume_ratio": (
+                    round(volume_ratio, 4)
+                    if volume_ratio is not None
+                    else None
+                ),
                 "market_cap": _safe_float(quote.get("marketCap")),
                 "strict_governed_universe": True,
             }
         )
-    candidates.sort(key=lambda row: abs(float(row.get("change_pct") or 0.0)), reverse=True)
+
+    candidates.sort(
+        key=lambda row: abs(float(row.get("change_pct") or 0.0)),
+        reverse=True,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "source": SOURCE,
         "observed_at": observed_at.isoformat(),
         "governed_universe_count": len(symbols),
+        "governed_universe_source": governed_universe.get("source"),
+        "governed_universe_as_of": (
+            governed_universe.get("cached_at")
+            or governed_universe.get("created_at")
+            or governed_universe.get("as_of")
+        ),
         "screeners_requested": list(SCREENER_IDS),
         "screeners_successful": sorted(successful),
         "snapshot_complete": set(successful) == set(SCREENER_IDS),
@@ -184,12 +249,22 @@ def _qualifies(
 ) -> bool:
     move = abs(float(row.get("change_pct") or 0.0))
     volume_ratio = float(row.get("volume_ratio") or 0.0)
-    screeners = row.get("screeners") if isinstance(row.get("screeners"), list) else []
+    screeners = (
+        row.get("screeners")
+        if isinstance(row.get("screeners"), list)
+        else []
+    )
     if move >= min_abs_move_pct:
         return True
-    if move >= min_abs_move_with_volume_pct and volume_ratio >= min_volume_ratio:
+    if (
+        move >= min_abs_move_with_volume_pct
+        and volume_ratio >= min_volume_ratio
+    ):
         return True
-    return move >= min_abs_move_with_volume_pct and len(screeners) >= 2
+    return (
+        move >= min_abs_move_with_volume_pct
+        and len(screeners) >= 2
+    )
 
 
 def build_opportunity_benchmark(
@@ -199,12 +274,22 @@ def build_opportunity_benchmark(
     session_end: str | datetime,
     interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
     min_abs_move_pct: float = DEFAULT_MIN_ABS_MOVE_PCT,
-    min_abs_move_with_volume_pct: float = DEFAULT_MIN_ABS_MOVE_WITH_VOLUME_PCT,
+    min_abs_move_with_volume_pct: float = (
+        DEFAULT_MIN_ABS_MOVE_WITH_VOLUME_PCT
+    ),
     min_volume_ratio: float = DEFAULT_MIN_VOLUME_RATIO,
     min_coverage_pct: float = DEFAULT_MIN_COVERAGE_PCT,
 ) -> dict[str, Any]:
-    start = session_start if isinstance(session_start, datetime) else _parse_time(session_start)
-    end = session_end if isinstance(session_end, datetime) else _parse_time(session_end)
+    start = (
+        session_start
+        if isinstance(session_start, datetime)
+        else _parse_time(session_start)
+    )
+    end = (
+        session_end
+        if isinstance(session_end, datetime)
+        else _parse_time(session_end)
+    )
     if start is None or end is None or end <= start:
         raise ValueError("Valid session_start/session_end are required")
     if start.tzinfo is None:
@@ -218,26 +303,51 @@ def build_opportunity_benchmark(
     in_window: list[tuple[datetime, dict[str, Any]]] = []
     for snapshot in snapshots:
         observed = _parse_time(snapshot.get("observed_at"))
-        if observed is None or observed < start or observed > end + timedelta(minutes=5):
+        if (
+            observed is None
+            or observed < start
+            or observed > end + timedelta(minutes=5)
+        ):
             continue
         in_window.append((observed, snapshot))
     in_window.sort(key=lambda item: item[0])
 
-    expected_samples = max(1, math.ceil((end - start).total_seconds() / interval_seconds))
+    expected_samples = max(
+        1,
+        math.ceil(
+            (end - start).total_seconds() / interval_seconds
+        ),
+    )
     sample_count = len(in_window)
-    coverage_pct = round(min(100.0, (sample_count / expected_samples) * 100.0), 2)
+    coverage_pct = round(
+        min(100.0, (sample_count / expected_samples) * 100.0),
+        2,
+    )
     all_screeners_seen: set[str] = set()
     complete_samples = 0
     provider_error_count = 0
     for _, snapshot in in_window:
-        all_screeners_seen.update(str(x) for x in snapshot.get("screeners_successful") or [])
-        complete_samples += int(snapshot.get("snapshot_complete") is True)
-        provider_error_count += len(snapshot.get("provider_errors") or [])
+        all_screeners_seen.update(
+            str(x)
+            for x in snapshot.get("screeners_successful") or []
+        )
+        complete_samples += int(
+            snapshot.get("snapshot_complete") is True
+        )
+        provider_error_count += len(
+            snapshot.get("provider_errors") or []
+        )
 
     first_sample_at = in_window[0][0] if in_window else None
     last_sample_at = in_window[-1][0] if in_window else None
-    opening_coverage = bool(first_sample_at and first_sample_at <= start + timedelta(minutes=20))
-    closing_coverage = bool(last_sample_at and last_sample_at >= end - timedelta(minutes=15))
+    opening_coverage = bool(
+        first_sample_at
+        and first_sample_at <= start + timedelta(minutes=20)
+    )
+    closing_coverage = bool(
+        last_sample_at
+        and last_sample_at >= end - timedelta(minutes=15)
+    )
     benchmark_complete = bool(
         coverage_pct >= float(min_coverage_pct)
         and set(SCREENER_IDS).issubset(all_screeners_seen)
@@ -251,7 +361,9 @@ def build_opportunity_benchmark(
         for row in snapshot.get("candidates") or []:
             if not isinstance(row, dict):
                 continue
-            ticker = str(row.get("ticker") or "").strip().upper()
+            ticker = str(
+                row.get("ticker") or ""
+            ).strip().upper()
             if not ticker:
                 continue
             move = float(row.get("change_pct") or 0.0)
@@ -262,20 +374,36 @@ def build_opportunity_benchmark(
             if not _qualifies(
                 row,
                 min_abs_move_pct=float(min_abs_move_pct),
-                min_abs_move_with_volume_pct=float(min_abs_move_with_volume_pct),
+                min_abs_move_with_volume_pct=float(
+                    min_abs_move_with_volume_pct
+                ),
                 min_volume_ratio=float(min_volume_ratio),
             ):
                 continue
-            first_qualified[ticker] = {**row, "event_at": observed.isoformat()}
+            first_qualified[ticker] = {
+                **row,
+                "event_at": observed.isoformat(),
+            }
 
     opportunities: list[dict[str, Any]] = []
     for ticker, row in first_qualified.items():
-        peak_move = peak_moves.get(ticker, float(row.get("change_pct") or 0.0))
+        peak_move = peak_moves.get(
+            ticker,
+            float(row.get("change_pct") or 0.0),
+        )
         magnitude = abs(float(peak_move))
-        importance = "HIGH" if magnitude >= 7.0 else "MEDIUM" if magnitude >= 4.0 else "LOW"
+        importance = (
+            "HIGH"
+            if magnitude >= 7.0
+            else "MEDIUM"
+            if magnitude >= 4.0
+            else "LOW"
+        )
         opportunities.append(
             {
-                "opportunity_id": f"9h_{start.date().isoformat()}_{ticker}",
+                "opportunity_id": (
+                    f"9h_{start.date().isoformat()}_{ticker}"
+                ),
                 "ticker": ticker,
                 "event_at": row["event_at"],
                 "label": row.get("company") or ticker,
@@ -284,7 +412,10 @@ def build_opportunity_benchmark(
                 "source": SOURCE,
             }
         )
-    opportunities.sort(key=lambda row: abs(float(row.get("move_pct") or 0.0)), reverse=True)
+    opportunities.sort(
+        key=lambda row: abs(float(row.get("move_pct") or 0.0)),
+        reverse=True,
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -304,11 +435,21 @@ def build_opportunity_benchmark(
             "screeners_seen": sorted(all_screeners_seen),
             "opening_coverage": opening_coverage,
             "closing_coverage": closing_coverage,
-            "first_sample_at": first_sample_at.isoformat() if first_sample_at else None,
-            "last_sample_at": last_sample_at.isoformat() if last_sample_at else None,
+            "first_sample_at": (
+                first_sample_at.isoformat()
+                if first_sample_at
+                else None
+            ),
+            "last_sample_at": (
+                last_sample_at.isoformat()
+                if last_sample_at
+                else None
+            ),
             "thresholds": {
                 "min_abs_move_pct": float(min_abs_move_pct),
-                "min_abs_move_with_volume_pct": float(min_abs_move_with_volume_pct),
+                "min_abs_move_with_volume_pct": float(
+                    min_abs_move_with_volume_pct
+                ),
                 "min_volume_ratio": float(min_volume_ratio),
             },
             "ledger_read": False,
