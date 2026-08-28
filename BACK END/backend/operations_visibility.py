@@ -12,7 +12,8 @@ from paper_portfolio_core import build_portfolio_state
 
 
 router = APIRouter()
-POLICY_VERSION = "batch10d-operations-visibility-v1"
+POLICY_VERSION = "batch10d-operations-visibility-v2"
+MAX_SCAN_CASES = 100
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -161,11 +162,67 @@ def _case_row(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _operational_score(row: dict[str, Any]) -> int:
+    deep = row.get("deep_watch") or {}
+    options = row.get("options_shadow") or {}
+    score = 0
+    if int(deep.get("material_change_count") or 0) > 0:
+        score += 1000
+    if int(deep.get("obligation_count") or 0) > 0:
+        score += 500
+    if row.get("monitoring_active") is True:
+        score += 300
+    if row.get("paper_execution_complete") is True:
+        score += 250
+    if row.get("qualified_buy_candidate") is True:
+        score += 200
+    if row.get("valid_no_capital_outcome") is True:
+        score += 150
+    if int(options.get("observation_count") or 0) > 0:
+        score += 100
+    return score
+
+
+def _is_current_operational_case(row: dict[str, Any]) -> bool:
+    return _operational_score(row) > 0
+
+
+def _select_current_cases(rows: list[dict[str, Any]], limit: int) -> tuple[list[dict[str, Any]], int]:
+    """Collapse historical case churn into one current operational row per ticker.
+
+    Input order is newest-first from the lineage overview. A higher operational
+    score beats recency so an actively monitored/Deep-Watch case is not hidden by
+    a newer dormant duplicate for the same ticker. Dormant legacy continuity gaps
+    remain in the ledger but do not flood the live operations board.
+    """
+    best_by_key: dict[str, tuple[int, int, dict[str, Any]]] = {}
+    legacy_gap_count = 0
+
+    for index, row in enumerate(rows):
+        if row.get("dead_end") is True and not _is_current_operational_case(row):
+            legacy_gap_count += 1
+
+        ticker = str(row.get("ticker") or "").strip().upper()
+        key = ticker or str(row.get("case_id") or f"case-{index}")
+        candidate = (_operational_score(row), -index, row)
+        prior = best_by_key.get(key)
+        if prior is None or candidate[:2] > prior[:2]:
+            best_by_key[key] = candidate
+
+    selected = [item[2] for item in best_by_key.values() if _is_current_operational_case(item[2])]
+    selected.sort(key=lambda row: _operational_score(row), reverse=True)
+    return selected[:limit], legacy_gap_count
+
+
 def build_operations_visibility(limit: int = 25) -> dict[str, Any]:
     limit = max(1, min(int(limit), 100))
     portfolio = build_portfolio_state()
-    lineage = build_closed_loop_overview(limit)
-    cases = [_case_row(row) for row in lineage.get("cases") or []]
+
+    # The live board scans a broader lineage window than it displays so an active
+    # monitored case cannot disappear merely because many newer legacy cases exist.
+    lineage = build_closed_loop_overview(MAX_SCAN_CASES)
+    all_rows = [_case_row(row) for row in lineage.get("cases") or []]
+    cases, legacy_gap_count = _select_current_cases(all_rows, limit)
 
     nav = _safe_float(portfolio.get("nav"))
     cash = _safe_float(portfolio.get("cash"))
@@ -173,12 +230,13 @@ def build_operations_visibility(limit: int = 25) -> dict[str, Any]:
 
     summary = {
         "case_count": len(cases),
-        "deep_watch_cases": sum(1 for row in cases if (row.get("deep_watch") or {}).get("active")),
+        "deep_watch_cases": sum(1 for row in cases if int((row.get("deep_watch") or {}).get("obligation_count") or 0) > 0),
         "open_obligations": sum(int((row.get("deep_watch") or {}).get("obligation_count") or 0) for row in cases),
         "material_change_cases": sum(1 for row in cases if int((row.get("deep_watch") or {}).get("material_change_count") or 0) > 0),
-        "options_shadow_cases": sum(1 for row in cases if (row.get("options_shadow") or {}).get("mode") == "SHADOW_OBSERVATION_ONLY"),
+        "options_shadow_cases": sum(1 for row in cases if int((row.get("options_shadow") or {}).get("observation_count") or 0) > 0),
         "options_observations": sum(int((row.get("options_shadow") or {}).get("observation_count") or 0) for row in cases),
         "dead_end_count": sum(1 for row in cases if row.get("dead_end") is True),
+        "legacy_continuity_gap_count": legacy_gap_count,
         "valid_no_capital_paths": sum(1 for row in cases if row.get("valid_no_capital_outcome") is True),
         "paper_positions_opened": sum(1 for row in cases if row.get("paper_execution_complete") is True),
     }
@@ -196,6 +254,13 @@ def build_operations_visibility(limit: int = 25) -> dict[str, Any]:
         },
         "summary": summary,
         "cases": cases,
+        "selection": {
+            "scanned_case_count": len(all_rows),
+            "displayed_current_case_count": len(cases),
+            "one_row_per_ticker": True,
+            "active_cases_prioritized": True,
+            "dormant_legacy_gaps_excluded_from_live_rows": True,
+        },
         "paper_mode": True,
         "read_only_surface": True,
         "equity_paper_expression_authoritative": True,
