@@ -123,10 +123,36 @@ class Batch9ODailyFactoryEpisodeTest(unittest.TestCase):
         self.assertEqual(payload["learning_misses"][0]["ticker"], "MISS")
         self.assertEqual(payload["scoreboard"]["paper"]["nav"], 10125.0)
         self.assertEqual(payload["scoreboard"]["paper"]["total_pnl"], 125.0)
+        self.assertEqual(payload["scoreboard"]["validation_miss_count"], 1)
+        self.assertEqual(payload["scoreboard"]["validation_miss_detail_count"], 1)
         self.assertEqual(payload["tomorrow_focus"][0]["priority"], "RADAR_MISS_REVIEW")
         self.assertEqual(payload["tomorrow_focus"][1]["authority"], "ADVISORY_ONLY")
         self.assertFalse(payload["safety"]["trade_execution_permission"])
         self.assertFalse(payload["safety"]["live_execution"])
+
+    def test_aggregate_misses_survive_when_detail_rows_are_absent(self) -> None:
+        payload = episode.build_daily_episode(
+            scorecard={
+                "session_id": "2026-08-28",
+                "metrics": {
+                    "benchmark_opportunity_count": 36,
+                    "eventual_detected_count": 17,
+                    "eventual_detection_rate_pct": 47.2,
+                    "eventual_opportunity_miss_rate_pct": 52.8,
+                },
+                "opportunities": [],
+            },
+            shadow={},
+            learning={"latest_session_id": "2026-08-28", "recent_outcomes": []},
+            telemetry={"paper_fund": {"nav": 10000.0, "total_pnl": 0.0}},
+            generated_at=datetime(2026, 8, 28, 22, 0, tzinfo=timezone.utc),
+            final_requested=True,
+        )
+        self.assertEqual(payload["scoreboard"]["validation_miss_count"], 19)
+        self.assertEqual(payload["scoreboard"]["validation_miss_detail_count"], 0)
+        self.assertEqual(payload["misses"], [])
+        self.assertIn("19 missed by the aggregate 9H metric", payload["story"][0]["line"])
+        self.assertIn("0 detailed miss row(s)", payload["tomorrow_focus"][0]["why"])
 
     def test_final_with_learning_warmup_when_current_session_outcomes_are_missing(self) -> None:
         payload = episode.build_daily_episode(
