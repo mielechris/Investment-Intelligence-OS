@@ -1,0 +1,69 @@
+name: IIOS Batch 10D-10F Readiness Superbatch Gate
+
+on:
+  push:
+    branches: [feature/batch10d-10f-readiness-superbatch-v2]
+  pull_request:
+    branches: [feature/batch10a-10c-operating-superbatch]
+
+jobs:
+  readiness-superbatch-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Compile 10D-10F
+        run: python -m py_compile scripts/iios_capital_preservation_stress_lab.py scripts/iios_governed_capital_readiness.py scripts/iios_institutional_investment_firm_os.py scripts/iios_readiness_superbatch_publisher.py scripts/iios_final_institutional_publisher.py scripts/test_batch10d_10f_readiness_superbatch.py scripts/activate_batch10d_10f_readiness_superbatch.py scripts/activate_batch9k_live_factory_browser.py
+      - name: Run inherited 9T and 10A-10C regressions
+        run: |
+          python scripts/test_batch9p_chief_intelligence_office.py
+          python scripts/test_batch9q_experiment_ab_laboratory.py
+          python scripts/test_batch9r_data_expansion_factory.py
+          python scripts/test_batch9s_agent_performance_league.py
+          python scripts/test_batch9t_market_regime_intelligence.py
+          python scripts/test_batch10a_10c_operating_superbatch.py
+      - name: Run 10D-10F contracts
+        run: python scripts/test_batch10d_10f_readiness_superbatch.py
+      - name: Build final institutional browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/ExperimentABLaboratory.tsx src/DataExpansionFactory.tsx src/AgentPerformanceLeague.tsx src/MarketRegimeIntelligence.tsx src/OperatingSuperbatch.tsx src/ReadinessSuperbatch.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+      - name: Assert 10D stress is hypothetical only
+        run: |
+          grep -q 'deterministic_hypothetical' scripts/iios_capital_preservation_stress_lab.py
+          grep -q 'forecast":False' scripts/iios_capital_preservation_stress_lab.py
+          grep -q 'auto_reduce_exposure":False' scripts/iios_capital_preservation_stress_lab.py
+          grep -q 'HYPOTHETICAL · NOT FORECAST' "FRONT END/src/ReadinessSuperbatch.tsx"
+      - name: Assert 10E cannot authorize live capital
+        run: |
+          grep -q 'NOT_READY_FOR_LIVE_CAPITAL' scripts/iios_governed_capital_readiness.py
+          grep -q 'UNRESOLVED_MANUAL_GATE' scripts/iios_governed_capital_readiness.py
+          grep -q 'auto_enable_live":False' scripts/iios_governed_capital_readiness.py
+          grep -q 'auto_connect_broker":False' scripts/iios_governed_capital_readiness.py
+          grep -q 'auto_fund_account":False' scripts/iios_governed_capital_readiness.py
+      - name: Assert 10F institutional label is architecture not regulatory status
+        run: |
+          grep -q 'INSTITUTIONAL_OS_ARCHITECTURE_READY_LIVE_CAPITAL_NOT_AUTHORIZED' scripts/iios_institutional_investment_firm_os.py
+          grep -q 'institutional_label_does_not_imply_regulatory_status":True' scripts/iios_institutional_investment_firm_os.py
+          grep -q 'ARCHITECTURE ≠ REGULATORY STATUS' "FRONT END/src/ReadinessSuperbatch.tsx"
+      - name: Assert final one-command publisher covers 9P through 10F
+        run: |
+          grep -q 'chief_intelligence_office.json' scripts/iios_final_institutional_publisher.py
+          grep -q 'agent_performance_league.json' scripts/iios_final_institutional_publisher.py
+          grep -q 'market_regime_intelligence.json' scripts/iios_final_institutional_publisher.py
+          grep -q 'unified_production_browser.json' scripts/iios_final_institutional_publisher.py
+          grep -q 'institutional_investment_firm_os.json' scripts/iios_final_institutional_publisher.py
+      - name: Assert final activation preserves existing workers
+        run: |
+          grep -q 'BRANCH="feature/batch10d-10f-readiness-superbatch-v2"' scripts/activate_batch10d_10f_readiness_superbatch.py
+          grep -q 'FINAL_LABEL="com.iios.institutional-browser-artifacts"' scripts/activate_batch10d_10f_readiness_superbatch.py
+          grep -q 'Existing 9O–9S workers: PRESERVED' scripts/activate_batch10d_10f_readiness_superbatch.py
+          grep -q 'One or more existing 9O–9S workers changed' scripts/activate_batch10d_10f_readiness_superbatch.py
+      - name: Assert no live authority anywhere in final superbatch
+        run: |
+          ! grep -Eq '"(capital_authority|trade_execution_permission|live_execution|auto_enable_live|auto_connect_broker|auto_fund_account|auto_reduce_exposure|position_change_authority)"[[:space:]]*:[[:space:]]*True' scripts/iios_capital_preservation_stress_lab.py scripts/iios_governed_capital_readiness.py scripts/iios_institutional_investment_firm_os.py scripts/activate_batch10d_10f_readiness_superbatch.py
