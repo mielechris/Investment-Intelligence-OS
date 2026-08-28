@@ -1,0 +1,118 @@
+name: IIOS Batch 9R Data Expansion Factory Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9r-data-expansion-factory
+  pull_request:
+    branches:
+      - feature/batch9q-experiment-ab-laboratory
+
+jobs:
+  data-expansion-factory-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 9R
+        run: >-
+          python -m py_compile
+          scripts/iios_data_expansion_factory.py
+          scripts/iios_data_expansion_factory_exact.py
+          scripts/iios_data_expansion_factory_publisher.py
+          scripts/test_batch9r_data_expansion_factory.py
+          scripts/activate_batch9r_data_expansion_factory.py
+          scripts/iios_chief_intelligence_office.py
+          scripts/iios_experiment_ab_laboratory.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run inherited 9P and 9Q regressions
+        run: |
+          python scripts/test_batch9p_chief_intelligence_office.py
+          python scripts/test_batch9q_experiment_ab_laboratory.py
+
+      - name: Run 9R data expansion contracts
+        run: python scripts/test_batch9r_data_expansion_factory.py
+
+      - name: Build 9R browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/LivingFactoryExperience.tsx src/CharacterStoryEngine.tsx src/InteractiveCaseTheater.tsx src/DailyFactoryEpisode.tsx src/ChiefIntelligenceOffice.tsx src/ExperimentABLaboratory.tsx src/DataExpansionFactory.tsx src/MarketValidationStackPanel.tsx
+          npm run build
+
+      - name: Assert Data Expansion room and source truthfulness
+        run: |
+          grep -q 'DataExpansionFactory' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'BATCH 9R · DATA EXPANSION FACTORY' "FRONT END/src/DataExpansionFactory.tsx"
+          grep -q 'Feed the factory' "FRONT END/src/DataExpansionFactory.tsx"
+          grep -q 'NO SOURCE IS CONNECTED BY THIS SCREEN' "FRONT END/src/DataExpansionFactory.tsx"
+          grep -q 'NOT_MEASURED_IN_9R' scripts/iios_data_expansion_factory.py
+          grep -q 'NO_PERSISTED_COST_EVIDENCE' scripts/iios_data_expansion_factory.py
+          grep -q 'REVIEW_REQUIRED' scripts/iios_data_expansion_factory.py
+          grep -q 'IMPLEMENTATION_PRESENT' scripts/iios_data_expansion_factory.py
+          grep -q 'Commercial real-time news candidate — provider TBD' scripts/iios_data_expansion_factory.py
+
+      - name: Assert existing provider inventory is grounded in repository implementations
+        run: |
+          grep -q 'GOOGLE_NEWS_RSS' scripts/iios_data_expansion_factory.py
+          grep -q 'GDELT_NEWS' scripts/iios_data_expansion_factory.py
+          grep -q 'SEC_COMPANYFACTS' scripts/iios_data_expansion_factory.py
+          grep -q 'STOOQ_MARKET_DATA' scripts/iios_data_expansion_factory.py
+          grep -q 'YAHOO_CHART' scripts/iios_data_expansion_factory.py
+          grep -q 'BACK END/backend/provider_hardening.py' scripts/iios_data_expansion_factory.py
+          grep -q 'BACK END/backend/official_sources.py' scripts/iios_data_expansion_factory.py
+
+      - name: Assert 9P and 9Q live builders drive 9R ranking
+        run: |
+          grep -q 'iios_chief_intelligence_office as chief' scripts/iios_data_expansion_factory_exact.py
+          grep -q 'iios_experiment_ab_laboratory as lab' scripts/iios_data_expansion_factory_exact.py
+          grep -q 'chief.build_from_state' scripts/iios_data_expansion_factory_exact.py
+          grep -q 'lab.build_from_state' scripts/iios_data_expansion_factory_exact.py
+          grep -q 'iios_data_expansion_factory_exact as factory' scripts/iios_data_expansion_factory_publisher.py
+
+      - name: Assert source intake remains research and shadow gated
+        run: |
+          grep -q 'READ_ONLY_ADAPTER_DRY_RUN' scripts/iios_data_expansion_factory.py
+          grep -q 'SHADOW_INGESTION' scripts/iios_data_expansion_factory.py
+          grep -q '9Q_AB_VALIDATION' scripts/iios_data_expansion_factory.py
+          grep -q 'HUMAN_APPROVAL' scripts/iios_data_expansion_factory.py
+          grep -q 'PRODUCTION_ELIGIBILITY_REVIEW' scripts/iios_data_expansion_factory.py
+          grep -q 'shadow_connected_count": 0' scripts/iios_data_expansion_factory.py
+          grep -q 'production_sources_added": 0' scripts/iios_data_expansion_factory.py
+
+      - name: Assert provider, credential, spend and licensing authority are absent
+        run: |
+          grep -q '"auto_connect_provider": False' scripts/iios_data_expansion_factory.py
+          grep -q '"auto_request_credentials": False' scripts/iios_data_expansion_factory.py
+          grep -q '"credential_use_authority": False' scripts/iios_data_expansion_factory.py
+          grep -q '"purchase_authority": False' scripts/iios_data_expansion_factory.py
+          grep -q '"license_acceptance_authority": False' scripts/iios_data_expansion_factory.py
+          grep -q '"production_feed_change_authority": False' scripts/iios_data_expansion_factory.py
+          grep -q 'human_approval_required": True' scripts/iios_data_expansion_factory.py
+
+      - name: Assert isolated Mac activation preserves prior workers
+        run: |
+          grep -q 'BRANCH = "feature/batch9r-data-expansion-factory"' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'DATA_LABEL = "com.iios.data-expansion-factory"' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'DATA_INTERVAL_SECONDS = 1800' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'Parent Batch 9Q: PRESERVED' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'EPISODE_PLIST' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'OFFICE_PLIST' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'LAB_PLIST' scripts/activate_batch9r_data_expansion_factory.py
+          grep -q 'one or more 9O/9P/9Q LaunchAgents changed' scripts/activate_batch9r_data_expansion_factory.py
+          ! grep -Eq 'launchctl.*factory-telemetry|launchctl.*market-benchmark|launchctl.*market-validation|launchctl.*shadow-counterfactual|launchctl.*outcome-learning' scripts/activate_batch9r_data_expansion_factory.py
+
+      - name: Assert no live authority
+        run: |
+          ! grep -Eq '"live_execution"[[:space:]]*:[[:space:]]*True' scripts/iios_data_expansion_factory.py scripts/iios_data_expansion_factory_publisher.py scripts/activate_batch9r_data_expansion_factory.py
+          ! grep -Eq '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' scripts/iios_data_expansion_factory.py scripts/iios_data_expansion_factory_publisher.py scripts/activate_batch9r_data_expansion_factory.py
+          ! grep -Eq '"purchase_authority"[[:space:]]*:[[:space:]]*True' scripts/iios_data_expansion_factory.py scripts/activate_batch9r_data_expansion_factory.py
+          ! grep -Eq '"production_feed_change_authority"[[:space:]]*:[[:space:]]*True' scripts/iios_data_expansion_factory.py scripts/activate_batch9r_data_expansion_factory.py
