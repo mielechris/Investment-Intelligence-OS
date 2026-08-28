@@ -41,7 +41,9 @@ jobs:
           ! grep -Eq 'OPENAI_API_KEY|XAI_API_KEY|GEMINI_API_KEY|KIMI_API_KEY' "BACK END/backend/factory_telemetry.py"
       - name: Assert private outbound bootstrap safety
         run: |
-          grep -q 'gh.*repo.*create' scripts/activate_batch9f_factory_telemetry.py
+          grep -q 'DEFAULT_TELEMETRY_REPO_NAME = "IIOS-Telemetry"' scripts/activate_batch9f_factory_telemetry.py
+          grep -q '"repo",' scripts/activate_batch9f_factory_telemetry.py
+          grep -q '"create",' scripts/activate_batch9f_factory_telemetry.py
           grep -q '"--private"' scripts/activate_batch9f_factory_telemetry.py
           grep -q 'Refusing activation: telemetry destination is not verified private' scripts/activate_batch9f_factory_telemetry.py
           grep -q 'StartInterval' scripts/activate_batch9f_factory_telemetry.py
