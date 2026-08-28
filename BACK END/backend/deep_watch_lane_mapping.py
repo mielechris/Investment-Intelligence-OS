@@ -11,6 +11,7 @@ LANE_HINTS: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = (
             ("micron", "earnings", "guidance"),
             ("cash flow", "capex", "debt"),
             ("revenue", "inventory", "margin"),
+            ("earnings", "margin", "capex"),
         ),
     ),
     (
