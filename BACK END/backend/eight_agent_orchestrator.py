@@ -299,6 +299,7 @@ Return ONLY JSON with exactly these fields:
         "decision_id": decision_id,
         "case_id": case_id,
         "topic": topic,
+        "evidence_summary": evidence_summary,
         "status": "complete",
         "headline": str(analysis.get("headline") or "Committee review completed"),
         "summary": str(analysis.get("summary") or "Committee review completed."),
