@@ -314,3 +314,10 @@ def install_open_evidence_watch(primary_module: Any, monitoring_module: Any) -> 
     from options_shadow_observation import router as options_shadow_router
 
     monitoring_module.router.include_router(options_shadow_router)
+
+    # Closed-loop lineage is a read-only operations spine. It treats monitored
+    # NO_TRADE/WATCH outcomes as valid closed-loop states and flags only genuine
+    # continuation gaps; it cannot create research, capital, authorization or orders.
+    from closed_loop_case_lineage import router as closed_loop_router
+
+    monitoring_module.router.include_router(closed_loop_router)
