@@ -1,0 +1,40 @@
+name: IIOS Batch 9E Resilient Universe Mirror Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9e-high-speed-market-radar
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  resilient-universe-mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile resilient universe sources
+        run: >-
+          python -m py_compile
+          "BACK END/backend/production_index_universe.py"
+          "BACK END/backend/production_index_universe_resilient.py"
+          scripts/test_batch9e_resilient_universe_mirrors.py
+      - name: Run Nasdaq mirror failover regression
+        env:
+          PYTHONPATH: BACK END/backend
+        run: python scripts/test_batch9e_resilient_universe_mirrors.py
+      - name: Assert governed mirror and safety boundaries
+        run: |
+          grep -q 'NASDAQ100_IQQ_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'ishares-nasdaq-100-etf/latest-holdings.csv' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'GOVERNED_INDEX_TRACKER_MIRROR' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'Nasdaq 100 Index' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'BLACKROCK_ISHARES' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'acceptance_screener_fallback_used.*False' "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -q 'CERT_NONE' "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -q 'check_hostname.*False' "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -q 'live_execution.*True' "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -q 'trade_execution_permission.*True' "BACK END/backend/production_index_universe_resilient.py"
