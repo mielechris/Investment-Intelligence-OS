@@ -23,6 +23,7 @@ LOG_DIR = Path.home() / "Library" / "Logs" / "IIOS"
 LABEL = "com.iios.historical-market-intelligence"
 PLIST = LAUNCH_DIR / f"{LABEL}.plist"
 INTERVAL_SECONDS = 900
+GENERATED_PREFIXES = ("FRONT END/dist/", "scripts/__pycache__/")
 
 
 def run(args: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -32,6 +33,23 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True) -> subproc
     return result
 
 
+def _dirty_paths(status_text: str) -> list[str]:
+    paths: list[str] = []
+    for raw in status_text.splitlines():
+        if len(raw) < 4:
+            continue
+        path = raw[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path)
+    return paths
+
+
+def _is_generated(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return normalized == "FRONT END/dist" or normalized == "scripts/__pycache__" or any(normalized.startswith(prefix) for prefix in GENERATED_PREFIXES)
+
+
 def ensure_worktree() -> None:
     git = shutil.which("git")
     if not git:
@@ -39,8 +57,19 @@ def ensure_worktree() -> None:
     run([git, "fetch", "origin", BRANCH], cwd=LIVE)
     remote = f"origin/{BRANCH}"
     if WORKTREE.exists():
-        if run([git, "status", "--porcelain"], cwd=WORKTREE).stdout.strip():
-            raise SystemExit("10H worktree has local changes; refusing runtime repair")
+        status = run([git, "status", "--porcelain"], cwd=WORKTREE).stdout.strip()
+        dirty = _dirty_paths(status)
+        unsafe = [path for path in dirty if not _is_generated(path)]
+        if unsafe:
+            raise SystemExit(
+                "10H worktree has non-generated local changes; refusing runtime repair: "
+                + ", ".join(unsafe[:12])
+            )
+        if dirty:
+            # 10H deliberately republishes browser artifacts into dist. Those files are
+            # runtime products, not source edits. Clean only those known generated paths.
+            run([git, "restore", "--staged", "--worktree", "--", "FRONT END/dist", "scripts/__pycache__"], cwd=WORKTREE, check=False)
+            run([git, "clean", "-fd", "--", "FRONT END/dist", "scripts/__pycache__"], cwd=WORKTREE, check=False)
         run([git, "reset", "--hard", remote], cwd=WORKTREE)
     else:
         run([git, "worktree", "add", "--detach", str(WORKTREE), remote], cwd=LIVE)
