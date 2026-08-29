@@ -11,6 +11,8 @@ WORKTREE = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9e-
 BRANCH = "feature/batch9e-high-speed-market-radar"
 DOTENV = LIVE / "BACK END" / "backend" / ".env"
 LEDGER = LIVE / "BACK END" / "backend" / "iios_ledger.db"
+COST_HELPER_BACKEND = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend")
+COST_HELPER = COST_HELPER_BACKEND / "model_cost_enforcement.py"
 VENV_CANDIDATES = (
     LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python",
     Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
@@ -67,6 +69,10 @@ def main() -> int:
         raise SystemExit(f"Live Batch8 checkout not found: {LIVE}")
     if not LEDGER.exists():
         raise SystemExit(f"Live governed ledger not found: {LEDGER}")
+    if not COST_HELPER.exists():
+        raise SystemExit(
+            "Binding Grok cost governor helper is missing; refusing to start 9E xAI research"
+        )
 
     branch_before = capture("git", "branch", "--show-current", cwd=LIVE)
     status_before = capture("git", "status", "--porcelain", cwd=LIVE)
@@ -75,6 +81,11 @@ def main() -> int:
     print(f"Live checkout: {LIVE}")
     print(f"Live branch: {branch_before}")
     print(f"Governed ledger: {LEDGER}")
+    print(f"Shared Grok cost governor: {COST_HELPER}")
+    print("Grok cost admission/accounting: BINDING")
+    print("Grok request retries: 0")
+    print("Grok max output tokens: 2000")
+    print("Grok prompt cache key: ENABLED")
     print("Ledger mutation: ENABLED for 9E radar/model/case telemetry")
     print("9A / 9B existing processes: UNTOUCHED")
     print("Grok: critical-path real-time context")
@@ -115,6 +126,12 @@ def main() -> int:
     python = resolve_python()
     env = dict(os.environ)
     load_dotenv(DOTENV, env)
+    inherited_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+    env["PYTHONPATH"] = (
+        str(COST_HELPER_BACKEND)
+        if not inherited_pythonpath
+        else str(COST_HELPER_BACKEND) + os.pathsep + inherited_pythonpath
+    )
     env.update(
         {
             "PYTHONUNBUFFERED": "1",
