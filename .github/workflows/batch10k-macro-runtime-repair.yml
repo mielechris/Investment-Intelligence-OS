@@ -23,11 +23,14 @@ jobs:
           scripts/iios_historical_macro_regime_runtime.py
           scripts/repair_batch10k_macro_runtime.py
 
-      - name: Assert HTTP1 transport repair
+      - name: Assert HTTP1 concurrent transport repair
         run: |
           grep -q '"--http1.1"' scripts/iios_historical_macro_regime_runtime.py
           grep -q '"--retry-all-errors"' scripts/iios_historical_macro_regime_runtime.py
           grep -q '"--retry"' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'ThreadPoolExecutor' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'MAX_SERIES_WORKERS = 6' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'runtime_series_workers' scripts/iios_historical_macro_regime_runtime.py
           ! grep -Eq -- '"--insecure"|"-k"' scripts/iios_historical_macro_regime_runtime.py
 
       - name: Assert runtime repair preserves no authority
