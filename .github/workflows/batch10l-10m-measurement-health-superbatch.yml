@@ -28,8 +28,11 @@ jobs:
           scripts/iios_measurement_health_publisher.py
           scripts/activate_batch10l_10m_measurement_health_superbatch.py
           scripts/test_batch10l_10m_measurement_health_superbatch.py
+          scripts/test_batch10m_binding_artifact_preservation.py
       - name: Run measurement health and cost contracts
-        run: PYTHONPATH=scripts python scripts/test_batch10l_10m_measurement_health_superbatch.py
+        run: |
+          PYTHONPATH=scripts python scripts/test_batch10l_10m_measurement_health_superbatch.py
+          PYTHONPATH=scripts python scripts/test_batch10m_binding_artifact_preservation.py
       - name: Lint and build browser
         working-directory: FRONT END
         run: |
