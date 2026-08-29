@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 
-ADAPTER_VERSION = "xai-official-sdk-citations-v4"
+ADAPTER_VERSION = "xai-official-sdk-citations-v5-cost-governor-aware"
 
 
 class _XaiSdkResponseAdapter:
@@ -27,6 +27,24 @@ class _XaiSdkResponseAdapter:
         except (TypeError, ValueError):
             cost_ticks = 0
 
+        def usage_int(primary: str, fallback: str | None = None) -> int:
+            value = getattr(usage, primary, None)
+            if value is None and fallback:
+                value = getattr(usage, fallback, 0)
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        input_tokens = usage_int("input_tokens", "prompt_tokens")
+        output_tokens = usage_int("output_tokens", "completion_tokens")
+        cached_tokens = 0
+        details = getattr(usage, "input_tokens_details", None) or getattr(usage, "prompt_tokens_details", None)
+        try:
+            cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            cached_tokens = 0
+
         server_usage = getattr(self._response, "server_side_tool_usage", None)
         tool_count = 0
         if isinstance(server_usage, dict):
@@ -44,6 +62,9 @@ class _XaiSdkResponseAdapter:
         return {
             "citations": list(self.citations),
             "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": {"cached_tokens": cached_tokens},
+                "output_tokens": output_tokens,
                 "cost_in_usd_ticks": cost_ticks,
                 "num_server_side_tools_used": tool_count,
             },
@@ -91,11 +112,22 @@ def _retryable_xai_error(exc: Exception) -> bool:
 
 
 def install_xai_sdk_x_search(module) -> None:
-    """Replace only Grok's X-search transport with the official xAI SDK.
+    """Install the official xAI SDK transport only when no binding cost gate owns the boundary.
 
-    The existing IIOS firewall, agent routing, evidence qualification, committee,
-    sizing, authorization, and execution paths are unchanged.
+    Once Batch 10M cost enforcement is active, the governed OpenAI-compatible
+    Responses boundary remains authoritative because it carries pre-call admission,
+    prompt caching, tool-call caps, output caps, and exact post-call accounting.
+    This prevents a later SDK adapter install from silently bypassing the governor.
     """
+    try:
+        plan = module.grok_plan()
+    except Exception:
+        plan = {}
+    if isinstance(plan, dict) and plan.get("cost_governor_binding") is True:
+        module._xai_official_sdk_adapter_installed = False
+        module._xai_official_sdk_adapter_skipped_for_cost_governor = True
+        return
+
     if getattr(module, "_xai_official_sdk_adapter_installed", False):
         return
     module._xai_official_sdk_adapter_installed = True
