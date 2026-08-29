@@ -16,6 +16,7 @@ import production_index_universe as legacy
 
 
 NASDAQ100_DIRECT_URL = "https://www.nasdaq.com/products/global-indexes/nasdaq-100/companies"
+NASDAQ100_IQQ_MIRROR_URL = "https://www.ishares.com/us/products/351653/ishares-nasdaq-100-etf/latest-holdings.csv"
 SP500_DIRECT_URLS = (
     "https://www.spglobal.com/spdji/en/indices/equity/sp-500/?index=&p=",
     "https://www.spglobal.com/spdji/en/indices/equity/sp-500/",
@@ -56,7 +57,9 @@ class _TextCollector(HTMLParser):
 
 def _ssl_context() -> ssl.SSLContext:
     cafile = str(os.getenv("SSL_CERT_FILE") or "").strip()
-    context = ssl.create_default_context(cafile=cafile if cafile and Path(cafile).is_file() else None)
+    context = ssl.create_default_context(
+        cafile=cafile if cafile and Path(cafile).is_file() else None
+    )
     if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
         raise RuntimeError("INDEX_SOURCE_TLS_VERIFICATION_NOT_ENFORCED")
     return context
@@ -81,7 +84,11 @@ def _fetch(url: str, *, referer: str | None = None) -> tuple[bytes, str | None]:
     if referer:
         headers["Referer"] = referer
     request = Request(url, headers=headers)
-    with urlopen(request, timeout=legacy.DEFAULT_TIMEOUT_SECONDS, context=_ssl_context()) as response:
+    with urlopen(
+        request,
+        timeout=legacy.DEFAULT_TIMEOUT_SECONDS,
+        context=_ssl_context(),
+    ) as response:
         return response.read(), response.headers.get("Content-Type")
 
 
@@ -103,14 +110,7 @@ def _normalize_symbols(values: list[Any]) -> list[str]:
 
 
 def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
-    """Parse the publisher's visible Nasdaq-100 Symbol | Company Name list.
-
-    The Nasdaq page is not a conventional HTML table in every render. Treating
-    every short uppercase text node as a ticker over-collects company-name words
-    such as APPLE, COSTCO, INTUIT, etc. The publisher section is explicitly a
-    two-column Symbol / Company Name list, so consume the bounded section as
-    symbol/company pairs and validate the resulting count before use.
-    """
+    """Parse the publisher's visible Nasdaq-100 Symbol | Company Name list."""
     text = raw.decode("utf-8", errors="replace")
     parser = _TextCollector()
     parser.feed(unescape(text))
@@ -130,9 +130,6 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
 
     end = section_end if section_end is not None else min(len(parts), section_start + 500)
     scope = parts[section_start:end]
-
-    # Find the exact two-column header. Some renders emit the header cells as
-    # separate text nodes; others include both labels in one node.
     data_start: int | None = None
     for idx, value in enumerate(scope):
         normalized = " ".join(value.lower().split())
@@ -148,8 +145,6 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
 
     rows = scope[data_start:]
     symbols: list[str] = []
-
-    # Primary path: each publisher row contributes [symbol, company name].
     for idx in range(0, len(rows) - 1, 2):
         token = rows[idx].strip().upper()
         symbol = _normalize_symbol(token)
@@ -160,9 +155,6 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
     if legacy.validate_index_count("NASDAQ100", paired)[0]:
         return paired
 
-    # Defensive fallback for a render that inserts extra text nodes: select only
-    # ticker-looking nodes whose immediate successor looks like a company label,
-    # while rejecting known UI/category labels. Count validation remains the gate.
     rejected = {
         "SYMBOL", "ALL", "TECHNOLOGY", "INDUSTRIALS", "UTILITIES",
         "TELECOMMUNICATIONS", "HEALTH", "CARE", "BASIC", "MATERIALS",
@@ -174,8 +166,6 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
         if token in rejected or not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,7}", token):
             continue
         next_value = rows[idx + 1].strip()
-        # Company labels normally contain lowercase after normalization, spaces,
-        # punctuation, or are longer than plausible ticker symbols.
         if (
             " " in next_value
             or any(ch in next_value for ch in ".,'&()")
@@ -187,60 +177,18 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
     return _normalize_symbols(fallback)
 
 
-def _read_nasdaq100() -> dict[str, Any]:
-    url = str(os.getenv("IIOS_NASDAQ100_CONSTITUENTS_URL") or NASDAQ100_DIRECT_URL).strip()
-    raw, content_type = _fetch(url, referer="https://www.nasdaq.com/")
-
-    # Prefer the publisher's explicitly labeled complete company list. Generic
-    # page parsers can see navigation/marketing symbols and therefore over-count.
-    visible = _nasdaq_visible_company_symbols(raw)
-    if legacy.validate_index_count("NASDAQ100", visible)[0]:
-        symbols = visible
-    else:
-        symbols = _normalize_symbols(legacy.parse_symbols_bytes(raw, content_type))
-
-    symbols = _normalize_symbols(symbols)
-    verified, error = legacy.validate_index_count("NASDAQ100", symbols)
-    return {
-        "source_mode": "OFFICIAL_WEB_SOURCE",
-        "source_ref": url,
-        "source_publisher": "NASDAQ",
-        "symbols": symbols,
-        "verified_complete": verified,
-        "error": error,
-    }
-
-
-def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[str]]:
-    errors: list[str] = []
-    configured = str(os.getenv("IIOS_SP500_CONSTITUENTS_URL") or "").strip()
-    urls = (configured,) if configured else SP500_DIRECT_URLS
-    for url in urls:
-        try:
-            raw, content_type = _fetch(url, referer="https://www.spglobal.com/")
-            symbols = _normalize_symbols(legacy.parse_symbols_bytes(raw, content_type))
-            verified, error = legacy.validate_index_count("SP500", symbols)
-            if verified:
-                return {
-                    "source_mode": "OFFICIAL_WEB_SOURCE",
-                    "source_ref": url,
-                    "source_publisher": "S&P_DOW_JONES_INDICES",
-                    "symbols": symbols,
-                    "verified_complete": True,
-                    "error": None,
-                }, errors
-            errors.append(f"{url}: {error}")
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{url}: {type(exc).__name__}: {exc}")
-    return None, errors
-
-
-def _parse_ivv_holdings(raw: bytes) -> list[str]:
+def _parse_ishares_equity_holdings(raw: bytes) -> list[str]:
+    """Parse first-party iShares holdings CSVs across current header variants."""
     text = raw.decode("utf-8-sig", errors="replace")
     lines = text.splitlines()
-    header_index = None
+    header_index: int | None = None
     for idx, line in enumerate(lines):
-        if line.startswith("Ticker,Name,Sector,Asset Class,"):
+        try:
+            fields = next(csv.reader([line]))
+        except (csv.Error, StopIteration):
+            continue
+        normalized = {str(field or "").strip().lower() for field in fields}
+        if "ticker" in normalized and "asset class" in normalized:
             header_index = idx
             break
     if header_index is None:
@@ -260,9 +208,116 @@ def _parse_ivv_holdings(raw: bytes) -> list[str]:
     return _normalize_symbols(symbols)
 
 
+def _read_nasdaq100_direct() -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    url = str(
+        os.getenv("IIOS_NASDAQ100_CONSTITUENTS_URL") or NASDAQ100_DIRECT_URL
+    ).strip()
+    try:
+        raw, content_type = _fetch(url, referer="https://www.nasdaq.com/")
+        visible = _nasdaq_visible_company_symbols(raw)
+        if legacy.validate_index_count("NASDAQ100", visible)[0]:
+            symbols = visible
+        else:
+            symbols = _normalize_symbols(legacy.parse_symbols_bytes(raw, content_type))
+        symbols = _normalize_symbols(symbols)
+        verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+        if verified:
+            return {
+                "source_mode": "OFFICIAL_WEB_SOURCE",
+                "source_ref": url,
+                "source_publisher": "NASDAQ",
+                "benchmark": "Nasdaq 100 Index",
+                "symbols": symbols,
+                "verified_complete": True,
+                "error": None,
+            }, errors
+        errors.append(f"{url}: {error}")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"{url}: {type(exc).__name__}: {exc}")
+    return None, errors
+
+
+def _read_nasdaq100_mirror(direct_errors: list[str]) -> dict[str, Any]:
+    raw, _content_type = _fetch(
+        NASDAQ100_IQQ_MIRROR_URL,
+        referer="https://www.ishares.com/",
+    )
+    symbols = _parse_ishares_equity_holdings(raw)
+    verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+    lineage_note = (
+        "Nasdaq publisher direct source was attempted first but did not provide a complete machine-readable list. "
+        "Fallback is BlackRock iShares IQQ first-party holdings; IQQ declares Nasdaq 100 Index as its benchmark."
+    )
+    if direct_errors:
+        lineage_note += " Direct attempt: " + " | ".join(direct_errors)[:1500]
+    return {
+        "source_mode": "GOVERNED_INDEX_TRACKER_MIRROR",
+        "source_ref": NASDAQ100_IQQ_MIRROR_URL,
+        "source_publisher": "BLACKROCK_ISHARES",
+        "benchmark": "Nasdaq 100 Index",
+        "symbols": symbols,
+        "verified_complete": verified,
+        "error": error,
+        "lineage_note": lineage_note,
+    }
+
+
+def _read_nasdaq100() -> dict[str, Any]:
+    file_value = str(os.getenv("IIOS_NASDAQ100_CONSTITUENTS_FILE") or "").strip()
+    if file_value:
+        path = Path(file_value).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(path)
+        symbols = _normalize_symbols(legacy.parse_symbols_bytes(path.read_bytes(), None))
+        verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+        return {
+            "source_mode": "GOVERNED_LOCAL_FILE",
+            "source_ref": str(path),
+            "source_publisher": "OPERATOR_GOVERNED_FILE",
+            "benchmark": "Nasdaq 100 Index",
+            "symbols": symbols,
+            "verified_complete": verified,
+            "error": error,
+        }
+
+    direct, errors = _read_nasdaq100_direct()
+    if direct is not None:
+        return direct
+    return _read_nasdaq100_mirror(errors)
+
+
+def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    configured = str(os.getenv("IIOS_SP500_CONSTITUENTS_URL") or "").strip()
+    urls = (configured,) if configured else SP500_DIRECT_URLS
+    for url in urls:
+        try:
+            raw, content_type = _fetch(url, referer="https://www.spglobal.com/")
+            symbols = _normalize_symbols(legacy.parse_symbols_bytes(raw, content_type))
+            verified, error = legacy.validate_index_count("SP500", symbols)
+            if verified:
+                return {
+                    "source_mode": "OFFICIAL_WEB_SOURCE",
+                    "source_ref": url,
+                    "source_publisher": "S&P_DOW_JONES_INDICES",
+                    "benchmark": "S&P 500 Index (USD)",
+                    "symbols": symbols,
+                    "verified_complete": True,
+                    "error": None,
+                }, errors
+            errors.append(f"{url}: {error}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{url}: {type(exc).__name__}: {exc}")
+    return None, errors
+
+
 def _read_sp500_mirror(direct_errors: list[str]) -> dict[str, Any]:
-    raw, _content_type = _fetch(SP500_IVV_MIRROR_URL, referer="https://www.ishares.com/")
-    symbols = _parse_ivv_holdings(raw)
+    raw, _content_type = _fetch(
+        SP500_IVV_MIRROR_URL,
+        referer="https://www.ishares.com/",
+    )
+    symbols = _parse_ishares_equity_holdings(raw)
     verified, error = legacy.validate_index_count("SP500", symbols)
     lineage_note = (
         "S&P publisher direct source was attempted first but did not provide a complete machine-readable list. "
@@ -294,6 +349,7 @@ def _read_sp500() -> dict[str, Any]:
             "source_mode": "GOVERNED_LOCAL_FILE",
             "source_ref": str(path),
             "source_publisher": "OPERATOR_GOVERNED_FILE",
+            "benchmark": "S&P 500 Index (USD)",
             "symbols": symbols,
             "verified_complete": verified,
             "error": error,
