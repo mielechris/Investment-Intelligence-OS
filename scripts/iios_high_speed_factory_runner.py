@@ -26,11 +26,13 @@ from high_speed_case_queue import run_case_floor_cycle  # noqa: E402
 from high_speed_gemini_deep_worker import run_deep_once  # noqa: E402
 from high_speed_gemini_pipeline import run_parallel_high_speed_cycle  # noqa: E402
 from ledger import record_event  # noqa: E402
+from model_agent_health_watchdog import publish_health_artifact  # noqa: E402
 
 
 DEFAULT_RADAR_MINUTES = 5
 DEFAULT_CASE_FLOOR_SECONDS = 30
 DEFAULT_DEEP_SECONDS = 60
+DEFAULT_HEALTH_SECONDS = 60
 RADAR_TELEMETRY_CASE = "high_speed_market_radar"
 _STOP = threading.Event()
 _PRINT_LOCK = threading.Lock()
@@ -119,6 +121,19 @@ def _run_model_radar_cycle(
     return cycle
 
 
+def _publish_health() -> dict[str, Any]:
+    snapshot = publish_health_artifact()
+    return {
+        "status": snapshot.get("status"),
+        "overall_state": snapshot.get("overall_state"),
+        "issues": snapshot.get("issues") or [],
+        "artifact_path": snapshot.get("artifact_path"),
+        "provider_requests_made": False,
+        "trade_execution_permission": False,
+        "live_execution": False,
+    }
+
+
 def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = False) -> int:
     _log("=== IIOS BATCH 9E · ONE-SHOT HIGH-SPEED RADAR ===")
     _log(f"Promotions enabled: {not dry_run}")
@@ -133,6 +148,7 @@ def run_once(*, dry_run: bool, no_models: bool, force_model_refresh: bool = Fals
         enable_promotions=not dry_run,
         force_model_refresh=bool(force_model_refresh),
     )
+    _publish_health()
     _log(
         "RADAR COMPLETE · "
         f"universe={cycle.get('governed_universe_count')} "
@@ -156,9 +172,11 @@ def run_continuous(
     _log(f"Radar cadence: {radar_minutes} minutes")
     _log(f"Case-floor cadence: {case_floor_seconds} seconds")
     _log(f"Gemini Pro deep-research queue cadence: {deep_seconds} seconds")
+    _log(f"Model/agent health publication cadence: {DEFAULT_HEALTH_SECONDS} seconds")
+    _log("Agent Contract: batch10m1-agent-contract-v2 · same 8 specialists + 1 Committee call")
     _log("Grok Wire Room: X SEARCH + WEB SEARCH when configured")
-    _log("Gemini Flash: Google Search grounding + URL Context + structured research")
-    _log("Gemini Pro: selective complex finalists only, separate non-blocking lane")
+    _log("Gemini Flash: widened bounded coverage + Google Search grounding + URL Context")
+    _log("Gemini Pro: selective evidence-gap-driven complex finalists only")
     _log(f"Verified TLS mode: {_TLS_STATUS.get('mode')}")
     _log("Certificate verification: TRUE")
     _log("Maximum concurrent governed cases on 8-agent floor: 2")
@@ -188,6 +206,12 @@ def run_continuous(
             target=_loop,
             args=("GEMINI PRO", deep_seconds, run_deep_once),
             name="iios-9e-gemini-pro",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_loop,
+            args=("MODEL+AGENT HEALTH", DEFAULT_HEALTH_SECONDS, _publish_health),
+            name="iios-10m1-model-agent-health",
             daemon=True,
         ),
     ]

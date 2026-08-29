@@ -8,11 +8,15 @@ from pathlib import Path
 
 LIVE = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8")
 WORKTREE = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9e-radar")
-BRANCH = "feature/batch9e-high-speed-market-radar"
+BRANCH = "feature/batch10m1-model-agent-intelligence-health"
 DOTENV = LIVE / "BACK END" / "backend" / ".env"
 LEDGER = LIVE / "BACK END" / "backend" / "iios_ledger.db"
+COST_HELPER_BACKEND = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend")
+COST_HELPER = COST_HELPER_BACKEND / "model_cost_enforcement.py"
 VENV_CANDIDATES = (
+    LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python3",
     LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python",
+    Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python3"),
     Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
 )
 
@@ -67,20 +71,34 @@ def main() -> int:
         raise SystemExit(f"Live Batch8 checkout not found: {LIVE}")
     if not LEDGER.exists():
         raise SystemExit(f"Live governed ledger not found: {LEDGER}")
+    if not COST_HELPER.exists():
+        raise SystemExit(
+            "Binding Grok cost governor helper is missing; refusing to start 9E xAI research"
+        )
 
     branch_before = capture("git", "branch", "--show-current", cwd=LIVE)
     status_before = capture("git", "status", "--porcelain", cwd=LIVE)
 
-    print("IIOS BATCH 9E — LIVE-LEDGER PAPER INTELLIGENCE FACTORY")
+    print("IIOS 10M.1 — MODEL + AGENT INTELLIGENCE SUPERBATCH")
     print(f"Live checkout: {LIVE}")
     print(f"Live branch: {branch_before}")
     print(f"Governed ledger: {LEDGER}")
-    print("Ledger mutation: ENABLED for 9E radar/model/case telemetry")
+    print(f"Shared Grok cost governor: {COST_HELPER}")
+    print("Grok cost admission/accounting: BINDING")
+    print("Grok request retries: 0")
+    print("Grok max output tokens: 2000")
+    print("Grok max server-side tool calls: 3")
+    print("Grok prompt cache key: ENABLED")
+    print("Agent Contract v2: ENABLED · same 8 specialist calls + 1 Committee call")
+    print("Model + Agent health artifact: ENABLED · read-only ledger inspection")
+    print("Ledger mutation: ENABLED for governed 9E radar/model/case telemetry only")
     print("9A / 9B existing processes: UNTOUCHED")
     print("Grok: critical-path real-time context")
     print("Gemini: bounded enrichment; provider degradation cannot freeze case flow")
     print("Gemini preferred: gemini-3.7-flash")
     print("Gemini rapid fallback: gemini-3.6-flash")
+    print("Gemini Flash finalists: 6 · workers: 2")
+    print("Gemini Pro: evidence-gap-driven selective deep lane · max requests/cycle unchanged")
     print("Gemini request timeout: 30 seconds; retries: 0")
     print("Radar cadence: 5 minutes")
     print("Case-floor cadence: 30 seconds")
@@ -110,11 +128,17 @@ def main() -> int:
     branch_after = capture("git", "branch", "--show-current", cwd=LIVE)
     status_after = capture("git", "status", "--porcelain", cwd=LIVE)
     if branch_after != branch_before or status_after != status_before:
-        raise SystemExit("Refusing 9E launch: live Batch8 branch or tracked working tree changed")
+        raise SystemExit("Refusing 10M.1 launch: live Batch8 branch or tracked working tree changed")
 
     python = resolve_python()
     env = dict(os.environ)
     load_dotenv(DOTENV, env)
+    inherited_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+    env["PYTHONPATH"] = (
+        str(COST_HELPER_BACKEND)
+        if not inherited_pythonpath
+        else str(COST_HELPER_BACKEND) + os.pathsep + inherited_pythonpath
+    )
     env.update(
         {
             "PYTHONUNBUFFERED": "1",
@@ -122,7 +146,7 @@ def main() -> int:
             "IIOS_GEMINI_TIMEOUT_SECONDS": "30",
             "IIOS_GEMINI_RETRIES": "0",
             "IIOS_9E_GEMINI_FALLBACK_MODEL": "gemini-3.6-flash",
-            "IIOS_9E_GEMINI_FINALISTS": "4",
+            "IIOS_9E_GEMINI_FINALISTS": "6",
             "IIOS_9E_GEMINI_WORKERS": "2",
             "IIOS_9E_GROK_MAX_BATCHES": "1",
             "IIOS_9E_GROK_BATCH_SIZE": "20",
@@ -132,9 +156,9 @@ def main() -> int:
 
     script = WORKTREE / "scripts" / "iios_high_speed_factory_runner.py"
     if not script.exists():
-        raise SystemExit(f"9E factory runner missing: {script}")
+        raise SystemExit(f"10M.1 factory runner missing: {script}")
 
-    print("\nStarting continuous 9E. Use Ctrl+C in THIS terminal only to stop 9E.")
+    print("\nStarting continuous 10M.1/9E. Use Ctrl+C in THIS terminal only to stop this worker.")
     print("Family Network may remain open on 127.0.0.1:5191.")
 
     result = run(
@@ -153,7 +177,7 @@ def main() -> int:
 
     branch_final = capture("git", "branch", "--show-current", cwd=LIVE)
     status_final = capture("git", "status", "--porcelain", cwd=LIVE)
-    print("\nBatch 9E process ended.")
+    print("\n10M.1/9E process ended.")
     print(f"Live branch unchanged: {branch_final == branch_before} ({branch_final})")
     print(f"Live tracked status unchanged: {status_final == status_before}")
     print(f"Runner exit code: {result.returncode}")
