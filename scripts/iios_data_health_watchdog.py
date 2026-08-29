@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ DEFAULT_HISTORICAL_DIR = Path.home() / "Library" / "Application Support" / "IIOS
 DEFAULT_EVENT_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "historical-event-reconstruction"
 DEFAULT_MACRO_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "historical-macro-regime"
 DEFAULT_BENCHMARK_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "benchmark-alpha"
+DEFAULT_COST_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "model-cost"
 DEFAULT_BROWSER_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "browser-health"
 
 
@@ -51,7 +51,7 @@ def _status(payload: dict[str, Any]) -> str | None:
     return str(raw) if raw is not None else None
 
 
-def _health_row(name: str, source: Path, *, max_age_seconds: int, browser_copy: Path | None, launch_label: str | None, launch_dir: Path, now: float) -> dict[str, Any]:
+def _health_row(name: str, source: Path, *, max_age_seconds: int, browser_copy: Path | None, launch_label: str | None, launch_dir: Path, now: float, critical: bool) -> dict[str, Any]:
     payload = _read_json(source)
     exists = bool(payload)
     age = _age_seconds(source, now)
@@ -74,6 +74,7 @@ def _health_row(name: str, source: Path, *, max_age_seconds: int, browser_copy: 
         state = "HEALTHY"
     return {
         "module": name,
+        "critical": critical,
         "state": state,
         "source": str(source),
         "source_status": _status(payload),
@@ -87,25 +88,27 @@ def _health_row(name: str, source: Path, *, max_age_seconds: int, browser_copy: 
     }
 
 
-def build_watchdog(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path, event_dir: Path, macro_dir: Path, benchmark_dir: Path, browser_dir: Path, launch_dir: Path | None = None, now: float | None = None) -> dict[str, Any]:
+def build_watchdog(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path, event_dir: Path, macro_dir: Path, benchmark_dir: Path, cost_dir: Path = DEFAULT_COST_DIR, browser_dir: Path, launch_dir: Path | None = None, now: float | None = None) -> dict[str, Any]:
     now_value = datetime.now(timezone.utc).timestamp() if now is None else now
     launch_root = launch_dir or (Path.home() / "Library" / "LaunchAgents")
     specs = [
-        ("9G_FACTORY_TELEMETRY", telemetry_dir / "latest.json", 7200, None, None),
-        ("9H_MARKET_VALIDATION", state_dir / "latest_market_validation.json", 172800, None, None),
-        ("10H_HISTORICAL_RESEARCH", historical_dir / "latest_historical_market_intelligence.json", 7200, "historical_market_intelligence.json", "com.iios.historical-market-intelligence"),
-        ("10J_EVENT_RECONSTRUCTION", event_dir / "latest_historical_event_reconstruction.json", 10800, "historical_event_reconstruction.json", "com.iios.historical-event-reconstruction"),
-        ("10K_MACRO_REGIME", macro_dir / "latest_historical_macro_regime_library.json", 14400, "historical_macro_regime_library.json", "com.iios.historical-macro-regime-library"),
-        ("10L_BENCHMARK_ATTRIBUTION", benchmark_dir / "latest_benchmark_alpha_attribution.json", 14400, "benchmark_alpha_attribution.json", "com.iios.benchmark-alpha-attribution"),
+        ("9G_FACTORY_TELEMETRY", telemetry_dir / "latest.json", 7200, None, None, False),
+        ("9H_MARKET_VALIDATION", state_dir / "latest_market_validation.json", 172800, None, None, False),
+        ("10H_HISTORICAL_RESEARCH", historical_dir / "latest_historical_market_intelligence.json", 7200, "historical_market_intelligence.json", "com.iios.historical-market-intelligence", True),
+        ("10J_EVENT_RECONSTRUCTION", event_dir / "latest_historical_event_reconstruction.json", 10800, "historical_event_reconstruction.json", "com.iios.historical-event-reconstruction", True),
+        ("10K_MACRO_REGIME", macro_dir / "latest_historical_macro_regime_library.json", 14400, "historical_macro_regime_library.json", "com.iios.historical-macro-regime-library", True),
+        ("10L_BENCHMARK_ATTRIBUTION", benchmark_dir / "latest_benchmark_alpha_attribution.json", 14400, "benchmark_alpha_attribution.json", "com.iios.benchmark-alpha-attribution", True),
+        ("10M_MODEL_COST_CONTROL", cost_dir / "latest_model_cost_governor.json", 1800, "model_cost_governor.json", "com.iios.model-cost-governor", False),
     ]
     rows = [
-        _health_row(name, source, max_age_seconds=budget, browser_copy=(browser_dir / browser_name if browser_name else None), launch_label=label, launch_dir=launch_root, now=now_value)
-        for name, source, budget, browser_name, label in specs
+        _health_row(name, source, max_age_seconds=budget, browser_copy=(browser_dir / browser_name if browser_name else None), launch_label=label, launch_dir=launch_root, now=now_value, critical=critical)
+        for name, source, budget, browser_name, label, critical in specs
     ]
-    critical = [row for row in rows if row["module"] in {"10H_HISTORICAL_RESEARCH", "10J_EVENT_RECONSTRUCTION", "10K_MACRO_REGIME", "10L_BENCHMARK_ATTRIBUTION"}]
+    critical = [row for row in rows if row["critical"] is True]
     healthy = sum(1 for row in critical if row["state"] == "HEALTHY")
     issues = [row for row in rows if row["state"] != "HEALTHY" and row["module"] != "9H_MARKET_VALIDATION"]
-    status = "DATA_HEALTH_WATCHDOG_ACTIVE" if healthy == len(critical) and not issues else "DATA_HEALTH_WATCHDOG_ATTENTION_REQUIRED"
+    critical_issues = [row for row in critical if row["state"] != "HEALTHY"]
+    status = "DATA_HEALTH_WATCHDOG_ACTIVE" if healthy == len(critical) and not critical_issues else "DATA_HEALTH_WATCHDOG_ATTENTION_REQUIRED"
     chain = {
         "PROCESS_ALIVE": all(row["process_alive"] is not False for row in critical),
         "DATA_FLOWING": all(row["data_flowing"] for row in critical),
@@ -123,10 +126,12 @@ def build_watchdog(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path
         "healthy_critical_modules": healthy,
         "critical_module_count": len(critical),
         "issues": issues,
+        "critical_issues": critical_issues,
         "policy": {
             "worker_alive_is_not_equal_to_data_healthy": True,
             "market_validation_freshness_is_weekend_tolerant": True,
             "silent_degradation_is_visible": True,
+            "cost_instrumentation_is_visible_but_noncritical_to_market_research": True,
         },
         "safety": {
             "observability_only": True,
@@ -148,11 +153,12 @@ def main() -> int:
     parser.add_argument("--event-dir", default=str(DEFAULT_EVENT_DIR))
     parser.add_argument("--macro-dir", default=str(DEFAULT_MACRO_DIR))
     parser.add_argument("--benchmark-dir", default=str(DEFAULT_BENCHMARK_DIR))
+    parser.add_argument("--cost-dir", default=str(DEFAULT_COST_DIR))
     parser.add_argument("--browser-dir", required=True)
     args = parser.parse_args()
     browser_dir = Path(args.browser_dir).expanduser()
     payload = build_watchdog(
-        state_dir=Path(args.state_dir).expanduser(), telemetry_dir=Path(args.telemetry_dir).expanduser(), historical_dir=Path(args.historical_dir).expanduser(), event_dir=Path(args.event_dir).expanduser(), macro_dir=Path(args.macro_dir).expanduser(), benchmark_dir=Path(args.benchmark_dir).expanduser(), browser_dir=browser_dir,
+        state_dir=Path(args.state_dir).expanduser(), telemetry_dir=Path(args.telemetry_dir).expanduser(), historical_dir=Path(args.historical_dir).expanduser(), event_dir=Path(args.event_dir).expanduser(), macro_dir=Path(args.macro_dir).expanduser(), benchmark_dir=Path(args.benchmark_dir).expanduser(), cost_dir=Path(args.cost_dir).expanduser(), browser_dir=browser_dir,
     )
     out_dir = DEFAULT_BROWSER_DIR
     _atomic_write(out_dir / "latest_data_health_watchdog.json", payload)
