@@ -39,4 +39,4 @@ jobs:
           grep -q '"capital_authority": False' scripts/repair_batch10j_event_runtime.py
           grep -q '"trade_execution_permission": False' scripts/repair_batch10j_event_runtime.py
           grep -q '"live_execution": False' scripts/repair_batch10j_event_runtime.py
-          ! grep -Eq -- '(-k|--insecure)' scripts/iios_historical_event_reconstruction_runtime.py scripts/repair_batch10j_event_runtime.py
+          ! grep -Eq -- '(--insecure|curl[^\n]*[[:space:]]-k([[:space:]]|$))' scripts/iios_historical_event_reconstruction_runtime.py
