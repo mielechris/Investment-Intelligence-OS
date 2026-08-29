@@ -1,0 +1,42 @@
+name: IIOS Batch 10J Event Runtime Correction Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10j-historical-event-reconstruction
+  pull_request:
+    branches:
+      - feature/batch10i-chief-intelligence-office-v2
+
+jobs:
+  event-runtime-correction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile runtime correction
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_event_reconstruction_runtime.py
+          scripts/repair_batch10j_event_runtime.py
+          scripts/test_batch10j_runtime_correction.py
+
+      - name: Run runtime correction tests
+        run: PYTHONPATH=scripts python scripts/test_batch10j_runtime_correction.py
+
+      - name: Assert truthful DOC coverage and bounded windows
+        run: |
+          grep -q 'DOC_SEARCH_START = date(2017, 1, 1)' scripts/iios_historical_event_reconstruction_runtime.py
+          grep -q 'PREFER_BEST_PRICE_ANALOGS_INSIDE_GDELT_DOC_SEARCH_COVERAGE' scripts/iios_historical_event_reconstruction_runtime.py
+          grep -q 'min(requested_end, now)' scripts/iios_historical_event_reconstruction_runtime.py
+
+      - name: Assert repair preserves no-authority boundary
+        run: |
+          grep -q '"causal_claim_authority": False' scripts/repair_batch10j_event_runtime.py
+          grep -q '"capital_authority": False' scripts/repair_batch10j_event_runtime.py
+          grep -q '"trade_execution_permission": False' scripts/repair_batch10j_event_runtime.py
+          grep -q '"live_execution": False' scripts/repair_batch10j_event_runtime.py
+          ! grep -Eq -- '(-k|--insecure)' scripts/iios_historical_event_reconstruction_runtime.py scripts/repair_batch10j_event_runtime.py
