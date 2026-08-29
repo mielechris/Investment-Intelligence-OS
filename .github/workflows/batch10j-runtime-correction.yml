@@ -27,10 +27,13 @@ jobs:
       - name: Run runtime correction tests
         run: PYTHONPATH=scripts python scripts/test_batch10j_runtime_correction.py
 
-      - name: Assert truthful DOC coverage and bounded windows
+      - name: Assert truthful provider mesh and bounded windows
         run: |
           grep -q 'DOC_SEARCH_START = date(2017, 1, 1)' scripts/iios_historical_event_reconstruction_runtime.py
-          grep -q 'PREFER_BEST_PRICE_ANALOGS_INSIDE_GDELT_DOC_SEARCH_COVERAGE' scripts/iios_historical_event_reconstruction_runtime.py
+          grep -q 'GDELT_DOC_2_THEN_GOOGLE_NEWS_RSS_DATE_VERIFIED' scripts/iios_historical_event_reconstruction_runtime.py
+          grep -q 'PREFER_GDELT_COVERED_ANALOGS_THEN_GOOGLE_NEWS_DATE_VERIFIED_FALLBACK' scripts/iios_historical_event_reconstruction_runtime.py
+          grep -q 'RESULT_PUBLISHED_DATE_VERIFIED_PER_WINDOW_NO_GLOBAL_CORPUS_START_CLAIM' scripts/iios_historical_event_reconstruction_runtime.py
+          grep -q 'published < start_dt or published > end_dt' scripts/iios_historical_event_reconstruction_runtime.py
           grep -q 'min(requested_end, now)' scripts/iios_historical_event_reconstruction_runtime.py
 
       - name: Assert repair preserves no-authority boundary
@@ -39,4 +42,4 @@ jobs:
           grep -q '"capital_authority": False' scripts/repair_batch10j_event_runtime.py
           grep -q '"trade_execution_permission": False' scripts/repair_batch10j_event_runtime.py
           grep -q '"live_execution": False' scripts/repair_batch10j_event_runtime.py
-          ! grep -Eq -- '(--insecure|curl[^\n]*[[:space:]]-k([[:space:]]|$))' scripts/iios_historical_event_reconstruction_runtime.py
+          ! grep -Eq -- '(--insecure|"-k")' scripts/iios_historical_event_reconstruction_runtime.py
