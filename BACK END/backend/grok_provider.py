@@ -29,6 +29,7 @@ COST_GOVERNOR_BINDING = True
 COST_GOVERNOR_CASE_ID = "high_speed_market_radar"
 COST_GOVERNOR_TASK_TYPE = "GROK_9E_RADAR"
 MAX_OUTPUT_TOKENS = 2000
+MAX_SERVER_SIDE_TOOL_CALLS = 3
 REQUEST_RETRIES = 0
 PROMPT_CACHE_KEY = "iios-9e-grok-wire-v1"
 
@@ -97,6 +98,7 @@ def configuration_status() -> dict[str, Any]:
         "cost_governor_import_error": _COST_GOVERNOR_IMPORT_ERROR,
         "request_retries": REQUEST_RETRIES,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "max_server_side_tool_calls": MAX_SERVER_SIDE_TOOL_CALLS,
         "prompt_cache_key_enabled": True,
         "paper_mode": True,
         "auto_trade_authority": False,
@@ -250,6 +252,7 @@ def research_json(
         ],
         "store": False,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "max_tool_calls": MAX_SERVER_SIDE_TOOL_CALLS,
         "prompt_cache_key": PROMPT_CACHE_KEY,
     }
     if tools:
