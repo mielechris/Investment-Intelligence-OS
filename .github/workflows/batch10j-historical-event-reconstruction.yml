@@ -1,0 +1,85 @@
+name: IIOS Batch 10J Historical Event Reconstruction Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10j-historical-event-reconstruction
+  pull_request:
+    branches:
+      - feature/batch10i-chief-intelligence-office-v2
+
+jobs:
+  historical-event-reconstruction-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 10J
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_event_reconstruction.py
+          scripts/test_batch10j_historical_event_reconstruction.py
+          scripts/test_batch10j_10i_feedback.py
+          scripts/iios_chief_intelligence_office_v2.py
+          scripts/iios_final_institutional_publisher.py
+          scripts/activate_batch10j_historical_event_reconstruction.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run inherited 10H and 10I regressions
+        run: |
+          python scripts/test_batch10h_historical_market_intelligence.py
+          python scripts/test_batch10i_chief_intelligence_office_v2.py
+
+      - name: Run 10J event contracts
+        run: |
+          python scripts/test_batch10j_historical_event_reconstruction.py
+          python scripts/test_batch10j_10i_feedback.py
+
+      - name: Build browser with 10J room
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/HistoricalEventReconstruction.tsx src/ChiefIntelligenceOfficeV2.tsx src/HistoricalMarketIntelligence.tsx
+          npm run build
+
+      - name: Assert event evidence truthfulness
+        run: |
+          grep -q 'ASSOCIATED_EVENT_EVIDENCE_NOT_CAUSAL_PROOF' scripts/iios_historical_event_reconstruction.py
+          grep -q 'OUTSIDE_MODERN_NEWS_CORPUS_COVERAGE' scripts/iios_historical_event_reconstruction.py
+          grep -q 'NEVER_BACKFILL_OR_INFER_EVENT_CONTEXT_WHEN_PROVIDER_EVIDENCE_IS_ABSENT' scripts/iios_historical_event_reconstruction.py
+          grep -q 'Same chart. Same reason? Prove it.' "FRONT END/src/HistoricalEventReconstruction.tsx"
+          grep -q 'ASSOCIATION ≠ CAUSATION' "FRONT END/src/HistoricalEventReconstruction.tsx"
+
+      - name: Assert 10I consumes measured 10J evidence
+        run: |
+          grep -q 'event_reconstruction=events' scripts/iios_final_institutional_publisher.py
+          grep -q 'event_engine_active' scripts/iios_chief_intelligence_office_v2.py
+          grep -q 'HISTORICAL_REGIME_LIBRARY' scripts/test_batch10j_10i_feedback.py
+          grep -q 'historical_event_reconstruction.json' scripts/iios_final_institutional_publisher.py
+
+      - name: Assert independent 24-7 event worker and preserved stack
+        run: |
+          grep -q 'com.iios.historical-event-reconstruction' scripts/activate_batch10j_historical_event_reconstruction.py
+          grep -q 'EVENT_INTERVAL_SECONDS = 1800' scripts/activate_batch10j_historical_event_reconstruction.py
+          grep -q '10H 24/7 historical price research: PRESERVED' scripts/activate_batch10j_historical_event_reconstruction.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch10j_historical_event_reconstruction.py
+          grep -q 'HistoricalEventReconstruction' "FRONT END/src/LiveFactoryBrowser.tsx"
+
+      - name: Assert no autonomous trade capital provider or causal authority
+        run: |
+          grep -q '"causal_claim_authority": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"auto_generate_trades": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"auto_change_thresholds": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"auto_change_agent_weights": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"provider_change_authority": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"broker_connection_authority": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"capital_authority": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"trade_execution_permission": False' scripts/iios_historical_event_reconstruction.py
+          grep -q '"live_execution": False' scripts/iios_historical_event_reconstruction.py
+          ! grep -Eq '"(causal_claim_authority|auto_generate_trades|auto_change_thresholds|auto_change_agent_weights|provider_change_authority|broker_connection_authority|capital_authority|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_historical_event_reconstruction.py scripts/activate_batch10j_historical_event_reconstruction.py
