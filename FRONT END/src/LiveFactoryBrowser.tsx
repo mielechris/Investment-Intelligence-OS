@@ -13,6 +13,7 @@ import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
 import MarketRegimeIntelligence from "./MarketRegimeIntelligence";
 import MarketValidationStackPanel from "./MarketValidationStackPanel";
+import MeasurementHealthSuperbatch from "./MeasurementHealthSuperbatch";
 import OperatingSuperbatch from "./OperatingSuperbatch";
 import QualificationWatch from "./QualificationWatch";
 import ReadinessSuperbatch from "./ReadinessSuperbatch";
@@ -23,8 +24,8 @@ export default function LiveFactoryBrowser() {
   return (
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
-        <div><span>BATCH 10K · HISTORICAL MACRO + REGIME</span><strong>Policy · curve · volatility · credit normalization · revised macro context governed</strong></div>
-        <div><span>10J EVENT RECONSTRUCTION + 10H 24/7 RESEARCH + 10G QUALIFICATION PRESERVED · BACKEND 8002 UNCHANGED</span><strong>LIVE EXECUTION FALSE</strong></div>
+        <div><span>BATCH 10L–10M · MEASUREMENT + DATA HEALTH</span><strong>Benchmark attribution · control portfolios · end-to-end freshness and consumption watchdog</strong></div>
+        <div><span>10K MACRO + 10J EVENTS + 10H 24/7 RESEARCH + 10G QUALIFICATION PRESERVED · BACKEND 8002 UNCHANGED</span><strong>LIVE EXECUTION FALSE</strong></div>
       </div>
       <LivingFactoryExperience />
       <div className="lfb-divider"><span>9M CHARACTER & STORY ENGINE · PERSISTED EVENTS ONLY</span></div><CharacterStoryEngine />
@@ -41,7 +42,8 @@ export default function LiveFactoryBrowser() {
       <div className="lfb-divider"><span>10H HISTORICAL MARKET INTELLIGENCE · 24/7 READ-ONLY RESEARCH</span></div><HistoricalMarketIntelligence />
       <div className="lfb-divider"><span>10I CHIEF INTELLIGENCE OFFICE V2 · WHOLE-STACK ADVISORY</span></div><ChiefIntelligenceOfficeV2 />
       <div className="lfb-divider"><span>10J HISTORICAL EVENT RECONSTRUCTION · ASSOCIATION ≠ CAUSATION</span></div><HistoricalEventReconstruction />
-      <div className="lfb-divider"><span>10K HISTORICAL MACRO + REGIME · TIER A NORMALIZATION / TIER B CONTEXT</span></div><HistoricalMacroRegimeLibrary />
+      <div className="lfb-divider"><span>10K HISTORICAL MACRO + REGIME · DIRECT TREASURY + CBOE NORMALIZATION</span></div><HistoricalMacroRegimeLibrary />
+      <div className="lfb-divider"><span>10L–10M BENCHMARK ATTRIBUTION + DATA HEALTH · MEASUREMENT / OBSERVABILITY ONLY</span></div><MeasurementHealthSuperbatch />
       <div className="lfb-divider"><span>9K VALIDATION STACK · PRESERVED</span></div><MarketValidationStackPanel />
       <div className="lfb-divider"><span>EXISTING FACTORY INTELLIGENCE UI · PRESERVED</span></div><FactoryIntelligenceUI />
     </div>
