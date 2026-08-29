@@ -50,6 +50,7 @@ def _patch_office(office: dict[str, Any], benchmark_payload: dict[str, Any], hea
         "model_cost_budget_state": cost_payload.get("budget_state"),
         "model_cost_exact_coverage_pct": rolling.get("exact_cost_coverage_pct"),
         "model_cost_enforcement_hooks_connected": cost_payload.get("enforcement_hooks_connected"),
+        "model_cost_binding_xai_grok_hook": cost_payload.get("binding_xai_grok_hook"),
     })
     result["historical_diagnostics"] = diagnostics
     return result
@@ -62,6 +63,10 @@ def publish_all(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path, e
     unified._atomic_write(benchmark_dir / "latest_benchmark_alpha_attribution.json", benchmark_payload)
     unified._atomic_write(browser_dir / "benchmark_alpha_attribution.json", benchmark_payload)
 
+    # iios_model_cost_governor.build_governor is binding-aware. When the
+    # xAI/Grok enforcement hook registry is connected, it reconstructs and
+    # preserves MODEL_COST_GOVERNOR_ENFORCEMENT_ACTIVE instead of downgrading
+    # the shared artifact to the legacy advisory/instrumentation state.
     cost_payload = cost_governor.build_governor(cost_dir)
     unified._atomic_write(cost_dir / "latest_model_cost_governor.json", cost_payload)
     unified._atomic_write(browser_dir / "model_cost_governor.json", cost_payload)
@@ -101,6 +106,7 @@ def publish_all(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path, e
         "exact_cost_coverage_pct": cost_rolling.get("exact_cost_coverage_pct"),
         "exact_spend_usd": cost_rolling.get("exact_spend_usd"),
         "enforcement_hooks_connected": cost_payload.get("enforcement_hooks_connected"),
+        "binding_xai_grok_hook": cost_payload.get("binding_xai_grok_hook"),
         "no_spend_estimate_invented": True,
     }
     q["benchmark_alpha_attribution"] = benchmark_summary
@@ -128,6 +134,7 @@ def publish_all(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path, e
         "model_cost_exact_coverage_pct": cost_rolling.get("exact_cost_coverage_pct"),
         "model_cost_rolling_7d_exact_spend_usd": cost_rolling.get("exact_spend_usd"),
         "model_cost_enforcement_hooks_connected": cost_payload.get("enforcement_hooks_connected"),
+        "model_cost_binding_xai_grok_hook": cost_payload.get("binding_xai_grok_hook"),
         "top_recommendation": top.get("upgrade_id"),
         "top_action": top.get("action_class"),
         "live_execution": False,
@@ -135,7 +142,7 @@ def publish_all(*, state_dir: Path, telemetry_dir: Path, historical_dir: Path, e
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Refresh IIOS browser artifacts through Batch 10L/10M with cost control.")
+    parser = argparse.ArgumentParser(description="Refresh IIOS browser artifacts through Batch 10L/10M with binding-aware cost control.")
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--telemetry-dir", required=True)
     parser.add_argument("--historical-dir", required=True)
