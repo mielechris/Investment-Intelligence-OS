@@ -11,11 +11,12 @@ from high_speed_gemini_pipeline import GEMINI_DEEP_REQUEST_TYPE
 from ledger import DB_PATH, latest_object, record_event, record_object, utc_now
 
 
-POLICY_VERSION = "batch9e-gemini-pro-deep-worker-v1"
+POLICY_VERSION = "batch10m1-gemini-pro-evidence-gap-v2"
 WORKER_CASE_ID = "high_speed_gemini_deep_worker"
 STATE_ID = "high_speed_gemini_deep_worker_state_v1"
 STATE_TYPE = "high_speed_gemini_deep_worker_state"
 RESULT_TYPE = "gemini_deep_research_result"
+MAX_PRIORITY_QUESTIONS = 6
 
 DEEP_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -27,6 +28,8 @@ DEEP_SCHEMA: dict[str, Any] = {
         "confirming_evidence": {"type": "array", "items": {"type": "string"}},
         "contradictions": {"type": "array", "items": {"type": "string"}},
         "open_evidence_gaps": {"type": "array", "items": {"type": "string"}},
+        "question_resolutions": {"type": "array", "items": {"type": "string"}},
+        "decision_changing_unknowns": {"type": "array", "items": {"type": "string"}},
         "structural_vs_temporary": {"type": "string"},
         "research_confidence": {"type": "number"},
         "complexity_score": {"type": "number"},
@@ -39,6 +42,8 @@ DEEP_SCHEMA: dict[str, Any] = {
         "confirming_evidence",
         "contradictions",
         "open_evidence_gaps",
+        "question_resolutions",
+        "decision_changing_unknowns",
         "structural_vs_temporary",
         "research_confidence",
         "complexity_score",
@@ -76,17 +81,48 @@ def _queued_requests(limit: int = 20) -> list[dict[str, Any]]:
     return output
 
 
+def _string_list(value: Any, limit: int = MAX_PRIORITY_QUESTIONS) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text[:1200])
+        if len(out) >= limit:
+            break
+    return out
+
+
+def priority_research_questions(request: dict[str, Any]) -> list[str]:
+    """Extract the highest-value unresolved questions without another model call."""
+    explicit = _string_list(request.get("research_questions"))
+    if explicit:
+        return explicit
+    source = request.get("source_context") if isinstance(request.get("source_context"), dict) else {}
+    gemini = source.get("gemini") if isinstance(source.get("gemini"), dict) else {}
+    questions = _string_list(gemini.get("open_questions"))
+    if questions:
+        return questions
+    # If Flash did not return questions, contradictions are the next best deep-research targets.
+    return [f"Resolve or bound this counterevidence: {text}" for text in _string_list(gemini.get("counterevidence"))]
+
+
 def _prompt(request: dict[str, Any]) -> tuple[str, str]:
+    questions = priority_research_questions(request)
     system = (
         "You are Gemini Pro serving as IIOS's selective deep Research Office. Use Google Search grounding and URL Context "
-        "to independently investigate the case. Seek primary sources wherever possible, test the strongest confirming and opposing "
-        "explanations, identify what changed, distinguish structural changes from temporary narrative, and list unresolved evidence gaps. "
-        "This is context only. Do not recommend or execute a trade and do not override IIOS Committee, Risk, or Capital."
+        "to independently investigate the case. Seek primary sources wherever possible. PRIORITIZE the supplied unresolved "
+        "research questions before broadening the investigation. For each question, state what the evidence resolves, what remains "
+        "unknown, and whether the uncertainty could materially change the thesis. Test the strongest confirming and opposing "
+        "explanations, identify what changed, and distinguish structural changes from temporary narrative. This is context only. "
+        "Do not recommend or execute a trade and do not override IIOS Committee, Risk, or Capital."
     )
     user = json.dumps(
         {
             "objective": request.get("objective"),
             "ticker": request.get("ticker"),
+            "priority_research_questions": questions,
             "source_context": request.get("source_context"),
         },
         ensure_ascii=False,
@@ -107,6 +143,7 @@ def run_deep_once() -> dict[str, Any]:
             "status": "PROVIDER_NOT_CONFIGURED",
             "queue_depth": len(queued),
             "processed": False,
+            "evidence_gap_driven": True,
             "paper_mode": True,
             "trade_execution_permission": False,
             "live_execution": False,
@@ -122,6 +159,7 @@ def run_deep_once() -> dict[str, Any]:
             "status": "IDLE",
             "queue_depth": 0,
             "processed": False,
+            "evidence_gap_driven": True,
             "paper_mode": True,
             "trade_execution_permission": False,
             "live_execution": False,
@@ -134,12 +172,18 @@ def run_deep_once() -> dict[str, Any]:
     request_id = str(request.get("gemini_deep_research_request_id") or "")
     case_id = str(request.get("case_id") or "")
     ticker = str(request.get("ticker") or "").upper()
+    questions = priority_research_questions(request)
 
     record_event(
         case_id,
         "GEMINI_DEEP_RESEARCH_STARTED",
         entity_id=request_id,
-        payload={"ticker": ticker, "trade_execution_permission": False},
+        payload={
+            "ticker": ticker,
+            "priority_question_count": len(questions),
+            "evidence_gap_driven": True,
+            "trade_execution_permission": False,
+        },
     )
 
     try:
@@ -173,6 +217,8 @@ def run_deep_once() -> dict[str, Any]:
         "ticker": ticker,
         "status": status,
         "research": output,
+        "priority_research_questions": questions,
+        "evidence_gap_driven": True,
         "provider_model": result.get("model"),
         "latency_ms": result.get("latency_ms"),
         "usage": result.get("usage") or {},
@@ -198,7 +244,13 @@ def run_deep_once() -> dict[str, Any]:
         case_id,
         "GEMINI_DEEP_RESEARCH_COMPLETE" if status == "COMPLETE" else "GEMINI_DEEP_RESEARCH_FAILED_CLOSED",
         entity_id=result_id,
-        payload={"ticker": ticker, "status": status, "trade_execution_permission": False},
+        payload={
+            "ticker": ticker,
+            "status": status,
+            "priority_question_count": len(questions),
+            "evidence_gap_driven": True,
+            "trade_execution_permission": False,
+        },
     )
 
     state = {
@@ -210,6 +262,8 @@ def run_deep_once() -> dict[str, Any]:
         "request_id": request_id,
         "result_id": result_id,
         "ticker": ticker,
+        "priority_question_count": len(questions),
+        "evidence_gap_driven": True,
         "duration_seconds": round(time.perf_counter() - started, 3),
         "paper_mode": True,
         "trade_execution_permission": False,
@@ -225,6 +279,7 @@ def latest_status() -> dict[str, Any]:
         "state": latest_object(STATE_TYPE, case_id=WORKER_CASE_ID),
         "queue_depth": len(_queued_requests(limit=50)),
         "provider": gemini_provider.configuration_status(),
+        "evidence_gap_driven": True,
         "paper_mode": True,
         "trade_execution_permission": False,
         "live_execution": False,

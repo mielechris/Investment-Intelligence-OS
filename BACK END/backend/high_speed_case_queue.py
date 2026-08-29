@@ -8,11 +8,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from eight_agent_orchestrator import run_eight_agent_orchestration
+from eight_agent_orchestrator_v2 import run_eight_agent_orchestration
 from ledger import DB_PATH, get_object, latest_object, record_event, record_object, utc_now
 
 
-POLICY_VERSION = "batch9e-case-floor-v1"
+POLICY_VERSION = "batch10m1-case-floor-agent-contract-v2"
 QUEUE_CASE_ID = "high_speed_case_floor"
 STATE_ID = "high_speed_case_floor_state_v1"
 STATE_TYPE = "high_speed_case_floor_state"
@@ -120,6 +120,7 @@ def _run_case(item: dict[str, Any]) -> dict[str, Any]:
         payload={
             "ticker": item.get("ticker"),
             "created_by": item.get("created_by"),
+            "agent_contract_version": "batch10m1-agent-contract-v2",
             "trade_execution_permission": False,
         },
     )
@@ -131,6 +132,7 @@ def _run_case(item: dict[str, Any]) -> dict[str, Any]:
             "status": "COMPLETE",
             "committee_disposition": committee.get("disposition"),
             "committee_confidence": committee.get("confidence"),
+            "agent_contract_version": "batch10m1-agent-contract-v2",
             "duration_seconds": round(time.perf_counter() - started, 3),
         }
     except Exception as exc:  # noqa: BLE001
@@ -140,6 +142,7 @@ def _run_case(item: dict[str, Any]) -> dict[str, Any]:
             entity_id=case_id,
             payload={
                 "error": f"{type(exc).__name__}: {exc}"[:1000],
+                "agent_contract_version": "batch10m1-agent-contract-v2",
                 "trade_execution_permission": False,
             },
         )
@@ -193,6 +196,10 @@ def run_case_floor_cycle(max_cases: int = MAX_CONCURRENT_CASES) -> dict[str, Any
         "results": results,
         "cycle_duration_seconds": duration,
         "max_concurrent_cases": MAX_CONCURRENT_CASES,
+        "agent_contract_version": "batch10m1-agent-contract-v2",
+        "specialist_call_count_per_case": 8,
+        "committee_call_count_per_case": 1,
+        "extra_model_calls_added": 0,
         "allowed_promotion_creators": sorted(ALLOWED_PROMOTION_CREATORS),
         "paper_mode": True,
         "committee_override": False,
@@ -218,6 +225,7 @@ def run_case_floor_cycle(max_cases: int = MAX_CONCURRENT_CASES) -> dict[str, Any
             "selected_count": len(selected),
             "completed_count": completed,
             "failed_closed_count": failed,
+            "agent_contract_version": "batch10m1-agent-contract-v2",
             "trade_execution_permission": False,
         },
     )
@@ -229,6 +237,7 @@ def latest_status() -> dict[str, Any]:
         "state": latest_object(STATE_TYPE, case_id=QUEUE_CASE_ID),
         "pending_cases": pending_cases(limit=20),
         "policy_version": POLICY_VERSION,
+        "agent_contract_version": "batch10m1-agent-contract-v2",
         "paper_mode": True,
         "trade_execution_permission": False,
         "live_execution": False,
