@@ -1,0 +1,43 @@
+name: IIOS Batch 10K Macro Runtime Repair Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10k-historical-macro-regime-library
+  pull_request:
+    branches:
+      - feature/batch10j-historical-event-reconstruction
+
+jobs:
+  macro-runtime-repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile runtime repair
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_macro_regime_runtime.py
+          scripts/repair_batch10k_macro_runtime.py
+
+      - name: Assert HTTP1 transport repair
+        run: |
+          grep -q '"--http1.1"' scripts/iios_historical_macro_regime_runtime.py
+          grep -q '"--retry-all-errors"' scripts/iios_historical_macro_regime_runtime.py
+          grep -q '"--retry"' scripts/iios_historical_macro_regime_runtime.py
+          ! grep -Eq -- '"--insecure"|"-k"' scripts/iios_historical_macro_regime_runtime.py
+
+      - name: Assert runtime repair preserves no authority
+        run: |
+          grep -q '"capital_authority": False' scripts/repair_batch10k_macro_runtime.py
+          grep -q '"trade_execution_permission": False' scripts/repair_batch10k_macro_runtime.py
+          grep -q '"live_execution": False' scripts/repair_batch10k_macro_runtime.py
+          grep -q 'provider_change_authority' scripts/repair_batch10k_macro_runtime.py
+
+      - name: Assert governed macro policy remains intact
+        run: |
+          grep -q 'TIER_B_REVISED_MACRO_SERIES_CONTEXT_ONLY_UNTIL_POINT_IN_TIME_VINTAGE_SOURCE_EXISTS' scripts/iios_historical_macro_regime_library.py
+          grep -q 'ONLY_OBSERVATIONS_AT_OR_BEFORE_EFFECTIVE_TARGET_DATE' scripts/iios_historical_macro_regime_library.py
