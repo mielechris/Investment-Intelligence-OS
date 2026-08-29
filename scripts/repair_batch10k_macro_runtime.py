@@ -53,10 +53,16 @@ def runtime_env() -> dict[str, str]:
 def install_runtime_file(git: str) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     content = run([git, "show", f"origin/{BRANCH}:scripts/iios_historical_macro_regime_runtime.py"], cwd=LIVE).stdout
-    if "--http1.1" not in content or "--retry-all-errors" not in content:
-        raise SystemExit("Fetched 10K runtime is missing the HTTP/1.1 repair contract")
+    required = (
+        "US_TREASURY_XML",
+        "CBOE_VIX_HISTORY",
+        "DIRECT_US_TREASURY_XML_PLUS_CBOE_VIX_VERIFIED_TLS",
+        "--http1.1",
+    )
+    if not all(token in content for token in required):
+        raise SystemExit("Fetched 10K runtime is missing the direct-source provider mesh contract")
     if "--insecure" in content:
-        raise SystemExit("10K runtime repair may not disable TLS verification")
+        raise SystemExit("10K direct-source runtime may not disable TLS verification")
     RUNTIME_FILE.write_text(content, encoding="utf-8")
 
 
@@ -68,7 +74,7 @@ def run_bootstrap(python: Path) -> dict:
     ], cwd=WORKTREE, env=runtime_env())
     artifact = MACRO_DIR / "latest_historical_macro_regime_library.json"
     if not artifact.exists():
-        raise SystemExit("10K runtime repair did not produce the macro artifact")
+        raise SystemExit("10K direct-source repair did not produce the macro artifact")
     return json.loads(artifact.read_text(encoding="utf-8"))
 
 
@@ -130,7 +136,7 @@ def health() -> dict:
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             time.sleep(0.5)
-    raise RuntimeError(f"10K preview health unavailable after runtime repair: {last_error}")
+    raise RuntimeError(f"10K preview health unavailable after direct-source repair: {last_error}")
 
 
 def main() -> int:
@@ -148,23 +154,26 @@ def main() -> int:
     safety = payload.get("safety") if isinstance(payload.get("safety"), dict) else {}
     for key in ("auto_generate_trades", "auto_change_thresholds", "auto_change_agent_weights", "auto_change_model_routing", "auto_change_portfolio_exposure", "provider_change_authority", "broker_connection_authority", "capital_authority", "trade_execution_permission", "live_execution"):
         if safety.get(key) is not False:
-            raise SystemExit(f"10K safety contract violated after runtime repair: {key}")
+            raise SystemExit(f"10K safety contract violated after direct-source repair: {key}")
     install_worker(python)
     browser_macro, office = republish(python)
     browser_health = health()
     coverage = browser_macro.get("coverage") if isinstance(browser_macro.get("coverage"), dict) else {}
     summary = browser_macro.get("research_summary") if isinstance(browser_macro.get("research_summary"), dict) else {}
+    diagnostics = browser_macro.get("provider_diagnostics") if isinstance(browser_macro.get("provider_diagnostics"), dict) else {}
     top = office.get("top_recommendation") if isinstance(office.get("top_recommendation"), dict) else {}
     print(json.dumps({
-        "status": "BATCH10K_MACRO_RUNTIME_REPAIRED",
+        "status": "BATCH10K_DIRECT_PROVIDER_RUNTIME_REPAIRED",
         "macro_status": browser_macro.get("status"),
         "tier_a_series_ready": coverage.get("tier_a_series_ready"),
+        "tier_a_series_required_for_active": coverage.get("tier_a_series_required_for_active"),
         "tier_b_context_series_ready": coverage.get("tier_b_context_series_ready"),
         "normalized_symbols_ready": coverage.get("normalized_symbols_ready"),
         "provider_errors": summary.get("errors"),
+        "provider_diagnostics": diagnostics,
         "10i_top_recommendation_after_repair": top.get("upgrade_id"),
         "10i_top_action_after_repair": top.get("action_class"),
-        "transport": "MACOS_SYSTEM_CURL_HTTP_1_1_VERIFIED_TLS_WITH_BOUNDED_RETRIES",
+        "transport": browser_macro.get("runtime_transport"),
         "worker": LABEL,
         "interval_seconds": INTERVAL_SECONDS,
         "preview_health": browser_health.get("status"),
