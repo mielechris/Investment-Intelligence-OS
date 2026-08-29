@@ -14,7 +14,9 @@ LEDGER = LIVE / "BACK END" / "backend" / "iios_ledger.db"
 COST_HELPER_BACKEND = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend")
 COST_HELPER = COST_HELPER_BACKEND / "model_cost_enforcement.py"
 VENV_CANDIDATES = (
+    LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python3",
     LIVE / "BACK END" / "backend" / ".venv" / "bin" / "python",
+    Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python3"),
     Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
 )
 
