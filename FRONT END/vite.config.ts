@@ -10,6 +10,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/__iios_api/, ''),
       },
+      '/living': {
+        target: 'http://127.0.0.1:8002',
+        changeOrigin: true,
+      },
     },
   },
 })
