@@ -1,0 +1,44 @@
+name: IIOS Batch 10H System Trust Runtime Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10h-historical-market-intelligence
+  pull_request:
+    branches:
+      - feature/batch10g-qualification-watch
+
+jobs:
+  system-trust-runtime-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile runtime repair
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_market_intelligence_runtime.py
+          scripts/repair_batch10h_historical_runtime.py
+          scripts/test_batch10h_system_trust_runtime.py
+
+      - name: Run system-trust runtime tests
+        run: PYTHONPATH=scripts python scripts/test_batch10h_system_trust_runtime.py
+
+      - name: Assert verified TLS policy and fallback providers
+        run: |
+          grep -q '/usr/bin/curl' scripts/iios_historical_market_intelligence_runtime.py
+          grep -q 'Yahoo Finance' scripts/iios_historical_market_intelligence_runtime.py
+          grep -q 'SYSTEM_TRUST_VERIFIED_NO_INSECURE_FLAG' scripts/iios_historical_market_intelligence_runtime.py
+          grep -q 'verified-history' scripts/iios_historical_market_intelligence_runtime.py
+          ! grep -q -- '--insecure' scripts/iios_historical_market_intelligence_runtime.py
+          ! grep -Eq '(^|[[:space:]])-k([[:space:]]|$)' scripts/iios_historical_market_intelligence_runtime.py
+
+      - name: Assert repair preserves safety boundary
+        run: |
+          grep -q 'capital_authority.*False' scripts/repair_batch10h_historical_runtime.py
+          grep -q 'trade_execution_permission.*False' scripts/repair_batch10h_historical_runtime.py
+          grep -q 'live_execution.*False' scripts/repair_batch10h_historical_runtime.py
+          grep -q 'com.iios.historical-market-intelligence' scripts/repair_batch10h_historical_runtime.py
