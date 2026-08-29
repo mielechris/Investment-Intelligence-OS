@@ -45,8 +45,13 @@ def resolve_python() -> Path:
 def install_runtime_file(git: str) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     content = run([git, "show", f"origin/{BRANCH}:scripts/iios_historical_event_reconstruction_runtime.py"], cwd=LIVE).stdout
-    if "DOC_SEARCH_START = date(2017, 1, 1)" not in content:
-        raise SystemExit("Fetched 10J runtime does not contain the corrected DOC coverage contract")
+    required = (
+        "DOC_SEARCH_START = date(2017, 1, 1)",
+        "GOOGLE_NEWS_RSS",
+        "GDELT_DOC_2_THEN_GOOGLE_NEWS_RSS_DATE_VERIFIED",
+    )
+    if not all(value in content for value in required):
+        raise SystemExit("Fetched 10J runtime does not contain the governed provider-mesh contract")
     RUNTIME_FILE.write_text(content, encoding="utf-8")
 
 
@@ -58,11 +63,13 @@ def runtime_env() -> dict[str, str]:
 
 
 def run_bootstrap(python: Path) -> dict:
+    # Process every currently-ready 10H study once so provider fallback can be
+    # judged immediately instead of waiting through eight 30-minute rotations.
     run([
         str(python), str(RUNTIME_FILE),
         "--historical-dir", str(HISTORICAL_DIR),
         "--event-dir", str(EVENT_DIR),
-        "--symbols-per-cycle", "4",
+        "--symbols-per-cycle", "8",
     ], cwd=WORKTREE, env=runtime_env())
     artifact = EVENT_DIR / "latest_historical_event_reconstruction.json"
     return json.loads(artifact.read_text(encoding="utf-8"))
@@ -146,6 +153,17 @@ def main() -> int:
     browser_health = health()
     summary = browser_event.get("research_summary") if isinstance(browser_event.get("research_summary"), dict) else {}
     top = office.get("top_recommendation") if isinstance(office.get("top_recommendation"), dict) else {}
+    provider_counts: dict[str, int] = {}
+    for row in browser_event.get("reconstructions") or []:
+        if not isinstance(row, dict):
+            continue
+        contexts = [row.get("current_event_context")] + [a.get("event_context") for a in row.get("analogs") or [] if isinstance(a, dict)]
+        for context in contexts:
+            if not isinstance(context, dict):
+                continue
+            meta = context.get("provider") if isinstance(context.get("provider"), dict) else {}
+            provider = str(meta.get("provider") or "NONE")
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
     print(json.dumps({
         "status": "BATCH10J_EVENT_RUNTIME_REPAIRED",
         "event_status": browser_event.get("status"),
@@ -157,8 +175,10 @@ def main() -> int:
         "worker": LABEL,
         "interval_seconds": INTERVAL_SECONDS,
         "doc_search_start": "2017-01-01",
+        "provider_mesh": "GDELT_DOC_2_THEN_GOOGLE_NEWS_RSS_DATE_VERIFIED",
+        "provider_context_counts": provider_counts,
         "current_windows_capped_at_now": True,
-        "event_analog_selection": "PREFER_POST_2017_FROM_FULL_10H_ANALOG_SET",
+        "event_analog_selection": "PREFER_GDELT_COVERED_ANALOGS_THEN_GOOGLE_NEWS_DATE_VERIFIED_FALLBACK",
         "preview_health": browser_health.get("status"),
         "causal_claim_authority": False,
         "capital_authority": False,
