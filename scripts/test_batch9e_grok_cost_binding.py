@@ -81,6 +81,7 @@ def test_allowed_request_is_bounded_and_accounted(monkeypatch):
     request = events["requests"][0]
     assert request["retries"] == 0
     assert request["payload"]["max_output_tokens"] == 2000
+    assert request["payload"]["max_tool_calls"] == 3
     assert request["payload"]["prompt_cache_key"] == "iios-9e-grok-wire-v1"
     assert request["payload"]["store"] is False
     assert len(events["responses"]) == 1
@@ -97,6 +98,7 @@ def test_configuration_declares_fail_closed_cost_boundary(monkeypatch):
     assert status["cost_governor_ready"] is True
     assert status["request_retries"] == 0
     assert status["max_output_tokens"] == 2000
+    assert status["max_server_side_tool_calls"] == 3
     assert status["prompt_cache_key_enabled"] is True
     assert status["trade_execution_permission"] is False
     assert status["live_execution"] is False
