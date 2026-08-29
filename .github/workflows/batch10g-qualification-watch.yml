@@ -1,0 +1,75 @@
+name: IIOS Batch 10G Qualification Watch Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10g-qualification-watch
+  pull_request:
+    branches:
+      - feature/batch10d-10f-readiness-superbatch-v2
+
+jobs:
+  qualification-watch-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 10G
+        run: >-
+          python -m py_compile
+          scripts/iios_qualification_watch.py
+          scripts/test_batch10g_qualification_watch.py
+          scripts/activate_batch10g_qualification_watch.py
+          scripts/iios_final_institutional_publisher.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run inherited final roadmap regressions
+        run: |
+          python scripts/test_batch9t_market_regime_intelligence.py
+          python scripts/test_batch10a_10c_operating_superbatch.py
+          python scripts/test_batch10d_10f_readiness_superbatch.py
+
+      - name: Run 10G qualification-watch contracts
+        run: python scripts/test_batch10g_qualification_watch.py
+
+      - name: Build final browser with qualification watch
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/QualificationWatch.tsx src/OperatingSuperbatch.tsx src/ReadinessSuperbatch.tsx src/MarketRegimeIntelligence.tsx
+          npm run build
+
+      - name: Assert watch is evidence tracking only
+        run: |
+          grep -q 'GOVERNED_PAPER_EVIDENCE_COLLECTION' scripts/iios_qualification_watch.py
+          grep -q 'CONTINUE_GOVERNED_PAPER_COLLECTION' scripts/iios_qualification_watch.py
+          grep -q 'PAPER_QUALIFIED_FOR_HUMAN_READINESS_REVIEW' scripts/iios_qualification_watch.py
+          grep -q 'ENGINEERING · COMPLETE' "FRONT END/src/QualificationWatch.tsx"
+
+      - name: Assert no trade or capital authority
+        run: |
+          grep -q '"auto_generate_trades": False' scripts/iios_qualification_watch.py
+          grep -q '"auto_connect_broker": False' scripts/iios_qualification_watch.py
+          grep -q '"auto_fund_account": False' scripts/iios_qualification_watch.py
+          grep -q '"auto_enable_live": False' scripts/iios_qualification_watch.py
+          grep -q '"capital_authority": False' scripts/iios_qualification_watch.py
+          grep -q '"trade_execution_permission": False' scripts/iios_qualification_watch.py
+          grep -q '"live_execution": False' scripts/iios_qualification_watch.py
+
+      - name: Assert final publisher and activation include watch
+        run: |
+          grep -q 'qualification_watch.json' scripts/iios_final_institutional_publisher.py
+          grep -q 'BRANCH="feature/batch10g-qualification-watch"' scripts/activate_batch10g_qualification_watch.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch10g_qualification_watch.py
+          grep -q '9T–10F institutional stack: PRESERVED' scripts/activate_batch10g_qualification_watch.py
+          grep -q 'QualificationWatch' "FRONT END/src/LiveFactoryBrowser.tsx"
+
+      - name: Assert no live authority anywhere in 10G
+        run: |
+          ! grep -Eq '"(auto_generate_trades|auto_connect_broker|auto_fund_account|auto_enable_live|capital_authority|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_qualification_watch.py scripts/activate_batch10g_qualification_watch.py
