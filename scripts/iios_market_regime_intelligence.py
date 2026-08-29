@@ -93,6 +93,9 @@ def _classification(rows: list[dict[str, Any]], benchmark_complete: bool) -> dic
         "regime_label": label,
         "evidence_level": evidence_level,
         "scope": "9H_SIGNIFICANT_MOVER_CROSS_SECTION_ONLY",
+        "row_availability": "DETAILED_ROWS_EXPOSED",
+        "reported_opportunity_count": sample,
+        "detailed_row_count": sample,
         "sample_count": sample,
         "upside_count": up,
         "downside_count": down,
@@ -108,6 +111,29 @@ def _classification(rows: list[dict[str, Any]], benchmark_complete: bool) -> dic
     }
 
 
+def _rows_unavailable_classification(reported_count: int, benchmark_complete: bool) -> dict[str, Any]:
+    return {
+        "regime_label": "SIGNIFICANT_MOVER_ROWS_NOT_EXPOSED",
+        "evidence_level": "LOW",
+        "scope": "9H_SIGNIFICANT_MOVER_CROSS_SECTION_ONLY",
+        "row_availability": "ROWS_NOT_EXPOSED",
+        "reported_opportunity_count": reported_count,
+        "detailed_row_count": 0,
+        "sample_count": None,
+        "upside_count": None,
+        "downside_count": None,
+        "neutral_count": None,
+        "upside_share_pct": None,
+        "downside_share_pct": None,
+        "median_absolute_move_pct": None,
+        "mean_absolute_move_pct": None,
+        "signed_mean_move_pct": None,
+        "high_importance_count": None,
+        "extreme_move_count": None,
+        "benchmark_complete": benchmark_complete,
+    }
+
+
 def build_regime(
     *,
     scorecard: dict[str, Any],
@@ -117,27 +143,50 @@ def build_regime(
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     input_block = scorecard.get("input") if isinstance(scorecard.get("input"), dict) else {}
-    rows = _benchmark_rows(scorecard)
-    benchmark_complete = bool(input_block.get("benchmark_complete"))
-    current = _classification(rows, benchmark_complete)
     metrics = scorecard.get("metrics") if isinstance(scorecard.get("metrics"), dict) else {}
+    rows = _benchmark_rows(scorecard)
+    benchmark_complete = bool(input_block.get("benchmark_complete", scorecard.get("benchmark_complete", False)))
+    reported_count = _int(metrics.get("opportunity_count", metrics.get("benchmark_opportunity_count")))
+    rows_missing = reported_count > 0 and not rows
+    current = (
+        _rows_unavailable_classification(reported_count, benchmark_complete)
+        if rows_missing
+        else _classification(rows, benchmark_complete)
+    )
     agent_rows = _rows(league.get("agent_standings"))
     mature_agents = [row for row in agent_rows if row.get("status") in {"OFFICIAL", "PROVISIONAL"}]
     outcome_count = _int(learning.get("outcome_count"))
 
-    dimensions = [
-        {
+    if rows_missing:
+        cross_section = {
+            "dimension": "CROSS_SECTIONAL_DIRECTION",
+            "state": "SOURCE_ROWS_UNAVAILABLE",
+            "value": None,
+            "evidence": f"9H reports {reported_count} aggregate opportunities, but the detailed mover rows needed for direction classification are not exposed in the current artifact.",
+        }
+        dispersion = {
+            "dimension": "MOVE_INTENSITY_DISPERSION",
+            "state": "SOURCE_ROWS_UNAVAILABLE",
+            "value": None,
+            "evidence": f"9H aggregate metrics are available, but move-level magnitudes for {reported_count} reported opportunities are not exposed to 9T.",
+        }
+    else:
+        cross_section = {
             "dimension": "CROSS_SECTIONAL_DIRECTION",
             "state": "MEASURED",
             "value": current["regime_label"],
             "evidence": f"{current['upside_count']} upside vs {current['downside_count']} downside significant movers.",
-        },
-        {
+        }
+        dispersion = {
             "dimension": "MOVE_INTENSITY_DISPERSION",
             "state": "MEASURED",
             "value": current.get("median_absolute_move_pct"),
             "evidence": "Derived only from persisted independent 9H significant-mover opportunities.",
-        },
+        }
+
+    dimensions = [
+        cross_section,
+        dispersion,
         {
             "dimension": "RATES_LIQUIDITY",
             "state": "MEASUREMENT_GAP",
@@ -164,22 +213,25 @@ def build_regime(
         },
     ]
 
+    has_classifiable_rows = bool(rows)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
-        "status": "MARKET_REGIME_INTELLIGENCE_ACTIVE" if current["sample_count"] else "MARKET_REGIME_INTELLIGENCE_WARM_UP",
+        "status": "MARKET_REGIME_INTELLIGENCE_ACTIVE" if has_classifiable_rows else "MARKET_REGIME_INTELLIGENCE_WARM_UP",
         "current_regime": current,
         "dimensions": dimensions,
         "regime_tag_contract": {
-            "tag_new_sessions": True,
+            "tag_new_sessions": has_classifiable_rows,
             "tagging_scope": "ADVISORY_METADATA_ONLY",
             "historical_backfill_available": False,
-            "agent_regime_performance_available": bool(mature_agents and outcome_count),
+            "agent_regime_performance_available": bool(has_classifiable_rows and mature_agents and outcome_count),
             "agent_regime_performance_note": (
                 "Agent rankings become regime-specific only after exact outcomes are persisted with a 9T regime tag."
             ),
         },
         "factory_context": {
+            "9h_reported_opportunity_count": reported_count,
+            "9h_detailed_mover_rows_exposed": len(rows),
             "9h_detection_rate_pct": _float(metrics.get("detection_rate_pct")),
             "9h_miss_rate_pct": _float(metrics.get("opportunity_miss_rate_pct")),
             "9j_outcome_count": outcome_count,
@@ -187,9 +239,10 @@ def build_regime(
             "9g_generated_at": telemetry.get("generated_at"),
         },
         "recommended_next_measurements": [
+            "Expose persisted 9H opportunity rows to 9T when aggregate 9H metrics are present without mover detail.",
             "Persist validated rates/liquidity regime inputs through 9R.",
             "Persist validated volatility/term-structure inputs through 9R.",
-            "Tag future 9H/9J sessions with the 9T regime snapshot for outcome attribution.",
+            "Tag future 9H/9J sessions with the 9T regime snapshot for outcome attribution only when detailed mover rows are available.",
             "Route any regime-specific threshold or weighting proposal through 9P → 9Q → human approval.",
         ],
         "safety": {

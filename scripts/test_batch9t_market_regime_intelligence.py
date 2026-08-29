@@ -18,7 +18,7 @@ class Batch9TMarketRegimeIntelligenceTest(unittest.TestCase):
         payload = regime.build_regime(
             scorecard={
                 "input": {"benchmark_complete": True, "opportunities": opportunities},
-                "metrics": {"detection_rate_pct": 47.2, "opportunity_miss_rate_pct": 52.8},
+                "metrics": {"opportunity_count": 30, "detection_rate_pct": 47.2, "opportunity_miss_rate_pct": 52.8},
             },
             learning={"outcome_count": 0},
             league={"agent_standings": []},
@@ -28,6 +28,7 @@ class Batch9TMarketRegimeIntelligenceTest(unittest.TestCase):
         current = payload["current_regime"]
         self.assertEqual(current["regime_label"], "DOWNSIDE_SIGNIFICANT_MOVER_DOMINANCE")
         self.assertEqual(current["evidence_level"], "HIGH")
+        self.assertEqual(current["row_availability"], "DETAILED_ROWS_EXPOSED")
         gaps = {row["dimension"]: row for row in payload["dimensions"]}
         self.assertEqual(gaps["CROSS_SECTIONAL_DIRECTION"]["state"], "MEASURED")
         self.assertEqual(gaps["RATES_LIQUIDITY"]["state"], "MEASUREMENT_GAP")
@@ -44,7 +45,8 @@ class Batch9TMarketRegimeIntelligenceTest(unittest.TestCase):
                         {"ticker": "A", "move_pct": 5.0},
                         {"ticker": "B", "move_pct": -6.0},
                     ],
-                }
+                },
+                "metrics": {"opportunity_count": 2},
             },
             learning={}, league={}, telemetry={},
         )
@@ -53,6 +55,33 @@ class Batch9TMarketRegimeIntelligenceTest(unittest.TestCase):
         self.assertFalse(payload["regime_tag_contract"]["historical_backfill_available"])
         self.assertFalse(payload["safety"]["auto_change_thresholds"])
         self.assertTrue(payload["safety"]["human_approval_required"])
+
+    def test_aggregate_metrics_without_rows_are_not_rendered_as_zero_movers(self) -> None:
+        payload = regime.build_regime(
+            scorecard={
+                "input": {"benchmark_complete": True},
+                "metrics": {
+                    "opportunity_count": 36,
+                    "detected_count": 17,
+                    "detection_rate_pct": 47.2,
+                    "opportunity_miss_rate_pct": 52.8,
+                },
+            },
+            learning={}, league={}, telemetry={},
+        )
+        current = payload["current_regime"]
+        self.assertEqual(current["regime_label"], "SIGNIFICANT_MOVER_ROWS_NOT_EXPOSED")
+        self.assertEqual(current["row_availability"], "ROWS_NOT_EXPOSED")
+        self.assertEqual(current["reported_opportunity_count"], 36)
+        self.assertEqual(current["detailed_row_count"], 0)
+        self.assertIsNone(current["sample_count"])
+        self.assertIsNone(current["upside_count"])
+        dims = {row["dimension"]: row for row in payload["dimensions"]}
+        self.assertEqual(dims["CROSS_SECTIONAL_DIRECTION"]["state"], "SOURCE_ROWS_UNAVAILABLE")
+        self.assertEqual(dims["MOVE_INTENSITY_DISPERSION"]["state"], "SOURCE_ROWS_UNAVAILABLE")
+        self.assertFalse(payload["regime_tag_contract"]["tag_new_sessions"])
+        self.assertEqual(payload["factory_context"]["9h_reported_opportunity_count"], 36)
+        self.assertEqual(payload["factory_context"]["9h_detailed_mover_rows_exposed"], 0)
 
 
 if __name__ == "__main__":
