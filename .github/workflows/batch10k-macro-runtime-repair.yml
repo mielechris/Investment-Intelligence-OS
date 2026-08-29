@@ -1,0 +1,54 @@
+name: IIOS Batch 10K Macro Runtime Repair Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10k-historical-macro-regime-library
+  pull_request:
+    branches:
+      - feature/batch10j-historical-event-reconstruction
+
+jobs:
+  macro-runtime-repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile direct-source runtime repair
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_macro_regime_runtime.py
+          scripts/repair_batch10k_macro_runtime.py
+          scripts/test_batch10k_direct_provider_mesh.py
+
+      - name: Run direct provider mesh contract
+        run: PYTHONPATH=scripts python scripts/test_batch10k_direct_provider_mesh.py
+
+      - name: Assert Treasury and Cboe direct sources
+        run: |
+          grep -q 'US_TREASURY_XML' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'CBOE_VIX_HISTORY' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'daily_treasury_yield_curve' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'VIX_History.csv' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'TREASURY_START_YEAR = 1990' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'ThreadPoolExecutor' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'DIRECT_US_TREASURY_XML_PLUS_CBOE_VIX_VERIFIED_TLS' scripts/iios_historical_macro_regime_runtime.py
+          ! grep -Eq -- '"--insecure"|"-k"' scripts/iios_historical_macro_regime_runtime.py
+
+      - name: Assert nonblocking FRED and visible remaining gaps
+        run: |
+          grep -q 'NON_BLOCKING_DISABLED_AFTER_OBSERVED_RUNTIME_TIMEOUTS' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'INFLATION_GROWTH_LIQUIDITY_REMAIN_MEASUREMENT_GAPS' scripts/iios_historical_macro_regime_runtime.py
+          grep -q 'tier_a_series_required_for_active.*3' scripts/iios_historical_macro_regime_runtime.py
+
+      - name: Assert runtime repair preserves no authority
+        run: |
+          grep -q '"capital_authority": False' scripts/repair_batch10k_macro_runtime.py
+          grep -q '"trade_execution_permission": False' scripts/repair_batch10k_macro_runtime.py
+          grep -q '"live_execution": False' scripts/repair_batch10k_macro_runtime.py
+          grep -q 'provider_change_authority' scripts/repair_batch10k_macro_runtime.py
+          grep -q '"auto_generate_trades": False' scripts/iios_historical_macro_regime_runtime.py
+          grep -q '"provider_change_authority": False' scripts/iios_historical_macro_regime_runtime.py

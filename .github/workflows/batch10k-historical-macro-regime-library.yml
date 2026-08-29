@@ -1,0 +1,81 @@
+name: IIOS Batch 10K Historical Macro Regime Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10k-historical-macro-regime-library
+  pull_request:
+    branches:
+      - feature/batch10j-historical-event-reconstruction
+
+jobs:
+  macro-regime-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 10K
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_macro_regime_library.py
+          scripts/test_batch10k_historical_macro_regime_library.py
+          scripts/test_batch10k_10i_feedback.py
+          scripts/iios_final_institutional_publisher.py
+          scripts/activate_batch10k_historical_macro_regime_library.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run inherited 10H through 10J regressions
+        run: |
+          python scripts/test_batch10h_historical_market_intelligence.py
+          python scripts/test_batch10i_chief_intelligence_office_v2.py
+          python scripts/test_batch10j_historical_event_reconstruction.py
+          python scripts/test_batch10j_10i_feedback.py
+
+      - name: Run 10K macro contracts
+        run: |
+          PYTHONPATH=scripts python scripts/test_batch10k_historical_macro_regime_library.py
+          PYTHONPATH=scripts python scripts/test_batch10k_10i_feedback.py
+
+      - name: Build browser with 10K room
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/HistoricalMacroRegimeLibrary.tsx src/HistoricalEventReconstruction.tsx src/ChiefIntelligenceOfficeV2.tsx
+          npm run build
+
+      - name: Assert no future leakage or revised-macro overclaim
+        run: |
+          grep -q 'TIER_B_REVISED_MACRO_SERIES_CONTEXT_ONLY_UNTIL_POINT_IN_TIME_VINTAGE_SOURCE_EXISTS' scripts/iios_historical_macro_regime_library.py
+          grep -q 'ONLY_OBSERVATIONS_AT_OR_BEFORE_EFFECTIVE_TARGET_DATE' scripts/iios_historical_macro_regime_library.py
+          grep -q 'TIER_B_MARKET' scripts/iios_historical_macro_regime_library.py || true
+          grep -q 'Same chart. Different economy.' "FRONT END/src/HistoricalMacroRegimeLibrary.tsx"
+          grep -q 'TIER B · CONTEXT ONLY' "FRONT END/src/HistoricalMacroRegimeLibrary.tsx"
+
+      - name: Assert 10I only advances after measured 10K evidence
+        run: |
+          grep -q 'HISTORICAL_MACRO_REGIME_LIBRARY_ACTIVE' scripts/iios_final_institutional_publisher.py
+          grep -q 'normalized_symbols_ready' scripts/iios_final_institutional_publisher.py
+          grep -q 'BENCHMARK_ALPHA_ATTRIBUTION' scripts/test_batch10k_10i_feedback.py
+
+      - name: Assert independent macro worker and preserved stack
+        run: |
+          grep -q 'com.iios.historical-macro-regime-library' scripts/activate_batch10k_historical_macro_regime_library.py
+          grep -q 'MACRO_INTERVAL_SECONDS = 3600' scripts/activate_batch10k_historical_macro_regime_library.py
+          grep -q '10J event reconstruction: PRESERVED' scripts/activate_batch10k_historical_macro_regime_library.py
+          grep -q 'Backend 8002: UNCHANGED' scripts/activate_batch10k_historical_macro_regime_library.py
+
+      - name: Assert no autonomous authority
+        run: |
+          grep -q '"auto_generate_trades": False' scripts/iios_historical_macro_regime_library.py
+          grep -q '"auto_change_thresholds": False' scripts/iios_historical_macro_regime_library.py
+          grep -q '"auto_change_agent_weights": False' scripts/iios_historical_macro_regime_library.py
+          grep -q '"provider_change_authority": False' scripts/iios_historical_macro_regime_library.py
+          grep -q '"capital_authority": False' scripts/iios_historical_macro_regime_library.py
+          grep -q '"trade_execution_permission": False' scripts/iios_historical_macro_regime_library.py
+          grep -q '"live_execution": False' scripts/iios_historical_macro_regime_library.py
