@@ -16,6 +16,7 @@ from pathlib import Path
 LIVE_ROOT = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS")
 BACKEND = LIVE_ROOT / "BACK END" / "backend"
 TARGET = BACKEND / "grok_social_intelligence.py"
+ADAPTER_TARGET = BACKEND / "grok_xai_sdk_adapter.py"
 HELPER_TARGET = BACKEND / "model_cost_enforcement.py"
 COST_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "model-cost"
 PLIST = Path.home() / "Library" / "LaunchAgents" / "com.iios.model-cost-governor.plist"
@@ -225,28 +226,46 @@ def plan_reports_binding() -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Activate binding IIOS Grok cost enforcement without changing Backend 8002 authority.")
     parser.add_argument("--helper", required=True)
+    parser.add_argument("--adapter", required=True)
     args = parser.parse_args()
     helper_source = Path(args.helper).expanduser()
+    adapter_source = Path(args.adapter).expanduser()
     if not helper_source.exists():
         raise RuntimeError(f"Missing helper file: {helper_source}")
+    if not adapter_source.exists():
+        raise RuntimeError(f"Missing adapter guard file: {adapter_source}")
     if not TARGET.exists():
         raise RuntimeError(f"Missing live Grok source: {TARGET}")
+    if not ADAPTER_TARGET.exists():
+        raise RuntimeError(f"Missing live xAI SDK adapter: {ADAPTER_TARGET}")
     if git_modified(TARGET):
         raise RuntimeError("Refusing to patch grok_social_intelligence.py because it has local uncommitted changes")
+    if git_modified(ADAPTER_TARGET):
+        raise RuntimeError("Refusing to patch grok_xai_sdk_adapter.py because it has local uncommitted changes")
 
     original = TARGET.read_text(encoding="utf-8")
+    adapter_original = ADAPTER_TARGET.read_text(encoding="utf-8")
     patched = patch_source(original)
+    guarded_adapter = adapter_source.read_text(encoding="utf-8")
+    if "cost_governor_binding" not in guarded_adapter or "_xai_official_sdk_adapter_skipped_for_cost_governor" not in guarded_adapter:
+        raise RuntimeError("Provided SDK adapter does not contain the binding-governor bypass guard")
+
     COST_DIR.mkdir(parents=True, exist_ok=True)
-    backup = COST_DIR / "backups" / "grok_social_intelligence.pre-cost-enforcement.py"
-    backup.parent.mkdir(parents=True, exist_ok=True)
-    if not backup.exists():
-        backup.write_text(original, encoding="utf-8")
+    backup_dir = COST_DIR / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    source_backup = backup_dir / "grok_social_intelligence.pre-cost-enforcement.py"
+    adapter_backup = backup_dir / "grok_xai_sdk_adapter.pre-cost-enforcement.py"
+    if not source_backup.exists():
+        source_backup.write_text(original, encoding="utf-8")
+    if not adapter_backup.exists():
+        adapter_backup.write_text(adapter_original, encoding="utf-8")
 
     HELPER_TARGET.write_text(helper_source.read_text(encoding="utf-8"), encoding="utf-8")
+    ADAPTER_TARGET.write_text(guarded_adapter, encoding="utf-8")
     TARGET.write_text(patched, encoding="utf-8")
 
     python = sys.executable
-    run([python, "-m", "py_compile", str(HELPER_TARGET), str(TARGET)], cwd=BACKEND, timeout=30)
+    run([python, "-m", "py_compile", str(HELPER_TARGET), str(ADAPTER_TARGET), str(TARGET)], cwd=BACKEND, timeout=30)
     hook_result = run([python, str(HELPER_TARGET)], cwd=BACKEND, timeout=30)
     install_cost_worker(python)
 
@@ -261,6 +280,7 @@ def main() -> int:
         "status": "BATCH10M_GROK_COST_ENFORCEMENT_PATCHED",
         "source_branch_expected": "experiment/grok-intelligence-v1",
         "live_source_patched": True,
+        "official_sdk_bypass_guard_installed": True,
         "grok_max_api_attempts": 1,
         "max_server_side_tool_calls_per_request": 3,
         "max_output_tokens": 2000,
