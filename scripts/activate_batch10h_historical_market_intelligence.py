@@ -5,6 +5,7 @@ import json
 import os
 import plistlib
 import shutil
+import socket
 import sys
 import time
 from pathlib import Path
@@ -37,17 +38,45 @@ def _plist(label:str,program:list[str],cwd:Path,interval:int,out_name:str)->Path
     tmp=path.with_suffix(".tmp.plist")
     with tmp.open("wb") as h:plistlib.dump(payload,h,sort_keys=True)
     tmp.replace(path);domain=f"gui/{os.getuid()}";base._run(["launchctl","bootout",domain,str(path)],check=False,capture=True);base._run(["launchctl","bootstrap",domain,str(path)]);base._run(["launchctl","kickstart","-k",f"{domain}/{label}"]);return path
+def _historical_runtime()->Path:
+    return WORKTREE/"scripts"/"iios_historical_market_intelligence_runtime.py"
 def _run_history(python:Path)->dict:
-    base._run([str(python),str(WORKTREE/"scripts"/"iios_historical_market_intelligence.py"),"--state-dir",str(STATE_DIR),"--telemetry-dir",str(TELEMETRY_DIR),"--research-dir",str(HISTORICAL_DIR),"--targets-per-cycle","3"],cwd=WORKTREE)
+    base._run([str(python),str(_historical_runtime()),"--state-dir",str(STATE_DIR),"--telemetry-dir",str(TELEMETRY_DIR),"--research-dir",str(HISTORICAL_DIR),"--targets-per-cycle","3"],cwd=WORKTREE)
     return json.loads((HISTORICAL_DIR/"latest_historical_market_intelligence.json").read_text())
 def _publish(python:Path)->dict:
     base._run([str(python),str(WORKTREE/"scripts"/"iios_final_institutional_publisher.py"),"--state-dir",str(STATE_DIR),"--telemetry-dir",str(TELEMETRY_DIR),"--historical-dir",str(HISTORICAL_DIR),"--browser-dir",str(DIST)],cwd=WORKTREE)
     return json.loads((DIST/"historical_market_intelligence.json").read_text())
-def _health():
+def _preview_port_open()->bool:
+    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex((PREVIEW_HOST,PREVIEW_PORT))==0
+def _wait_preview_port_free(timeout_seconds:float=20.0)->None:
+    deadline=time.monotonic()+timeout_seconds
+    while time.monotonic()<deadline:
+        if not _preview_port_open():return
+        time.sleep(0.25)
+    raise RuntimeError(f"Preview port {PREVIEW_PORT} did not release after bootout")
+def _install_preview_agent(python:Path)->None:
+    # A prior preview worker can briefly retain 5176 after launchctl bootout.
+    # Waiting for the port to actually close prevents the replacement process
+    # from crashing with EADDRINUSE and leaving the browser connection refused.
+    domain=f"gui/{os.getuid()}"
+    base._run(["launchctl","bootout",domain,str(base.PLIST)],check=False,capture=True)
+    _wait_preview_port_free()
+    base._install_preview_agent(python)
+def _health(python:Path):
     time.sleep(2)
     try:return base._json_url(f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/health",attempts=80)
     except RuntimeError:
-        domain=f"gui/{os.getuid()}";base._run(["launchctl","kickstart","-k",f"{domain}/{base.LABEL}"],check=False,capture=True);time.sleep(2);return base._json_url(f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/health",attempts=80)
+        # One controlled reinstall is allowed; never loop indefinitely or mask
+        # a persistent launchd failure.
+        domain=f"gui/{os.getuid()}"
+        base._run(["launchctl","bootout",domain,str(base.PLIST)],check=False,capture=True)
+        _wait_preview_port_free()
+        base._install_preview_agent(python)
+        time.sleep(2)
+        return base._json_url(f"http://{PREVIEW_HOST}:{PREVIEW_PORT}/health",attempts=80)
+
 
 def main()->int:
     if sys.platform!="darwin":raise SystemExit("10H activation is macOS-only for this IIOS runtime")
@@ -60,11 +89,11 @@ def main()->int:
     for key in ("auto_generate_trades","auto_change_thresholds","auto_change_agent_weights","auto_change_model_routing","auto_change_portfolio_exposure","broker_connection_authority","capital_authority","trade_execution_permission","live_execution"):
         if s.get(key) is not False:raise SystemExit(f"10H safety contract violated: {key}")
     if s.get("read_only_research") is not True or s.get("twenty_four_seven_worker") is not True or s.get("human_approval_required") is not True:raise SystemExit("10H read-only/24x7/human approval contract missing")
-    historical_program=[str(python),str(WORKTREE/"scripts"/"iios_historical_market_intelligence.py"),"--state-dir",str(STATE_DIR),"--telemetry-dir",str(TELEMETRY_DIR),"--research-dir",str(HISTORICAL_DIR),"--targets-per-cycle","3"]
+    historical_program=[str(python),str(_historical_runtime()),"--state-dir",str(STATE_DIR),"--telemetry-dir",str(TELEMETRY_DIR),"--research-dir",str(HISTORICAL_DIR),"--targets-per-cycle","3"]
     _plist(HISTORICAL_LABEL,historical_program,WORKTREE,HISTORICAL_INTERVAL_SECONDS,"historical-market-intelligence")
     final_program=[str(python),str(WORKTREE/"scripts"/"iios_final_institutional_publisher.py"),"--state-dir",str(STATE_DIR),"--telemetry-dir",str(TELEMETRY_DIR),"--historical-dir",str(HISTORICAL_DIR),"--browser-dir",str(DIST)]
     _plist(FINAL_LABEL,final_program,WORKTREE,FINAL_INTERVAL_SECONDS,"institutional-browser-artifacts")
-    browser_research=_publish(python);base._install_preview_agent(python);health=_health()
+    browser_research=_publish(python);_install_preview_agent(python);health=_health(python)
     if health.get("backend_access")!="READ_ONLY_GET_ONLY" or health.get("live_execution") is not False:raise SystemExit("10H preview safety boundary failed")
     if base._protected_hashes()!=protected:raise SystemExit("Protected 9G–9J worker changed")
     if {k:_hash(v) for k,v in PRESERVED_PLISTS.items()}!=preserved:raise SystemExit("One or more existing 9O–9S workers changed")
