@@ -26,6 +26,7 @@ jobs:
             'BACK END/backend/grok_router_registry.py' \
             scripts/activate_batch10m_grok_cost_enforcement.py \
             scripts/activate_batch10m_grok_cost_enforcement_v2.py \
+            scripts/repair_batch10m_cost_artifact_race.py \
             scripts/test_batch10m_grok_cost_enforcement.py \
             scripts/test_batch10m_grok_router_wiring.py
       - name: Run binding governor unit tests
@@ -37,7 +38,7 @@ jobs:
             'BACK END/backend/test_grok_xai_sdk_adapter.py' \
             scripts/test_batch10m_grok_cost_enforcement.py \
             scripts/test_batch10m_grok_router_wiring.py
-      - name: Assert safety, router, and no-secret invariants
+      - name: Assert safety, router, race-repair, and no-secret invariants
         run: |
           grep -q 'daily_hard_limit_usd.*20.0' 'BACK END/backend/model_cost_enforcement.py'
           grep -q 'rolling_7d_hard_limit_usd.*75.0' 'BACK END/backend/model_cost_enforcement.py'
@@ -46,6 +47,8 @@ jobs:
           grep -q 'grok_social_intelligence' 'BACK END/backend/grok_router_registry.py'
           grep -q 'grok_value_scheduler' 'BACK END/backend/grok_router_registry.py'
           grep -q 'CONTROLLED_BACKEND_8002_RELOAD_REQUIRED' scripts/activate_batch10m_grok_cost_enforcement_v2.py
+          grep -q 'BATCH10M_COST_ARTIFACT_RACE_REPAIRED' scripts/repair_batch10m_cost_artifact_race.py
+          grep -q 'START_BACKEND_8002_AND_VERIFY_GROK_ROUTES' scripts/repair_batch10m_cost_artifact_race.py
           grep -q 'trade_execution_permission.*False' 'BACK END/backend/model_cost_enforcement.py'
           grep -q 'capital_authority.*False' 'BACK END/backend/model_cost_enforcement.py'
           grep -q 'live_execution.*False' 'BACK END/backend/model_cost_enforcement.py'
