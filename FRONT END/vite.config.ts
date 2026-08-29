@@ -11,7 +11,15 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/__iios_api/, ''),
       },
       '/living': {
-        target: 'http://127.0.0.1:8002',
+        target: 'http://127.0.0.1:5176',
+        changeOrigin: true,
+      },
+      '/validation': {
+        target: 'http://127.0.0.1:5176',
+        changeOrigin: true,
+      },
+      '/health': {
+        target: 'http://127.0.0.1:5176',
         changeOrigin: true,
       },
     },
