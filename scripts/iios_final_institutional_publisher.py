@@ -18,8 +18,10 @@ import iios_institutional_investment_firm_os as firm
 import iios_qualification_watch as qualification_watch
 import iios_unified_production_browser as unified
 
+DEFAULT_HISTORICAL_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "historical-research"
 
-def publish_all(state:Path,telemetry_dir:Path,out:Path)->dict:
+
+def publish_all(state:Path,telemetry_dir:Path,out:Path,historical_dir:Path|None=None)->dict:
     out.mkdir(parents=True,exist_ok=True)
     score=unified._read_json(state/"latest_market_validation.json");learning=unified._read_json(state/"latest_outcome_learning.json");telemetry=unified._read_json(telemetry_dir/"latest.json")
     office=chief.build_from_state(state,telemetry_dir);experiments=lab.build_from_state(state,telemetry_dir);expansion=data_factory.build_from_state(state,telemetry_dir);league_payload=league.build_from_state(state,telemetry_dir);regime_payload=regime.build_regime(scorecard=score,learning=learning,league=league_payload,telemetry=telemetry)
@@ -28,13 +30,20 @@ def publish_all(state:Path,telemetry_dir:Path,out:Path)->dict:
     for name,payload in artifacts.items(): unified._atomic_write(out/name,payload)
     episode=state/"browser"/"daily_factory_episode.json"
     if episode.exists() and episode.is_file(): shutil.copy2(episode,out/"daily_factory_episode.json")
-    return {"artifact_count":len(artifacts),"paper_qualification":q.get("status"),"qualification_phase":w.get("phase"),"qualification_progress_pct":w.get("qualification_progress_pct"),"capital_readiness":r.get("status"),"firm_os":f.get("status"),"live_execution":False}
+    hdir=historical_dir or DEFAULT_HISTORICAL_DIR; historical=hdir/"latest_historical_market_intelligence.json"
+    historical_status="HISTORICAL_RESEARCH_WARM_UP"
+    if historical.exists() and historical.is_file():
+        shutil.copy2(historical,out/"historical_market_intelligence.json")
+        historical_status=str(unified._read_json(historical).get("status") or historical_status)
+    else:
+        unified._atomic_write(out/"historical_market_intelligence.json",{"schema_version":"batch10h-historical-market-intelligence-v1","status":"HISTORICAL_RESEARCH_WARM_UP","mode":"TWENTY_FOUR_SEVEN_READ_ONLY_RESEARCH","cycle":{"cycle_count":0,"processed_symbols":[]},"pipeline":[],"coverage":[],"studies":[],"research_summary":{"targets_known":0,"studies_ready":0},"historical_scope":{"coverage_policy":"NEVER_INFER_OR_BACKFILL_BEYOND_ACTUAL_PROVIDER_ROWS","note":"Waiting for the first governed 10H historical research cycle."},"safety":{"read_only_research":True,"twenty_four_seven_worker":True,"capital_authority":False,"trade_execution_permission":False,"live_execution":False}})
+    return {"artifact_count":len(artifacts)+1,"paper_qualification":q.get("status"),"qualification_phase":w.get("phase"),"qualification_progress_pct":w.get("qualification_progress_pct"),"historical_research":historical_status,"capital_readiness":r.get("status"),"firm_os":f.get("status"),"live_execution":False}
 
 
 def main()->int:
-    parser=argparse.ArgumentParser(description="Refresh final IIOS institutional browser artifacts plus qualification watch")
-    parser.add_argument("--state-dir",required=True);parser.add_argument("--telemetry-dir",required=True);parser.add_argument("--browser-dir",required=True);args=parser.parse_args()
-    result=publish_all(Path(args.state_dir).expanduser(),Path(args.telemetry_dir).expanduser(),Path(args.browser_dir).expanduser())
+    parser=argparse.ArgumentParser(description="Refresh final IIOS institutional browser artifacts plus qualification and historical research")
+    parser.add_argument("--state-dir",required=True);parser.add_argument("--telemetry-dir",required=True);parser.add_argument("--browser-dir",required=True);parser.add_argument("--historical-dir",default=str(DEFAULT_HISTORICAL_DIR));args=parser.parse_args()
+    result=publish_all(Path(args.state_dir).expanduser(),Path(args.telemetry_dir).expanduser(),Path(args.browser_dir).expanduser(),Path(args.historical_dir).expanduser())
     import json;print(json.dumps({"status":"FINAL_INSTITUTIONAL_BROWSER_ARTIFACTS_PUBLISHED",**result},sort_keys=True));return 0
 
 if __name__=="__main__":raise SystemExit(main())
