@@ -25,19 +25,7 @@ def _rows(value: Any) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
-def _candidate(
-    upgrade_id: str,
-    title: str,
-    why: str,
-    evidence: list[str],
-    *,
-    score: int,
-    action_class: str,
-    suggested_batch: str,
-    effort: str,
-    risk: str,
-    measurement_goal: str,
-) -> dict[str, Any]:
+def _candidate(upgrade_id: str, title: str, why: str, evidence: list[str], *, score: int, action_class: str, suggested_batch: str, effort: str, risk: str, measurement_goal: str) -> dict[str, Any]:
     return {
         "upgrade_id": upgrade_id,
         "title": title,
@@ -82,27 +70,35 @@ def build_office_v2(
     readiness: dict[str, Any],
     qualification_watch: dict[str, Any],
     historical: dict[str, Any],
+    event_reconstruction: dict[str, Any] | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     candidates = _legacy_candidates(legacy_office)
+    event_reconstruction = event_reconstruction or {}
 
     historical_summary = historical.get("research_summary") if isinstance(historical.get("research_summary"), dict) else {}
     studies_ready = _int(historical_summary.get("studies_ready"))
     targets_known = _int(historical_summary.get("targets_known"))
-    historical_errors = _rows(historical_summary.get("errors"))
-    if not historical_errors and isinstance(historical_summary.get("errors"), list):
-        historical_errors = [{"error": str(value)} for value in historical_summary.get("errors") if value]
+    raw_errors = historical_summary.get("errors") if isinstance(historical_summary.get("errors"), list) else []
+    historical_errors = [str(value) for value in raw_errors if value]
 
-    event_state, event_note = _pipeline_state(historical, "EVENT_RECONSTRUCTION")
+    event_state_10h, event_note = _pipeline_state(historical, "EVENT_RECONSTRUCTION")
     regime_state, regime_note = _pipeline_state(historical, "REGIME_NORMALIZATION")
 
-    if event_state in {"MEASUREMENT_GAP", "PARTIAL", "UNKNOWN"}:
+    event_summary = event_reconstruction.get("research_summary") if isinstance(event_reconstruction.get("research_summary"), dict) else {}
+    event_engine_status = str(event_reconstruction.get("status") or "")
+    event_symbols_ready = _int(event_summary.get("symbols_ready"))
+    event_contexts_ready = _int(event_summary.get("analog_contexts_ready"))
+    event_engine_active = event_engine_status == "HISTORICAL_EVENT_RECONSTRUCTION_ACTIVE" and event_symbols_ready > 0
+    effective_event_state = "ACTIVE" if event_engine_active else event_state_10h
+
+    if not event_engine_active and event_state_10h in {"MEASUREMENT_GAP", "PARTIAL", "UNKNOWN"}:
         candidates.append(_candidate(
             "HISTORICAL_EVENT_RECONSTRUCTION",
             "Build governed historical event reconstruction",
             "Price analogs are useful, but IIOS cannot yet determine whether a historical match was driven by the same causal event type.",
             [
-                f"10H event reconstruction: {event_state}",
+                f"10H event reconstruction: {event_state_10h}",
                 event_note or "No governed historical event/news corpus is attached to the 10H analog contract.",
                 f"10H analog studies ready: {studies_ready} of {targets_known or 'unknown'} targets",
             ],
@@ -132,11 +128,7 @@ def build_office_v2(
             measurement_goal="Compare analog usefulness before and after macro/regime filtering using mature 9J outcomes.",
         ))
 
-    benchmark_present = bool(
-        portfolio.get("benchmark_alpha_attribution")
-        or qualification.get("benchmark_alpha_attribution")
-        or qualification_watch.get("benchmark_alpha_attribution")
-    )
+    benchmark_present = bool(portfolio.get("benchmark_alpha_attribution") or qualification.get("benchmark_alpha_attribution") or qualification_watch.get("benchmark_alpha_attribution"))
     if not benchmark_present:
         candidates.append(_candidate(
             "BENCHMARK_ALPHA_ATTRIBUTION",
@@ -155,11 +147,7 @@ def build_office_v2(
             measurement_goal="Measure IIOS paper return, drawdown and risk-adjusted performance versus SPY, QQQ, cash/T-bill proxy and at least one simple mechanical control.",
         ))
 
-    centralized_health = bool(
-        legacy_office.get("central_data_health")
-        or data_expansion.get("central_data_health")
-        or qualification_watch.get("data_health")
-    )
+    centralized_health = bool(legacy_office.get("central_data_health") or data_expansion.get("central_data_health") or qualification_watch.get("data_health"))
     if not centralized_health:
         historical_error_count = _int((historical.get("cycle") or {}).get("error_count") if isinstance(historical.get("cycle"), dict) else 0)
         candidates.append(_candidate(
@@ -237,6 +225,8 @@ def build_office_v2(
         {"layer": "10G", "name": "Qualification Watch", "status": qualification_watch.get("status")},
         {"layer": "10H", "name": "Historical Intelligence", "status": historical.get("status")},
     ]
+    if event_reconstruction:
+        whole_stack.append({"layer": "10J", "name": "Historical Event Reconstruction", "status": event_reconstruction.get("status")})
     observed = sum(1 for row in whole_stack if row.get("status"))
 
     return {
@@ -252,7 +242,10 @@ def build_office_v2(
         "historical_diagnostics": {
             "studies_ready": studies_ready,
             "targets_known": targets_known,
-            "event_reconstruction_state": event_state,
+            "event_reconstruction_state": effective_event_state,
+            "event_reconstruction_engine_status": event_engine_status or None,
+            "event_symbols_ready": event_symbols_ready,
+            "event_analog_contexts_ready": event_contexts_ready,
             "regime_normalization_state": regime_state,
             "historical_error_count": len(historical_errors),
         },
