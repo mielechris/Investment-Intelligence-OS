@@ -18,8 +18,8 @@ def _load(path: Path, name: str):
 
 def test_registry_contains_required_grok_surfaces():
     registry = _load(REGISTRY, "grok_router_registry_test")
-    modules = set(registry.ROUTER_MODULES)
-    required = {
+    required = set(registry.REQUIRED_ROUTER_MODULES)
+    assert {
         "grok_social_intelligence",
         "grok_experiment_manifest",
         "grok_opportunity_discovery",
@@ -27,8 +27,19 @@ def test_registry_contains_required_grok_surfaces():
         "grok_value_cycle",
         "grok_value_cycle_async",
         "grok_value_scheduler",
-    }
-    assert required.issubset(modules)
+    }.issubset(required)
+
+
+def test_registry_does_not_require_helper_modules_to_export_routers():
+    registry = _load(REGISTRY, "grok_router_registry_helpers_test")
+    required = set(registry.REQUIRED_ROUTER_MODULES)
+    optional = set(registry.OPTIONAL_ROUTER_MODULES)
+    assert registry.REGISTRY_VERSION == "grok-router-registry-v2"
+    assert "grok_value_instrumentation" not in required
+    assert "grok_value_instrumentation" in optional
+    text = REGISTRY.read_text(encoding="utf-8")
+    assert "non_router_modules.append(module_name)" in text
+    assert "Required Grok HTTP surface is missing" in text
 
 
 def test_app_patch_is_idempotent_and_exactly_once():
