@@ -1,0 +1,76 @@
+name: IIOS Batch 10H Historical Market Intelligence Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10h-historical-market-intelligence
+  pull_request:
+    branches:
+      - feature/batch10g-qualification-watch
+
+jobs:
+  historical-market-intelligence-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile 10H
+        run: >-
+          python -m py_compile
+          scripts/iios_historical_market_intelligence.py
+          scripts/test_batch10h_historical_market_intelligence.py
+          scripts/activate_batch10h_historical_market_intelligence.py
+          scripts/iios_final_institutional_publisher.py
+          scripts/activate_batch9k_live_factory_browser.py
+
+      - name: Run inherited 9T through 10G regressions
+        run: |
+          python scripts/test_batch9t_market_regime_intelligence.py
+          python scripts/test_batch10a_10c_operating_superbatch.py
+          python scripts/test_batch10d_10f_readiness_superbatch.py
+          python scripts/test_batch10g_qualification_watch.py
+
+      - name: Run 10H historical intelligence contracts
+        run: python scripts/test_batch10h_historical_market_intelligence.py
+
+      - name: Build final browser with 24-7 historical research room
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npx eslint src/LiveFactoryBrowser.tsx src/HistoricalMarketIntelligence.tsx src/QualificationWatch.tsx src/OperatingSuperbatch.tsx src/ReadinessSuperbatch.tsx src/MarketRegimeIntelligence.tsx
+          npm run build
+
+      - name: Assert historical research is truthful and 24-7
+        run: |
+          grep -q 'TWENTY_FOUR_SEVEN_READ_ONLY_RESEARCH' scripts/iios_historical_market_intelligence.py
+          grep -q 'NEVER_INFER_OR_BACKFILL_BEYOND_ACTUAL_PROVIDER_ROWS' scripts/iios_historical_market_intelligence.py
+          grep -q 'FEATURE_DISTANCE_NO_FUTURE_LEAKAGE' scripts/iios_historical_market_intelligence.py
+          grep -q 'The market closes. The research floor does not.' "FRONT END/src/HistoricalMarketIntelligence.tsx"
+          grep -q 'HISTORY COVERAGE · NEVER FAKED' "FRONT END/src/HistoricalMarketIntelligence.tsx"
+
+      - name: Assert 10H installs independent historical worker
+        run: |
+          grep -q 'com.iios.historical-market-intelligence' scripts/activate_batch10h_historical_market_intelligence.py
+          grep -q 'HISTORICAL_INTERVAL_SECONDS=900' scripts/activate_batch10h_historical_market_intelligence.py
+          grep -q 'FINAL_INTERVAL_SECONDS=300' scripts/activate_batch10h_historical_market_intelligence.py
+          grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch10h_historical_market_intelligence.py
+          grep -q 'HistoricalMarketIntelligence' "FRONT END/src/LiveFactoryBrowser.tsx"
+          grep -q 'historical_market_intelligence.json' scripts/iios_final_institutional_publisher.py
+
+      - name: Assert no trade capital or broker authority
+        run: |
+          grep -q '"auto_generate_trades": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"auto_change_thresholds": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"auto_change_agent_weights": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"auto_change_portfolio_exposure": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"broker_connection_authority": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"capital_authority": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"trade_execution_permission": False' scripts/iios_historical_market_intelligence.py
+          grep -q '"live_execution": False' scripts/iios_historical_market_intelligence.py
+          ! grep -Eq '"(auto_generate_trades|auto_change_thresholds|auto_change_agent_weights|auto_change_portfolio_exposure|broker_connection_authority|capital_authority|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_historical_market_intelligence.py scripts/activate_batch10h_historical_market_intelligence.py
