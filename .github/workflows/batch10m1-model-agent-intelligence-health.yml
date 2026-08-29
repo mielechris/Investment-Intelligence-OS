@@ -1,0 +1,105 @@
+name: IIOS 10M.1 Model + Agent Intelligence Superbatch Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10m1-model-agent-intelligence-health
+  pull_request:
+    branches:
+      - feature/batch9e-high-speed-market-radar
+
+jobs:
+  model-agent-intelligence-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install governed test dependencies
+        run: python -m pip install --disable-pip-version-check pytest fastapi openai python-dotenv certifi
+      - name: Compile 10M.1 superbatch
+        run: >-
+          python -m py_compile
+          "BACK END/backend/agent_contract_v2.py"
+          "BACK END/backend/eight_agent_orchestrator_v2.py"
+          "BACK END/backend/model_agent_health_watchdog.py"
+          "BACK END/backend/high_speed_case_queue.py"
+          "BACK END/backend/high_speed_gemini_deep_worker.py"
+          "BACK END/backend/gemini_rapid_research.py"
+          "BACK END/backend/grok_provider.py"
+          scripts/iios_high_speed_factory_runner.py
+          scripts/publish_batch10m1_model_agent_health.py
+          scripts/launch_batch9e_live_paper_factory.py
+          scripts/test_batch10m1_model_agent_superbatch.py
+      - name: Run 10M.1 superbatch regression
+        run: python -m pytest -q scripts/test_batch10m1_model_agent_superbatch.py
+      - name: Run inherited 9E throughput and safety contract
+        run: python scripts/test_batch9e_high_speed_contract.py
+      - name: Run inherited 9E Grok binding cost contract
+        run: python -m pytest -q scripts/test_batch9e_grok_cost_binding.py
+      - name: Assert Agent Contract v2 topology and evidence linkage
+        run: |
+          grep -q 'CONTRACT_VERSION = "batch10m1-agent-contract-v2"' "BACK END/backend/agent_contract_v2.py"
+          grep -q 'specialist_call_count.*8' "BACK END/backend/eight_agent_orchestrator_v2.py"
+          grep -q 'committee_call_count.*1' "BACK END/backend/eight_agent_orchestrator_v2.py"
+          grep -q 'extra_model_calls_added.*0' "BACK END/backend/eight_agent_orchestrator_v2.py"
+          grep -q 'evidence_ids' "BACK END/backend/agent_contract_v2.py"
+          grep -q 'confidence_components' "BACK END/backend/agent_contract_v2.py"
+          grep -q 'questions_for_other_desks' "BACK END/backend/agent_contract_v2.py"
+          grep -q 'eight_agent_orchestrator_v2' "BACK END/backend/high_speed_case_queue.py"
+      - name: Assert Gemini utilization v2 remains bounded
+        run: |
+          grep -q 'IIOS_9E_GEMINI_FINALISTS.*6' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'IIOS_9E_GEMINI_WORKERS.*2' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'IIOS_GEMINI_RETRIES.*0' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'MAX_GEMINI_DEEP_REQUESTS_PER_CYCLE = 2' "BACK END/backend/high_speed_gemini_pipeline.py"
+          grep -q 'evidence-gap' "BACK END/backend/high_speed_gemini_deep_worker.py"
+          grep -q 'priority_research_questions' "BACK END/backend/high_speed_gemini_deep_worker.py"
+          grep -q 'thinking_level="high"' "BACK END/backend/high_speed_gemini_deep_worker.py"
+          grep -q 'use_google_search=True' "BACK END/backend/high_speed_gemini_deep_worker.py"
+          grep -q 'use_url_context=True' "BACK END/backend/high_speed_gemini_deep_worker.py"
+      - name: Assert model and agent health coverage
+        run: |
+          grep -q 'MODEL_AGENT_INTELLIGENCE_HEALTH_ACTIVE' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'STRICT_GOVERNED_UNIVERSE' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q '9E_RADAR' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'GROK_GEMINI_MODEL_CONTEXT' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'GEMINI_PRO_DEEP_WORKER' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'GPT_EIGHT_AGENT_CASE_FLOOR' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'EIGHT_GPT_DESKS' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'INVESTMENT_COMMITTEE' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'provider_requests_made.*False' "BACK END/backend/model_agent_health_watchdog.py"
+          grep -q 'MODEL+AGENT HEALTH' scripts/iios_high_speed_factory_runner.py
+      - name: Assert inherited Grok cost governor remains binding
+        run: |
+          grep -q 'COST_GOVERNOR_BINDING = True' "BACK END/backend/grok_provider.py"
+          grep -q 'REQUEST_RETRIES = 0' "BACK END/backend/grok_provider.py"
+          grep -q 'MAX_OUTPUT_TOKENS = 2000' "BACK END/backend/grok_provider.py"
+          grep -q 'MAX_SERVER_SIDE_TOOL_CALLS = 3' "BACK END/backend/grok_provider.py"
+          grep -q 'preflight_xai_request' "BACK END/backend/grok_provider.py"
+          grep -q 'record_xai_response' "BACK END/backend/grok_provider.py"
+      - name: Assert paper-only authority boundaries
+        run: |
+          ! grep -ER '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/agent_contract_v2.py" "BACK END/backend/eight_agent_orchestrator_v2.py" "BACK END/backend/model_agent_health_watchdog.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/high_speed_gemini_deep_worker.py"
+          ! grep -ER '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/agent_contract_v2.py" "BACK END/backend/eight_agent_orchestrator_v2.py" "BACK END/backend/model_agent_health_watchdog.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/high_speed_gemini_deep_worker.py"
+          ! grep -ER '"capital_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/agent_contract_v2.py" "BACK END/backend/eight_agent_orchestrator_v2.py" "BACK END/backend/model_agent_health_watchdog.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/high_speed_gemini_deep_worker.py"
+          grep -q 'EXISTING 9B GOVERNED CHAIN ONLY' scripts/launch_batch9e_live_paper_factory.py
+          grep -q '9A / 9B existing processes: UNTOUCHED' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Broker connected: FALSE' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Live execution: FALSE' scripts/launch_batch9e_live_paper_factory.py
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build

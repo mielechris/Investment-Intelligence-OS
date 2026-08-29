@@ -8,10 +8,30 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+try:
+    from model_cost_enforcement import (
+        preflight_xai_request,
+        record_xai_failure,
+        record_xai_response,
+    )
+    _COST_GOVERNOR_IMPORT_ERROR: str | None = None
+except Exception as exc:  # noqa: BLE001
+    preflight_xai_request = None
+    record_xai_failure = None
+    record_xai_response = None
+    _COST_GOVERNOR_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"[:500]
+
 DEFAULT_BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MODEL = "grok-4.6"
 DEFAULT_TIMEOUT_SECONDS = 180
 APPROVED_HOSTS = {"api.x.ai"}
+COST_GOVERNOR_BINDING = True
+COST_GOVERNOR_CASE_ID = "high_speed_market_radar"
+COST_GOVERNOR_TASK_TYPE = "GROK_9E_RADAR"
+MAX_OUTPUT_TOKENS = 2000
+MAX_SERVER_SIDE_TOOL_CALLS = 3
+REQUEST_RETRIES = 0
+PROMPT_CACHE_KEY = "iios-9e-grok-wire-v1"
 
 
 def _env(*names: str) -> str:
@@ -50,6 +70,13 @@ def validate_base_url(value: str) -> None:
         )
 
 
+def _cost_governor_ready() -> bool:
+    return all(
+        callable(fn)
+        for fn in (preflight_xai_request, record_xai_response, record_xai_failure)
+    )
+
+
 def configuration_status() -> dict[str, Any]:
     key = api_key()
     root = base_url().rstrip("/")
@@ -66,6 +93,13 @@ def configuration_status() -> dict[str, Any]:
         "realtime_requires_search_tools": True,
         "provider_response_storage_requested": False,
         "context_only_default": True,
+        "cost_governor_binding": COST_GOVERNOR_BINDING,
+        "cost_governor_ready": _cost_governor_ready(),
+        "cost_governor_import_error": _COST_GOVERNOR_IMPORT_ERROR,
+        "request_retries": REQUEST_RETRIES,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "max_server_side_tool_calls": MAX_SERVER_SIDE_TOOL_CALLS,
+        "prompt_cache_key_enabled": True,
         "paper_mode": True,
         "auto_trade_authority": False,
         "trade_execution_permission": False,
@@ -79,7 +113,7 @@ def _request(
     payload: dict[str, Any] | None = None,
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
-    retries: int = 2,
+    retries: int = REQUEST_RETRIES,
 ) -> dict[str, Any]:
     key = api_key()
     if not key:
@@ -173,6 +207,11 @@ def _json_object(text: str) -> dict[str, Any]:
     return value
 
 
+def _estimated_input_tokens(system: str, user: str) -> int:
+    # Admission-only approximation; never used to invent dollar spend.
+    return max(1, (len(system) + len(user) + 3) // 4)
+
+
 def research_json(
     *,
     system: str,
@@ -180,7 +219,25 @@ def research_json(
     use_x_search: bool = True,
     use_web_search: bool = True,
 ) -> dict[str, Any]:
+    if not _cost_governor_ready():
+        raise RuntimeError(
+            "GROK_COST_GOVERNOR_UNAVAILABLE: 9E refuses xAI spend without binding admission/accounting"
+        )
+
     model = preferred_model()
+    query_for_governor = f"{system}\n\n{user}"
+    gate = preflight_xai_request(
+        query=query_for_governor,
+        model=model,
+        case_id=COST_GOVERNOR_CASE_ID,
+        estimated_input_tokens=_estimated_input_tokens(system, user),
+    )
+    if gate.get("allow") is not True:
+        raise RuntimeError(
+            f"GROK_COST_GOVERNOR_{gate.get('decision')}: "
+            + ",".join(str(x) for x in gate.get("reasons") or [])
+        )
+
     tools: list[dict[str, Any]] = []
     if use_web_search:
         tools.append({"type": "web_search"})
@@ -194,13 +251,37 @@ def research_json(
             {"role": "user", "content": user},
         ],
         "store": False,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "max_tool_calls": MAX_SERVER_SIDE_TOOL_CALLS,
+        "prompt_cache_key": PROMPT_CACHE_KEY,
     }
     if tools:
         payload["tools"] = tools
 
     started = time.perf_counter()
-    response = _request("POST", "/responses", payload)
+    try:
+        response = _request("POST", "/responses", payload, retries=REQUEST_RETRIES)
+    except Exception as exc:
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        record_xai_failure(
+            model=model,
+            query=query_for_governor,
+            case_id=COST_GOVERNOR_CASE_ID,
+            latency_ms=latency_ms,
+            error_type=type(exc).__name__,
+            task_type=COST_GOVERNOR_TASK_TYPE,
+        )
+        raise
+
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
+    record_xai_response(
+        response,
+        model=str(response.get("model") or model),
+        query=query_for_governor,
+        case_id=COST_GOVERNOR_CASE_ID,
+        latency_ms=latency_ms,
+        task_type=COST_GOVERNOR_TASK_TYPE,
+    )
     text = _output_text(response)
     return {
         "status": "CAPTURED",
@@ -213,6 +294,7 @@ def research_json(
         "latency_ms": latency_ms,
         "x_search_enabled": use_x_search,
         "web_search_enabled": use_web_search,
+        "cost_governor_binding": True,
         "credential_exposed": False,
         "context_only": True,
         "trade_execution_permission": False,

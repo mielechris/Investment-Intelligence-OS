@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Install binding test runner
+        run: python -m pip install --disable-pip-version-check pytest
       - name: Compile Batch 9E modules
         run: >-
           python -m py_compile
@@ -23,6 +25,7 @@ jobs:
           "BACK END/backend/production_index_universe.py"
           "BACK END/backend/production_index_universe_resilient.py"
           "BACK END/backend/index_tls_bootstrap.py"
+          "BACK END/backend/grok_provider.py"
           "BACK END/backend/gemini_provider.py"
           "BACK END/backend/gemini_rapid_research.py"
           "BACK END/backend/high_speed_gemini_pipeline.py"
@@ -40,8 +43,11 @@ jobs:
           scripts/run_batch9e_case_floor_scaling_benchmark.py
           scripts/run_batch9e_case_floor_edge_confirmation.py
           scripts/test_batch9e_high_speed_contract.py
+          scripts/test_batch9e_grok_cost_binding.py
       - name: Run Batch 9E throughput and safety contract
         run: python scripts/test_batch9e_high_speed_contract.py
+      - name: Run 9E Grok binding cost contract
+        run: python -m pytest -q scripts/test_batch9e_grok_cost_binding.py
       - name: Assert verified TLS policy
         run: |
           grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/index_tls_bootstrap.py"
@@ -55,9 +61,22 @@ jobs:
       - name: Assert governed index source lineage
         run: |
           grep -q 'NASDAQ100_DIRECT_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'NASDAQ100_IQQ_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
           grep -q 'SP500_IVV_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
           grep -q 'GOVERNED_INDEX_TRACKER_MIRROR' "BACK END/backend/production_index_universe_resilient.py"
           grep -q 'acceptance_screener_fallback_used' "BACK END/backend/production_index_universe_resilient.py"
+      - name: Assert 9E binding Grok cost boundary
+        run: |
+          grep -q 'COST_GOVERNOR_BINDING = True' "BACK END/backend/grok_provider.py"
+          grep -q 'REQUEST_RETRIES = 0' "BACK END/backend/grok_provider.py"
+          grep -q 'MAX_OUTPUT_TOKENS = 2000' "BACK END/backend/grok_provider.py"
+          grep -q 'prompt_cache_key' "BACK END/backend/grok_provider.py"
+          grep -q 'preflight_xai_request' "BACK END/backend/grok_provider.py"
+          grep -q 'record_xai_response' "BACK END/backend/grok_provider.py"
+          grep -q 'model_cost_enforcement.py' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Grok cost admission/accounting: BINDING' scripts/launch_batch9e_live_paper_factory.py
+          ! grep -q 'trade_execution_permission.*True' "BACK END/backend/grok_provider.py"
+          ! grep -q 'live_execution.*True' "BACK END/backend/grok_provider.py"
       - name: Assert Grok Gemini promotion reaches case floor
         run: |
           grep -q 'BATCH_9E_GROK_GEMINI_HIGH_SPEED_RADAR' "BACK END/backend/high_speed_gemini_pipeline.py"
@@ -129,9 +148,9 @@ jobs:
           ! grep -q 'prepare_paper_authorization' scripts/run_batch9e_case_floor_edge_confirmation.py
       - name: Assert no live or broker authority
         run: |
-          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
-          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
-          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/grok_provider.py" "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/grok_provider.py" "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/grok_provider.py" "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/production_index_universe_resilient.py"
       - name: Assert maximum throughput bounds
         run: |
           grep -q 'MAX_PROMOTIONS_PER_CYCLE.*"5"' "BACK END/backend/high_speed_market_radar.py"
