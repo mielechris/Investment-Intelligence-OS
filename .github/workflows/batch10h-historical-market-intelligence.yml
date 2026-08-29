@@ -24,7 +24,9 @@ jobs:
         run: >-
           python -m py_compile
           scripts/iios_historical_market_intelligence.py
+          scripts/iios_historical_market_intelligence_publisher.py
           scripts/test_batch10h_historical_market_intelligence.py
+          scripts/test_batch10h_publisher_contract.py
           scripts/activate_batch10h_historical_market_intelligence.py
           scripts/iios_final_institutional_publisher.py
           scripts/activate_batch9k_live_factory_browser.py
@@ -37,7 +39,9 @@ jobs:
           python scripts/test_batch10g_qualification_watch.py
 
       - name: Run 10H historical intelligence contracts
-        run: python scripts/test_batch10h_historical_market_intelligence.py
+        run: |
+          python scripts/test_batch10h_historical_market_intelligence.py
+          python scripts/test_batch10h_publisher_contract.py
 
       - name: Build final browser with 24-7 historical research room
         working-directory: FRONT END
