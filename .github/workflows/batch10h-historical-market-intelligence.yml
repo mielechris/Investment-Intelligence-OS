@@ -24,6 +24,7 @@ jobs:
         run: >-
           python -m py_compile
           scripts/iios_historical_market_intelligence.py
+          scripts/iios_historical_market_intelligence_runtime.py
           scripts/iios_historical_market_intelligence_publisher.py
           scripts/test_batch10h_historical_market_intelligence.py
           scripts/test_batch10h_publisher_contract.py
@@ -55,6 +56,7 @@ jobs:
           grep -q 'TWENTY_FOUR_SEVEN_READ_ONLY_RESEARCH' scripts/iios_historical_market_intelligence.py
           grep -q 'NEVER_INFER_OR_BACKFILL_BEYOND_ACTUAL_PROVIDER_ROWS' scripts/iios_historical_market_intelligence.py
           grep -q 'FEATURE_DISTANCE_NO_FUTURE_LEAKAGE' scripts/iios_historical_market_intelligence.py
+          grep -q 'SSL_CERT_FILE' scripts/iios_historical_market_intelligence_runtime.py
           grep -q 'The market closes. The research floor does not.' "FRONT END/src/HistoricalMarketIntelligence.tsx"
           grep -q 'HISTORY COVERAGE · NEVER FAKED' "FRONT END/src/HistoricalMarketIntelligence.tsx"
 
@@ -63,6 +65,8 @@ jobs:
           grep -q 'com.iios.historical-market-intelligence' scripts/activate_batch10h_historical_market_intelligence.py
           grep -q 'HISTORICAL_INTERVAL_SECONDS=900' scripts/activate_batch10h_historical_market_intelligence.py
           grep -q 'FINAL_INTERVAL_SECONDS=300' scripts/activate_batch10h_historical_market_intelligence.py
+          grep -q 'iios_historical_market_intelligence_runtime.py' scripts/activate_batch10h_historical_market_intelligence.py
+          grep -q '_wait_preview_port_free' scripts/activate_batch10h_historical_market_intelligence.py
           grep -q 'Existing Backend 8002: UNCHANGED' scripts/activate_batch10h_historical_market_intelligence.py
           grep -q 'HistoricalMarketIntelligence' "FRONT END/src/LiveFactoryBrowser.tsx"
           grep -q 'historical_market_intelligence.json' scripts/iios_final_institutional_publisher.py
