@@ -1,0 +1,177 @@
+name: IIOS Batch 9E High-Speed Market Radar Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9e-high-speed-market-radar
+  pull_request:
+    branches:
+      - feature/batch8-paper-portfolio
+
+jobs:
+  high-speed-radar-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install binding test runner
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile Batch 9E modules
+        run: >-
+          python -m py_compile
+          "BACK END/backend/high_speed_market_radar.py"
+          "BACK END/backend/production_index_universe.py"
+          "BACK END/backend/production_index_universe_resilient.py"
+          "BACK END/backend/index_tls_bootstrap.py"
+          "BACK END/backend/grok_provider.py"
+          "BACK END/backend/gemini_provider.py"
+          "BACK END/backend/gemini_rapid_research.py"
+          "BACK END/backend/high_speed_gemini_pipeline.py"
+          "BACK END/backend/high_speed_gemini_deep_worker.py"
+          "BACK END/backend/high_speed_case_queue.py"
+          scripts/iios_high_speed_factory_runner.py
+          scripts/launch_batch9e_live_paper_factory.py
+          scripts/run_batch9e_high_speed_acceptance.py
+          scripts/run_batch9e_official_universe_acceptance.py
+          scripts/run_batch9e_model_acceptance.py
+          scripts/run_batch9e_gemini_focused_acceptance.py
+          scripts/run_batch9e_full_factory_acceptance.py
+          scripts/run_batch9e_full_factory_acceptance_v2.py
+          scripts/run_batch9e_case_floor_benchmark.py
+          scripts/run_batch9e_case_floor_scaling_benchmark.py
+          scripts/run_batch9e_case_floor_edge_confirmation.py
+          scripts/test_batch9e_high_speed_contract.py
+          scripts/test_batch9e_grok_cost_binding.py
+      - name: Run Batch 9E throughput and safety contract
+        run: python scripts/test_batch9e_high_speed_contract.py
+      - name: Run 9E Grok binding cost contract
+        run: python -m pytest -q scripts/test_batch9e_grok_cost_binding.py
+      - name: Assert verified TLS policy
+        run: |
+          grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/index_tls_bootstrap.py"
+          grep -q 'check_hostname' "BACK END/backend/index_tls_bootstrap.py"
+          grep -q 'ssl.CERT_REQUIRED' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'check_hostname' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'configure_verified_tls' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Certificate verification:' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Hostname verification:' scripts/run_batch9e_gemini_focused_acceptance.py
+          ! grep -ER '_create_unverified_context|CERT_NONE|check_hostname[[:space:]]*=[[:space:]]*False' "BACK END/backend/index_tls_bootstrap.py" "BACK END/backend/production_index_universe_resilient.py" scripts/run_batch9e_gemini_focused_acceptance.py
+      - name: Assert governed index source lineage
+        run: |
+          grep -q 'NASDAQ100_DIRECT_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'NASDAQ100_IQQ_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'SP500_IVV_MIRROR_URL' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'GOVERNED_INDEX_TRACKER_MIRROR' "BACK END/backend/production_index_universe_resilient.py"
+          grep -q 'acceptance_screener_fallback_used' "BACK END/backend/production_index_universe_resilient.py"
+      - name: Assert 9E binding Grok cost boundary
+        run: |
+          grep -q 'COST_GOVERNOR_BINDING = True' "BACK END/backend/grok_provider.py"
+          grep -q 'REQUEST_RETRIES = 0' "BACK END/backend/grok_provider.py"
+          grep -q 'MAX_OUTPUT_TOKENS = 2000' "BACK END/backend/grok_provider.py"
+          grep -q 'prompt_cache_key' "BACK END/backend/grok_provider.py"
+          grep -q 'preflight_xai_request' "BACK END/backend/grok_provider.py"
+          grep -q 'record_xai_response' "BACK END/backend/grok_provider.py"
+          grep -q 'model_cost_enforcement.py' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Grok cost admission/accounting: BINDING' scripts/launch_batch9e_live_paper_factory.py
+          ! grep -q 'trade_execution_permission.*True' "BACK END/backend/grok_provider.py"
+          ! grep -q 'live_execution.*True' "BACK END/backend/grok_provider.py"
+      - name: Assert Grok Gemini promotion reaches case floor
+        run: |
+          grep -q 'BATCH_9E_GROK_GEMINI_HIGH_SPEED_RADAR' "BACK END/backend/high_speed_gemini_pipeline.py"
+          grep -q 'BATCH_9E_GROK_GEMINI_HIGH_SPEED_RADAR' "BACK END/backend/high_speed_case_queue.py"
+          grep -q 'Synthetic promotion fixture: FORBIDDEN' scripts/run_batch9e_full_factory_acceptance.py
+          grep -q 'Authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
+          grep -q 'Execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance.py
+      - name: Assert Gemini focused acceptance bounds and safety
+        run: |
+          grep -q 'IIOS_GEMINI_TIMEOUT_SECONDS.*60' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'IIOS_GEMINI_RETRIES.*0' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Google Search grounding: REQUIRED' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'URL Context: REQUIRED' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Broker connected: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_gemini_focused_acceptance.py
+      - name: Assert live-ledger paper factory launcher safety
+        run: |
+          grep -q 'IIOS_DB_PATH' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'iios_ledger.db' scripts/launch_batch9e_live_paper_factory.py
+          grep -q '9A / 9B existing processes: UNTOUCHED' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'EXISTING 9B GOVERNED CHAIN ONLY' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'IIOS_GEMINI_TIMEOUT_SECONDS.*30' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'IIOS_GEMINI_RETRIES.*0' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'gemini-3.6-flash' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Broker connected: FALSE' scripts/launch_batch9e_live_paper_factory.py
+          grep -q 'Live execution: FALSE' scripts/launch_batch9e_live_paper_factory.py
+          ! grep -q 'prepare_paper_authorization' scripts/launch_batch9e_live_paper_factory.py
+          ! grep -q 'submit_paper_order' scripts/launch_batch9e_live_paper_factory.py
+      - name: Assert qualification-aware full-factory v2 safety
+        run: |
+          grep -q 'Qualification stage: REQUIRED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'Legacy execution check: INTERCEPTED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'evidence_gap_hunter.run_gap_hunt' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'paper_capital_status' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'Paper authorization functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'Governed execution functions: NOT CALLED' scripts/run_batch9e_full_factory_acceptance_v2.py
+          grep -q 'BATCH9E_ACCEPTANCE_EXECUTION_LOCK' scripts/run_batch9e_full_factory_acceptance_v2.py
+          ! grep -q 'prepare_paper_authorization' scripts/run_batch9e_full_factory_acceptance_v2.py
+      - name: Assert throughput benchmark boundary and safety
+        run: |
+          grep -q 'DEFAULT_TRIALS = 10' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'CASES_PER_TRIAL = 2' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Included: all 8 agents + Committee' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Excluded: radar, evidence acquisition, Gap Hunter, Risk, Capital, execution' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_case_floor_benchmark.py
+          grep -q '7200.0 / mean_pair' scripts/run_batch9e_case_floor_benchmark.py
+      - name: Assert scaling benchmark reasoning order and safety
+        run: |
+          grep -q 'WORKER_SWEEP = (4, 5, 6)' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'CASE_SWEEP = (4, 6, 8)' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Skeptic remains after first wave; Portfolio remains after Skeptic; Committee remains last' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Broker connected: FALSE' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          ! grep -q 'submit_paper_order' scripts/run_batch9e_case_floor_scaling_benchmark.py
+          ! grep -q 'prepare_paper_authorization' scripts/run_batch9e_case_floor_scaling_benchmark.py
+      - name: Assert edge confirmation diagnostics and safety
+        run: |
+          grep -q 'WORKERS = 6' scripts/run_batch9e_case_floor_edge_confirmation.py
+          grep -q 'EDGE_CASES = (6, 7, 8)' scripts/run_batch9e_case_floor_edge_confirmation.py
+          grep -q 'Reasoning order unchanged: first wave -> Skeptic -> Portfolio -> Committee' scripts/run_batch9e_case_floor_edge_confirmation.py
+          grep -q 'Paper order authority: FALSE' scripts/run_batch9e_case_floor_edge_confirmation.py
+          grep -q 'Broker connected: FALSE' scripts/run_batch9e_case_floor_edge_confirmation.py
+          grep -q 'Live execution: FALSE' scripts/run_batch9e_case_floor_edge_confirmation.py
+          grep -q 'RATE_LIMIT' scripts/run_batch9e_case_floor_edge_confirmation.py
+          ! grep -q 'submit_paper_order' scripts/run_batch9e_case_floor_edge_confirmation.py
+          ! grep -q 'prepare_paper_authorization' scripts/run_batch9e_case_floor_edge_confirmation.py
+      - name: Assert no live or broker authority
+        run: |
+          ! grep -R '"live_execution"[[:space:]]*:[[:space:]]*True' "BACK END/backend/grok_provider.py" "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"trade_execution_permission"[[:space:]]*:[[:space:]]*True' "BACK END/backend/grok_provider.py" "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/high_speed_gemini_deep_worker.py" "BACK END/backend/high_speed_case_queue.py" "BACK END/backend/production_index_universe_resilient.py"
+          ! grep -R '"auto_trade_authority"[[:space:]]*:[[:space:]]*True' "BACK END/backend/grok_provider.py" "BACK END/backend/gemini_provider.py" "BACK END/backend/gemini_rapid_research.py" "BACK END/backend/high_speed_gemini_pipeline.py" "BACK END/backend/production_index_universe_resilient.py"
+      - name: Assert maximum throughput bounds
+        run: |
+          grep -q 'MAX_PROMOTIONS_PER_CYCLE.*"5"' "BACK END/backend/high_speed_market_radar.py"
+          grep -q 'MAX_CONCURRENT_CASES = 2' "BACK END/backend/high_speed_case_queue.py"
+          grep -q 'GROK_AND_GEMINI_PARALLEL' "BACK END/backend/high_speed_gemini_pipeline.py"
+          grep -q 'gemini-3.7-flash' "BACK END/backend/gemini_provider.py"
+          grep -q 'gemini-3.1-pro-preview' "BACK END/backend/gemini_provider.py"
+          grep -q 'google_search' "BACK END/backend/gemini_provider.py"
+          grep -q 'url_context' "BACK END/backend/gemini_provider.py"
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+      - run: npm run build
