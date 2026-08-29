@@ -5,6 +5,7 @@ import DailyFactoryEpisode from "./DailyFactoryEpisode";
 import DataExpansionFactory from "./DataExpansionFactory";
 import ExperimentABLaboratory from "./ExperimentABLaboratory";
 import FactoryIntelligenceUI from "./FactoryIntelligenceUI";
+import HistoricalMarketIntelligence from "./HistoricalMarketIntelligence";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
 import MarketRegimeIntelligence from "./MarketRegimeIntelligence";
@@ -19,8 +20,8 @@ export default function LiveFactoryBrowser() {
   return (
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
-        <div><span>BATCH 10G · QUALIFICATION WATCH</span><strong>Engineering complete · governed paper evidence campaign · readiness stays human gated</strong></div>
-        <div><span>9T–10F INSTITUTIONAL STACK PRESERVED · BACKEND 8002 UNCHANGED</span><strong>LIVE EXECUTION FALSE</strong></div>
+        <div><span>BATCH 10H · HISTORICAL MARKET INTELLIGENCE</span><strong>24/7 archive research · analog matching · forward-outcome studies · actual coverage only</strong></div>
+        <div><span>10G QUALIFICATION WATCH + 9T–10F STACK PRESERVED · BACKEND 8002 UNCHANGED</span><strong>LIVE EXECUTION FALSE</strong></div>
       </div>
       <LivingFactoryExperience />
       <div className="lfb-divider"><span>9M CHARACTER & STORY ENGINE · PERSISTED EVENTS ONLY</span></div><CharacterStoryEngine />
@@ -34,6 +35,7 @@ export default function LiveFactoryBrowser() {
       <div className="lfb-divider"><span>10A–10C UNIFIED OPERATING SUPERBATCH · PAPER ONLY</span></div><OperatingSuperbatch />
       <div className="lfb-divider"><span>10D–10F CAPITAL PRESERVATION / READINESS / FIRM OS</span></div><ReadinessSuperbatch />
       <div className="lfb-divider"><span>10G PAPER QUALIFICATION CAMPAIGN · WATCH ONLY</span></div><QualificationWatch />
+      <div className="lfb-divider"><span>10H HISTORICAL MARKET INTELLIGENCE · 24/7 READ-ONLY RESEARCH</span></div><HistoricalMarketIntelligence />
       <div className="lfb-divider"><span>9K VALIDATION STACK · PRESERVED</span></div><MarketValidationStackPanel />
       <div className="lfb-divider"><span>EXISTING FACTORY INTELLIGENCE UI · PRESERVED</span></div><FactoryIntelligenceUI />
     </div>
