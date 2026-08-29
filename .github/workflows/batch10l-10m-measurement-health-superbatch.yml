@@ -1,4 +1,4 @@
-name: IIOS Batch 10L-10M Measurement Health Gate
+name: IIOS Batch 10L-10M Measurement Health Cost Gate
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - feature/batch10k-historical-macro-regime-library
 
 jobs:
-  measurement-health-contract:
+  measurement-health-cost-contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,13 +24,15 @@ jobs:
           python -m py_compile
           scripts/iios_benchmark_alpha_attribution.py
           scripts/iios_data_health_watchdog.py
+          scripts/iios_model_cost_governor.py
           scripts/iios_measurement_health_publisher.py
           scripts/activate_batch10l_10m_measurement_health_superbatch.py
           scripts/test_batch10l_10m_measurement_health_superbatch.py
-      - name: Run measurement and health contracts
+      - name: Run measurement health and cost contracts
         run: PYTHONPATH=scripts python scripts/test_batch10l_10m_measurement_health_superbatch.py
-      - name: Build browser
+      - name: Lint and build browser
         working-directory: FRONT END
         run: |
           npm ci
+          npm exec eslint -- src/LiveFactoryBrowser.tsx src/MeasurementHealthSuperbatch.tsx
           npm run build
