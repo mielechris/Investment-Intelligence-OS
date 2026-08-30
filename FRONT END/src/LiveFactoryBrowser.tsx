@@ -21,6 +21,7 @@ import QualificationWatch from "./QualificationWatch";
 import ReadinessSuperbatch from "./ReadinessSuperbatch";
 import "./LiveFactoryBrowser.css";
 import "./Batch9MVisualSeal.css";
+import "./LivingFactorySpatialFloorV21.css";
 
 type BrowserView = "floor" | "control";
 
@@ -31,8 +32,8 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9L-V2 · SPATIAL LIVING FACTORY FLOOR</span>
-          <strong>Room map · persisted packets · MAX overlook · eight-desk bullpen · live event bus</strong>
+          <span>BATCH 9L-V2.1 · SPATIAL LIVING FACTORY FLOOR</span>
+          <strong>Directional corridors · Committee Queue · MAX command overlook · eight-desk bullpen · live event bus</strong>
         </div>
         <div>
           <span>10L–10M + ALL PRESERVED FACTORY SYSTEMS · BACKEND 8002 UNCHANGED</span>
@@ -43,7 +44,7 @@ export default function LiveFactoryBrowser() {
       <nav className="lfb-viewbar" aria-label="Investment factory browser view">
         <div className="lfb-viewbar-copy">
           <span>IIOS EXPERIENCE</span>
-          <strong>{view === "floor" ? "Spatial Factory Floor" : "Control Room"}</strong>
+          <strong>{view === "floor" ? "Spatial Factory Floor V2.1" : "Control Room"}</strong>
         </div>
         <div className="lfb-view-switch">
           <button
@@ -53,7 +54,7 @@ export default function LiveFactoryBrowser() {
           >
             <span>01</span>
             <strong>FACTORY FLOOR</strong>
-            <em>spatial living view</em>
+            <em>corridors + queue view</em>
           </button>
           <button
             className={`lfb-view-button ${view === "control" ? "is-active" : ""}`}
