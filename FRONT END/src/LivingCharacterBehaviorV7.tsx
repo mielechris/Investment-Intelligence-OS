@@ -186,11 +186,6 @@ function readable(value: unknown, fallback = "WAITING"): string {
   return text(value, fallback).replaceAll("_", " ").toUpperCase();
 }
 
-function meaningful(value: unknown): boolean {
-  const normalized = readable(value, "");
-  return Boolean(normalized) && !["WAITING", "UNKNOWN", "NONE", "PENDING", "NOT EXECUTED", "—"].includes(normalized);
-}
-
 function stationForEvent(eventType: string): StationKey | null {
   const type = eventType.toUpperCase();
   if (type.includes("OUTCOME") || type.includes("LEARNING") || type.includes("JUDGMENT")) return "learning";
@@ -244,17 +239,6 @@ function pct01(value: unknown): string {
 function pct(value: unknown): string {
   const numeric = numberValue(value);
   return numeric === null ? "—" : `${numeric.toFixed(1)}%`;
-}
-
-function money(value: unknown): string {
-  const numeric = numberValue(value);
-  return numeric === null
-    ? "UNREPORTED"
-    : numeric.toLocaleString(undefined, {
-        style: "currency",
-        currency: "USD",
-        maximumFractionDigits: 0,
-      });
 }
 
 function isLivingCastKey(value: string): value is LivingCastKey {
