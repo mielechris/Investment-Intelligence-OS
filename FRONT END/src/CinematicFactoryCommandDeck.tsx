@@ -25,6 +25,14 @@ type ValidationLayer = {
   payload?: JsonObject | null;
 };
 
+type SafetyState = {
+  direct_ledger_access?: boolean;
+  backend_access?: string;
+  backend_write_permission?: boolean;
+  trade_execution_permission?: boolean;
+  live_execution?: boolean;
+};
+
 type LivingOverview = {
   generated_at?: string;
   validation?: {
@@ -39,13 +47,7 @@ type LivingOverview = {
     availability?: string;
     payload?: JsonObject | null;
   };
-  safety?: {
-    direct_ledger_access?: boolean;
-    backend_access?: string;
-    backend_write_permission?: boolean;
-    trade_execution_permission?: boolean;
-    live_execution?: boolean;
-  };
+  safety?: SafetyState;
 };
 
 type Props = {
@@ -213,7 +215,7 @@ async function sameOriginJson<T>(path: string, signal?: AbortSignal): Promise<T>
 export default function CinematicFactoryCommandDeck({ view }: Props) {
   const [snapshot, setSnapshot] = useState<LivingOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pulse, setPulse] = useState(0);
+  const [, setPulse] = useState(0);
 
   useEffect(() => {
     let disposed = false;
@@ -256,7 +258,8 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
   }, []);
 
   const model = useMemo(() => {
-    const telemetryLayer = snapshot?.validation?.layers?.factory_telemetry ?? {};
+    const telemetryLayer: ValidationLayer =
+      snapshot?.validation?.layers?.factory_telemetry ?? {};
     const telemetry = record(telemetryLayer.payload);
     const radar = record(telemetry.radar);
     const fund = record(telemetry.paper_fund);
@@ -336,7 +339,6 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
       radar,
       fund,
       events,
-      promotions,
       cases,
       outcomeCount,
       stationCounts,
@@ -353,7 +355,7 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
     };
   }, [snapshot]);
 
-  const safety = snapshot?.safety ?? {};
+  const safety: SafetyState = snapshot?.safety ?? {};
   const universe = text(model.radar.governed_universe_count, "—");
   const hits = text(model.radar.screener_hit_count, "—");
   const positions = text(model.fund.position_count, "0");
