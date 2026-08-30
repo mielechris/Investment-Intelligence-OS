@@ -21,6 +21,7 @@ import QualificationWatch from "./QualificationWatch";
 import ReadinessSuperbatch from "./ReadinessSuperbatch";
 import "./LiveFactoryBrowser.css";
 import "./Batch9MVisualSeal.css";
+import "./LivingFactoryFloorV2Cinematic.css";
 
 type BrowserView = "floor" | "control";
 
