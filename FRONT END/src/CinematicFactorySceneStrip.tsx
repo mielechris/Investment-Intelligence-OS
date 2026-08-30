@@ -1,5 +1,6 @@
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import CinematicRoomScene from "./CinematicRoomScene";
+import FamilyWallV75 from "./FamilyWallV75";
 import LiveFactoryEpisodeV74 from "./LiveFactoryEpisodeV74";
 import LivingCharacterBehaviorV7 from "./LivingCharacterBehaviorV7";
 import PersistedStateReconstructionV732 from "./PersistedStateReconstructionV732";
@@ -13,6 +14,8 @@ type Props = {
 export default function CinematicFactorySceneStrip({ view }: Props) {
   return (
     <>
+      <FamilyWallV75 />
+
       <section className="cfs-strip cfs-strip--illustrated" aria-label="IIOS cinematic headquarters presentation layer">
         <header className="cfs-strip__truth">
           <span>HEADQUARTERS ATMOSPHERE · ILLUSTRATED PRESENTATION LAYER</span>
