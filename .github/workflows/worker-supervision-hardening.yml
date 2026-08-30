@@ -1,0 +1,36 @@
+name: IIOS Worker Supervision Hardening
+
+on:
+  push:
+    branches:
+      - feature/iios-worker-supervision-hardening
+  pull_request:
+    branches:
+      - feature/batch9a-observation-paper-operations
+
+jobs:
+  worker-supervision-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile supervision scripts
+        run: >-
+          python -m py_compile
+          scripts/iios_worker_watchdog.py
+          scripts/install_iios_worker_supervision.py
+          scripts/test_iios_worker_supervision_contract.py
+      - name: Run supervision safety contract
+        run: python scripts/test_iios_worker_supervision_contract.py
+      - name: Assert 9E remains out of managed worker config
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          config = json.loads(Path('config/iios_worker_supervision.json').read_text())
+          assert set(config['workers']) == {'9A', '9B'}
+          print('Managed workers:', sorted(config['workers']))
+          print('9E excluded: PASS')
+          PY
