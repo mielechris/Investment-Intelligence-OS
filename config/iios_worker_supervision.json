@@ -1,0 +1,33 @@
+{
+  "schema_version": "iios-worker-supervision-v1",
+  "ledger_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/iios_ledger.db",
+  "state_directory": "~/.iios/worker-supervision",
+  "log_directory": "~/.iios/logs",
+  "watchdog_interval_seconds": 300,
+  "stale_after_minutes": 45,
+  "startup_grace_minutes": 60,
+  "recovery_cooldown_minutes": 60,
+  "watchdog_label": "com.iios.worker-watchdog",
+  "workers": {
+    "9A": {
+      "name": "Batch 9A Observation",
+      "label": "com.iios.batch9a-observation",
+      "launcher_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9a-observation/scripts/start_batch9a_observation_continuous.py",
+      "working_directory": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9a-observation",
+      "runner_process_fragment": "scripts/iios_observation_runner.py",
+      "object_type": "observation_operations_state",
+      "case_id": "observation_operations",
+      "completed_at_field": "last_cycle_completed_at"
+    },
+    "9B": {
+      "name": "Batch 9B Paper Trading",
+      "label": "com.iios.batch9b-paper-trading",
+      "launcher_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9b-paper-trading/scripts/start_batch9b_paper_trading_continuous.py",
+      "working_directory": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9b-paper-trading",
+      "runner_process_fragment": "scripts/iios_paper_trading_runner.py",
+      "object_type": "governed_paper_trading_state",
+      "case_id": "paper_trading_operations",
+      "completed_at_field": "cycle_completed_at"
+    }
+  }
+}
