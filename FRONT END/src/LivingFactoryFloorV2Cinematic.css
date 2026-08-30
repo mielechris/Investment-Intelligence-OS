@@ -1,0 +1,395 @@
+.lv2r-shell {
+  --cin-bg: #050b10;
+  --cin-panel: rgba(8, 18, 24, 0.92);
+  --cin-line: rgba(103, 232, 249, 0.16);
+  --cin-green: #5ee3b5;
+  --cin-cyan: #67e8f9;
+  --cin-amber: #d8b15b;
+  position: relative;
+  overflow: hidden;
+}
+
+.lv2r-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(40, 180, 210, 0.05), transparent 30%),
+    radial-gradient(circle at 80% 55%, rgba(55, 220, 175, 0.035), transparent 28%);
+  z-index: 0;
+}
+
+.lv2r-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.lv2-floor-scene,
+.lv2-character-floor,
+.lv2-event-tape {
+  background:
+    linear-gradient(rgba(6, 14, 20, 0.92), rgba(5, 12, 17, 0.96)),
+    repeating-linear-gradient(90deg, transparent 0 38px, rgba(95, 198, 216, 0.025) 39px 40px),
+    repeating-linear-gradient(0deg, transparent 0 38px, rgba(95, 198, 216, 0.018) 39px 40px);
+}
+
+.lv2-floor-scene {
+  position: relative;
+  overflow: hidden;
+}
+
+.lv2-floor-scene::after {
+  content: "FACTORY FLOOR / PERSISTED STATE ONLY";
+  position: absolute;
+  right: 24px;
+  bottom: 16px;
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  color: rgba(117, 199, 211, 0.22);
+  pointer-events: none;
+}
+
+.lv2-station-grid {
+  position: relative;
+  gap: 10px;
+}
+
+.lv2-station-grid::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3%;
+  right: 3%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(94, 227, 181, 0.14), transparent);
+  z-index: 0;
+}
+
+.lv2-station {
+  position: relative;
+  z-index: 1;
+  min-height: 180px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(10, 23, 31, 0.96), rgba(6, 14, 19, 0.96));
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.lv2-station::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(103, 232, 249, 0.025), transparent 45%);
+  pointer-events: none;
+}
+
+.lv2-station::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(100, 162, 176, 0.08);
+}
+
+.lv2-station.has-lineage {
+  border-color: rgba(103, 232, 249, 0.24);
+  box-shadow: inset 0 0 30px rgba(70, 190, 210, 0.025);
+}
+
+.lv2-station.has-active-state {
+  border-color: rgba(94, 227, 181, 0.42);
+  box-shadow: 0 0 32px rgba(94, 227, 181, 0.06), inset 0 0 40px rgba(94, 227, 181, 0.035);
+}
+
+.lv2-station.is-event {
+  transform: translateY(-3px);
+  box-shadow: 0 0 44px rgba(94, 227, 181, 0.12), inset 0 0 46px rgba(94, 227, 181, 0.04);
+}
+
+.lv2-station.is-event::after {
+  background: linear-gradient(90deg, transparent, var(--cin-green), transparent);
+  animation: cinematicRoomScan 2.2s linear infinite;
+}
+
+@keyframes cinematicRoomScan {
+  0% { opacity: 0.25; transform: translateX(-12%); }
+  50% { opacity: 1; transform: translateX(12%); }
+  100% { opacity: 0.25; transform: translateX(-12%); }
+}
+
+.lv2-conveyor {
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(3, 9, 13, 0.9), rgba(6, 14, 18, 0.94));
+  box-shadow: inset 0 18px 28px rgba(0, 0, 0, 0.26);
+}
+
+.lv2-packet {
+  box-shadow: 0 10px 28px rgba(0,0,0,0.28), inset 0 0 0 1px rgba(255,255,255,0.015);
+  transform-origin: center;
+}
+
+.lv2-packet.is-active-case {
+  box-shadow: 0 0 26px rgba(94, 227, 181, 0.1), 0 12px 30px rgba(0,0,0,0.28);
+}
+
+.lv2-packet.is-lineage {
+  opacity: 0.82;
+  border-style: dashed;
+}
+
+.lv2-people-and-tape {
+  align-items: stretch;
+}
+
+.lv2-character-floor {
+  position: relative;
+  overflow: hidden;
+  min-height: 690px;
+  background:
+    linear-gradient(180deg, rgba(6, 16, 22, 0.97), rgba(5, 11, 16, 0.98)),
+    linear-gradient(90deg, transparent 0 49.8%, rgba(89, 173, 188, 0.05) 50%, transparent 50.2%);
+}
+
+.lv2-character-floor::before {
+  content: "";
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  top: 165px;
+  bottom: 24px;
+  background:
+    linear-gradient(rgba(102, 210, 225, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(102, 210, 225, 0.025) 1px, transparent 1px);
+  background-size: 42px 42px;
+  transform: perspective(520px) rotateX(62deg);
+  transform-origin: top center;
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+.lv2-character-floor::after {
+  content: "SPECIALIST OPERATIONS DECK";
+  position: absolute;
+  left: 34px;
+  bottom: 16px;
+  font-size: 9px;
+  letter-spacing: 0.35em;
+  color: rgba(105, 198, 213, 0.19);
+}
+
+.lv2-max-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 150px minmax(0,1fr);
+  min-height: 178px;
+  padding: 22px 26px;
+  border-radius: 18px;
+  background:
+    linear-gradient(100deg, rgba(12, 36, 46, 0.98), rgba(7, 17, 23, 0.94));
+  border: 1px solid rgba(103, 232, 249, 0.24);
+  box-shadow: 0 14px 42px rgba(0,0,0,0.28), inset 0 0 44px rgba(63, 207, 219, 0.035);
+  overflow: hidden;
+}
+
+.lv2-max-row::before {
+  content: "FOREMAN COMMAND PLATFORM";
+  position: absolute;
+  top: 12px;
+  right: 18px;
+  font-size: 8px;
+  letter-spacing: 0.24em;
+  color: rgba(94, 227, 181, 0.58);
+}
+
+.lv2-max-row::after {
+  content: "";
+  position: absolute;
+  left: 150px;
+  right: 18px;
+  bottom: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(103,232,249,0.3), transparent);
+}
+
+.lv2-max-figure {
+  width: 116px;
+  height: 126px;
+  margin: 8px auto 0;
+  filter: drop-shadow(0 0 18px rgba(103, 232, 249, 0.12));
+  animation: maxForemanIdle 4.8s ease-in-out infinite;
+}
+
+@keyframes maxForemanIdle {
+  0%,100% { transform: translateY(0) rotate(-0.5deg); }
+  50% { transform: translateY(-4px) rotate(0.5deg); }
+}
+
+.lv2-max-head {
+  box-shadow: inset 0 0 24px rgba(103, 232, 249, 0.08), 0 0 22px rgba(103, 232, 249, 0.08);
+}
+
+.lv2-max-copy strong {
+  font-size: clamp(34px, 4vw, 58px);
+  letter-spacing: -0.04em;
+}
+
+.lv2-agent-grid {
+  position: relative;
+  z-index: 2;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.lv2-agent {
+  position: relative;
+  min-height: 150px;
+  padding: 18px 14px 36px;
+  border-radius: 15px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(9, 24, 31, 0.96), rgba(5, 13, 18, 0.98));
+  box-shadow: 0 12px 26px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.012);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.lv2-agent::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: 14px;
+  border: 1px solid rgba(103,232,249,0.09);
+  border-radius: 3px;
+  background:
+    linear-gradient(90deg, rgba(103,232,249,0.06), transparent 36%, rgba(94,227,181,0.05));
+}
+
+.lv2-agent::after {
+  content: "WORKSTATION";
+  position: absolute;
+  right: 14px;
+  bottom: 15px;
+  font-size: 7px;
+  letter-spacing: 0.22em;
+  color: rgba(121, 194, 207, 0.28);
+}
+
+.lv2-agent:hover {
+  transform: translateY(-3px);
+}
+
+.lv2-agent.is-active {
+  border-color: rgba(94, 227, 181, 0.38);
+  box-shadow: 0 0 30px rgba(94,227,181,0.07), 0 14px 30px rgba(0,0,0,0.26);
+}
+
+.lv2-agent.is-active::before {
+  border-color: rgba(94,227,181,0.32);
+  background: linear-gradient(90deg, rgba(94,227,181,0.14), transparent 48%, rgba(103,232,249,0.08));
+  animation: deskMonitor 2.8s ease-in-out infinite;
+}
+
+@keyframes deskMonitor {
+  0%,100% { opacity: 0.65; }
+  50% { opacity: 1; box-shadow: 0 0 14px rgba(94,227,181,0.08); }
+}
+
+.lv2-agent-avatar {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 20px 20px 12px 12px;
+  background: radial-gradient(circle at 50% 34%, rgba(103,232,249,0.1), rgba(8,19,25,0.96) 64%);
+}
+
+.lv2-agent-avatar::before,
+.lv2-agent-avatar::after {
+  content: "";
+  position: absolute;
+  top: -9px;
+  width: 14px;
+  height: 18px;
+  border: 1px solid rgba(103,232,249,0.22);
+  border-radius: 60% 60% 25% 25%;
+  background: rgba(7,17,23,0.95);
+}
+
+.lv2-agent-avatar::before { left: 9px; transform: rotate(-16deg); }
+.lv2-agent-avatar::after { right: 9px; transform: rotate(16deg); }
+
+.lv2-agent-avatar span {
+  font-size: 16px;
+  text-shadow: 0 0 12px rgba(103,232,249,0.18);
+}
+
+.lv2-event-tape {
+  position: relative;
+  overflow: hidden;
+  border-left-color: rgba(94,227,181,0.2);
+  box-shadow: inset 20px 0 30px rgba(0,0,0,0.12);
+}
+
+.lv2-event-tape::before {
+  content: "LIVE PERSISTED BUS";
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  font-size: 7px;
+  letter-spacing: 0.22em;
+  color: rgba(94,227,181,0.36);
+}
+
+.lv2-event-list article:first-child {
+  background: linear-gradient(90deg, rgba(94,227,181,0.055), transparent);
+  box-shadow: inset 3px 0 0 rgba(94,227,181,0.45);
+}
+
+.lv2-event-list article:first-child strong {
+  color: #dffcf3;
+}
+
+.lv2r-now {
+  position: relative;
+  overflow: hidden;
+}
+
+.lv2r-now.has-event::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(94,227,181,0.025), transparent);
+  animation: nowSweep 4s linear infinite;
+}
+
+@keyframes nowSweep {
+  from { transform: translateX(-60%); }
+  to { transform: translateX(60%); }
+}
+
+@media (max-width: 1180px) {
+  .lv2-agent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lv2-max-row { grid-template-columns: 120px minmax(0, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .lv2-agent-grid { grid-template-columns: 1fr; }
+  .lv2-max-row { grid-template-columns: 1fr; text-align: center; }
+  .lv2-max-row::after { display: none; }
+  .lv2-character-floor::before { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lv2-max-figure,
+  .lv2-station.is-event::after,
+  .lv2-agent.is-active::before,
+  .lv2r-now.has-event::after {
+    animation: none !important;
+  }
+}
