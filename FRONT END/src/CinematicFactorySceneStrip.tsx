@@ -27,7 +27,7 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
               <CinematicCharacterPortrait characterKey="commodities" variant="scene" />
             </div>
             <div className="cfs-console" aria-hidden="true"><i /><i /><i /><i /><i /></div>
-            <blockquote>NARRATIVE · “HEY, I’M WORKIN’ HERE. READ THE DAMN EVIDENCE.”</blockquote>
+            <blockquote>NARRATIVE · “AY, I’M WALKIN’ HERE. READ THE FUCKIN’ RECEIPTS BEFORE YOU FALL IN LOVE.”</blockquote>
             <footer>FRANKIE · MIKEY · TONY</footer>
           </article>
 
@@ -39,7 +39,7 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
               <CinematicCharacterPortrait characterKey="geo_weather" variant="scene" />
             </div>
             <div className="cfs-war-map" aria-hidden="true"><i /><i /><i /><i /></div>
-            <blockquote>NARRATIVE · “EVERYBODY’S A GENIUS UNTIL RATES AND A HURRICANE CHANGE THE RULES.”</blockquote>
+            <blockquote>NARRATIVE · “EVERYBODY’S A FUCKIN’ GENIUS UNTIL RATES, WEATHER, OR SOME ASSHOLE WITH A MISSILE CHANGES THE RULES.”</blockquote>
             <footer>BENNY · STORMY SAL</footer>
           </article>
 
@@ -52,7 +52,7 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
               <CinematicCharacterPortrait characterKey="portfolio" variant="scene" />
             </div>
             <div className="cfs-commission-table" aria-hidden="true"><i /><i /><i /></div>
-            <blockquote>NARRATIVE · “GOOD STORY. NOW SHOW US THE PART THAT SURVIVES JOHNNY.”</blockquote>
+            <blockquote>NARRATIVE · “GOOD STORY, PAISAN. NOW SHOW US THE PART THAT SURVIVES JOHNNY WITHOUT SHITTIN’ THE BED.”</blockquote>
             <footer>VINNY · JOHNNY · PAULIE</footer>
           </article>
 
@@ -63,8 +63,8 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
               <CinematicCharacterPortrait characterKey="max" variant="boss" />
             </div>
             <div className="cfs-max-desk-v2" aria-hidden="true"><i /><i /><i /></div>
-            <blockquote>NARRATIVE · “I’M JUST HERE FOR THE SNACKS. YOU PEOPLE HANDLE THE DOWNSIDE.”</blockquote>
-            <footer>MAX IS NOT A FIDUCIARY.</footer>
+            <blockquote>NARRATIVE · “I’M HERE FOR THE SNACKS AND THE DOWNSIDE. YOU GOT NO RECEIPTS? FUCK OUTTA MY OFFICE.”</blockquote>
+            <footer>MAX IS NOT A FIDUCIARY. MAX IS ALSO NOT HR.</footer>
           </article>
         </div>
       </section>
