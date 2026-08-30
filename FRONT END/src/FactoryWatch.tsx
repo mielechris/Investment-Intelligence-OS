@@ -42,6 +42,19 @@ type AgentStatus = {
   completions: number;
 };
 
+type CadenceWorker = {
+  key: string;
+  code: string;
+  label: string;
+  raw: JsonObject;
+};
+
+type ProviderStatus = {
+  key: string;
+  label: string;
+  raw: JsonObject;
+};
+
 const AGENTS: Array<[string, string]> = [
   ["policy", "Frankie Fine Print"],
   ["macro", "Benny Basis Points"],
@@ -67,6 +80,10 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function boolValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
 function text(value: unknown, fallback = "—"): string {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -80,8 +97,16 @@ function readable(value: unknown, fallback = "WAITING"): string {
 function age(value?: number | null): string {
   if (value === undefined || value === null) return "WARM-UP";
   if (value < 60) return `${Math.round(value)}s`;
-  if (value < 3600) return `${Math.floor(value / 60)}m`;
-  return `${Math.floor(value / 3600)}h`;
+  if (value < 3600) return `${Math.floor(value / 60)}m ${Math.round(value % 60)}s`;
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
+function duration(value: unknown): string {
+  const seconds = numberValue(value);
+  if (seconds === null) return "—";
+  return age(Math.max(0, seconds));
 }
 
 function money(value: unknown): string {
@@ -96,6 +121,21 @@ function time(value: unknown): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
   return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function dateTime(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function toneForState(value: unknown): "good" | "warn" | "bad" | "idle" {
+  const state = readable(value, "UNKNOWN");
+  if (["AVAILABLE", "HEALTHY", "ON CADENCE", "CONNECTED", "READY", "ACTIVE", "OK"].includes(state)) return "good";
+  if (["OVERDUE", "STALE", "ATTENTION", "DEGRADED", "WARNING"].includes(state)) return "warn";
+  if (["ERROR", "FAILED", "UNAVAILABLE", "TELEMETRY UNAVAILABLE"].includes(state)) return "bad";
+  return "idle";
 }
 
 function regularSessionClock(now = new Date()): { open: boolean; label: string; detail: string } {
@@ -179,6 +219,9 @@ export default function FactoryWatch() {
     const telemetry = record(telemetryLayer.payload);
     const radar = record(telemetry.radar);
     const fund = record(telemetry.paper_fund);
+    const telemetryHealth = record(telemetry.health);
+    const cadence = record(telemetry.cadence);
+    const providers = record(telemetry.providers);
     const events = rows(telemetry.recent_meaningful_events);
     const latestEvent = events[0] ?? null;
     const marketValidation = record(layers.market_validation?.payload);
@@ -194,6 +237,17 @@ export default function FactoryWatch() {
       completions: deskMap.get(key)?.recent_completions ?? 0,
     }));
 
+    const workers: CadenceWorker[] = [
+      { key: "observation", code: "9A", label: "Observation", raw: record(cadence.observation) },
+      { key: "paper_trading", code: "9B", label: "Paper Trading", raw: record(cadence.paper_trading) },
+      { key: "radar", code: "9E", label: "High-Speed Radar", raw: record(cadence.radar) },
+    ];
+
+    const providerRows: ProviderStatus[] = [
+      { key: "grok", label: "Grok Research", raw: record(providers.grok) },
+      { key: "gemini", label: "Gemini Research", raw: record(providers.gemini) },
+    ];
+
     const detect = numberValue(marketValidation.detect_rate_pct)
       ?? numberValue(marketValidation.detection_rate_pct)
       ?? numberValue(marketValidation.detect_pct);
@@ -207,12 +261,16 @@ export default function FactoryWatch() {
     return {
       layers,
       telemetryLayer,
+      telemetryHealth,
+      providers,
       radar,
       fund,
       events,
       latestEvent,
       cases,
       agents,
+      workers,
+      providerRows,
       detect,
       miss,
       shadowSessions,
@@ -228,6 +286,18 @@ export default function FactoryWatch() {
   const latestCase = model.latestEvent ? text(model.latestEvent.case_id, "") : "";
   const safety = overview?.safety ?? {};
   const healthState = readable(record(health).status, health ? "CONNECTED" : "WARMING");
+  const telemetryHealthState = readable(model.telemetryHealth.state, "WARMING");
+  const telemetryFlags = Array.isArray(model.telemetryHealth.flags)
+    ? model.telemetryHealth.flags.map((item) => text(item, "")).filter(Boolean)
+    : [];
+  const providerErrorCount = numberValue(model.providers.provider_error_count) ?? 0;
+
+  const freshness = [
+    { code: "9G", label: "Factory Telemetry", layer: model.layers.factory_telemetry },
+    { code: "9H", label: "Independent Grading", layer: model.layers.market_validation },
+    { code: "9I", label: "Shadow Strategy", layer: model.layers.shadow_strategy },
+    { code: "9J", label: "Outcome Learning", layer: model.layers.outcome_learning },
+  ];
 
   return (
     <main className="fw-shell">
@@ -263,6 +333,76 @@ export default function FactoryWatch() {
         <article><span>GOVERNED CASES</span><strong>{model.cases.length}</strong><em>backend case objects</em></article>
         <article><span>PAPER NAV</span><strong>{money(model.fund.nav)}</strong><em>{text(model.fund.position_count, "0")} positions</em></article>
         <article><span>SIDECAR</span><strong>{healthState}</strong><em>read-only 5176</em></article>
+      </section>
+
+      <section className="fw-ops-grid">
+        <article className="fw-panel fw-workers">
+          <header><span>WORKER CADENCE</span><em>persisted 9G cadence evidence</em></header>
+          <div className="fw-worker-grid">
+            {model.workers.map((worker) => {
+              const cadenceState = readable(worker.raw.cadence_state, "UNKNOWN");
+              const tone = toneForState(cadenceState);
+              const lastSeconds = numberValue(worker.raw.seconds_since_last_cycle);
+              return (
+                <div key={worker.key} className={`is-${tone}`}>
+                  <div className="fw-worker-title"><b>{worker.code}</b><span>{worker.label}</span><i /></div>
+                  <strong>{cadenceState}</strong>
+                  <dl>
+                    <div><dt>last cycle</dt><dd>{lastSeconds === null ? dateTime(worker.raw.last_completed_at) : `${duration(lastSeconds)} ago`}</dd></div>
+                    <div><dt>cadence</dt><dd>{text(worker.raw.cadence_minutes)}m</dd></div>
+                    <div><dt>next due</dt><dd>{dateTime(worker.raw.next_due_at)}</dd></div>
+                  </dl>
+                </div>
+              );
+            })}
+          </div>
+          <small className="fw-truth-note">Cadence is persisted worker evidence, not operating-system PID inspection. Off-hours status remains shown exactly as 9G reports it.</small>
+        </article>
+
+        <article className="fw-panel fw-providers">
+          <header><span>RESEARCH & PROVIDER HEALTH</span><em>{providerErrorCount ? `${providerErrorCount} provider error(s)` : "no provider errors in latest cycle"}</em></header>
+          <div className="fw-provider-grid">
+            {model.providerRows.map((provider) => {
+              const configured = boolValue(provider.raw.configured);
+              const rawStatus = provider.raw.status;
+              const status = readable(rawStatus, configured === false ? "NOT CONFIGURED" : configured === true ? "CONFIGURED" : "UNKNOWN");
+              const tone = providerErrorCount > 0 && status === "UNKNOWN" ? "warn" : toneForState(status === "CONFIGURED" ? "AVAILABLE" : status);
+              return (
+                <div key={provider.key} className={`is-${tone}`}>
+                  <div><i /><span>{provider.label}</span></div>
+                  <strong>{status}</strong>
+                  <small>{[text(provider.raw.provider, ""), text(provider.raw.model, text(provider.raw.preferred_model, ""))].filter(Boolean).join(" · ") || "provider metadata waiting"}</small>
+                </div>
+              );
+            })}
+            <div className={`fw-telemetry-health is-${toneForState(telemetryHealthState)}`}>
+              <div><i /><span>9G Telemetry Health</span></div>
+              <strong>{telemetryHealthState}</strong>
+              <small>{telemetryFlags.length ? telemetryFlags.join(" · ") : "no telemetry health flags"}</small>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section className="fw-freshness">
+        <header><span>DATA FRESHNESS</span><em>age of latest persisted layer snapshot</em></header>
+        <div>
+          {freshness.map((item) => {
+            const availability = readable(item.layer?.availability, "WAITING");
+            return (
+              <article key={item.code} className={`is-${toneForState(availability)}`}>
+                <b>{item.code}</b>
+                <div><strong>{item.label}</strong><span>{availability}</span></div>
+                <em>{age(item.layer?.age_seconds)}</em>
+              </article>
+            );
+          })}
+          <article className={alive ? "is-good" : "is-warn"}>
+            <b>UI</b>
+            <div><strong>Watch Refresh</strong><span>{error ? "WARNING" : "POLLING"}</span></div>
+            <em>{refreshedAt ? refreshedAt.toLocaleTimeString() : "connecting"}</em>
+          </article>
+        </div>
       </section>
 
       <section className="fw-grid">
