@@ -23,6 +23,7 @@ import "./LiveFactoryBrowser.css";
 import "./Batch9MVisualSeal.css";
 import "./LivingFactorySpatialFloorV21.css";
 import "./LivingFactorySpatialFloorV22.css";
+import "./LivingFactorySpatialFloorV23.css";
 
 type BrowserView = "floor" | "control";
 
@@ -33,8 +34,8 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9L-V2.2 · SPATIAL LIVING FACTORY FLOOR</span>
-          <strong>Docked Committee Queue · routed station lanes · MAX command overlook · eight-desk bullpen · live event bus</strong>
+          <span>BATCH 9L-V2.3 · CHARACTER LIVING FACTORY FLOOR</span>
+          <strong>Recurring character identities · living workstations · docked Committee Queue · routed station lanes · MAX bulldog foreman</strong>
         </div>
         <div>
           <span>10L–10M + ALL PRESERVED FACTORY SYSTEMS · BACKEND 8002 UNCHANGED</span>
@@ -45,7 +46,7 @@ export default function LiveFactoryBrowser() {
       <nav className="lfb-viewbar" aria-label="Investment factory browser view">
         <div className="lfb-viewbar-copy">
           <span>IIOS EXPERIENCE</span>
-          <strong>{view === "floor" ? "Spatial Factory Floor V2.2" : "Control Room"}</strong>
+          <strong>{view === "floor" ? "Character Factory Floor V2.3" : "Control Room"}</strong>
         </div>
         <div className="lfb-view-switch">
           <button
@@ -55,7 +56,7 @@ export default function LiveFactoryBrowser() {
           >
             <span>01</span>
             <strong>FACTORY FLOOR</strong>
-            <em>docked queue + routed lanes</em>
+            <em>characters + living workstations</em>
           </button>
           <button
             className={`lfb-view-button ${view === "control" ? "is-active" : ""}`}
@@ -69,7 +70,7 @@ export default function LiveFactoryBrowser() {
         </div>
         <div className="lfb-view-truth">
           <i aria-hidden="true" />
-          <span>AMBIENT MOTION IS UI ONLY · PERSISTED STATE DRIVES SUBSTANTIVE ACTIVITY</span>
+          <span>CHARACTER MOTION IS PRESENTATION ONLY · PERSISTED STATE DRIVES SUBSTANTIVE ACTIVITY</span>
         </div>
       </nav>
 
