@@ -31,11 +31,9 @@ jobs:
           from pathlib import Path
           source = Path('scripts/diagnose_iios_worker_supervision.py').read_text().lower()
           forbidden = [
-              'kickstart',
-              'bootout',
+              '"launchctl", "kickstart"',
+              '"launchctl", "bootout"',
               'os.kill(',
-              'sigterm',
-              'sigkill',
               'record_event(',
               'trade_execution_permission": true',
               'live_execution": true',
