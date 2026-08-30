@@ -13,6 +13,7 @@ import HistoricalEventReconstruction from "./HistoricalEventReconstruction";
 import HistoricalMacroRegimeLibrary from "./HistoricalMacroRegimeLibrary";
 import HistoricalMarketIntelligence from "./HistoricalMarketIntelligence";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
+import LivingCharacterDirectorV7 from "./LivingCharacterDirectorV7";
 import LivingFactoryExperience from "./LivingFactoryExperience";
 import LivingFactorySpatialFloor from "./LivingFactorySpatialFloor";
 import MarketRegimeIntelligence from "./MarketRegimeIntelligence";
@@ -205,14 +206,14 @@ export default function LiveFactoryBrowser() {
   const [view, setView] = useState<BrowserView>("floor");
 
   return (
-    <div className="lfb-shell cinematic-v6">
+    <div className="lfb-shell cinematic-v6 cinematic-v7">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9L-V6 · FULL CINEMATIC FACTORY CONVERSION</span>
-          <strong>Mob-noir headquarters · illustrated living cast · physical room composition · real IIOS state underneath</strong>
+          <span>BATCH 9L-V7 · LIVING CHARACTER FACTORY</span>
+          <strong>Frozen V6 cinematic headquarters · event-bound cast director · persisted IIOS state remains authoritative</strong>
         </div>
         <div>
-          <span>ALL PRESERVED FACTORY SYSTEMS · BACKEND 8002 UNCHANGED</span>
+          <span>V6 VISUAL BASE PRESERVED · BACKEND 8002 UNCHANGED</span>
           <strong>LIVE EXECUTION FALSE</strong>
         </div>
       </div>
@@ -220,7 +221,7 @@ export default function LiveFactoryBrowser() {
       <nav className="lfb-viewbar" aria-label="Investment factory browser view">
         <div className="lfb-viewbar-copy">
           <span>IIOS EXPERIENCE</span>
-          <strong>{view === "floor" ? "The Operations Floor" : "The Control Room"}</strong>
+          <strong>{view === "floor" ? "The Living Operations Floor" : "The Living Control Room"}</strong>
         </div>
         <div className="lfb-view-switch">
           <button
@@ -244,12 +245,13 @@ export default function LiveFactoryBrowser() {
         </div>
         <div className="lfb-view-truth">
           <i aria-hidden="true" />
-          <span>NARRATIVE ≠ RAW MODEL OUTPUT · CINEMATIC MOTION IS PRESENTATION ONLY · PERSISTED STATE REMAINS AUTHORITATIVE</span>
+          <span>NARRATIVE ≠ RAW MODEL OUTPUT · CHARACTER MOTION IS PRESENTATION ONLY · PERSISTED STATE REMAINS AUTHORITATIVE</span>
         </div>
       </nav>
 
       <CinematicFactoryCommandDeck view={view} />
       <CinematicFactorySceneStrip view={view} />
+      <LivingCharacterDirectorV7 view={view} />
 
       {view === "floor" ? (
         <div className="cinematic-floor-stage">
