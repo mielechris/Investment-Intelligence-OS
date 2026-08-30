@@ -57,21 +57,25 @@ jobs:
           grep -q 'is-interrupting' "FRONT END/src/SceneDirectionV73.tsx"
           grep -q 'BEAT' "FRONT END/src/SceneDirectionV73.tsx"
 
-      - name: Assert V7.3.1 persisted-state reconstruction boundaries
+      - name: Assert V7.3.2 persisted-state inventory boundaries
         run: |
-          grep -q 'V7.3.1 · PERSISTED STATE RECONSTRUCTION' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'MISSING FIELD · NO SCENE' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'NOT A LIVE EVENT · NOT RAW MODEL SPEECH' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'PERSISTED COMMITTEE DISPOSITION' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'PERSISTED RISK DECISION' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'PERSISTED PAPER EXECUTION STATE' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'PERSISTED MONITORING / THESIS STATE' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'PERSISTED 9J OUTCOME LABEL' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          grep -q 'PersistedStateReconstructionV731' "FRONT END/src/CinematicFactorySceneStrip.tsx"
-          ! grep -q 'method: "POST"' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          ! grep -q 'method: "PUT"' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          ! grep -q 'method: "PATCH"' "FRONT END/src/PersistedStateReconstructionV731.tsx"
-          ! grep -q 'method: "DELETE"' "FRONT END/src/PersistedStateReconstructionV731.tsx"
+          grep -q 'V7.3.2 · PERSISTED STATE INVENTORY + RECONSTRUCTION' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q "DON'T MAKE ME CLICK TEN FUCKIN' RECEIPTS" "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'MISSING FIELD · NO SCENE' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'ZERO MEANS NO FUCKIN'"'"' RECEIPT' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'PERSISTED COMMITTEE DISPOSITION' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'PERSISTED RISK DECISION' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'PERSISTED PAPER EXECUTION STATE' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'PERSISTED MONITORING / THESIS STATE' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'PERSISTED 9J OUTCOME LABEL' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'inventoryFor' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'disabled={unavailable}' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          grep -q 'PersistedStateReconstructionV732' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'PersistedStateReconstructionV731 view=' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/PersistedStateReconstructionV732.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/PersistedStateReconstructionV732.tsx"
 
       - name: Build V7.3 browser
         working-directory: FRONT END
