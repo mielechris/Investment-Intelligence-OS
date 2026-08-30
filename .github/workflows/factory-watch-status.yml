@@ -1,0 +1,28 @@
+name: Factory Watch Status
+
+on:
+  push:
+    branches:
+      - feature/factory-watch-status
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+
+      - name: Install dependencies
+        working-directory: FRONT END
+        run: npm ci
+
+      - name: Type-check and build Factory Watch
+        working-directory: FRONT END
+        run: npm run build
