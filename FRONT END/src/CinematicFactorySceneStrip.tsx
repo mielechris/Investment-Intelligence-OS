@@ -1,4 +1,5 @@
-import LivingCharacterAvatar from "./LivingCharacterAvatar";
+import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
+import CinematicRoomScene from "./CinematicRoomScene";
 import "./CinematicFactorySceneStrip.css";
 
 type Props = {
@@ -7,43 +8,58 @@ type Props = {
 
 export default function CinematicFactorySceneStrip({ view }: Props) {
   return (
-    <section className="cfs-strip" aria-label="IIOS cinematic headquarters presentation layer">
+    <section className="cfs-strip cfs-strip--illustrated" aria-label="IIOS cinematic headquarters presentation layer">
       <header className="cfs-strip__truth">
-        <span>HEADQUARTERS ATMOSPHERE · PRESENTATION LAYER</span>
+        <span>HEADQUARTERS ATMOSPHERE · ILLUSTRATED PRESENTATION LAYER</span>
         <strong>CHARACTER SCENES ≠ PERSISTED AGENT ACTIVITY</strong>
       </header>
 
-      <div className="cfs-strip__rooms">
-        <article className="cfs-scene cfs-scene--pit">
-          <div className="cfs-scene__lamp" aria-hidden="true" />
+      <div className="cfs-strip__rooms cfs-strip__rooms--four">
+        <article className="cfs-scene cfs-scene--pit cfs-scene--painted">
+          <CinematicRoomScene station="radar" />
           <header><span>THE INTELLIGENCE PIT</span><em>{view === "floor" ? "OPERATIONS VIEW" : "OBSERVATION VIEW"}</em></header>
-          <div className="cfs-pit-cast">
-            <div><LivingCharacterAvatar characterKey="policy" /><span>FRANKIE</span></div>
-            <div><LivingCharacterAvatar characterKey="market_structure" /><span>MIKEY</span></div>
-            <div><LivingCharacterAvatar characterKey="commodities" /><span>TONY</span></div>
+          <div className="cfs-painted-cast cfs-painted-cast--pit">
+            <CinematicCharacterPortrait characterKey="policy" variant="scene" />
+            <CinematicCharacterPortrait characterKey="market_structure" variant="scene" />
+            <CinematicCharacterPortrait characterKey="commodities" variant="scene" />
           </div>
           <div className="cfs-console" aria-hidden="true"><i /><i /><i /><i /><i /></div>
           <blockquote>NARRATIVE · “HEY, I’M WORKIN’ HERE. READ THE DAMN EVIDENCE.”</blockquote>
+          <footer>FRANKIE · MIKEY · TONY</footer>
         </article>
 
-        <article className="cfs-scene cfs-scene--commission">
-          <div className="cfs-scene__lamp" aria-hidden="true" />
+        <article className="cfs-scene cfs-scene--war-room cfs-scene--painted">
+          <CinematicRoomScene station="research" />
+          <header><span>THE MACRO WAR ROOM</span><em>RATES · WEATHER · GEOPOLITICS</em></header>
+          <div className="cfs-painted-cast cfs-painted-cast--war">
+            <CinematicCharacterPortrait characterKey="macro" variant="scene" />
+            <CinematicCharacterPortrait characterKey="geo_weather" variant="scene" />
+          </div>
+          <div className="cfs-war-map" aria-hidden="true"><i /><i /><i /><i /></div>
+          <blockquote>NARRATIVE · “EVERYBODY’S A GENIUS UNTIL RATES AND A HURRICANE CHANGE THE RULES.”</blockquote>
+          <footer>BENNY · STORMY SAL</footer>
+        </article>
+
+        <article className="cfs-scene cfs-scene--commission cfs-scene--painted">
+          <CinematicRoomScene station="committee" />
           <header><span>THE COMMISSION</span><em>GOVERNED SYNTHESIS</em></header>
-          <div className="cfs-commission-table" aria-hidden="true"><i /><i /><i /></div>
-          <div className="cfs-commission-cast">
-            <LivingCharacterAvatar characterKey="fundamentals" />
-            <LivingCharacterAvatar characterKey="skeptic" />
-            <LivingCharacterAvatar characterKey="portfolio" />
+          <div className="cfs-painted-cast cfs-painted-cast--commission">
+            <CinematicCharacterPortrait characterKey="fundamentals" variant="scene" />
+            <CinematicCharacterPortrait characterKey="skeptic" variant="scene" />
+            <CinematicCharacterPortrait characterKey="portfolio" variant="scene" />
           </div>
+          <div className="cfs-commission-table" aria-hidden="true"><i /><i /><i /></div>
           <blockquote>NARRATIVE · “GOOD STORY. NOW SHOW US THE PART THAT SURVIVES JOHNNY.”</blockquote>
+          <footer>VINNY · JOHNNY · PAULIE</footer>
         </article>
 
-        <article className="cfs-scene cfs-scene--max">
+        <article className="cfs-scene cfs-scene--max cfs-scene--painted">
           <header><span>MAX’S OFFICE</span><em>COMMAND OVERLOOK</em></header>
-          <div className="cfs-max-desk">
-            <LivingCharacterAvatar characterKey="max" />
-            <div className="cfs-max-props" aria-hidden="true"><i /><i /><i /></div>
+          <div className="cfs-max-office-set" aria-hidden="true"><i /><i /><i /><i /></div>
+          <div className="cfs-painted-max">
+            <CinematicCharacterPortrait characterKey="max" variant="boss" />
           </div>
+          <div className="cfs-max-desk-v2" aria-hidden="true"><i /><i /><i /></div>
           <blockquote>NARRATIVE · “I’M JUST HERE FOR THE SNACKS. YOU PEOPLE HANDLE THE DOWNSIDE.”</blockquote>
           <footer>MAX IS NOT A FIDUCIARY.</footer>
         </article>
