@@ -29,6 +29,8 @@ import "./LivingFactorySpatialFloorV24.css";
 import "./LivingFactorySpatialFloorV24Cast.css";
 import "./LivingFactorySpatialFloorV25.css";
 import "./CinematicFactoryThemeV6.css";
+import "./CinematicAvatarPortraitsV6.css";
+import "./CinematicFactoryFidelityV6.css";
 
 type BrowserView = "floor" | "control";
 
@@ -204,7 +206,7 @@ export default function LiveFactoryBrowser() {
       <div className="lfb-preview-banner">
         <div>
           <span>BATCH 9L-V6 · FULL CINEMATIC FACTORY CONVERSION</span>
-          <strong>Mob-noir command deck · full living cast · entire Control Room · real IIOS state underneath</strong>
+          <strong>Mob-noir headquarters · illustrated living cast · physical room composition · real IIOS state underneath</strong>
         </div>
         <div>
           <span>ALL PRESERVED FACTORY SYSTEMS · BACKEND 8002 UNCHANGED</span>
@@ -225,7 +227,7 @@ export default function LiveFactoryBrowser() {
           >
             <span>01</span>
             <strong>FACTORY FLOOR</strong>
-            <em>living cast · rooms · routed cases</em>
+            <em>living cast · physical rooms · routed cases</em>
           </button>
           <button
             className={`lfb-view-button ${view === "control" ? "is-active" : ""}`}
@@ -234,7 +236,7 @@ export default function LiveFactoryBrowser() {
           >
             <span>02</span>
             <strong>CONTROL ROOM</strong>
-            <em>every preserved system · cinematic skin</em>
+            <em>every preserved system · same cinematic headquarters</em>
           </button>
         </div>
         <div className="lfb-view-truth">
