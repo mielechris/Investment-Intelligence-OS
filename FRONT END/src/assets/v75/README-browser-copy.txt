@@ -1,0 +1,1 @@
+The canonical user-approved family poster is represented in the browser by an optimized WebP derivative. CI verifies the derivative byte signature and SHA before build. The artwork remains presentation-only; it does not encode or create IIOS state.
