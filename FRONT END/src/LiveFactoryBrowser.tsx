@@ -24,6 +24,8 @@ import "./Batch9MVisualSeal.css";
 import "./LivingFactorySpatialFloorV21.css";
 import "./LivingFactorySpatialFloorV22.css";
 import "./LivingFactorySpatialFloorV23.css";
+import "./LivingFactorySpatialFloorV24.css";
+import "./LivingFactorySpatialFloorV24Cast.css";
 
 type BrowserView = "floor" | "control";
 
@@ -34,8 +36,8 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9L-V2.3 · CHARACTER LIVING FACTORY FLOOR</span>
-          <strong>Recurring character identities · living workstations · docked Committee Queue · routed station lanes · MAX bulldog foreman</strong>
+          <span>BATCH 9L-V2.4 · LIVING CHARACTER FACTORY FLOOR</span>
+          <strong>MAX · Frankie Fine Print · Benny Basis Points · Vinny EBITDA · Mikey Tape · Tony Tanker · Stormy Sal · Johnny No · Paulie Positions</strong>
         </div>
         <div>
           <span>10L–10M + ALL PRESERVED FACTORY SYSTEMS · BACKEND 8002 UNCHANGED</span>
@@ -46,7 +48,7 @@ export default function LiveFactoryBrowser() {
       <nav className="lfb-viewbar" aria-label="Investment factory browser view">
         <div className="lfb-viewbar-copy">
           <span>IIOS EXPERIENCE</span>
-          <strong>{view === "floor" ? "Character Factory Floor V2.3" : "Control Room"}</strong>
+          <strong>{view === "floor" ? "Living Character Floor V2.4" : "Control Room"}</strong>
         </div>
         <div className="lfb-view-switch">
           <button
@@ -56,7 +58,7 @@ export default function LiveFactoryBrowser() {
           >
             <span>01</span>
             <strong>FACTORY FLOOR</strong>
-            <em>characters + living workstations</em>
+            <em>living cast + event-driven workstations</em>
           </button>
           <button
             className={`lfb-view-button ${view === "control" ? "is-active" : ""}`}
@@ -70,7 +72,7 @@ export default function LiveFactoryBrowser() {
         </div>
         <div className="lfb-view-truth">
           <i aria-hidden="true" />
-          <span>CHARACTER MOTION IS PRESENTATION ONLY · PERSISTED STATE DRIVES SUBSTANTIVE ACTIVITY</span>
+          <span>NARRATIVE ≠ RAW MODEL OUTPUT · CHARACTER MOTION IS PRESENTATION ONLY · PERSISTED STATE DRIVES SUBSTANTIVE ACTIVITY</span>
         </div>
       </nav>
 
