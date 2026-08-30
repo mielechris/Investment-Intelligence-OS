@@ -1,0 +1,207 @@
+.living-avatar {
+  --avatar-line: rgba(103, 232, 249, .58);
+  --avatar-line-soft: rgba(103, 232, 249, .22);
+  --avatar-fill: rgba(8, 26, 33, .96);
+  --avatar-glow: rgba(103, 232, 249, .12);
+  position: relative;
+  width: 86px;
+  min-width: 86px;
+  height: 112px;
+  color: #67e8f9;
+  display: grid;
+  place-items: center;
+  filter: drop-shadow(0 10px 18px rgba(0,0,0,.24));
+  transform-origin: 50% 82%;
+  animation: livingAvatarIdle 6.6s ease-in-out infinite;
+}
+
+.living-avatar svg {
+  width: 82px;
+  height: 100px;
+  overflow: visible;
+}
+
+.living-avatar__halo {
+  fill: rgba(103, 232, 249, .022);
+  stroke: rgba(103, 232, 249, .08);
+  stroke-width: 1;
+}
+
+.living-avatar__body,
+.living-avatar__neck,
+.living-avatar__head {
+  fill: var(--avatar-fill);
+  stroke: var(--avatar-line);
+  stroke-width: 1.5;
+}
+
+.living-avatar__hair {
+  fill: rgba(103, 232, 249, .08);
+  stroke: var(--avatar-line-soft);
+  stroke-width: 1;
+}
+
+.living-avatar__eyes ellipse {
+  fill: #78eff6;
+  filter: drop-shadow(0 0 4px rgba(103,232,249,.45));
+  transform-origin: center;
+  animation: livingAvatarBlink 5.4s steps(1,end) infinite;
+}
+
+.living-avatar__nose,
+.living-avatar__mouth,
+.living-avatar__lapel,
+.living-avatar__accessory * {
+  fill: none;
+  stroke: var(--avatar-line);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.living-avatar__accessory--red * { stroke: rgba(255,125,125,.72); }
+
+.living-avatar__badge {
+  position: absolute;
+  right: -2px;
+  bottom: 5px;
+  min-width: 30px;
+  height: 21px;
+  padding: 0 6px;
+  border: 1px solid rgba(103,232,249,.28);
+  border-radius: 7px;
+  background: rgba(3,14,18,.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-shadow: 0 6px 15px rgba(0,0,0,.25);
+}
+
+.living-avatar__badge span {
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  color: #72e7ef;
+}
+
+.living-avatar__badge i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(124,174,183,.30);
+}
+
+.living-avatar.is-active {
+  --avatar-line: rgba(94, 227, 181, .78);
+  --avatar-line-soft: rgba(94, 227, 181, .32);
+  --avatar-fill: rgba(6, 30, 28, .96);
+  --avatar-glow: rgba(94, 227, 181, .18);
+}
+
+.living-avatar.is-active .living-avatar__eyes ellipse {
+  fill: #6ff0c4;
+  filter: drop-shadow(0 0 6px rgba(94,227,181,.55));
+}
+
+.living-avatar.is-active .living-avatar__badge {
+  border-color: rgba(94,227,181,.45);
+  box-shadow: 0 0 18px rgba(94,227,181,.07), 0 6px 15px rgba(0,0,0,.25);
+}
+
+.living-avatar.is-active .living-avatar__badge span { color: #6ff0c4; }
+.living-avatar.is-active .living-avatar__badge i { background: #5ee3b5; box-shadow: 0 0 8px rgba(94,227,181,.6); }
+
+.living-avatar.is-reacting {
+  animation: livingAvatarReact 1.3s ease-in-out infinite;
+}
+
+.living-avatar.is-reacting svg {
+  filter: drop-shadow(0 0 10px rgba(94,227,181,.10));
+}
+
+.living-avatar--skeptic {
+  --avatar-line: rgba(255, 138, 138, .64);
+  --avatar-line-soft: rgba(255, 125, 125, .24);
+  --avatar-fill: rgba(27, 11, 15, .97);
+  color: #ff9595;
+}
+
+.living-avatar--skeptic .living-avatar__eyes ellipse {
+  fill: #ff9b9b;
+  filter: drop-shadow(0 0 5px rgba(255,100,100,.42));
+}
+
+.living-avatar--skeptic .living-avatar__badge { border-color: rgba(255,125,125,.34); }
+.living-avatar--skeptic .living-avatar__badge span { color: #f2a3a3; }
+
+@keyframes livingAvatarIdle {
+  0%,100% { transform: translateY(0) rotate(0deg); }
+  45% { transform: translateY(-1.5px) rotate(.25deg); }
+  55% { transform: translateY(-1px) rotate(-.2deg); }
+}
+
+@keyframes livingAvatarReact {
+  0%,100% { transform: translateY(0) rotate(0deg) scale(1); }
+  48% { transform: translateY(-4px) rotate(-1deg) scale(1.02); }
+}
+
+@keyframes livingAvatarBlink {
+  0%, 90%, 94%, 100% { transform: scaleY(1); opacity: 1; }
+  91%, 93% { transform: scaleY(.16); opacity: .55; }
+}
+
+/* MAX bulldog */
+.living-avatar--max {
+  width: 128px;
+  min-width: 128px;
+  height: 142px;
+  color: #7deaf3;
+}
+
+.living-avatar--max svg { width: 122px; height: 132px; }
+.max-avatar__ear,
+.max-avatar__head,
+.max-avatar__muzzle,
+.max-avatar__body,
+.max-avatar__collar,
+.max-avatar__tag {
+  fill: rgba(8,25,32,.98);
+  stroke: rgba(103,232,249,.60);
+  stroke-width: 1.6;
+}
+
+.max-avatar__muzzle { fill: rgba(12,35,40,.98); }
+.max-avatar__collar { fill: rgba(216,177,91,.10); stroke: rgba(216,177,91,.54); }
+.max-avatar__tag { fill: rgba(216,177,91,.16); stroke: rgba(216,177,91,.65); }
+.max-avatar__tag-text { fill: #e8cc7e; font-size: 10px; font-weight: 900; }
+.max-avatar__eyes ellipse { fill: #80edf5; filter: drop-shadow(0 0 5px rgba(103,232,249,.45)); animation: livingAvatarBlink 5.8s steps(1,end) infinite; }
+.max-avatar__brow path,
+.max-avatar__mouth,
+.max-avatar__nose { fill: none; stroke: rgba(103,232,249,.68); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.max-avatar__nose { fill: rgba(103,232,249,.12); }
+
+.living-avatar--max.is-active .max-avatar__ear,
+.living-avatar--max.is-active .max-avatar__head,
+.living-avatar--max.is-active .max-avatar__muzzle,
+.living-avatar--max.is-active .max-avatar__body {
+  stroke: rgba(94,227,181,.72);
+}
+
+.living-avatar--max.is-active .max-avatar__eyes ellipse { fill: #6ff0c4; }
+
+.living-avatar--max.is-compact {
+  width: 92px;
+  min-width: 92px;
+  height: 105px;
+}
+.living-avatar--max.is-compact svg { width: 88px; height: 98px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .living-avatar,
+  .living-avatar.is-reacting,
+  .living-avatar__eyes ellipse,
+  .max-avatar__eyes ellipse {
+    animation: none !important;
+  }
+}
