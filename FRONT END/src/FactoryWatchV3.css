@@ -1,0 +1,155 @@
+/* Factory Watch v3 — truth-aware freshness and provider-evidence treatment. */
+
+.fw-v3 .fw-age-alert {
+  margin-top: 12px;
+  padding: 11px 14px;
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(211, 137, 55, .34);
+  background:
+    linear-gradient(90deg, rgba(47, 24, 8, .92), rgba(11, 8, 5, .97));
+  box-shadow: inset 0 0 28px rgba(172, 92, 27, .05);
+}
+
+.fw-v3 .fw-age-alert strong {
+  color: #e3a55d;
+  font-size: 10px;
+  letter-spacing: .14em;
+}
+
+.fw-v3 .fw-age-alert span {
+  color: rgba(228, 199, 156, .72);
+  font-size: 9px;
+}
+
+.fw-v3 .fw-age-alert em {
+  color: rgba(222, 172, 103, .42);
+  font-size: 8px;
+  font-style: normal;
+  text-align: right;
+}
+
+.fw-v3 .fw-provider-evidence {
+  min-height: 112px;
+}
+
+.fw-v3 .fw-provider-proof {
+  margin-top: 10px;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid rgba(190,126,45,.10);
+}
+
+.fw-v3 .fw-provider-proof span {
+  color: rgba(211, 164, 91, .44);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.fw-v3 .fw-provider-proof b {
+  color: #d7a45e;
+  font-size: 8px;
+  letter-spacing: .08em;
+}
+
+.fw-v3 .fw-freshness article {
+  min-height: 104px;
+  grid-template-columns: 34px minmax(0,1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 8px;
+}
+
+.fw-v3 .fw-freshness article::before {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+}
+
+.fw-v3 .fw-freshness-state {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(190,126,45,.10);
+}
+
+.fw-v3 .fw-freshness-state strong {
+  font-size: 9px;
+  letter-spacing: .12em;
+}
+
+.fw-v3 .fw-freshness-state em {
+  font-style: normal;
+  font-size: 9px;
+  color: rgba(218, 205, 181, .58);
+}
+
+.fw-v3 .fw-freshness article.is-fresh {
+  border-color: rgba(75,211,157,.34);
+  background: linear-gradient(155deg, rgba(7, 25, 18, .86), rgba(4, 8, 7, .97));
+}
+.fw-v3 .fw-freshness article.is-fresh::before {
+  background: #4bd39d;
+  box-shadow: 0 0 12px rgba(75,211,157,.42);
+}
+.fw-v3 .fw-freshness article.is-fresh .fw-freshness-state strong { color: #62d8a8; }
+
+.fw-v3 .fw-freshness article.is-aging {
+  border-color: rgba(211, 168, 76, .36);
+  background: linear-gradient(155deg, rgba(33, 24, 8, .90), rgba(6, 7, 5, .97));
+}
+.fw-v3 .fw-freshness article.is-aging::before {
+  background: #d7aa56;
+  box-shadow: 0 0 12px rgba(215,170,86,.34);
+}
+.fw-v3 .fw-freshness article.is-aging .fw-freshness-state strong { color: #d7aa56; }
+
+.fw-v3 .fw-freshness article.is-stale {
+  border-color: rgba(225, 121, 55, .46);
+  background: linear-gradient(155deg, rgba(43, 19, 7, .92), rgba(8, 6, 4, .98));
+}
+.fw-v3 .fw-freshness article.is-stale::before {
+  background: #df7d42;
+  box-shadow: 0 0 13px rgba(223,125,66,.38);
+}
+.fw-v3 .fw-freshness article.is-stale .fw-freshness-state strong { color: #df8a4d; }
+
+.fw-v3 .fw-freshness article.is-critical {
+  border-color: rgba(208, 74, 62, .54);
+  background: linear-gradient(155deg, rgba(43, 10, 9, .94), rgba(8, 5, 4, .98));
+}
+.fw-v3 .fw-freshness article.is-critical::before {
+  background: #d6544b;
+  box-shadow: 0 0 14px rgba(214,84,75,.44);
+}
+.fw-v3 .fw-freshness article.is-critical .fw-freshness-state strong { color: #df6258; }
+
+.fw-v3 .fw-freshness article.is-waiting {
+  border-color: rgba(108, 127, 119, .18);
+  background: rgba(4,8,7,.62);
+}
+.fw-v3 .fw-freshness article.is-waiting::before {
+  background: rgba(119,147,137,.32);
+}
+.fw-v3 .fw-freshness article.is-waiting .fw-freshness-state strong { color: rgba(190, 198, 186, .44); }
+
+.fw-v3 .fw-provider-grid .is-good .fw-provider-proof b,
+.fw-v3 .fw-provider-grid .is-warn .fw-provider-proof b {
+  color: #d7a45e;
+}
+
+@media (max-width: 1100px) {
+  .fw-v3 .fw-age-alert {
+    grid-template-columns: 1fr;
+  }
+  .fw-v3 .fw-age-alert em { text-align: left; }
+}
