@@ -1,0 +1,42 @@
+name: IIOS 9L-V7 Living Characters Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v7-living-characters
+  pull_request:
+
+jobs:
+  living-characters-v7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify V6 backend and scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v6-full-cinematic-factory
+          git diff --quiet origin/feature/batch9l-v6-full-cinematic-factory...HEAD -- "BACK END" scripts
+
+      - name: Assert V7 truth boundaries
+        run: |
+          grep -q 'V7 · LIVING CHARACTER DIRECTOR' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+          grep -q 'LAST PERSISTED SCENE' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+          grep -q 'NARRATIVE CAST REACTION · NOT LITERAL AGENT SPEECH' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+          grep -q 'EVENT SOURCE · 9G PERSISTED TELEMETRY' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+          grep -q 'LIVE EXECUTION' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+          grep -q 'LivingCharacterDirectorV7' "FRONT END/src/LiveFactoryBrowser.tsx"
+          ! grep -Eq 'method:[[:space:]]*["'"'](POST|PUT|PATCH|DELETE)' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+
+      - name: Build V7 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
