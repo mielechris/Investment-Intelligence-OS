@@ -1,0 +1,47 @@
+name: IIOS 9L-V7.2 Character Motion Replay Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v72-character-motion-replay
+  pull_request:
+
+jobs:
+  character-motion-replay-v72:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify V7.1 backend and scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v7-character-behavior-superbatch
+          git diff --quiet origin/feature/batch9l-v7-character-behavior-superbatch...HEAD -- "BACK END" scripts
+
+      - name: Assert V7.2 replay truth boundaries
+        run: |
+          grep -q 'V7.2 · THE BACK ROOM SCREENING THEATER' "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q 'HISTORICAL REPLAY' "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q 'NOT LIVE · NOT MODEL OUTPUT' "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q 'REAL PERSISTED 9G RECORD' "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q 'REPLAY CANNOT INVENT ONE' "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q "RUN THE FUCKIN' REHEARSAL" "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q 'mobReactionLine' "FRONT END/src/HistoricalReplayV72.tsx"
+          grep -q 'HistoricalReplayV72' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/HistoricalReplayV72.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/HistoricalReplayV72.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/HistoricalReplayV72.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/HistoricalReplayV72.tsx"
+
+      - name: Build V7.2 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
