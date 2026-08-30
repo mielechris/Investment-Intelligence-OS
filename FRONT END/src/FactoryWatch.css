@@ -151,23 +151,160 @@
 .fw-footer { margin-top: 12px; padding: 11px 14px; display: flex; justify-content: space-between; gap: 18px; border: 1px solid rgba(188,126,45,.18); color: rgba(217,180,119,.49); background: rgba(9,7,5,.88); font-size: 8px; letter-spacing: .12em; }
 .fw-footer em { font-style: normal; }
 
+/* Factory Watch v2: worker cadence, provider health, and freshness. */
+.fw-ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.fw-worker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+}
+
+.fw-worker-grid > div,
+.fw-provider-grid > div,
+.fw-freshness article {
+  position: relative;
+  border: 1px solid rgba(188,126,44,.18);
+  background: rgba(4,8,7,.68);
+  box-shadow: inset 0 0 22px rgba(0,0,0,.28);
+}
+
+.fw-worker-grid > div { min-height: 154px; padding: 12px; }
+
+.fw-worker-title {
+  display: grid;
+  grid-template-columns: 36px minmax(0,1fr) 9px;
+  gap: 8px;
+  align-items: center;
+}
+.fw-worker-title b {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 28px;
+  border: 1px solid rgba(206,145,65,.28);
+  color: #e0bd80;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+}
+.fw-worker-title span { color: rgba(222,203,169,.68); font-size: 10px; font-weight: 700; }
+.fw-worker-title i,
+.fw-provider-grid i,
+.fw-freshness article::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(119,147,137,.36);
+  box-shadow: 0 0 0 0 transparent;
+}
+.fw-worker-grid > div > strong {
+  display: block;
+  margin: 15px 0 10px;
+  color: #d8bd8b;
+  font-size: 12px;
+  letter-spacing: .07em;
+}
+.fw-worker-grid dl { margin: 0; display: grid; gap: 5px; }
+.fw-worker-grid dl > div { display: flex; justify-content: space-between; gap: 10px; }
+.fw-worker-grid dt { color: rgba(210,187,151,.36); font-size: 8px; text-transform: uppercase; letter-spacing: .08em; }
+.fw-worker-grid dd { margin: 0; color: rgba(216,212,194,.58); font-size: 8px; text-align: right; }
+
+.fw-truth-note {
+  display: block;
+  padding: 0 12px 12px;
+  color: rgba(214,176,118,.34);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.fw-provider-grid {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+.fw-provider-grid > div { min-height: 84px; padding: 12px; }
+.fw-provider-grid > div > div:first-child { display: flex; align-items: center; gap: 8px; }
+.fw-provider-grid > div > div:first-child span { color: rgba(220,201,168,.68); font-size: 10px; font-weight: 700; }
+.fw-provider-grid > div > strong { display: block; margin: 9px 0 4px; color: #d9bf8d; font-size: 12px; letter-spacing: .05em; }
+.fw-provider-grid > div > small { color: rgba(202,211,202,.40); font-size: 8px; line-height: 1.4; }
+
+.fw-freshness {
+  margin-top: 12px;
+  border: 1px solid rgba(190,126,45,.25);
+  background: linear-gradient(155deg, rgba(20,13,7,.9), rgba(4,8,7,.97));
+}
+.fw-freshness > header {
+  min-height: 42px;
+  padding: 11px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(190,126,45,.14);
+}
+.fw-freshness > header span { color: rgba(211,164,91,.68); font-size: 9px; font-weight: 800; letter-spacing: .18em; }
+.fw-freshness > header em { color: rgba(112,202,162,.52); font-size: 8px; font-style: normal; text-transform: uppercase; letter-spacing: .1em; }
+.fw-freshness > div { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; padding: 12px; }
+.fw-freshness article {
+  min-height: 74px;
+  padding: 10px 11px;
+  display: grid;
+  grid-template-columns: 32px minmax(0,1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.fw-freshness article::before { content: ""; position: absolute; right: 8px; top: 8px; }
+.fw-freshness b { color: #dfbb7c; font-family: Georgia, "Times New Roman", serif; font-size: 14px; }
+.fw-freshness article div strong { display: block; color: rgba(226,211,181,.72); font-size: 9px; }
+.fw-freshness article div span { display: block; margin-top: 3px; color: rgba(201,207,197,.38); font-size: 7px; letter-spacing: .05em; }
+.fw-freshness article > em { color: #d8c197; font-size: 10px; font-style: normal; text-align: right; }
+
+.is-good { border-color: rgba(75,211,157,.30) !important; }
+.is-good > strong,
+.is-good .fw-worker-title + strong { color: #74d7ad !important; }
+.is-good .fw-worker-title i,
+.fw-provider-grid .is-good i,
+.fw-freshness .is-good::before { background: #4bd39d; box-shadow: 0 0 11px rgba(75,211,157,.38); }
+
+.is-warn { border-color: rgba(217,154,66,.34) !important; }
+.is-warn > strong,
+.is-warn .fw-worker-title + strong { color: #ddb16e !important; }
+.is-warn .fw-worker-title i,
+.fw-provider-grid .is-warn i,
+.fw-freshness .is-warn::before { background: #d99a42; box-shadow: 0 0 10px rgba(217,154,66,.28); }
+
+.is-bad { border-color: rgba(195,74,63,.38) !important; }
+.is-bad > strong,
+.is-bad .fw-worker-title + strong { color: #d88175 !important; }
+.is-bad .fw-worker-title i,
+.fw-provider-grid .is-bad i,
+.fw-freshness .is-bad::before { background: #c84c43; box-shadow: 0 0 10px rgba(200,76,67,.28); }
+
+.is-idle { border-color: rgba(140,132,111,.18) !important; }
+
 @keyframes fwPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.18); opacity: .72; } }
 
 @media (max-width: 1100px) {
   .fw-header { grid-template-columns: 1fr; }
   .fw-metrics { grid-template-columns: repeat(3, 1fr); }
-  .fw-grid { grid-template-columns: 1fr; }
+  .fw-grid, .fw-ops-grid { grid-template-columns: 1fr; }
   .fw-agents, .fw-events { grid-column: auto; }
   .fw-agent-grid { grid-template-columns: repeat(2, 1fr); }
   .fw-market-clock { grid-template-columns: 1fr; }
   .fw-market-clock em { text-align: left; }
+  .fw-freshness > div { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 720px) {
   .fw-shell { padding: 10px; }
   .fw-safety { grid-template-columns: 1fr 1fr; }
   .fw-metrics { grid-template-columns: 1fr 1fr; }
-  .fw-layer-grid, .fw-agent-grid { grid-template-columns: 1fr; }
+  .fw-layer-grid, .fw-agent-grid, .fw-worker-grid, .fw-freshness > div { grid-template-columns: 1fr; }
   .fw-events > div > div { grid-template-columns: 72px 1fr; }
   .fw-events span { grid-column: 2; }
 }
