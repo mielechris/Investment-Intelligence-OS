@@ -109,9 +109,9 @@ def main() -> int:
     assert '"kickstart", "-k"' in watchdog_source
     assert '"KeepAlive": True' in installer_source
     assert '"AbandonProcessGroup": False' in installer_source
-    assert "trade_execution_permission\": False" in watchdog_source
-    assert "live_execution\": False" in watchdog_source
-    assert "broker_connected\": False" in watchdog_source
+    assert '"trade_execution_permission": False' in watchdog_source
+    assert '"live_execution": False' in watchdog_source
+    assert '"broker_connected": False' in watchdog_source
 
     forbidden = [
         '"trade_execution_permission": True',
