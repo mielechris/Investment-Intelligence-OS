@@ -1,0 +1,264 @@
+/*
+ * 9L V2.5 — Living Cast Superbatch
+ * Full recurring SVG avatars + readability + evidence-gated reactions.
+ * Presentation only. Persisted IIOS state remains authoritative.
+ */
+
+.v25-shell {
+  --v25-green: #5ee3b5;
+  --v25-cyan: #67e8f9;
+  --v25-amber: #d8b15b;
+  --v25-red: #ff8c8c;
+}
+
+/* Disable V2.4 pseudo-name injection now that V2.5 renders the cast directly. */
+.v25-shell .spatial-desk-copy > strong {
+  font-size: 16px;
+  line-height: 1.08;
+  letter-spacing: -.015em;
+  color: #f0fbfd;
+}
+.v25-shell .spatial-desk-copy > strong::before,
+.v25-shell .spatial-desk-copy > strong::after,
+.v25-shell .spatial-desk-copy > small::after,
+.v25-shell .spatial-max-platform > div:last-child::after {
+  content: none !important;
+  display: none !important;
+}
+
+.v25-agent-desks {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+  padding: 4px 0 28px;
+}
+
+.v25-desk {
+  min-height: 186px;
+  padding: 15px 15px 18px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  gap: 14px;
+  align-items: center;
+  overflow: visible;
+  background:
+    radial-gradient(circle at 12% 38%, rgba(103,232,249,.035), transparent 28%),
+    linear-gradient(145deg, rgba(8,22,29,.98), rgba(4,13,18,.99));
+}
+
+.v25-desk.has-lineage:not(.is-on):not(.is-reacting) {
+  border-color: rgba(103,232,249,.26);
+  box-shadow: inset 0 0 28px rgba(103,232,249,.018), 0 12px 30px rgba(0,0,0,.17);
+}
+
+.v25-desk.has-lineage:not(.is-on):not(.is-reacting)::before {
+  border-color: rgba(103,232,249,.09);
+}
+
+.v25-desk-copy {
+  min-height: 148px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.v25-desk-copy > em {
+  color: rgba(103,232,249,.47);
+  font-size: 7px;
+  letter-spacing: .17em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  font-style: normal;
+}
+
+.v25-governed-role {
+  display: block;
+  margin-top: 5px;
+  color: rgba(103,232,249,.34);
+  font-size: 6px;
+  line-height: 1.3;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  font-weight: 760;
+}
+
+.v25-desk-copy > small {
+  margin-top: 10px;
+  min-height: 18px;
+  color: rgba(170,199,206,.47);
+  font-size: 7px;
+  line-height: 1.35;
+  letter-spacing: .04em;
+}
+
+.v25-desk.is-on .v25-desk-copy > small,
+.v25-desk.is-reacting .v25-desk-copy > small {
+  color: rgba(94,227,181,.78);
+}
+
+.v25-workstation-props {
+  margin-top: 10px;
+  padding: 7px 8px;
+  border: 1px solid rgba(103,232,249,.08);
+  border-radius: 6px;
+  background: rgba(2,10,14,.62);
+  color: rgba(103,232,249,.28);
+  font-size: 6px;
+  line-height: 1.35;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.v25-persona {
+  margin-top: 7px;
+  color: rgba(181,207,212,.43);
+  font-size: 7px;
+  line-height: 1.38;
+}
+
+.v25-persona > span {
+  display: inline-block;
+  margin-right: 6px;
+  color: rgba(216,177,91,.55);
+  font-size: 5px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.v25-desk[data-cast-key="skeptic"] {
+  border-color: rgba(255,125,125,.24);
+  background:
+    radial-gradient(circle at 14% 38%, rgba(255,90,90,.055), transparent 28%),
+    linear-gradient(145deg, rgba(22,12,16,.98), rgba(5,12,16,.99));
+}
+
+.v25-desk[data-cast-key="skeptic"] .v25-governed-role,
+.v25-desk[data-cast-key="skeptic"] .v25-workstation-props {
+  color: rgba(255,145,145,.38);
+  border-color: rgba(255,125,125,.10);
+}
+
+.v25-desk[data-cast-key="skeptic"] .v25-persona > span { color: rgba(255,145,145,.62); }
+
+/* Full MAX command bridge composition. */
+.v25-max-platform {
+  grid-template-columns: 138px minmax(0,1fr);
+  min-height: 268px;
+  padding: 22px 22px 86px;
+  align-items: center;
+}
+
+.v25-max-copy > em {
+  color: rgba(103,232,249,.55);
+  font-style: normal;
+  font-size: 7px;
+  letter-spacing: .20em;
+}
+
+.v25-max-copy h2 {
+  margin: 8px 0 7px;
+  font-size: 36px;
+  line-height: .95;
+  color: #f3fcfd;
+}
+
+.v25-max-copy p {
+  margin: 0;
+  max-width: 440px;
+  color: rgba(184,211,217,.63);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.v25-max-copy small {
+  display: block;
+  margin-top: 9px;
+  color: rgba(177,204,210,.36);
+  font-size: 8px;
+}
+
+.v25-max-platform .spatial-max-narrative {
+  left: 18px;
+  right: 18px;
+  bottom: 15px;
+  min-height: 58px;
+}
+
+/* Reaction bubble has room above a large portrait without covering adjacent desks. */
+.v25-desk .spatial-desk-reaction {
+  top: -48px;
+  left: 18px;
+  right: 18px;
+  z-index: 12;
+}
+
+.v25-desk.is-reacting {
+  z-index: 10;
+}
+
+/* Character-specific workstation accent rails. */
+.v25-desk::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(103,232,249,.12), transparent);
+}
+
+.v25-desk.is-on::after,
+.v25-desk.is-reacting::after {
+  background: linear-gradient(90deg, transparent, rgba(94,227,181,.52), transparent);
+  box-shadow: 0 0 10px rgba(94,227,181,.12);
+}
+
+.v25-desk[data-cast-key="skeptic"]::after {
+  background: linear-gradient(90deg, transparent, rgba(255,125,125,.28), transparent);
+}
+
+/* Make the central bullpen feel like a cast stage rather than a dense data card. */
+.v25-shell .spatial-bullpen {
+  padding: 16px;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(103,232,249,.065), transparent 44%),
+    linear-gradient(160deg, rgba(8,24,31,.99), rgba(4,13,18,.99));
+}
+
+.v25-shell .spatial-bullpen-heading {
+  min-height: 58px;
+  padding: 0 4px;
+}
+
+.v25-shell .spatial-bullpen-heading > div::after {
+  content: "  ·  FRANKIE · BENNY · VINNY · MIKEY · TONY · SAL · JOHNNY · PAULIE";
+  color: rgba(94,227,181,.38);
+  font-size: 7px;
+  letter-spacing: .10em;
+}
+
+/* V2.5 status language */
+.v25-shell .spatial-truth span:last-child { color: rgba(216,177,91,.86); }
+
+@media (max-width: 1450px) {
+  .v25-desk { grid-template-columns: 82px minmax(0,1fr); min-height: 174px; gap: 11px; }
+  .v25-shell .spatial-desk-copy > strong { font-size: 14px; }
+  .v25-persona { font-size: 6px; }
+  .v25-workstation-props { font-size: 5px; }
+}
+
+@media (max-width: 1250px) {
+  .v25-agent-desks { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .v25-max-platform { grid-template-columns: 110px 1fr; padding-bottom: 24px; }
+  .v25-max-platform .spatial-max-narrative { position: relative; left: auto; right: auto; bottom: auto; grid-column: 1 / -1; margin-top: 12px; }
+}
+
+@media (max-width: 760px) {
+  .v25-agent-desks { grid-template-columns: 1fr; }
+  .v25-desk { grid-template-columns: 84px 1fr; }
+  .v25-persona { display: none; }
+  .v25-max-platform { grid-template-columns: 92px 1fr; }
+}
