@@ -27,12 +27,8 @@ jobs:
 
       - name: Assert approved V7.5 family wall truth boundaries
         run: |
-          test -s "FRONT END/src/assets/v75/family-part-00.txt"
-          test -s "FRONT END/src/assets/v75/family-part-01.txt"
-          test -s "FRONT END/src/assets/v75/family-part-02.txt"
-          test -s "FRONT END/src/assets/v75/family-part-03.txt"
-          grep -q 'family-part-00.txt?raw' "FRONT END/src/FamilyWallV75.tsx"
-          grep -q 'data:image/webp;base64' "FRONT END/src/FamilyWallV75.tsx"
+          test -s "FRONT END/src/assets/v75/iios-family-portrait.avif"
+          grep -q 'iios-family-portrait.avif' "FRONT END/src/FamilyWallV75.tsx"
           grep -q 'V7.5 · FINAL AVATAR INSTALLATION · APPROVED FAMILY WALL' "FRONT END/src/FamilyWallV75.tsx"
           grep -q "THE FAMILY IS IN THE FUCKIN' BUILDING" "FRONT END/src/FamilyWallV75.tsx"
           grep -q 'PRESENTATION ONLY' "FRONT END/src/FamilyWallV75.tsx"
@@ -48,22 +44,15 @@ jobs:
 
       - name: Verify approved family portrait payload bytes
         run: |
-          cat \
-            "FRONT END/src/assets/v75/family-part-00.txt" \
-            "FRONT END/src/assets/v75/family-part-01.txt" \
-            "FRONT END/src/assets/v75/family-part-02.txt" \
-            "FRONT END/src/assets/v75/family-part-03.txt" \
-            | tr -d '\n\r\t ' | base64 --decode > /tmp/iios-family-v75.webp
           python3 - <<'PY'
           from hashlib import sha256
           from pathlib import Path
 
-          path = Path('/tmp/iios-family-v75.webp')
+          path = Path('FRONT END/src/assets/v75/iios-family-portrait.avif')
           data = path.read_bytes()
-          expected = 'ec15adf2413e8b1fc636af09b4cbfc6c79350a12a7bead2ac8d70d5e06ad2f96'
-          assert len(data) == 189798, f'unexpected portrait size: {len(data)}'
-          assert data[:4] == b'RIFF', data[:12]
-          assert data[8:12] == b'WEBP', data[:12]
+          expected = 'd9e9c25fa1a38082a5b8deaa9bdf3f727d2285b13515e2f01a3ce0ab0a21f170'
+          assert len(data) == 13826, f'unexpected portrait size: {len(data)}'
+          assert data[4:12] == b'ftypavif', data[:16]
           actual = sha256(data).hexdigest()
           assert actual == expected, f'portrait SHA mismatch: {actual}'
           print(f'V7.5 approved portrait verified: {len(data)} bytes · {actual}')
