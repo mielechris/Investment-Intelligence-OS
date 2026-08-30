@@ -12,7 +12,7 @@ import HistoricalMacroRegimeLibrary from "./HistoricalMacroRegimeLibrary";
 import HistoricalMarketIntelligence from "./HistoricalMarketIntelligence";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
-import LivingFactoryFloorV2Refined from "./LivingFactoryFloorV2Refined";
+import LivingFactorySpatialFloor from "./LivingFactorySpatialFloor";
 import MarketRegimeIntelligence from "./MarketRegimeIntelligence";
 import MarketValidationStackPanel from "./MarketValidationStackPanel";
 import MeasurementHealthSuperbatch from "./MeasurementHealthSuperbatch";
@@ -21,7 +21,6 @@ import QualificationWatch from "./QualificationWatch";
 import ReadinessSuperbatch from "./ReadinessSuperbatch";
 import "./LiveFactoryBrowser.css";
 import "./Batch9MVisualSeal.css";
-import "./LivingFactoryFloorV2Cinematic.css";
 
 type BrowserView = "floor" | "control";
 
@@ -32,8 +31,8 @@ export default function LiveFactoryBrowser() {
     <div className="lfb-shell">
       <div className="lfb-preview-banner">
         <div>
-          <span>BATCH 9L-V2 · LIVING FACTORY FLOOR</span>
-          <strong>Spatial floor · persisted case packets · MAX + eight specialist desks · live event tape</strong>
+          <span>BATCH 9L-V2 · SPATIAL LIVING FACTORY FLOOR</span>
+          <strong>Room map · persisted packets · MAX overlook · eight-desk bullpen · live event bus</strong>
         </div>
         <div>
           <span>10L–10M + ALL PRESERVED FACTORY SYSTEMS · BACKEND 8002 UNCHANGED</span>
@@ -44,7 +43,7 @@ export default function LiveFactoryBrowser() {
       <nav className="lfb-viewbar" aria-label="Investment factory browser view">
         <div className="lfb-viewbar-copy">
           <span>IIOS EXPERIENCE</span>
-          <strong>{view === "floor" ? "Factory Floor" : "Control Room"}</strong>
+          <strong>{view === "floor" ? "Spatial Factory Floor" : "Control Room"}</strong>
         </div>
         <div className="lfb-view-switch">
           <button
@@ -54,7 +53,7 @@ export default function LiveFactoryBrowser() {
           >
             <span>01</span>
             <strong>FACTORY FLOOR</strong>
-            <em>living spatial view</em>
+            <em>spatial living view</em>
           </button>
           <button
             className={`lfb-view-button ${view === "control" ? "is-active" : ""}`}
@@ -73,7 +72,7 @@ export default function LiveFactoryBrowser() {
       </nav>
 
       {view === "floor" ? (
-        <LivingFactoryFloorV2Refined />
+        <LivingFactorySpatialFloor />
       ) : (
         <div className="lfb-control-stack">
           <LivingFactoryExperience />
