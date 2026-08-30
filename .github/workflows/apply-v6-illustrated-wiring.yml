@@ -1,0 +1,140 @@
+name: Apply V6 Illustrated Wiring
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v6-full-cinematic-factory
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'chore(9L-V6): trigger illustrated wiring'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out V6 branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/batch9l-v6-full-cinematic-factory
+          fetch-depth: 0
+
+      - name: Wire illustrated portraits and rooms
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          function replaceRequired(path, before, after, label) {
+            let source = fs.readFileSync(path, 'utf8');
+            if (!source.includes(before)) {
+              throw new Error(`${label} anchor not found in ${path}`);
+            }
+            source = source.replace(before, after);
+            fs.writeFileSync(path, source);
+          }
+
+          const commandDeck = 'FRONT END/src/CinematicFactoryCommandDeck.tsx';
+          replaceRequired(
+            commandDeck,
+            'import LivingCharacterAvatar from "./LivingCharacterAvatar";',
+            'import CinematicCharacterPortrait from "./CinematicCharacterPortrait";',
+            'command-deck import',
+          );
+          replaceRequired(
+            commandDeck,
+            `            <LivingCharacterAvatar
+              characterKey="max"
+              active={model.events.length > 0}
+              reacting={model.latestEvent !== null}
+            />`,
+            `            <CinematicCharacterPortrait
+              characterKey="max"
+              active={model.events.length > 0}
+              reacting={model.latestEvent !== null}
+              variant="boss"
+            />`,
+            'MAX boss portrait',
+          );
+          replaceRequired(
+            commandDeck,
+            `                    <LivingCharacterAvatar
+                      characterKey={key}
+                      active={active}
+                      reacting={active && model.latestStation === "agents"}
+                    />`,
+            `                    <CinematicCharacterPortrait
+                      characterKey={key}
+                      active={active}
+                      reacting={active && model.latestStation === "agents"}
+                      variant="card"
+                    />`,
+            'command-deck cast portraits',
+          );
+
+          const spatialFloor = 'FRONT END/src/LivingFactorySpatialFloor.tsx';
+          replaceRequired(
+            spatialFloor,
+            'import LivingCharacterAvatar from "./LivingCharacterAvatar";',
+            `import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
+import CinematicRoomScene, { type CinematicStation } from "./CinematicRoomScene";`,
+            'spatial art imports',
+          );
+          replaceRequired(
+            spatialFloor,
+            `          <article key={station.key} className={\`spatial-room room-${station.key} ${model.stationEventCounts[station.key] ? "is-event" : ""} ${model.activeByStation[station.key] ? "is-active" : ""} ${model.lineageByStation[station.key] ? "has-lineage" : ""}\`}>
+            <header><span>{station.code}</span><i /></header><strong>{station.title}</strong><p>{station.subtitle}</p><div className="spatial-room-meter"><i style={{ width: \`${Math.min(100, model.stationEventCounts[station.key] * 16)}%\` }} /></div><footer>{model.stationEventCounts[station.key] ? \`${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · \` : ""}{roomState(station.key)}</footer>
+          </article>`,
+            `          <article key={station.key} className={\`spatial-room room-${station.key} ${model.stationEventCounts[station.key] ? "is-event" : ""} ${model.activeByStation[station.key] ? "is-active" : ""} ${model.lineageByStation[station.key] ? "has-lineage" : ""}\`}>
+            <header><span>{station.code}</span><i /></header>
+            <CinematicRoomScene
+              station={station.key as CinematicStation}
+              active={Boolean(model.stationEventCounts[station.key] || model.activeByStation[station.key])}
+              eventCount={model.stationEventCounts[station.key]}
+            />
+            <strong>{station.title}</strong>
+            <p>{station.subtitle}</p>
+            <div className="spatial-room-meter"><i style={{ width: \`${Math.min(100, model.stationEventCounts[station.key] * 16)}%\` }} /></div>
+            <footer>{model.stationEventCounts[station.key] ? \`${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · \` : ""}{roomState(station.key)}</footer>
+          </article>`,
+            'physical department rooms',
+          );
+          replaceRequired(
+            spatialFloor,
+            '<LivingCharacterAvatar characterKey="max" active={Boolean(model.latestEvent)} reacting={Boolean(model.latestEvent)} />',
+            '<CinematicCharacterPortrait characterKey="max" active={Boolean(model.latestEvent)} reacting={Boolean(model.latestEvent)} variant="boss" />',
+            'spatial MAX portrait',
+          );
+          replaceRequired(
+            spatialFloor,
+            '<LivingCharacterAvatar characterKey={agent.key} active={working || reacting} reacting={reacting} />',
+            '<CinematicCharacterPortrait characterKey={agent.key} active={working || reacting} reacting={reacting} variant="desk" />',
+            'spatial specialist portraits',
+          );
+
+          const browser = 'FRONT END/src/LiveFactoryBrowser.tsx';
+          replaceRequired(
+            browser,
+            'import "./CinematicFactoryFidelityV6.css";',
+            `import "./CinematicFactoryFidelityV6.css";
+import "./CinematicPortraitIntegrationV6.css";`,
+            'portrait integration import',
+          );
+          NODE
+
+      - name: Verify frontend build
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit illustrated wiring
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "FRONT END/src/CinematicFactoryCommandDeck.tsx" \
+                  "FRONT END/src/LivingFactorySpatialFloor.tsx" \
+                  "FRONT END/src/LiveFactoryBrowser.tsx"
+          git commit -m "feat(9L-V6): wire painted cast and physical rooms into live state"
+          git push origin HEAD:feature/batch9l-v6-full-cinematic-factory
