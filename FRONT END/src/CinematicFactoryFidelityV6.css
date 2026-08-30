@@ -1,0 +1,542 @@
+/*
+ * Batch 9L-V6 — Cinematic Fidelity Finishing Pass
+ * Presentation-only. This layer intentionally changes composition, material,
+ * typography and illustration treatment while leaving all persisted IIOS
+ * state, read-only boundaries and execution permissions untouched.
+ */
+
+.cinematic-v6 {
+  --v6-shadow-black: #010100;
+  --v6-wood-black: #0b0704;
+  --v6-wood-deep: #160c06;
+  --v6-wood-mid: #2a1609;
+  --v6-bronze: #6f3d14;
+  --v6-brass-hot: #d99738;
+  --v6-gold-hot: #f1bd68;
+  --v6-lamp: rgba(240, 164, 68, .18);
+  --v6-smoke: rgba(222, 191, 153, .025);
+  background:
+    radial-gradient(ellipse at 18% -12%, rgba(163, 77, 15, .20), transparent 33%),
+    radial-gradient(ellipse at 84% -8%, rgba(143, 70, 18, .16), transparent 31%),
+    radial-gradient(ellipse at 50% 100%, rgba(82, 37, 7, .11), transparent 42%),
+    linear-gradient(180deg, #090502 0, #020202 52%, #010101 100%);
+}
+
+/* Fine wood grain, smoke and warm lamp falloff. */
+.cinematic-v6::before {
+  opacity: .23;
+  background:
+    radial-gradient(ellipse at 23% 22%, rgba(235, 163, 76, .035), transparent 15%),
+    radial-gradient(ellipse at 68% 31%, rgba(236, 163, 75, .028), transparent 17%),
+    radial-gradient(ellipse at 48% 68%, rgba(232, 199, 160, .018), transparent 26%),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.013) 3px),
+    repeating-linear-gradient(90deg, transparent 0 6px, rgba(145,78,24,.014) 7px 8px),
+    radial-gradient(circle at center, transparent 0 58%, rgba(0,0,0,.44) 100%);
+  mix-blend-mode: screen;
+}
+
+/* ----- Top command-deck / north-star composition ----- */
+.cinematic-v6 .cfd-shell {
+  margin: 18px 18px 16px;
+  padding: 14px;
+  border: 1px solid rgba(207, 132, 42, .46);
+  background:
+    radial-gradient(ellipse at 50% -10%, rgba(203,118,30,.12), transparent 36%),
+    linear-gradient(180deg, rgba(12,7,4,.99), rgba(3,3,2,.995));
+  box-shadow:
+    0 28px 95px rgba(0,0,0,.62),
+    inset 0 0 0 3px rgba(0,0,0,.82),
+    inset 0 0 95px rgba(117,49,8,.045);
+}
+
+.cinematic-v6 .cfd-top-grid {
+  gap: 10px;
+  grid-template-columns: minmax(270px, .88fr) minmax(620px, 2.35fr) minmax(280px, .94fr);
+}
+
+.cinematic-v6 .cfd-panel,
+.cinematic-v6 .cfd-center-stage {
+  border-width: 1px;
+  border-color: rgba(193,117,32,.42);
+  box-shadow:
+    inset 0 0 0 2px rgba(0,0,0,.78),
+    inset 0 0 45px rgba(133,60,10,.05),
+    0 14px 38px rgba(0,0,0,.38);
+}
+
+.cinematic-v6 .cfd-brand-lockup {
+  position: relative;
+  min-height: 130px;
+  align-items: center;
+  background:
+    linear-gradient(90deg, rgba(48,24,10,.34), transparent 24%, transparent 75%, rgba(48,24,10,.20)),
+    radial-gradient(ellipse at center, rgba(198,113,27,.07), transparent 62%);
+}
+
+.cinematic-v6 .cfd-brand-lockup::after {
+  content: "THE HOUSE DOESN'T GUESS. IT KEEPS RECEIPTS.";
+  position: absolute;
+  right: 20px;
+  bottom: 10px;
+  color: rgba(221,147,56,.23);
+  font: italic 7px Georgia, "Times New Roman", serif;
+  letter-spacing: .17em;
+}
+
+.cinematic-v6 .cfd-brand-mark {
+  font-size: clamp(56px, 5.1vw, 92px);
+  text-shadow:
+    0 0 8px rgba(236,170,75,.22),
+    0 3px 0 #3a1b08,
+    0 7px 22px rgba(0,0,0,.65);
+}
+
+.cinematic-v6 .cfd-brand-lockup h1 {
+  font-size: clamp(30px, 3vw, 52px);
+  text-shadow: 0 2px 0 rgba(0,0,0,.8), 0 0 18px rgba(230,160,66,.08);
+}
+
+.cinematic-v6 .cfd-feed {
+  background:
+    linear-gradient(rgba(5,14,11,.82), rgba(4,5,3,.95)),
+    repeating-linear-gradient(0deg, transparent 0 26px, rgba(91,180,87,.025) 27px 28px);
+}
+
+.cinematic-v6 .cfd-feed::after {
+  content: "LIVE INTELLIGENCE WIRE";
+  position: absolute;
+  left: 16px;
+  bottom: 10px;
+  color: rgba(105, 205, 91, .22);
+  font-size: 6px;
+  letter-spacing: .22em;
+}
+
+.cinematic-v6 .cfd-boss-office {
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 25%, rgba(191,111,31,.14), transparent 42%),
+    linear-gradient(155deg, rgba(34,18,9,.98), rgba(5,4,3,.995));
+}
+
+.cinematic-v6 .cfd-boss-office::before {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  pointer-events: none;
+  border: 1px solid rgba(222,147,53,.15);
+  box-shadow: inset 0 0 60px rgba(0,0,0,.62);
+}
+
+.cinematic-v6 .cfd-boss-portrait {
+  min-height: 238px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(227,155,63,.11), transparent 41%),
+    linear-gradient(180deg, rgba(34,20,12,.28), rgba(2,2,2,.68));
+  border-bottom: 1px solid rgba(188,112,30,.28);
+}
+
+.cinematic-v6 .cfd-boss-portrait .living-avatar--max {
+  width: 210px;
+  min-width: 210px;
+  height: 230px;
+}
+
+.cinematic-v6 .cfd-boss-portrait .living-avatar--max svg {
+  width: 190px;
+  height: 210px;
+}
+
+.cinematic-v6 .cfd-boss-copy {
+  padding: 17px 20px 21px;
+  background: linear-gradient(180deg, rgba(30,17,9,.58), rgba(5,4,3,.92));
+}
+
+/* ----- Dense Operations Floor / physical headquarters ----- */
+.cinematic-v6 .cinematic-floor-stage {
+  margin-top: 12px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(22,12,6,.86), rgba(3,3,2,.99)),
+    repeating-linear-gradient(90deg, transparent 0 88px, rgba(220,142,45,.015) 89px 90px);
+}
+
+.cinematic-v6 .spatial-shell { padding: 8px; }
+
+.cinematic-v6 .spatial-factory {
+  min-height: 870px;
+  grid-template-rows: repeat(7, minmax(92px, auto));
+  gap: 10px;
+  padding: 18px;
+  background:
+    radial-gradient(ellipse at 23% 62%, rgba(180,91,19,.10), transparent 23%),
+    radial-gradient(ellipse at 72% 38%, rgba(163,76,14,.07), transparent 28%),
+    linear-gradient(180deg, rgba(10,6,4,.76), rgba(2,2,2,.98)),
+    repeating-linear-gradient(90deg, transparent 0 61px, rgba(218,142,48,.025) 62px 63px),
+    repeating-linear-gradient(0deg, transparent 0 61px, rgba(218,142,48,.018) 62px 63px);
+}
+
+/* Remove the wasted top/bottom rows and pack the departments together. */
+.cinematic-v6 .room-radar { grid-column: 1 / 3; grid-row: 1 / 3; }
+.cinematic-v6 .room-research { grid-column: 3 / 5; grid-row: 1 / 3; }
+.cinematic-v6 .room-committee { grid-column: 9 / 11; grid-row: 1 / 3; }
+.cinematic-v6 .room-risk { grid-column: 11 / 13; grid-row: 1 / 3; }
+.cinematic-v6 .room-paper { grid-column: 9 / 11; grid-row: 3 / 5; }
+.cinematic-v6 .room-monitoring { grid-column: 11 / 13; grid-row: 3 / 5; }
+.cinematic-v6 .room-learning { grid-column: 10 / 13; grid-row: 5 / 7; }
+
+.cinematic-v6 .spatial-bullpen {
+  grid-column: 5 / 9;
+  grid-row: 1 / 7;
+  padding: 12px;
+  background:
+    radial-gradient(ellipse at 50% 2%, rgba(223,148,54,.07), transparent 36%),
+    linear-gradient(160deg, rgba(28,15,8,.98), rgba(4,4,3,.995));
+}
+
+.cinematic-v6 .spatial-agent-desks {
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.cinematic-v6 .spatial-desk {
+  min-height: 196px;
+  grid-template-columns: 108px minmax(0,1fr);
+  grid-template-rows: 1fr auto;
+  gap: 8px 12px;
+  padding: 12px 13px 25px;
+  align-items: center;
+  background:
+    radial-gradient(ellipse at 17% 42%, rgba(218,137,43,.08), transparent 34%),
+    linear-gradient(145deg, rgba(30,17,10,.98), rgba(5,4,3,.995));
+}
+
+.cinematic-v6 .spatial-desk .living-avatar {
+  width: 110px;
+  min-width: 110px;
+  height: 142px;
+  grid-row: 1 / 3;
+}
+
+.cinematic-v6 .spatial-desk .living-avatar svg {
+  width: 104px;
+  height: 130px;
+}
+
+.cinematic-v6 .spatial-desk-copy {
+  min-height: 126px;
+  justify-content: center;
+}
+
+.cinematic-v6 .spatial-desk-copy > strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px !important;
+  line-height: 1.02;
+  color: #efc980 !important;
+}
+
+.cinematic-v6 .spatial-desk-copy > strong::before,
+.cinematic-v6 .spatial-desk-copy > strong::after {
+  display: none !important;
+}
+
+.cinematic-v6 .spatial-desk-copy > em {
+  font-size: 7px;
+  line-height: 1.4;
+  letter-spacing: .17em;
+}
+
+.cinematic-v6 .spatial-desk-copy > small {
+  margin-top: 7px;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.cinematic-v6 .spatial-desk-copy > small::after {
+  display: block;
+  margin-top: 7px;
+  font-size: 6px;
+  line-height: 1.45;
+  color: rgba(223,188,135,.45);
+}
+
+/* Each workstation gets its own physical-world accent rather than one repeated card. */
+.cinematic-v6 .spatial-desk:nth-child(1) { background-image: radial-gradient(circle at 83% 18%, rgba(191,139,55,.10), transparent 22%), linear-gradient(145deg, rgba(31,17,9,.98), rgba(5,4,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(2) { background-image: linear-gradient(120deg, transparent 60%, rgba(75,120,95,.07)), linear-gradient(145deg, rgba(27,16,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(3) { background-image: repeating-linear-gradient(0deg, transparent 0 28px, rgba(221,163,81,.025) 29px 30px), linear-gradient(145deg, rgba(29,17,10,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(4) { background-image: linear-gradient(90deg, transparent 60%, rgba(86,149,118,.055)), linear-gradient(145deg, rgba(25,15,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(5) { background-image: radial-gradient(circle at 82% 28%, rgba(141,106,45,.11), transparent 24%), linear-gradient(145deg, rgba(32,18,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(6) { background-image: radial-gradient(circle at 85% 22%, rgba(56,111,101,.075), transparent 24%), linear-gradient(145deg, rgba(25,15,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(7) { background-image: radial-gradient(circle at 80% 26%, rgba(126,25,23,.14), transparent 29%), linear-gradient(145deg, rgba(30,10,10,.98), rgba(5,3,3,.995)); }
+.cinematic-v6 .spatial-desk:nth-child(8) { background-image: linear-gradient(120deg, transparent 58%, rgba(114,91,47,.075)), linear-gradient(145deg, rgba(28,16,9,.98), rgba(4,4,3,.995)); }
+
+/* MAX owns a real boss/foreman pit instead of another room card. */
+.cinematic-v6 .spatial-max-platform {
+  grid-column: 1 / 5;
+  grid-row: 3 / 7;
+  min-height: 400px;
+  grid-template-columns: 190px 1fr;
+  gap: 18px;
+  padding: 25px 28px 34px;
+  overflow: visible;
+  background:
+    radial-gradient(ellipse at 18% 42%, rgba(220,139,43,.18), transparent 38%),
+    radial-gradient(ellipse at 80% 20%, rgba(111,61,22,.11), transparent 32%),
+    linear-gradient(150deg, rgba(38,20,10,.99), rgba(5,4,3,.995));
+  box-shadow:
+    0 24px 45px rgba(0,0,0,.42),
+    inset 0 0 0 2px rgba(0,0,0,.78),
+    inset 0 0 70px rgba(160,75,15,.07);
+}
+
+.cinematic-v6 .spatial-max-platform .living-avatar--max {
+  width: 190px;
+  min-width: 190px;
+  height: 210px;
+}
+
+.cinematic-v6 .spatial-max-platform .living-avatar--max svg {
+  width: 175px;
+  height: 192px;
+}
+
+.cinematic-v6 .spatial-max-platform h2 {
+  margin: 3px 0 8px;
+  font-size: 50px;
+  line-height: .9;
+}
+
+.cinematic-v6 .spatial-max-platform p {
+  max-width: 560px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.cinematic-v6 .spatial-max-platform > div:last-child::before {
+  content: "THE BOSS'S FLOOR RULES";
+  display: block;
+  width: max-content;
+  margin: 14px 0 8px;
+  padding: 6px 9px;
+  border: 1px solid rgba(221,145,52,.24);
+  color: rgba(232,177,88,.66);
+  background: rgba(12,7,4,.72);
+  font: 7px Georgia, "Times New Roman", serif;
+  letter-spacing: .18em;
+}
+
+/* Physical station treatment and prop-like lower shelves. */
+.cinematic-v6 .spatial-room {
+  min-height: 180px;
+  padding: 17px 17px 30px;
+  overflow: hidden;
+}
+
+.cinematic-v6 .spatial-room::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  height: 13px;
+  border: 1px solid rgba(186,111,31,.12);
+  background: repeating-linear-gradient(90deg, rgba(216,139,44,.06) 0 23px, transparent 23px 31px), rgba(5,4,3,.72);
+  opacity: .8;
+  pointer-events: none;
+}
+
+.cinematic-v6 .spatial-room.is-event::after {
+  background: repeating-linear-gradient(90deg, rgba(114,212,94,.12) 0 23px, transparent 23px 31px), rgba(5,4,3,.72);
+  animation: none;
+}
+
+.cinematic-v6 .room-radar { background-image: radial-gradient(circle at 77% 22%, rgba(57,132,88,.09), transparent 28%), repeating-linear-gradient(0deg, transparent 0 30px, rgba(88,165,103,.018) 31px), linear-gradient(145deg, rgba(27,16,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .room-research { background-image: radial-gradient(circle at 75% 23%, rgba(75,105,117,.08), transparent 26%), linear-gradient(145deg, rgba(27,16,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .room-committee { background-image: radial-gradient(ellipse at 50% 75%, rgba(205,131,40,.11), transparent 33%), linear-gradient(145deg, rgba(33,18,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .room-risk { background-image: radial-gradient(circle at 77% 25%, rgba(117,147,76,.075), transparent 26%), linear-gradient(145deg, rgba(28,16,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .room-paper { background-image: repeating-linear-gradient(90deg, transparent 0 39px, rgba(185,135,57,.025) 40px), linear-gradient(145deg, rgba(29,17,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .room-monitoring { background-image: radial-gradient(circle at 80% 24%, rgba(62,119,90,.075), transparent 26%), linear-gradient(145deg, rgba(27,16,9,.98), rgba(4,4,3,.995)); }
+.cinematic-v6 .room-learning { background-image: repeating-linear-gradient(0deg, transparent 0 32px, rgba(201,140,55,.022) 33px), linear-gradient(145deg, rgba(28,16,9,.98), rgba(4,4,3,.995)); }
+
+/* Committee queue becomes a physical evidence rack / commission output dock. */
+.cinematic-v6 .spatial-packets::before {
+  content: "THE COMMISSION · CASE DOSSIER RACK";
+  border-width: 1px;
+  background:
+    repeating-linear-gradient(0deg, rgba(34,18,9,.96) 0 35px, rgba(5,4,3,.98) 36px 38px),
+    rgba(5,4,3,.98);
+  color: rgba(230,171,79,.57);
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: .15em;
+}
+
+.cinematic-v6 .spatial-packet {
+  border-color: rgba(195,125,37,.38);
+  background:
+    linear-gradient(90deg, rgba(45,25,12,.96), rgba(8,5,3,.99));
+  box-shadow: 0 6px 13px rgba(0,0,0,.42), inset 0 0 0 1px rgba(230,159,67,.02);
+}
+
+/* ----- Control Room: turn modules into rooms, not stacked dashboards ----- */
+.cinematic-control-room {
+  padding: 12px;
+  background:
+    radial-gradient(ellipse at 18% 4%, rgba(168,82,17,.10), transparent 25%),
+    radial-gradient(ellipse at 82% 6%, rgba(133,66,17,.08), transparent 27%),
+    linear-gradient(180deg, rgba(10,6,4,.99), rgba(2,2,2,.995));
+}
+
+.cinematic-control-room__masthead {
+  min-height: 160px;
+  padding: 24px 28px;
+  background:
+    radial-gradient(ellipse at 18% 50%, rgba(214,131,36,.10), transparent 30%),
+    linear-gradient(90deg, rgba(38,19,8,.96), rgba(5,4,3,.99));
+}
+
+.cinematic-control-room__masthead h2 {
+  font-size: clamp(42px, 4.6vw, 78px);
+  text-shadow: 0 3px 0 rgba(0,0,0,.7), 0 0 22px rgba(222,146,50,.08);
+}
+
+.cinematic-control-index {
+  gap: 6px;
+  padding: 9px;
+  background: rgba(5,4,3,.965);
+}
+
+.cinematic-control-index a {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 9px;
+  white-space: normal;
+  line-height: 1.3;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 7px;
+  background:
+    radial-gradient(circle at 12% 50%, rgba(195,117,29,.06), transparent 24%),
+    linear-gradient(145deg, rgba(25,14,8,.93), rgba(5,4,3,.98));
+}
+
+.cinematic-v6 .lfb-control-stack { gap: 22px; }
+
+.cinematic-control-module {
+  padding: 10px;
+  border-color: rgba(189,113,30,.47);
+  background:
+    radial-gradient(ellipse at 18% 0%, rgba(182,86,17,.07), transparent 30%),
+    linear-gradient(145deg, rgba(22,12,7,.96), rgba(3,3,2,.995));
+  box-shadow:
+    0 26px 68px rgba(0,0,0,.46),
+    inset 0 0 0 3px rgba(0,0,0,.78),
+    inset 0 0 80px rgba(121,51,7,.035);
+}
+
+.cinematic-control-module__header {
+  min-height: 68px;
+  padding: 10px 17px;
+  background:
+    linear-gradient(90deg, rgba(46,23,9,.90), rgba(7,5,3,.88) 58%, rgba(31,16,8,.72));
+}
+
+.cinematic-control-module__code {
+  width: 43px;
+  height: 43px;
+  font-size: 9px;
+}
+
+.cinematic-control-module__title strong { font-size: 18px; }
+.cinematic-control-module__title span { font-size: 8px; line-height: 1.5; }
+.cinematic-control-module__truth { font-size: 7px; }
+
+.cinematic-control-module__body {
+  padding: 4px;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(131,61,11,.035), transparent 34%),
+    rgba(3,3,2,.74);
+}
+
+/* Room-specific accents: still the same underlying components/data. */
+#character-story { border-color: rgba(188,119,39,.54); }
+#daily-episode { border-color: rgba(197,125,42,.58); }
+#chief-office-v1,
+#chief-office-v2 { background-image: radial-gradient(circle at 90% 8%, rgba(222,146,52,.07), transparent 20%), linear-gradient(145deg, rgba(25,13,7,.96), rgba(3,3,2,.995)); }
+#experiment-lab { background-image: radial-gradient(circle at 85% 10%, rgba(95,79,126,.055), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#data-expansion { background-image: radial-gradient(circle at 85% 8%, rgba(67,113,87,.045), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#agent-league { background-image: radial-gradient(circle at 84% 8%, rgba(180,138,53,.055), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#market-regime { background-image: radial-gradient(circle at 84% 8%, rgba(59,102,95,.045), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#operating-superbatch { background-image: radial-gradient(circle at 84% 8%, rgba(91,135,80,.05), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#readiness-superbatch { background-image: radial-gradient(circle at 84% 8%, rgba(137,72,38,.055), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#event-reconstruction { background-image: radial-gradient(circle at 84% 8%, rgba(75,91,122,.045), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+#measurement-health { background-image: radial-gradient(circle at 84% 8%, rgba(77,124,92,.045), transparent 22%), linear-gradient(145deg, rgba(21,12,8,.96), rgba(3,3,2,.995)); }
+
+/* Global readability: the original concept uses compact density, not microscopic type. */
+.cinematic-v6 .cinematic-control-module__body :where(p,li,span,small,em,label,td,th) {
+  line-height: 1.48;
+}
+
+.cinematic-v6 .cinematic-control-module__body :where(p,li) {
+  font-size: max(9px, .72vw);
+}
+
+.cinematic-v6 .cinematic-control-module__body :where(h2) { font-size: clamp(27px, 3.1vw, 50px) !important; }
+.cinematic-v6 .cinematic-control-module__body :where(h3) { font-size: clamp(20px, 2vw, 31px) !important; }
+.cinematic-v6 .cinematic-control-module__body :where(h4) { font-size: 15px !important; }
+
+/* Make cards read like inset files / gauges rather than floating SaaS tiles. */
+.cinematic-v6 .cinematic-control-module__body :where(article,[class*="card"],[class*="panel"],[class*="metric"],[class*="score"] > div) {
+  background-color: rgba(7,5,3,.78) !important;
+  background-image:
+    radial-gradient(circle at 8% 9%, rgba(224,149,57,.025), transparent 22%),
+    linear-gradient(145deg, rgba(24,13,7,.62), rgba(3,3,2,.85)) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(233,164,72,.024),
+    inset 0 0 24px rgba(133,58,7,.025),
+    0 8px 23px rgba(0,0,0,.22) !important;
+}
+
+/* Bottom edge gets the feeling of a lower trading floor / machine room. */
+.cinematic-control-room::after,
+.cinematic-v6 .cinematic-floor-stage::after {
+  content: "";
+  display: block;
+  height: 34px;
+  margin-top: 10px;
+  border-top: 1px solid rgba(187,111,30,.19);
+  background:
+    repeating-linear-gradient(90deg, rgba(141,76,22,.10) 0 42px, rgba(3,3,2,.7) 42px 69px),
+    linear-gradient(180deg, rgba(20,11,6,.72), rgba(2,2,2,.94));
+  box-shadow: inset 0 9px 22px rgba(0,0,0,.34);
+}
+
+@media (max-width: 1350px) {
+  .cinematic-v6 .cfd-top-grid { grid-template-columns: 1fr 2fr; }
+  .cinematic-v6 .cfd-boss-office { grid-column: 1 / -1; display: grid; grid-template-columns: 240px 1fr; }
+  .cinematic-v6 .cfd-boss-portrait { min-height: 220px; }
+  .cinematic-v6 .spatial-desk { grid-template-columns: 86px 1fr; }
+  .cinematic-v6 .spatial-desk .living-avatar { width: 88px; min-width: 88px; }
+  .cinematic-v6 .spatial-desk .living-avatar svg { width: 84px; }
+}
+
+@media (max-width: 1000px) {
+  .cinematic-v6 .spatial-factory { min-height: 1180px; grid-template-rows: repeat(12, auto); }
+  .cinematic-v6 .room-radar { grid-column: 1 / 7; grid-row: 1 / 3; }
+  .cinematic-v6 .room-research { grid-column: 7 / 13; grid-row: 1 / 3; }
+  .cinematic-v6 .spatial-bullpen { grid-column: 1 / 13; grid-row: 3 / 8; }
+  .cinematic-v6 .room-committee { grid-column: 1 / 7; grid-row: 8 / 10; }
+  .cinematic-v6 .room-risk { grid-column: 7 / 13; grid-row: 8 / 10; }
+  .cinematic-v6 .spatial-max-platform { grid-column: 1 / 13; grid-row: 10 / 13; min-height: 320px; }
+  .cinematic-v6 .room-paper,
+  .cinematic-v6 .room-monitoring,
+  .cinematic-v6 .room-learning { display: none; }
+  .cinematic-control-index { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cinematic-v6 * { scroll-behavior: auto !important; }
+}
