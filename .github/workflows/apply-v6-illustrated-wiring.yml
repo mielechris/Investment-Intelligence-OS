@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore(9L-V6): trigger illustrated wiring'
+    if: "${{ github.event.head_commit.message == 'chore(9L-V6): trigger illustrated wiring v2' }}"
     runs-on: ubuntu-latest
     steps:
       - name: Check out V6 branch
@@ -27,10 +27,15 @@ jobs:
 
           function replaceRequired(path, before, after, label) {
             let source = fs.readFileSync(path, 'utf8');
-            if (!source.includes(before)) {
-              throw new Error(`${label} anchor not found in ${path}`);
-            }
+            if (!source.includes(before)) throw new Error(`${label} anchor not found in ${path}`);
             source = source.replace(before, after);
+            fs.writeFileSync(path, source);
+          }
+
+          function replaceRegex(path, pattern, after, label) {
+            let source = fs.readFileSync(path, 'utf8');
+            if (!pattern.test(source)) throw new Error(`${label} pattern not found in ${path}`);
+            source = source.replace(pattern, after);
             fs.writeFileSync(path, source);
           }
 
@@ -41,34 +46,30 @@ jobs:
             'import CinematicCharacterPortrait from "./CinematicCharacterPortrait";',
             'command-deck import',
           );
-          replaceRequired(
+          replaceRegex(
             commandDeck,
-            `            <LivingCharacterAvatar
-              characterKey="max"
-              active={model.events.length > 0}
-              reacting={model.latestEvent !== null}
-            />`,
-            `            <CinematicCharacterPortrait
-              characterKey="max"
-              active={model.events.length > 0}
-              reacting={model.latestEvent !== null}
-              variant="boss"
-            />`,
+            /            <LivingCharacterAvatar\n              characterKey="max"\n              active=\{model\.events\.length > 0\}\n              reacting=\{model\.latestEvent !== null\}\n            \/>/,
+            [
+              '            <CinematicCharacterPortrait',
+              '              characterKey="max"',
+              '              active={model.events.length > 0}',
+              '              reacting={model.latestEvent !== null}',
+              '              variant="boss"',
+              '            />',
+            ].join('\n'),
             'MAX boss portrait',
           );
-          replaceRequired(
+          replaceRegex(
             commandDeck,
-            `                    <LivingCharacterAvatar
-                      characterKey={key}
-                      active={active}
-                      reacting={active && model.latestStation === "agents"}
-                    />`,
-            `                    <CinematicCharacterPortrait
-                      characterKey={key}
-                      active={active}
-                      reacting={active && model.latestStation === "agents"}
-                      variant="card"
-                    />`,
+            /                    <LivingCharacterAvatar\n                      characterKey=\{key\}\n                      active=\{active\}\n                      reacting=\{active && model\.latestStation === "agents"\}\n                    \/>/,
+            [
+              '                    <CinematicCharacterPortrait',
+              '                      characterKey={key}',
+              '                      active={active}',
+              '                      reacting={active && model.latestStation === "agents"}',
+              '                      variant="card"',
+              '                    />',
+            ].join('\n'),
             'command-deck cast portraits',
           );
 
@@ -76,27 +77,26 @@ jobs:
           replaceRequired(
             spatialFloor,
             'import LivingCharacterAvatar from "./LivingCharacterAvatar";',
-            `import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
-import CinematicRoomScene, { type CinematicStation } from "./CinematicRoomScene";`,
+            'import CinematicCharacterPortrait from "./CinematicCharacterPortrait";\nimport CinematicRoomScene, { type CinematicStation } from "./CinematicRoomScene";',
             'spatial art imports',
           );
-          replaceRequired(
+          replaceRegex(
             spatialFloor,
-            `          <article key={station.key} className={\`spatial-room room-${station.key} ${model.stationEventCounts[station.key] ? "is-event" : ""} ${model.activeByStation[station.key] ? "is-active" : ""} ${model.lineageByStation[station.key] ? "has-lineage" : ""}\`}>
-            <header><span>{station.code}</span><i /></header><strong>{station.title}</strong><p>{station.subtitle}</p><div className="spatial-room-meter"><i style={{ width: \`${Math.min(100, model.stationEventCounts[station.key] * 16)}%\` }} /></div><footer>{model.stationEventCounts[station.key] ? \`${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · \` : ""}{roomState(station.key)}</footer>
-          </article>`,
-            `          <article key={station.key} className={\`spatial-room room-${station.key} ${model.stationEventCounts[station.key] ? "is-event" : ""} ${model.activeByStation[station.key] ? "is-active" : ""} ${model.lineageByStation[station.key] ? "has-lineage" : ""}\`}>
-            <header><span>{station.code}</span><i /></header>
-            <CinematicRoomScene
-              station={station.key as CinematicStation}
-              active={Boolean(model.stationEventCounts[station.key] || model.activeByStation[station.key])}
-              eventCount={model.stationEventCounts[station.key]}
-            />
-            <strong>{station.title}</strong>
-            <p>{station.subtitle}</p>
-            <div className="spatial-room-meter"><i style={{ width: \`${Math.min(100, model.stationEventCounts[station.key] * 16)}%\` }} /></div>
-            <footer>{model.stationEventCounts[station.key] ? \`${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · \` : ""}{roomState(station.key)}</footer>
-          </article>`,
+            /          <article key=\{station\.key\} className=\{`spatial-room room-\$\{station\.key\}[\s\S]*?          <\/article>/,
+            [
+              '          <article key={station.key} className={`spatial-room room-${station.key} ${model.stationEventCounts[station.key] ? "is-event" : ""} ${model.activeByStation[station.key] ? "is-active" : ""} ${model.lineageByStation[station.key] ? "has-lineage" : ""}`}>',
+              '            <header><span>{station.code}</span><i /></header>',
+              '            <CinematicRoomScene',
+              '              station={station.key as CinematicStation}',
+              '              active={Boolean(model.stationEventCounts[station.key] || model.activeByStation[station.key])}',
+              '              eventCount={model.stationEventCounts[station.key]}',
+              '            />',
+              '            <strong>{station.title}</strong>',
+              '            <p>{station.subtitle}</p>',
+              '            <div className="spatial-room-meter"><i style={{ width: `${Math.min(100, model.stationEventCounts[station.key] * 16)}%` }} /></div>',
+              '            <footer>{model.stationEventCounts[station.key] ? `${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · ` : ""}{roomState(station.key)}</footer>',
+              '          </article>',
+            ].join('\n'),
             'physical department rooms',
           );
           replaceRequired(
@@ -116,8 +116,7 @@ import CinematicRoomScene, { type CinematicStation } from "./CinematicRoomScene"
           replaceRequired(
             browser,
             'import "./CinematicFactoryFidelityV6.css";',
-            `import "./CinematicFactoryFidelityV6.css";
-import "./CinematicPortraitIntegrationV6.css";`,
+            'import "./CinematicFactoryFidelityV6.css";\nimport "./CinematicPortraitIntegrationV6.css";',
             'portrait integration import',
           );
           NODE
