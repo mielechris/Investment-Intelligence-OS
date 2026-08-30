@@ -4,6 +4,7 @@ import CharacterStoryEngine from "./CharacterStoryEngine";
 import ChiefIntelligenceOffice from "./ChiefIntelligenceOffice";
 import ChiefIntelligenceOfficeV2 from "./ChiefIntelligenceOfficeV2";
 import CinematicFactoryCommandDeck from "./CinematicFactoryCommandDeck";
+import CinematicFactorySceneStrip from "./CinematicFactorySceneStrip";
 import DailyFactoryEpisode from "./DailyFactoryEpisode";
 import DataExpansionFactory from "./DataExpansionFactory";
 import ExperimentABLaboratory from "./ExperimentABLaboratory";
@@ -246,6 +247,7 @@ export default function LiveFactoryBrowser() {
       </nav>
 
       <CinematicFactoryCommandDeck view={view} />
+      <CinematicFactorySceneStrip view={view} />
 
       {view === "floor" ? (
         <div className="cinematic-floor-stage">
