@@ -12,7 +12,7 @@ import HistoricalMacroRegimeLibrary from "./HistoricalMacroRegimeLibrary";
 import HistoricalMarketIntelligence from "./HistoricalMarketIntelligence";
 import InteractiveCaseTheater from "./InteractiveCaseTheater";
 import LivingFactoryExperience from "./LivingFactoryExperience";
-import LivingFactoryFloorV2 from "./LivingFactoryFloorV2";
+import LivingFactoryFloorV2Refined from "./LivingFactoryFloorV2Refined";
 import MarketRegimeIntelligence from "./MarketRegimeIntelligence";
 import MarketValidationStackPanel from "./MarketValidationStackPanel";
 import MeasurementHealthSuperbatch from "./MeasurementHealthSuperbatch";
@@ -72,7 +72,7 @@ export default function LiveFactoryBrowser() {
       </nav>
 
       {view === "floor" ? (
-        <LivingFactoryFloorV2 />
+        <LivingFactoryFloorV2Refined />
       ) : (
         <div className="lfb-control-stack">
           <LivingFactoryExperience />
