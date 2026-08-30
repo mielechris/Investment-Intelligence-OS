@@ -1,4 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import LivingCharacterAvatar from "./LivingCharacterAvatar";
+import {
+  LIVING_CAST,
+  agentNarrativeForEvent,
+  maxNarrativeForStation,
+  type LivingCastKey,
+} from "./livingCast";
 import "./LivingFactorySpatialFloor.css";
 
 type JsonObject = Record<string, unknown>;
@@ -74,15 +81,26 @@ const STATIONS = [
 ];
 
 const AGENTS = [
-  { key: "policy", name: "Policy Analyst", monogram: "PA", title: "Regulatory Bloodhound" },
-  { key: "macro", name: "Macro & Rates", monogram: "MR", title: "Regime Obsessive" },
-  { key: "fundamentals", name: "Fundamentals", monogram: "FA", title: "Numbers Before Vibes" },
-  { key: "market_structure", name: "Market Structure", monogram: "MS", title: "Tape Reader" },
-  { key: "commodities", name: "Commodities", monogram: "CS", title: "Physical-World Realist" },
-  { key: "geo_weather", name: "Geo + Weather", monogram: "GW", title: "Scenario Disciplinarian" },
-  { key: "skeptic", name: "Skeptic / Red Team", monogram: "RT", title: "Professional Buzzkill" },
-  { key: "portfolio", name: "Portfolio Context", monogram: "PC", title: "Risk-Adjusted Adult" },
+  LIVING_CAST.policy,
+  LIVING_CAST.macro,
+  LIVING_CAST.fundamentals,
+  LIVING_CAST.market_structure,
+  LIVING_CAST.commodities,
+  LIVING_CAST.geo_weather,
+  LIVING_CAST.skeptic,
+  LIVING_CAST.portfolio,
 ] as const;
+
+const AGENT_ALIAS = new Map<string, LivingCastKey>([
+  ["policy", "policy"], ["policy analyst", "policy"],
+  ["macro", "macro"], ["macro & rates", "macro"], ["macro & rates analyst", "macro"],
+  ["fundamentals", "fundamentals"], ["fundamentals analyst", "fundamentals"],
+  ["market_structure", "market_structure"], ["market structure", "market_structure"], ["market structure analyst", "market_structure"],
+  ["commodities", "commodities"], ["commodities & supply chain analyst", "commodities"],
+  ["geo_weather", "geo_weather"], ["geo + weather", "geo_weather"], ["geopolitics & weather analyst", "geo_weather"],
+  ["skeptic", "skeptic"], ["red team", "skeptic"], ["skeptic / red team", "skeptic"],
+  ["portfolio", "portfolio"], ["portfolio context", "portfolio"], ["portfolio context analyst", "portfolio"],
+]);
 
 function record(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
@@ -143,6 +161,38 @@ function stationForEvent(eventType: string): StationKey | null {
   if (type.includes("RESEARCH") || type.includes("EVIDENCE") || type.includes("INGEST")) return "research";
   if (type.includes("RADAR") || type.includes("CANDIDATE") || type.includes("OPPORTUNITY") || type.includes("PROMOT")) return "radar";
   return null;
+}
+
+function normalizeAgentKey(value: unknown): LivingCastKey | null {
+  if (typeof value !== "string") return null;
+  const normalizedValue = value.trim().toLowerCase().replaceAll("-", "_");
+  return AGENT_ALIAS.get(normalizedValue) ?? null;
+}
+
+function agentKeysFromEvent(event: JsonObject | null): Set<LivingCastKey> {
+  const found = new Set<LivingCastKey>();
+  if (!event) return found;
+  const payload = record(event.payload);
+  const scalarCandidates = [
+    payload.agent_key,
+    payload.agent,
+    payload.agent_name,
+    payload.specialist,
+    payload.speaker_key,
+    event.entity_id,
+  ];
+  scalarCandidates.forEach((candidate) => {
+    const key = normalizeAgentKey(candidate);
+    if (key && key !== "max") found.add(key);
+  });
+  [payload.agent_keys, payload.agents, payload.specialists].forEach((candidate) => {
+    if (!Array.isArray(candidate)) return;
+    candidate.forEach((item) => {
+      const key = normalizeAgentKey(item);
+      if (key && key !== "max") found.add(key);
+    });
+  });
+  return found;
 }
 
 function stageFromCase(row: CaseRow): number {
@@ -254,6 +304,7 @@ export default function LivingFactorySpatialFloor() {
     const latestEvent = events[0] ?? null;
     const latestEventType = latestEvent ? text(latestEvent.event_type, "UNKNOWN_EVENT") : "NO_PERSISTED_EVENT";
     const latestStation = stationForEvent(latestEventType);
+    const latestAgentKeys = agentKeysFromEvent(latestEvent);
 
     const lineageByStation: Record<StationKey, boolean> = {
       radar: (numberValue(radar.screener_hit_count) ?? 0) > 0,
@@ -277,17 +328,34 @@ export default function LivingFactorySpatialFloor() {
       learning: outcomeCount > 0,
     };
 
-    const activeAgentKeys = new Set<string>();
+    const lineageAgentKeys = new Set<string>();
     for (const promotion of promotions) {
       const keys = record(promotion.agents).agent_keys;
-      if (Array.isArray(keys)) keys.forEach((key) => activeAgentKeys.add(String(key)));
+      if (Array.isArray(keys)) keys.forEach((key) => lineageAgentKeys.add(String(key)));
     }
 
-    return { telemetryLayer, radar, fund, events, latestEvent, latestEventType, latestStation, stationEventCounts, packets: packets.slice(0, 10), cases, deskByKey, activeAgentKeys, activeByStation, lineageByStation, outcomeCount };
+    return {
+      telemetryLayer,
+      radar,
+      fund,
+      events,
+      latestEvent,
+      latestEventType,
+      latestStation,
+      latestAgentKeys,
+      stationEventCounts,
+      packets: packets.slice(0, 10),
+      cases,
+      deskByKey,
+      lineageAgentKeys,
+      activeByStation,
+      lineageByStation,
+      outcomeCount,
+    };
   }, [snapshot]);
 
   if (!snapshot || !model) {
-    return <section className="spatial-shell spatial-loading"><div><span>9L-V2 · SPATIAL FACTORY FLOOR</span><h1>{error ? "SIDECAR WARM-UP" : "OPENING FACTORY"}</h1><p>{error ?? "Connecting to persisted IIOS state…"}</p></div></section>;
+    return <section className="spatial-shell spatial-loading"><div><span>9L-V2.5 · LIVING CAST SUPERBATCH</span><h1>{error ? "SIDECAR WARM-UP" : "OPENING FACTORY"}</h1><p>{error ?? "Connecting to persisted IIOS state…"}</p></div></section>;
   }
 
   const universe = text(model.radar.governed_universe_count, "0");
@@ -298,6 +366,7 @@ export default function LivingFactorySpatialFloor() {
   const latestTicker = text(latestPayload.ticker, "").toUpperCase();
   const latestCase = model.latestEvent ? text(model.latestEvent.case_id, "") : "";
   const latestStationCode = model.latestStation ? STATIONS.find((item) => item.key === model.latestStation)?.code ?? "SYS" : "SYS";
+  const maxNarrative = maxNarrativeForStation(model.latestStation, model.latestEventType);
 
   const roomState = (key: StationKey) => {
     if (model.stationEventCounts[key] > 0) return "RECENT EVENT";
@@ -307,14 +376,14 @@ export default function LivingFactorySpatialFloor() {
   };
 
   return (
-    <section className="spatial-shell">
+    <section className="spatial-shell v25-shell">
       <div className="spatial-grid-glow" aria-hidden="true" />
       <header className="spatial-hero">
-        <div><span>9L-V2 · SPATIAL FACTORY FLOOR · PERSISTED STATE ONLY</span><h1>THE INVESTMENT FACTORY</h1><p>Real IIOS state now occupies rooms, desks and corridors. Ambient motion is presentation only; substantive movement requires persisted lineage.</p></div>
+        <div><span>9L-V2.5 · LIVING CAST SUPERBATCH · PERSISTED STATE ONLY</span><h1>THE INVESTMENT FACTORY</h1><p>Full recurring cast avatars, living workstations and narrative reactions now sit on top of the same governed IIOS state. Character motion is presentation only; substantive activity still requires persisted evidence.</p></div>
         <div className="spatial-heartbeat"><i className={beat % 2 ? "is-beat" : ""} /><span>FACTORY HEARTBEAT</span><strong>{model.telemetryLayer.availability.replaceAll("_", " ")}</strong><em>9G age {ageLabel(model.telemetryLayer.age_seconds)}</em></div>
       </header>
 
-      <div className="spatial-truth"><span>LIVE EXECUTION · {snapshot.safety.live_execution ? "TRUE" : "FALSE"}</span><span>WRITE PERMISSION · {snapshot.safety.backend_write_permission ? "TRUE" : "NONE"}</span><span>TRADE PERMISSION · {snapshot.safety.trade_execution_permission ? "TRUE" : "FALSE"}</span><span>AMBIENT MOTION ≠ MARKET EVENT</span></div>
+      <div className="spatial-truth"><span>LIVE EXECUTION · {snapshot.safety.live_execution ? "TRUE" : "FALSE"}</span><span>WRITE PERMISSION · {snapshot.safety.backend_write_permission ? "TRUE" : "NONE"}</span><span>TRADE PERMISSION · {snapshot.safety.trade_execution_permission ? "TRUE" : "FALSE"}</span><span>NARRATIVE ≠ RAW MODEL OUTPUT</span></div>
 
       <section className="spatial-metrics">
         <article><span>Market Universe</span><strong>{universe}</strong><em>persisted 9G</em></article>
@@ -337,20 +406,64 @@ export default function LivingFactorySpatialFloor() {
           </article>
         ))}
 
-        <aside className="spatial-max-platform">
-          <div className="spatial-max-avatar"><div className="spatial-max-ears"><i /><i /></div><strong>M</strong><span>MAX</span></div>
-          <div><em>FACTORY FOREMAN · COMMAND OVERLOOK</em><h2>MAX</h2><p>{model.events.length ? `${model.events.length} persisted meaningful events in the current 9G window. Latest: ${model.latestEventType.replaceAll("_", " ")}.` : "Factory floor in governed idle mode."}</p><small>Presentation only · no trade or backend authority</small></div>
+        <aside className="spatial-max-platform v25-max-platform">
+          <LivingCharacterAvatar characterKey="max" active={Boolean(model.latestEvent)} reacting={Boolean(model.latestEvent)} />
+          <div className="v25-max-copy">
+            <em>MAX · FACTORY FOREMAN · COMMAND OVERLOOK</em>
+            <h2>MAX</h2>
+            <p>{model.events.length ? `${model.events.length} persisted meaningful events in the current 9G window. Latest: ${model.latestEventType.replaceAll("_", " ")}.` : "Factory floor in governed idle mode."}</p>
+            <small>Presentation only · no trade or backend authority</small>
+          </div>
+          {model.latestEvent ? (
+            <div className="spatial-max-narrative">
+              <span>NARRATIVE</span>
+              <strong>{maxNarrative}</strong>
+              <em>Basis · persisted {model.latestEventType.replaceAll("_", " ")} · {latestStationCode}</em>
+            </div>
+          ) : null}
         </aside>
 
         <article className={`spatial-bullpen room-agents ${model.stationEventCounts.agents ? "is-event" : ""} ${model.activeByStation.agents ? "is-active" : ""} ${model.lineageByStation.agents ? "has-lineage" : ""}`}>
           <header className="spatial-bullpen-heading"><div><span>8A</span><strong>SPECIALIST BULLPEN</strong></div><em>{roomState("agents")}</em></header>
-          <div className="spatial-agent-desks">
+          <div className="spatial-agent-desks v25-agent-desks">
             {AGENTS.map((agent, index) => {
               const desk = model.deskByKey.get(agent.key);
               const completions = desk?.recent_completions ?? 0;
-              const lineageObserved = model.activeAgentKeys.has(agent.key);
-              const active = completions > 0 || lineageObserved;
-              return <article key={agent.key} className={`spatial-desk ${active ? "is-on" : ""}`} style={{ "--desk-delay": `${index * 0.08}s` } as CSSProperties}><div className="spatial-chair"><i /><i /></div><div className="spatial-monitor"><span>{agent.monogram}</span><i /></div><div className="spatial-desk-copy"><em>{agent.title}</em><strong>{agent.name}</strong><small>{active ? `${completions} completion(s) · lineage observed` : "WAITING"}</small></div></article>;
+              const lineageObserved = model.lineageAgentKeys.has(agent.key);
+              const reacting = model.latestStation === "agents" && model.latestAgentKeys.has(agent.key);
+              const working = completions > 0;
+              const status = reacting
+                ? `PERSISTED AGENT EVENT · ${model.latestEventType.replaceAll("_", " ")}`
+                : working
+                  ? `${completions} backend completion(s)`
+                  : lineageObserved
+                    ? "PERSISTED LINEAGE OBSERVED"
+                    : "WAITING";
+              return (
+                <article
+                  key={agent.key}
+                  data-cast-key={agent.key}
+                  className={`spatial-desk v25-desk ${working ? "is-on" : ""} ${lineageObserved ? "has-lineage" : ""} ${reacting ? "is-reacting" : ""}`}
+                  style={{ "--desk-delay": `${index * 0.08}s` } as CSSProperties}
+                >
+                  <LivingCharacterAvatar characterKey={agent.key} active={working || reacting} reacting={reacting} />
+                  <div className="spatial-desk-copy v25-desk-copy">
+                    <em>{agent.title}</em>
+                    <strong>{agent.displayName}</strong>
+                    <span className="v25-governed-role">{agent.governedRole}</span>
+                    <small>{status}</small>
+                    <div className="v25-workstation-props">{agent.workstation}</div>
+                    <div className="v25-persona"><span>NARRATIVE PERSONA</span>{agent.personaLine}</div>
+                  </div>
+                  {reacting ? (
+                    <div className="spatial-desk-reaction">
+                      <span>NARRATIVE</span>
+                      <strong>{agentNarrativeForEvent(agent.key, model.latestEventType)}</strong>
+                      <em>Basis · exact persisted agent-stage event</em>
+                    </div>
+                  ) : null}
+                </article>
+              );
             })}
           </div>
         </article>
