@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import LivingCharacterAvatar from "./LivingCharacterAvatar";
+import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
+import CinematicRoomScene, { type CinematicStation } from "./CinematicRoomScene";
 import {
   LIVING_CAST,
   agentNarrativeForEvent,
@@ -402,12 +403,21 @@ export default function LivingFactorySpatialFloor() {
         <div className="spatial-corridors" aria-hidden="true"><i /><i /><i /><i /></div>
         {STATIONS.filter((station) => station.key !== "agents").map((station) => (
           <article key={station.key} className={`spatial-room room-${station.key} ${model.stationEventCounts[station.key] ? "is-event" : ""} ${model.activeByStation[station.key] ? "is-active" : ""} ${model.lineageByStation[station.key] ? "has-lineage" : ""}`}>
-            <header><span>{station.code}</span><i /></header><strong>{station.title}</strong><p>{station.subtitle}</p><div className="spatial-room-meter"><i style={{ width: `${Math.min(100, model.stationEventCounts[station.key] * 16)}%` }} /></div><footer>{model.stationEventCounts[station.key] ? `${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · ` : ""}{roomState(station.key)}</footer>
+            <header><span>{station.code}</span><i /></header>
+            <CinematicRoomScene
+              station={station.key as CinematicStation}
+              active={Boolean(model.stationEventCounts[station.key] || model.activeByStation[station.key])}
+              eventCount={model.stationEventCounts[station.key]}
+            />
+            <strong>{station.title}</strong>
+            <p>{station.subtitle}</p>
+            <div className="spatial-room-meter"><i style={{ width: `${Math.min(100, model.stationEventCounts[station.key] * 16)}%` }} /></div>
+            <footer>{model.stationEventCounts[station.key] ? `${model.stationEventCounts[station.key]} EVENT${model.stationEventCounts[station.key] === 1 ? "" : "S"} · ` : ""}{roomState(station.key)}</footer>
           </article>
         ))}
 
         <aside className="spatial-max-platform v25-max-platform">
-          <LivingCharacterAvatar characterKey="max" active={Boolean(model.latestEvent)} reacting={Boolean(model.latestEvent)} />
+          <CinematicCharacterPortrait characterKey="max" active={Boolean(model.latestEvent)} reacting={Boolean(model.latestEvent)} variant="boss" />
           <div className="v25-max-copy">
             <em>MAX · FACTORY FOREMAN · COMMAND OVERLOOK</em>
             <h2>MAX</h2>
@@ -446,7 +456,7 @@ export default function LivingFactorySpatialFloor() {
                   className={`spatial-desk v25-desk ${working ? "is-on" : ""} ${lineageObserved ? "has-lineage" : ""} ${reacting ? "is-reacting" : ""}`}
                   style={{ "--desk-delay": `${index * 0.08}s` } as CSSProperties}
                 >
-                  <LivingCharacterAvatar characterKey={agent.key} active={working || reacting} reacting={reacting} />
+                  <CinematicCharacterPortrait characterKey={agent.key} active={working || reacting} reacting={reacting} variant="desk" />
                   <div className="spatial-desk-copy v25-desk-copy">
                     <em>{agent.title}</em>
                     <strong>{agent.displayName}</strong>

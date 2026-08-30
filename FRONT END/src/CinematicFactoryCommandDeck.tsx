@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import LivingCharacterAvatar from "./LivingCharacterAvatar";
+import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import {
   LIVING_CAST,
   maxNarrativeForStation,
@@ -439,10 +439,11 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
 
         <aside className="cfd-panel cfd-boss-office">
           <div className="cfd-boss-portrait">
-            <LivingCharacterAvatar
+            <CinematicCharacterPortrait
               characterKey="max"
               active={model.events.length > 0}
               reacting={model.latestEvent !== null}
+              variant="boss"
             />
           </div>
           <div className="cfd-boss-copy">
@@ -487,10 +488,11 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
                 >
                   <div className="cfd-cast-number">{index + 1}</div>
                   <div className="cfd-cast-avatar">
-                    <LivingCharacterAvatar
+                    <CinematicCharacterPortrait
                       characterKey={key}
                       active={active}
                       reacting={active && model.latestStation === "agents"}
+                      variant="card"
                     />
                   </div>
                   <div className="cfd-cast-copy">

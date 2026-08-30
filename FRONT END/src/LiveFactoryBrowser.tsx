@@ -32,6 +32,7 @@ import "./LivingFactorySpatialFloorV25.css";
 import "./CinematicFactoryThemeV6.css";
 import "./CinematicAvatarPortraitsV6.css";
 import "./CinematicFactoryFidelityV6.css";
+import "./CinematicPortraitIntegrationV6.css";
 
 type BrowserView = "floor" | "control";
 
