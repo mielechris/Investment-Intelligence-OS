@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import "./FactoryWatch.css";
+import "./FactoryWatchV3.css";
 
 type JsonObject = Record<string, unknown>;
 
@@ -55,6 +56,17 @@ type ProviderStatus = {
   raw: JsonObject;
 };
 
+type FreshnessLevel = "fresh" | "aging" | "stale" | "critical" | "waiting";
+
+type FreshnessSpec = {
+  code: string;
+  label: string;
+  layer?: Layer;
+  freshSeconds: number;
+  agingSeconds: number;
+  staleSeconds: number;
+};
+
 const AGENTS: Array<[string, string]> = [
   ["policy", "Frankie Fine Print"],
   ["macro", "Benny Basis Points"],
@@ -105,8 +117,7 @@ function age(value?: number | null): string {
 
 function duration(value: unknown): string {
   const seconds = numberValue(value);
-  if (seconds === null) return "—";
-  return age(Math.max(0, seconds));
+  return seconds === null ? "—" : age(Math.max(0, seconds));
 }
 
 function money(value: unknown): string {
@@ -136,6 +147,24 @@ function toneForState(value: unknown): "good" | "warn" | "bad" | "idle" {
   if (["OVERDUE", "STALE", "ATTENTION", "DEGRADED", "WARNING"].includes(state)) return "warn";
   if (["ERROR", "FAILED", "UNAVAILABLE", "TELEMETRY UNAVAILABLE"].includes(state)) return "bad";
   return "idle";
+}
+
+function freshnessLevel(spec: FreshnessSpec): FreshnessLevel {
+  const availability = readable(spec.layer?.availability, "WAITING");
+  const seconds = spec.layer?.age_seconds;
+  if (availability === "WAITING" || availability === "UNKNOWN" || seconds === null || seconds === undefined) return "waiting";
+  if (seconds <= spec.freshSeconds) return "fresh";
+  if (seconds <= spec.agingSeconds) return "aging";
+  if (seconds <= spec.staleSeconds) return "stale";
+  return "critical";
+}
+
+function freshnessLabel(level: FreshnessLevel): string {
+  if (level === "fresh") return "FRESH";
+  if (level === "aging") return "AGING";
+  if (level === "stale") return "STALE";
+  if (level === "critical") return "CRITICAL";
+  return "WAITING";
 }
 
 function regularSessionClock(now = new Date()): { open: boolean; label: string; detail: string } {
@@ -292,20 +321,21 @@ export default function FactoryWatch() {
     : [];
   const providerErrorCount = numberValue(model.providers.provider_error_count) ?? 0;
 
-  const freshness = [
-    { code: "9G", label: "Factory Telemetry", layer: model.layers.factory_telemetry },
-    { code: "9H", label: "Independent Grading", layer: model.layers.market_validation },
-    { code: "9I", label: "Shadow Strategy", layer: model.layers.shadow_strategy },
-    { code: "9J", label: "Outcome Learning", layer: model.layers.outcome_learning },
+  const freshness: FreshnessSpec[] = [
+    { code: "9G", label: "Factory Telemetry", layer: model.layers.factory_telemetry, freshSeconds: 120, agingSeconds: 600, staleSeconds: 1800 },
+    { code: "9H", label: "Independent Grading", layer: model.layers.market_validation, freshSeconds: 24 * 3600, agingSeconds: 36 * 3600, staleSeconds: 72 * 3600 },
+    { code: "9I", label: "Shadow Strategy", layer: model.layers.shadow_strategy, freshSeconds: 2 * 3600, agingSeconds: 6 * 3600, staleSeconds: 24 * 3600 },
+    { code: "9J", label: "Outcome Learning", layer: model.layers.outcome_learning, freshSeconds: 2 * 3600, agingSeconds: 6 * 3600, staleSeconds: 24 * 3600 },
   ];
+  const staleLayers = freshness.filter((item) => ["stale", "critical"].includes(freshnessLevel(item)));
 
   return (
-    <main className="fw-shell">
+    <main className="fw-shell fw-v3">
       <header className="fw-header">
         <div>
           <span>IIOS · ALWAYS-ON OBSERVATION</span>
           <h1>FACTORY WATCH</h1>
-          <p>Stable read-only status surface. Keep this open while the cinematic factory is being rebuilt.</p>
+          <p>Stable read-only status surface. Market-closed does not mean factory-offline.</p>
         </div>
         <div className={`fw-heartbeat ${alive ? "is-live" : "is-warning"}`}>
           <i />
@@ -316,7 +346,7 @@ export default function FactoryWatch() {
       <section className={`fw-market-clock ${clock.open ? "is-open" : "is-closed"}`}>
         <div><i /><strong>{clock.label}</strong></div>
         <p>{clock.detail}</p>
-        <em>Regular-session clock is a presentation aid; persisted IIOS state remains authoritative.</em>
+        <em>Regular-session clock is presentation context; persisted IIOS state remains authoritative.</em>
       </section>
 
       <section className="fw-safety">
@@ -334,6 +364,14 @@ export default function FactoryWatch() {
         <article><span>PAPER NAV</span><strong>{money(model.fund.nav)}</strong><em>{text(model.fund.position_count, "0")} positions</em></article>
         <article><span>SIDECAR</span><strong>{healthState}</strong><em>read-only 5176</em></article>
       </section>
+
+      {staleLayers.length ? (
+        <section className="fw-age-alert">
+          <strong>FRESHNESS ATTENTION</strong>
+          <span>{staleLayers.map((item) => `${item.code} ${freshnessLabel(freshnessLevel(item))} · ${age(item.layer?.age_seconds)}`).join("  |  ")}</span>
+          <em>Availability and freshness are separate signals.</em>
+        </section>
+      ) : null}
 
       <section className="fw-ops-grid">
         <article className="fw-panel fw-workers">
@@ -356,22 +394,23 @@ export default function FactoryWatch() {
               );
             })}
           </div>
-          <small className="fw-truth-note">Cadence is persisted worker evidence, not operating-system PID inspection. Off-hours status remains shown exactly as 9G reports it.</small>
+          <small className="fw-truth-note">Cadence is persisted worker evidence, not operating-system PID inspection. Off-hours status is shown exactly as 9G reports it.</small>
         </article>
 
         <article className="fw-panel fw-providers">
-          <header><span>RESEARCH & PROVIDER HEALTH</span><em>{providerErrorCount ? `${providerErrorCount} provider error(s)` : "no provider errors in latest cycle"}</em></header>
+          <header><span>RESEARCH & PROVIDER EVIDENCE</span><em>{providerErrorCount ? `${providerErrorCount} provider error(s)` : "no provider errors in latest cycle"}</em></header>
           <div className="fw-provider-grid">
             {model.providerRows.map((provider) => {
               const configured = boolValue(provider.raw.configured);
-              const rawStatus = provider.raw.status;
-              const status = readable(rawStatus, configured === false ? "NOT CONFIGURED" : configured === true ? "CONFIGURED" : "UNKNOWN");
-              const tone = providerErrorCount > 0 && status === "UNKNOWN" ? "warn" : toneForState(status === "CONFIGURED" ? "AVAILABLE" : status);
+              const rawStatus = readable(provider.raw.status, "");
+              const configuredLabel = configured === true ? "CONFIGURED" : configured === false ? "NOT CONFIGURED" : rawStatus || "CONFIG UNKNOWN";
+              const hasLatestCycleError = providerErrorCount > 0;
               return (
-                <div key={provider.key} className={`is-${tone}`}>
+                <div key={provider.key} className={`fw-provider-evidence ${configured === false ? "is-bad" : hasLatestCycleError ? "is-warn" : "is-good"}`}>
                   <div><i /><span>{provider.label}</span></div>
-                  <strong>{status}</strong>
+                  <strong>{configuredLabel}{configured !== false && !hasLatestCycleError ? " · NO LATEST-CYCLE ERRORS" : ""}</strong>
                   <small>{[text(provider.raw.provider, ""), text(provider.raw.model, text(provider.raw.preferred_model, ""))].filter(Boolean).join(" · ") || "provider metadata waiting"}</small>
+                  <div className="fw-provider-proof"><span>LAST SUCCESS EVIDENCE</span><b>NOT EXPOSED</b></div>
                 </div>
               );
             })}
@@ -381,26 +420,28 @@ export default function FactoryWatch() {
               <small>{telemetryFlags.length ? telemetryFlags.join(" · ") : "no telemetry health flags"}</small>
             </div>
           </div>
+          <small className="fw-truth-note">Provider cards prove configuration and latest-cycle error evidence only. They do not claim a fresh successful model call until 9G exposes one.</small>
         </article>
       </section>
 
       <section className="fw-freshness">
-        <header><span>DATA FRESHNESS</span><em>age of latest persisted layer snapshot</em></header>
+        <header><span>DATA FRESHNESS</span><em>availability ≠ freshness</em></header>
         <div>
           {freshness.map((item) => {
             const availability = readable(item.layer?.availability, "WAITING");
+            const level = freshnessLevel(item);
             return (
-              <article key={item.code} className={`is-${toneForState(availability)}`}>
+              <article key={item.code} className={`is-${level}`}>
                 <b>{item.code}</b>
                 <div><strong>{item.label}</strong><span>{availability}</span></div>
-                <em>{age(item.layer?.age_seconds)}</em>
+                <div className="fw-freshness-state"><strong>{freshnessLabel(level)}</strong><em>{age(item.layer?.age_seconds)}</em></div>
               </article>
             );
           })}
-          <article className={alive ? "is-good" : "is-warn"}>
+          <article className={alive ? "is-fresh" : "is-aging"}>
             <b>UI</b>
             <div><strong>Watch Refresh</strong><span>{error ? "WARNING" : "POLLING"}</span></div>
-            <em>{refreshedAt ? refreshedAt.toLocaleTimeString() : "connecting"}</em>
+            <div className="fw-freshness-state"><strong>{error ? "AGING" : "FRESH"}</strong><em>{refreshedAt ? refreshedAt.toLocaleTimeString() : "connecting"}</em></div>
           </article>
         </div>
       </section>
