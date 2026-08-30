@@ -1,0 +1,65 @@
+name: IIOS Worker Supervision Hardening
+
+on:
+  push:
+    branches:
+      - feature/iios-worker-supervision-hardening
+  pull_request:
+    branches:
+      - feature/batch9a-observation-paper-operations
+
+jobs:
+  worker-supervision-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile supervision scripts
+        run: >-
+          python -m py_compile
+          scripts/iios_worker_watchdog.py
+          scripts/install_iios_worker_supervision.py
+          scripts/diagnose_iios_worker_supervision.py
+          scripts/test_iios_worker_supervision_contract.py
+          scripts/iios_terminal_bridge_worker.py
+          scripts/iios_terminal_bridge_supervisor.py
+          scripts/install_iios_terminal_bridge_supervision.py
+          scripts/test_iios_terminal_bridge_supervision_contract.py
+      - name: Run legacy supervision safety contract
+        run: python scripts/test_iios_worker_supervision_contract.py
+      - name: Run Terminal-Bridge v2 safety contract
+        run: python scripts/test_iios_terminal_bridge_supervision_contract.py
+      - name: Assert diagnostic remains read-only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('scripts/diagnose_iios_worker_supervision.py').read_text().lower()
+          forbidden = [
+              '"launchctl", "kickstart"',
+              '"launchctl", "bootout"',
+              'os.kill(',
+              'record_event(',
+              'trade_execution_permission": true',
+              'live_execution": true',
+          ]
+          for fragment in forbidden:
+              assert fragment not in source, fragment
+          assert 'mutation": "none_read_only"' in source
+          assert '"9e_touched": false' in source
+          print('Read-only diagnostic contract: PASS')
+          PY
+      - name: Assert 9E remains excluded from both supervision generations
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          v1 = json.loads(Path('config/iios_worker_supervision.json').read_text())
+          v2 = json.loads(Path('config/iios_terminal_bridge_supervision.json').read_text())
+          assert set(v1['workers']) == {'9A', '9B'}
+          assert set(v2['workers']) == {'9A', '9B'}
+          assert v2['safety']['9E_touched'] is False
+          print('Managed workers:', sorted(v2['workers']))
+          print('9E excluded: PASS')
+          PY

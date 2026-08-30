@@ -1,0 +1,42 @@
+{
+  "schema_version": "iios-terminal-bridge-supervision-v2",
+  "runtime_root": "~/.iios/terminal-bridge",
+  "log_directory": "~/.iios/logs",
+  "heartbeat_directory": "~/.iios/heartbeats",
+  "supervisor_interval_seconds": 300,
+  "stale_after_minutes": 45,
+  "startup_grace_minutes": 45,
+  "restart_cooldown_minutes": 15,
+  "supervisor_label": "com.iios.terminal-bridge-supervisor",
+  "legacy_labels": [
+    "com.iios.batch9a-observation",
+    "com.iios.batch9b-paper-trading",
+    "com.iios.worker-watchdog"
+  ],
+  "workers": {
+    "9A": {
+      "name": "Batch 9A Observation",
+      "terminal_title": "IIOS 9A SUPERVISED",
+      "launcher_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9a-observation/scripts/start_batch9a_observation_continuous.py",
+      "runner_process_fragment": "scripts/iios_observation_runner.py",
+      "completion_pattern": "CYCLE COMPLETE",
+      "bridge_log_name": "9a.bridge.log"
+    },
+    "9B": {
+      "name": "Batch 9B Paper Trading",
+      "terminal_title": "IIOS 9B SUPERVISED",
+      "launcher_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9b-paper-trading/scripts/start_batch9b_paper_trading_continuous.py",
+      "runner_process_fragment": "scripts/iios_paper_trading_runner.py",
+      "completion_pattern": "9B CYCLE COMPLETE",
+      "bridge_log_name": "9b.bridge.log"
+    }
+  },
+  "safety": {
+    "managed_workers": ["9A", "9B"],
+    "9E_touched": false,
+    "paper_mode": true,
+    "broker_connected": false,
+    "live_execution": false,
+    "trade_execution_permission": false
+  }
+}
