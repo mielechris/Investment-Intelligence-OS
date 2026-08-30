@@ -33,6 +33,7 @@ import "./CinematicFactoryThemeV6.css";
 import "./CinematicAvatarPortraitsV6.css";
 import "./CinematicFactoryFidelityV6.css";
 import "./CinematicPortraitIntegrationV6.css";
+import "./CinematicFactoryFinalPolishV6.css";
 
 type BrowserView = "floor" | "control";
 
