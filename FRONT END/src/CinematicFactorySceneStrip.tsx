@@ -1,7 +1,7 @@
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import CinematicRoomScene from "./CinematicRoomScene";
-import HistoricalReplayV721 from "./HistoricalReplayV721";
 import LivingCharacterBehaviorV7 from "./LivingCharacterBehaviorV7";
+import SceneDirectionV73 from "./SceneDirectionV73";
 import "./CinematicFactorySceneStrip.css";
 
 type Props = {
@@ -70,7 +70,7 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
       </section>
 
       <LivingCharacterBehaviorV7 view={view} />
-      <HistoricalReplayV721 view={view} />
+      <SceneDirectionV73 view={view} />
     </>
   );
 }
