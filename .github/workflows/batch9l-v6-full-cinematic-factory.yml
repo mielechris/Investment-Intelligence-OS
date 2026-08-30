@@ -1,0 +1,58 @@
+name: Batch 9L-V6 Full Cinematic Factory
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v6-full-cinematic-factory
+  pull_request:
+    paths:
+      - "FRONT END/**"
+      - ".github/workflows/batch9l-v6-full-cinematic-factory.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-build:
+    name: Cinematic frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FRONT END
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check and build
+        run: npm run build
+
+  scope-guard:
+    name: Frontend-only scope guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify V6 does not modify governed backend or runtime services
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/batch9l-v25-living-cast-superbatch --depth=1
+          changed="$(git diff --name-only origin/feature/batch9l-v25-living-cast-superbatch...HEAD)"
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -E '^(BACK END/|scripts/|config/)' >/dev/null; then
+            echo "V6 scope violation: cinematic conversion must remain frontend-only."
+            exit 1
+          fi
