@@ -1,5 +1,6 @@
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import CinematicRoomScene from "./CinematicRoomScene";
+import LiveFactoryEpisodeV74 from "./LiveFactoryEpisodeV74";
 import LivingCharacterBehaviorV7 from "./LivingCharacterBehaviorV7";
 import PersistedStateReconstructionV732 from "./PersistedStateReconstructionV732";
 import SceneDirectionV73 from "./SceneDirectionV73";
@@ -71,6 +72,7 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
       </section>
 
       <LivingCharacterBehaviorV7 view={view} />
+      <LiveFactoryEpisodeV74 view={view} />
       <SceneDirectionV73 view={view} />
       <PersistedStateReconstructionV732 view={view} />
     </>
