@@ -1,0 +1,50 @@
+name: Batch 9H-9J Learning Activation Superbatch
+
+on:
+  push:
+    branches:
+      - feature/batch9h-9j-learning-activation-superbatch
+  pull_request:
+    paths:
+      - 'scripts/activate_batch9h_9j_learning_superbatch.py'
+      - 'tests/test_batch9h_9j_learning_superbatch.py'
+      - '.github/workflows/batch9h-9j-learning-activation-superbatch.yml'
+
+jobs:
+  learning-superbatch-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile activation superbatch
+        run: python -m py_compile scripts/activate_batch9h_9j_learning_superbatch.py
+
+      - name: Run learning-chain gate tests
+        run: python -m unittest -v tests/test_batch9h_9j_learning_superbatch.py
+
+      - name: Verify hard safety declarations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('scripts/activate_batch9h_9j_learning_superbatch.py').read_text()
+          required = [
+              '"ledger_mode": "READ_ONLY"',
+              '"auto_apply_threshold_changes": False',
+              '"automatic_judgment_bank_writes": False',
+              '"automatic_agent_weight_changes": False',
+              '"capital_authority": False',
+              '"trade_execution_permission": False',
+              '"live_execution": False',
+              'No complete independent 9H benchmark session exists; no synthetic session was created.',
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit(f'Missing safety declarations: {missing}')
+          print('Learning superbatch safety declarations verified.')
+          PY
