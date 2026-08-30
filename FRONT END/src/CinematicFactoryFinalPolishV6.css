@@ -259,6 +259,37 @@
   pointer-events: none;
 }
 
+/* Final floor composition: remove inherited prototype dead zones. */
+.cinematic-v6 .spatial-max-platform {
+  grid-row: 5 / 7;
+  align-self: start;
+  margin-top: 12px;
+}
+
+.cinematic-v6 .v25-max-platform {
+  min-height: 246px;
+  padding: 18px 20px 76px;
+}
+
+.cinematic-v6 .spatial-bottom {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.cinematic-v6 .spatial-legend {
+  min-height: 58px;
+  padding: 12px 16px;
+}
+
+.cinematic-v6 .spatial-radio {
+  width: 100%;
+}
+
+.cinematic-v6 .spatial-radio > div {
+  max-height: 260px;
+}
+
 /* Control room must feel like the same building, not embedded legacy pages. */
 .cinematic-v6 .cinematic-control-room__masthead {
   background:
@@ -299,6 +330,17 @@
   .cinematic-v6 .cfs-scene--max::before,
   .cinematic-v6 .cfd-boss-office::before {
     animation: none !important;
+  }
+}
+
+@media (max-width: 1250px) {
+  .cinematic-v6 .spatial-max-platform {
+    grid-row: auto;
+    margin-top: 0;
+  }
+
+  .cinematic-v6 .spatial-bottom {
+    grid-template-columns: 1fr;
   }
 }
 
