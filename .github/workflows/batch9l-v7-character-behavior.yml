@@ -1,0 +1,46 @@
+name: IIOS 9L-V7 Character Behavior Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v7-character-behavior-superbatch
+  pull_request:
+
+jobs:
+  character-behavior-v7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify V7 backend and scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v7-living-characters
+          git diff --quiet origin/feature/batch9l-v7-living-characters...HEAD -- "BACK END" scripts
+
+      - name: Assert V7 behavior truth boundaries
+        run: |
+          grep -q 'V7.1 · CHARACTER BEHAVIOR SUPERBATCH' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          grep -q 'MAX CUTS IN · NARRATIVE REACTION' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          grep -q 'FICTIONAL AMBIENT PRESENTATION · NOT AGENT ACTIVITY' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          grep -q 'POSTMORTEM ROOM ARMED' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          grep -q 'NO COMMITTEE EVENT ON THE CURRENT SCENE' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          grep -q 'ROOM ROUTE · PERSISTED EVENT TYPE' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          grep -q 'LivingCharacterBehaviorV7' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/LivingCharacterBehaviorV7.tsx"
+
+      - name: Build V7 behavior browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
