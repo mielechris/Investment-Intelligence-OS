@@ -1,0 +1,58 @@
+name: IIOS 9L-V7.4 Live Factory Episode Engine Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v74-live-factory-episode-engine
+  pull_request:
+
+jobs:
+  live-factory-episode-v74:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify frozen V7.3.2 backend and scripts remain untouched
+        run: |
+          git fetch origin checkpoint/batch9l-v732-cinematic-freeze
+          git diff --quiet origin/checkpoint/batch9l-v732-cinematic-freeze...HEAD -- "BACK END" scripts
+
+      - name: Assert V7.4 episode truth boundaries
+        run: |
+          grep -q 'V7.4 · LIVE FACTORY EPISODE ENGINE' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'AUTO_NEW_PERSISTED_EVENT' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'HISTORICAL_RECENT_WINDOW_RECAP' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'Existing history is not replayed automatically on page load' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'RECENT PERSISTED WINDOW · NOT CLAIMED AS FULL-DAY HISTORY' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'AUTO SCENE · NEW EVENT ID ONLY' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'STALE INITIAL HISTORY DOES NOT AUTO-PLAY' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'HISTORICAL RECAP IS EXPLICIT' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'sessionStorage' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'LiveFactoryEpisodeV74' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+
+      - name: Assert episode continuity and close handoff
+        run: |
+          grep -q 'STORY CONTINUITY · PERSISTED WINDOW ONLY' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'AUTO CAMERA' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'EPISODE TIMELINE' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'END-OF-DAY HANDOFF' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'Batch 9O remains the persisted session-close episode source' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+          grep -q 'NO DUPLICATE EVENT IDS' "FRONT END/src/LiveFactoryEpisodeV74.tsx"
+
+      - name: Build V7.4 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
