@@ -1,0 +1,501 @@
+/*
+ * 9L V2.3 — Character Identity + Living Workstations
+ * Presentation-only layer. Existing Spatial Floor state, packet lineage,
+ * case truth, and execution permissions remain authoritative.
+ */
+
+.spatial-shell {
+  --v23-ink: #03090d;
+  --v23-cyan: #67e8f9;
+  --v23-green: #5ee3b5;
+  --v23-amber: #d8b15b;
+  --v23-red: #ff7d7d;
+}
+
+/* --- Bullpen becomes an inhabited analyst floor --- */
+.spatial-bullpen {
+  overflow: visible;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(103,232,249,.055), transparent 42%),
+    linear-gradient(160deg, rgba(8,24,31,.98), rgba(4,13,18,.98));
+}
+
+.spatial-bullpen::after {
+  content: "CHARACTER FLOOR · PRESENTATION LAYER · PERSISTED STATE REMAINS AUTHORITATIVE";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 10px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(103,232,249,.07);
+  color: rgba(103,232,249,.20);
+  font-size: 6px;
+  letter-spacing: .20em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.spatial-bullpen-heading {
+  min-height: 48px;
+  align-items: center;
+}
+
+.spatial-bullpen-heading > div::after {
+  content: "  ·  EIGHT RECURRING SPECIALISTS";
+  color: rgba(94,227,181,.38);
+  font-size: 7px;
+  letter-spacing: .14em;
+}
+
+.spatial-agent-desks {
+  gap: 14px;
+  padding-bottom: 26px;
+}
+
+/* --- Workstation shell --- */
+.spatial-desk {
+  min-height: 150px;
+  position: relative;
+  isolation: isolate;
+  border-radius: 17px;
+  padding: 15px 14px 34px;
+  grid-template-columns: 62px 58px minmax(0,1fr);
+  gap: 11px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(103,232,249,.18);
+  background:
+    linear-gradient(145deg, rgba(8,22,29,.97), rgba(4,13,18,.98)),
+    repeating-linear-gradient(90deg, transparent 0 33px, rgba(103,232,249,.025) 34px 35px);
+  box-shadow:
+    inset 0 0 28px rgba(103,232,249,.018),
+    0 12px 30px rgba(0,0,0,.16);
+}
+
+.spatial-desk::before {
+  content: "";
+  position: absolute;
+  inset: auto 10px 8px 10px;
+  height: 18px;
+  border: 1px solid rgba(103,232,249,.08);
+  border-radius: 5px;
+  background:
+    repeating-linear-gradient(90deg, rgba(103,232,249,.055) 0 18px, transparent 18px 28px),
+    rgba(2,9,12,.6);
+  z-index: -1;
+}
+
+.spatial-desk::after {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  color: rgba(151,197,206,.35);
+  font-size: 5px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.spatial-desk.is-on {
+  border-color: rgba(94,227,181,.42);
+  box-shadow:
+    0 0 30px rgba(94,227,181,.055),
+    inset 0 0 30px rgba(94,227,181,.025),
+    0 14px 34px rgba(0,0,0,.20);
+}
+
+.spatial-desk.is-on::before {
+  border-color: rgba(94,227,181,.20);
+  background:
+    repeating-linear-gradient(90deg, rgba(94,227,181,.12) 0 18px, transparent 18px 28px),
+    rgba(2,14,13,.75);
+  box-shadow: inset 0 0 12px rgba(94,227,181,.035);
+}
+
+/* --- Character silhouettes --- */
+.spatial-chair {
+  width: 52px;
+  height: 75px;
+  position: relative;
+  align-self: center;
+  justify-self: center;
+  border: 0;
+  background: transparent;
+}
+
+.spatial-chair::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 7px;
+  width: 28px;
+  height: 30px;
+  border: 1px solid rgba(103,232,249,.28);
+  border-radius: 45% 45% 42% 42%;
+  background: radial-gradient(circle at 45% 32%, rgba(103,232,249,.10), rgba(4,17,22,.95) 66%);
+  box-shadow: inset 0 0 14px rgba(103,232,249,.04);
+}
+
+.spatial-chair::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  bottom: 4px;
+  width: 38px;
+  height: 37px;
+  border: 1px solid rgba(103,232,249,.19);
+  border-radius: 14px 14px 7px 7px;
+  background: linear-gradient(rgba(8,24,30,.94), rgba(4,13,18,.98));
+}
+
+.spatial-chair > i {
+  display: block;
+  position: absolute;
+  z-index: 3;
+}
+
+.spatial-chair > i:first-child {
+  left: 19px;
+  top: 19px;
+  width: 5px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(103,232,249,.62);
+  box-shadow: 12px 0 0 rgba(103,232,249,.62);
+}
+
+.spatial-chair > i:last-child {
+  left: 22px;
+  top: 31px;
+  width: 11px;
+  height: 1px;
+  background: rgba(103,232,249,.24);
+}
+
+.spatial-desk.is-on .spatial-chair::before {
+  border-color: rgba(94,227,181,.50);
+  box-shadow: 0 0 18px rgba(94,227,181,.08), inset 0 0 14px rgba(94,227,181,.05);
+}
+
+.spatial-desk.is-on .spatial-chair > i:first-child {
+  background: #5ee3b5;
+  box-shadow: 12px 0 0 #5ee3b5, 0 0 8px rgba(94,227,181,.45), 12px 0 8px rgba(94,227,181,.45);
+}
+
+/* --- Monogram monitor becomes a character workstation terminal --- */
+.spatial-monitor {
+  width: 55px;
+  height: 48px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 7px 7px 5px 5px;
+  border: 1px solid rgba(103,232,249,.30);
+  background:
+    linear-gradient(rgba(5,25,30,.96), rgba(3,13,17,.98)),
+    repeating-linear-gradient(0deg, transparent 0 5px, rgba(103,232,249,.04) 6px 7px);
+  box-shadow: inset 0 0 18px rgba(103,232,249,.04);
+}
+
+.spatial-monitor::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: -8px;
+  height: 8px;
+  border-left: 2px solid rgba(103,232,249,.22);
+  border-right: 2px solid rgba(103,232,249,.22);
+}
+
+.spatial-monitor::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -10px;
+  height: 2px;
+  background: rgba(103,232,249,.20);
+}
+
+.spatial-monitor span {
+  font-size: 18px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  color: #78e3ed;
+  text-shadow: 0 0 12px rgba(103,232,249,.18);
+}
+
+.spatial-monitor > i {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(113,167,178,.24);
+}
+
+.spatial-desk.is-on .spatial-monitor {
+  border-color: rgba(94,227,181,.55);
+  box-shadow: 0 0 16px rgba(94,227,181,.08), inset 0 0 18px rgba(94,227,181,.05);
+}
+
+.spatial-desk.is-on .spatial-monitor span { color: #75efc8; }
+.spatial-desk.is-on .spatial-monitor > i { background: #5ee3b5; box-shadow: 0 0 9px rgba(94,227,181,.6); }
+
+.spatial-desk-copy {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.spatial-desk-copy > em {
+  font-size: 6px;
+  letter-spacing: .18em;
+  line-height: 1.45;
+  text-transform: uppercase;
+  color: rgba(103,232,249,.38);
+}
+
+.spatial-desk-copy > strong {
+  margin-top: 5px;
+  color: #eefafd;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.spatial-desk-copy > small {
+  margin-top: 8px;
+  font-size: 7px;
+  line-height: 1.35;
+  color: rgba(150,192,201,.46);
+}
+
+.spatial-desk.is-on .spatial-desk-copy > small { color: rgba(94,227,181,.62); }
+
+/* --- Eight recurring identities / workstation props --- */
+.spatial-desk:nth-child(1)::after { content: "POLICY BINDERS · EO BOARD · TARIFF MAP"; }
+.spatial-desk:nth-child(2)::after { content: "YIELD CURVE · FED BOARD · DOLLAR TAPE"; }
+.spatial-desk:nth-child(3)::after { content: "FILINGS · MARGIN BRIDGE · VALUATION LEDGER"; }
+.spatial-desk:nth-child(4)::after { content: "TAPE WALL · POSITIONING · VOLATILITY"; }
+.spatial-desk:nth-child(5)::after { content: "COMMODITIES · FREIGHT · INVENTORY"; }
+.spatial-desk:nth-child(6)::after { content: "WORLD MAP · WEATHER · CHOKEPOINTS"; }
+.spatial-desk:nth-child(7)::after { content: "RED DOSSIER · FALSIFIERS · CONTRADICTIONS"; }
+.spatial-desk:nth-child(8)::after { content: "EXPOSURE · CORRELATION · DRAWDOWN"; }
+
+/* Policy — sharp fedora-like brim / document glow */
+.spatial-desk:nth-child(1) .spatial-chair::before { border-radius: 42% 42% 48% 48%; }
+.spatial-desk:nth-child(1) .spatial-chair { filter: drop-shadow(0 0 8px rgba(96,196,215,.025)); }
+.spatial-desk:nth-child(1) .spatial-chair > i:last-child {
+  left: 12px; top: 7px; width: 31px; height: 3px; background: rgba(103,232,249,.17); border-radius: 50%;
+}
+
+/* Macro — swept hair / dual-screen glow */
+.spatial-desk:nth-child(2) .spatial-chair::before { border-radius: 55% 35% 45% 45%; transform: rotate(-2deg); }
+.spatial-desk:nth-child(2) .spatial-monitor { box-shadow: -10px 3px 0 -7px rgba(103,232,249,.15), inset 0 0 18px rgba(103,232,249,.04); }
+
+/* Fundamentals — square glasses */
+.spatial-desk:nth-child(3) .spatial-chair > i:first-child {
+  width: 8px; height: 6px; border: 1px solid rgba(103,232,249,.52); background: transparent; border-radius: 2px;
+  box-shadow: 13px 0 0 -1px rgba(3,12,16,.95), 13px 0 0 0 rgba(103,232,249,.52);
+}
+.spatial-desk:nth-child(3).is-on .spatial-chair > i:first-child {
+  border-color: rgba(94,227,181,.75); box-shadow: 13px 0 0 -1px rgba(3,12,16,.95), 13px 0 0 0 rgba(94,227,181,.75);
+}
+
+/* Market Structure — earpiece / tape-reader profile */
+.spatial-desk:nth-child(4) .spatial-chair::before { transform: translateX(2px) rotate(1deg); }
+.spatial-desk:nth-child(4) .spatial-chair > i:last-child { left: 39px; top: 19px; width: 8px; height: 12px; border: 1px solid rgba(103,232,249,.22); background: transparent; border-left: 0; }
+
+/* Commodities — hard-hat silhouette */
+.spatial-desk:nth-child(5) .spatial-chair::before { border-radius: 45% 45% 38% 38%; }
+.spatial-desk:nth-child(5) .spatial-chair > i:last-child { left: 12px; top: 8px; width: 31px; height: 8px; border-radius: 50% 50% 20% 20%; background: rgba(103,232,249,.11); border-top: 1px solid rgba(103,232,249,.28); }
+
+/* Geo + Weather — headset arc */
+.spatial-desk:nth-child(6) .spatial-chair::before { box-shadow: 0 0 0 3px rgba(103,232,249,.035), inset 0 0 14px rgba(103,232,249,.04); }
+.spatial-desk:nth-child(6) .spatial-chair > i:last-child { left: 38px; top: 22px; width: 11px; height: 2px; background: rgba(103,232,249,.26); transform: rotate(18deg); transform-origin:left; }
+
+/* Skeptic — darker red-room edge without claiming active state */
+.spatial-desk:nth-child(7) {
+  border-color: rgba(255,125,125,.20);
+  background: radial-gradient(circle at 15% 35%, rgba(255,90,90,.035), transparent 28%), linear-gradient(145deg, rgba(20,13,17,.97), rgba(5,12,16,.98));
+}
+.spatial-desk:nth-child(7) .spatial-monitor { border-color: rgba(255,125,125,.24); }
+.spatial-desk:nth-child(7) .spatial-monitor span { color: #e8a3a3; }
+.spatial-desk:nth-child(7)::before { border-color: rgba(255,125,125,.08); }
+.spatial-desk:nth-child(7).is-on { border-color: rgba(255,125,125,.46); box-shadow: 0 0 28px rgba(255,80,80,.045), inset 0 0 30px rgba(255,80,80,.02); }
+
+/* Portfolio — tie / control-room silhouette */
+.spatial-desk:nth-child(8) .spatial-chair > i:last-child { left: 25px; top: 43px; width: 5px; height: 18px; background: linear-gradient(rgba(103,232,249,.20), transparent); clip-path: polygon(50% 0,100% 25%,65% 100%,35% 100%,0 25%); }
+
+/* --- MAX: recurring bulldog foreman identity --- */
+.spatial-max-platform {
+  min-height: 215px;
+  overflow: visible;
+}
+
+.spatial-max-avatar {
+  width: 124px;
+  height: 150px;
+  position: relative;
+  display: block;
+  margin: 0 auto;
+}
+
+.spatial-max-avatar::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  height: 65px;
+  border: 1px solid rgba(103,232,249,.30);
+  border-radius: 25px 25px 18px 18px;
+  background:
+    linear-gradient(90deg, transparent 46%, rgba(103,232,249,.12) 47% 53%, transparent 54%),
+    linear-gradient(rgba(8,29,36,.96), rgba(4,14,19,.98));
+  box-shadow: inset 0 0 22px rgba(103,232,249,.04), 0 12px 25px rgba(0,0,0,.18);
+}
+
+.spatial-max-avatar::after {
+  content: "FOREMAN";
+  position: absolute;
+  left: 25px;
+  right: 25px;
+  bottom: 30px;
+  padding: 5px 0;
+  border: 1px solid rgba(103,232,249,.16);
+  color: rgba(103,232,249,.58);
+  background: rgba(2,12,16,.72);
+  font-size: 6px;
+  letter-spacing: .20em;
+  text-align: center;
+  z-index: 4;
+}
+
+.spatial-max-avatar > strong {
+  position: absolute;
+  left: 28px;
+  top: 24px;
+  width: 70px;
+  height: 63px;
+  z-index: 4;
+  border-radius: 38% 38% 48% 48%;
+  border: 1px solid rgba(103,232,249,.55);
+  background:
+    radial-gradient(ellipse at 34% 43%, rgba(103,232,249,.70) 0 2px, transparent 3px),
+    radial-gradient(ellipse at 66% 43%, rgba(103,232,249,.70) 0 2px, transparent 3px),
+    radial-gradient(ellipse at 50% 65%, rgba(103,232,249,.18) 0 7px, transparent 8px),
+    linear-gradient(rgba(8,34,42,.98), rgba(3,15,20,.98));
+  color: transparent;
+  box-shadow: 0 0 35px rgba(103,232,249,.10), inset 0 0 18px rgba(103,232,249,.05);
+}
+
+.spatial-max-avatar > strong::before,
+.spatial-max-avatar > strong::after {
+  content: "";
+  position: absolute;
+  bottom: 6px;
+  width: 22px;
+  height: 15px;
+  border: 1px solid rgba(103,232,249,.20);
+  border-radius: 50%;
+  background: rgba(7,27,34,.94);
+}
+.spatial-max-avatar > strong::before { left: 9px; transform: rotate(7deg); }
+.spatial-max-avatar > strong::after { right: 9px; transform: rotate(-7deg); }
+
+.spatial-max-ears {
+  position: absolute;
+  left: 24px;
+  top: 9px;
+  width: 78px;
+  height: 42px;
+  z-index: 3;
+}
+
+.spatial-max-ears > i {
+  position: absolute;
+  top: 0;
+  width: 26px;
+  height: 34px;
+  border: 1px solid rgba(103,232,249,.38);
+  background: rgba(6,24,31,.96);
+  border-radius: 52% 48% 40% 60%;
+}
+.spatial-max-ears > i:first-child { left: 2px; transform: rotate(-19deg); }
+.spatial-max-ears > i:last-child { right: 2px; transform: rotate(19deg) scaleX(-1); }
+
+.spatial-max-avatar > span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  color: #75e5ef;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .30em;
+  text-align: center;
+  z-index: 5;
+}
+
+.spatial-max-platform > div:last-child > em::after {
+  content: " · EVIDENCE FIRST · NO HEROICS · NO BULLSHIT";
+  color: rgba(216,177,91,.52);
+}
+
+/* --- Ambient, not evidentiary: subtle workstation life --- */
+.spatial-desk .spatial-monitor::selection { background: transparent; }
+
+.spatial-desk.is-on .spatial-monitor {
+  animation: v23MonitorWake 2.4s ease-in-out infinite;
+}
+
+@keyframes v23MonitorWake {
+  0%,100% { filter: brightness(1); }
+  50% { filter: brightness(1.09); }
+}
+
+.spatial-desk.is-on .spatial-chair {
+  animation: v23CharacterAttention 3.4s ease-in-out infinite;
+}
+
+@keyframes v23CharacterAttention {
+  0%,100% { transform: translateY(0); }
+  45% { transform: translateY(-2px); }
+  55% { transform: translateY(-2px); }
+}
+
+/* Make the existing operational truth labels dominant over decorative identity. */
+.spatial-desk-copy > small,
+.spatial-room footer,
+.spatial-bullpen-heading > em {
+  position: relative;
+  z-index: 8;
+}
+
+@media (max-width: 1250px) {
+  .spatial-desk {
+    grid-template-columns: 54px 52px minmax(0,1fr);
+  }
+  .spatial-desk::after { display: none; }
+}
+
+@media (max-width: 760px) {
+  .spatial-desk {
+    grid-template-columns: 50px 48px minmax(0,1fr);
+    min-height: 126px;
+  }
+  .spatial-chair { transform: scale(.90); transform-origin:center; }
+  .spatial-max-avatar { transform: scale(.88); transform-origin:center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spatial-desk.is-on .spatial-monitor,
+  .spatial-desk.is-on .spatial-chair {
+    animation: none !important;
+  }
+}
