@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import signal
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -69,10 +69,25 @@ def main() -> int:
     if not launcher.exists():
         raise SystemExit(f"Missing {worker_key} launcher: {launcher}")
 
+    runtime_root = expand(str(config.get("runtime_root") or "~/.iios/terminal-bridge"))
     log_dir = expand(str(config.get("log_directory") or "~/.iios/logs"))
     heartbeat_dir = expand(str(config.get("heartbeat_directory") or "~/.iios/heartbeats"))
-    log_dir.mkdir(parents=True, exist_ok=True)
-    heartbeat_dir.mkdir(parents=True, exist_ok=True)
+    lock_dir = runtime_root / "locks"
+    for path in (log_dir, heartbeat_dir, lock_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    lock_path = lock_dir / f"{worker_key.lower()}.lock"
+    lock_handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"{worker_key} Terminal-Bridge already owns the worker lock; refusing duplicate start.", flush=True)
+        return 0
+
+    lock_handle.seek(0)
+    lock_handle.truncate()
+    lock_handle.write(f"pid={os.getpid()} started_at={utc_now()}\n")
+    lock_handle.flush()
 
     log_path = log_dir / str(worker.get("bridge_log_name") or f"{worker_key.lower()}.bridge.log")
     heartbeat_path = heartbeat_dir / f"{worker_key.lower()}.json"
@@ -146,14 +161,14 @@ def main() -> int:
 
         assert child.stdout is not None
         for line in child.stdout:
-            now = utc_now()
+            stamp = utc_now()
             print(line, end="", flush=True)
             log.write(line)
             log.flush()
-            heartbeat["last_output_at"] = now
+            heartbeat["last_output_at"] = stamp
             heartbeat["status"] = "RUNNING"
             if completion_pattern in line:
-                heartbeat["last_completed_at"] = now
+                heartbeat["last_completed_at"] = stamp
                 heartbeat["last_completion_line"] = line.strip()[-1000:]
             write_json(heartbeat_path, heartbeat)
 
