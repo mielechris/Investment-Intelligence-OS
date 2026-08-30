@@ -33,7 +33,7 @@ jobs:
           grep -q 'EVENT SOURCE · 9G PERSISTED TELEMETRY' "FRONT END/src/LivingCharacterDirectorV7.tsx"
           grep -q 'LIVE EXECUTION' "FRONT END/src/LivingCharacterDirectorV7.tsx"
           grep -q 'LivingCharacterDirectorV7' "FRONT END/src/LiveFactoryBrowser.tsx"
-          ! grep -Eq 'method:[[:space:]]*["'"'](POST|PUT|PATCH|DELETE)' "FRONT END/src/LivingCharacterDirectorV7.tsx"
+          ! grep -Eq 'method[[:space:]]*:' "FRONT END/src/LivingCharacterDirectorV7.tsx"
 
       - name: Build V7 browser
         working-directory: FRONT END
