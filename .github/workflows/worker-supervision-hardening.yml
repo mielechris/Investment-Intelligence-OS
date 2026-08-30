@@ -21,9 +21,31 @@ jobs:
           python -m py_compile
           scripts/iios_worker_watchdog.py
           scripts/install_iios_worker_supervision.py
+          scripts/diagnose_iios_worker_supervision.py
           scripts/test_iios_worker_supervision_contract.py
       - name: Run supervision safety contract
         run: python scripts/test_iios_worker_supervision_contract.py
+      - name: Assert diagnostic remains read-only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('scripts/diagnose_iios_worker_supervision.py').read_text().lower()
+          forbidden = [
+              'kickstart',
+              'bootout',
+              'os.kill(',
+              'sigterm',
+              'sigkill',
+              'record_event(',
+              'trade_execution_permission": true',
+              'live_execution": true',
+          ]
+          for fragment in forbidden:
+              assert fragment not in source, fragment
+          assert 'mutation": "none_read_only"' in source
+          assert '"9e_touched": false' in source
+          print('Read-only diagnostic contract: PASS')
+          PY
       - name: Assert 9E remains out of managed worker config
         run: |
           python - <<'PY'
