@@ -1,0 +1,69 @@
+name: IIOS 9L-V7.5 Final Avatar Installation Gate v2
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v75-final-avatar-installation
+  pull_request:
+
+jobs:
+  final-avatar-install-v75-v2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify frozen V7.4 backend and scripts remain untouched
+        run: |
+          git fetch origin checkpoint/batch9l-v74-live-episode-freeze
+          git diff --quiet origin/checkpoint/batch9l-v74-live-episode-freeze...HEAD -- "BACK END" scripts
+
+      - name: Assert approved V7.5 family wall truth boundaries
+        run: |
+          test -s "FRONT END/src/assets/v75/family480.b64"
+          test "$(wc -c < "FRONT END/src/assets/v75/family480.b64")" -eq 19816
+          grep -q 'family480.b64?raw' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'data:image/webp;base64' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'V7.5 · FINAL AVATAR INSTALLATION · APPROVED FAMILY WALL' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q "THE FAMILY IS IN THE FUCKIN' BUILDING" "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'PRESENTATION ONLY' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'ARTWORK ≠ AGENT ACTIVITY' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'LIVE EXECUTION · FALSE' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'TRADE AUTHORITY · FALSE' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'WRITE AUTHORITY · NONE' "FRONT END/src/FamilyWallV75.tsx"
+          grep -q 'FamilyWallV75' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/FamilyWallV75.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/FamilyWallV75.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/FamilyWallV75.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/FamilyWallV75.tsx"
+
+      - name: Verify approved family portrait payload bytes
+        run: |
+          tr -d '\n\r\t ' < "FRONT END/src/assets/v75/family480.b64" | base64 --decode > /tmp/iios-family-v75.webp
+          python3 - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+
+          path = Path('/tmp/iios-family-v75.webp')
+          data = path.read_bytes()
+          expected = '272c1517798fb0f851102771e4853153edf2a212548fd3b9c2310508318b683f'
+          assert len(data) == 14860, f'unexpected portrait size: {len(data)}'
+          assert data[:4] == b'RIFF', data[:12]
+          assert data[8:12] == b'WEBP', data[:12]
+          actual = sha256(data).hexdigest()
+          assert actual == expected, f'portrait SHA mismatch: {actual}'
+          print(f'V7.5 approved portrait verified: {len(data)} bytes · {actual}')
+          PY
+
+      - name: Build V7.5 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
