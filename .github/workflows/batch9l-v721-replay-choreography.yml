@@ -1,0 +1,44 @@
+name: IIOS 9L-V7.2.1 Replay Choreography Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v721-replay-choreography-polish
+  pull_request:
+
+jobs:
+  replay-choreography-v721:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify V7.2 backend and scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v72-character-motion-replay
+          git diff --quiet origin/feature/batch9l-v72-character-motion-replay...HEAD -- "BACK END" scripts
+
+      - name: Assert replay choreography boundaries
+        run: |
+          grep -q 'V7.2.1 · THE BACK ROOM SCREENING THEATER' "FRONT END/src/HistoricalReplayV721.tsx"
+          grep -q 'ReplayPhase = "idle" | "moving" | "assembled"' "FRONT END/src/HistoricalReplayV721.tsx"
+          grep -q 'setPhase("assembled")' "FRONT END/src/HistoricalReplayV721.tsx"
+          grep -q 'RUN IT AGAIN' "FRONT END/src/HistoricalReplayV721.tsx"
+          grep -q 'HistoricalReplayV721' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          grep -q 'is-assembled' "FRONT END/src/HistoricalReplayV721.css"
+          ! grep -q 'method: "POST"' "FRONT END/src/HistoricalReplayV721.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/HistoricalReplayV721.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/HistoricalReplayV721.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/HistoricalReplayV721.tsx"
+
+      - name: Build V7.2.1 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
