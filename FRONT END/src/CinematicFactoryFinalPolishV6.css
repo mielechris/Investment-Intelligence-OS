@@ -1,0 +1,308 @@
+/*
+ * 9L-V6 final production polish.
+ * Presentation only: no market, agent, paper, backend, or execution state is created here.
+ */
+
+.cinematic-v6 {
+  --v6-gold-hot: #e0aa59;
+  --v6-gold-dim: rgba(196, 132, 55, .34);
+  --v6-walnut-deep: #0c0704;
+  --v6-green: #72d45e;
+}
+
+.cinematic-v6::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 20%, transparent 0 46%, rgba(0,0,0,.12) 78%, rgba(0,0,0,.42) 100%),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.008) 4px);
+  mix-blend-mode: multiply;
+  opacity: .44;
+}
+
+/* Command deck depth */
+.cinematic-v6 .cfd-shell {
+  box-shadow:
+    0 32px 90px rgba(0,0,0,.68),
+    inset 0 0 0 2px rgba(34,16,7,.92),
+    inset 0 0 0 4px rgba(183,112,32,.12),
+    inset 0 -90px 140px rgba(0,0,0,.26);
+}
+
+.cinematic-v6 .cfd-brand-lockup {
+  background:
+    radial-gradient(circle at 12% 42%, rgba(229,151,52,.19), transparent 28%),
+    linear-gradient(90deg, rgba(31,15,7,.98), rgba(7,5,4,.99));
+}
+
+.cinematic-v6 .cfd-brand-lockup::after {
+  content: "THE HOUSE DOESN'T GUESS. IT KEEPS RECEIPTS.";
+  position: absolute;
+  right: 18px;
+  bottom: 8px;
+  color: rgba(221,162,78,.22);
+  font: italic 7px Georgia, "Times New Roman", serif;
+  letter-spacing: .12em;
+}
+
+.cinematic-v6 .cfd-panel,
+.cinematic-v6 .cfd-prop,
+.cinematic-v6 .cinematic-control-module {
+  backdrop-filter: blur(.3px);
+}
+
+/* Boss office gets the strongest visual hierarchy in the system. */
+.cinematic-v6 .cfd-boss-office {
+  background:
+    radial-gradient(ellipse at 50% 18%, rgba(230,151,61,.18), transparent 30%),
+    radial-gradient(ellipse at 15% 88%, rgba(109,48,14,.13), transparent 28%),
+    linear-gradient(150deg, rgba(43,22,10,.98), rgba(5,4,3,.995));
+  box-shadow:
+    inset 0 0 0 2px rgba(0,0,0,.75),
+    inset 0 -42px 70px rgba(0,0,0,.35),
+    0 18px 42px rgba(0,0,0,.46);
+}
+
+.cinematic-v6 .cfd-boss-office::after {
+  content: "";
+  position: absolute;
+  inset: 10px 10px 48%;
+  pointer-events: none;
+  opacity: .24;
+  background:
+    linear-gradient(90deg, transparent 49%, rgba(210,144,57,.13) 50%, transparent 51%),
+    repeating-linear-gradient(90deg, rgba(117,63,26,.15) 0 18px, rgba(15,8,4,.18) 18px 36px);
+  mask-image: linear-gradient(to bottom, #000, transparent 90%);
+}
+
+.cinematic-v6 .cfd-boss-portrait .ccp-portrait {
+  filter: drop-shadow(0 24px 28px rgba(0,0,0,.72));
+}
+
+.cinematic-v6 .cfd-boss-copy blockquote {
+  text-shadow: 0 1px 0 #000;
+}
+
+/* More physical cast cards — framed case files, not SaaS tiles. */
+.cinematic-v6 .cfd-cast-grid article {
+  background:
+    linear-gradient(180deg, rgba(46,25,12,.82), rgba(7,5,3,.98)),
+    repeating-linear-gradient(90deg, transparent 0 17px, rgba(201,135,53,.02) 18px 19px);
+  box-shadow:
+    inset 0 0 0 2px rgba(2,2,2,.82),
+    inset 0 -30px 42px rgba(0,0,0,.34),
+    0 10px 24px rgba(0,0,0,.36);
+}
+
+.cinematic-v6 .cfd-cast-grid article.has-lineage {
+  box-shadow:
+    inset 0 0 0 2px rgba(2,2,2,.82),
+    inset 0 -30px 42px rgba(0,0,0,.34),
+    0 0 22px rgba(208,145,62,.055),
+    0 10px 24px rgba(0,0,0,.38);
+}
+
+.cinematic-v6 .cfd-cast-grid article.is-active {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(114,212,94,.055), transparent 36%),
+    linear-gradient(180deg, rgba(40,28,13,.88), rgba(6,6,3,.99));
+}
+
+.cinematic-v6 .cfd-cast-avatar {
+  position: relative;
+}
+
+.cinematic-v6 .cfd-cast-avatar::after {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 4px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.56);
+  filter: blur(5px);
+  pointer-events: none;
+}
+
+/* Portraits: more filmic light and less vector-flat. */
+.cinematic-v6 .ccp-portrait__art {
+  background:
+    radial-gradient(circle at 52% 12%, rgba(225,153,72,.08), transparent 35%),
+    #050302;
+}
+
+.cinematic-v6 .ccp-portrait__art::after {
+  background:
+    linear-gradient(110deg, rgba(255,220,164,.035), transparent 22%, transparent 66%, rgba(0,0,0,.36)),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.01) 4px),
+    radial-gradient(circle at 50% 42%, transparent 0 50%, rgba(0,0,0,.48) 100%);
+}
+
+.cinematic-v6 .ccp-face,
+.cinematic-v6 .ccp-max-head,
+.cinematic-v6 .ccp-max-muzzle {
+  filter: contrast(1.04) saturate(.9);
+}
+
+.cinematic-v6 .ccp-portrait--skeptic {
+  transform: translateY(1px) rotate(-.3deg);
+}
+
+.cinematic-v6 .ccp-portrait--skeptic .ccp-portrait__art {
+  background:
+    radial-gradient(circle at 55% 10%, rgba(156,45,36,.10), transparent 36%),
+    #050202;
+}
+
+/* Headquarters strip — turn it into a real set. */
+.cinematic-v6 .cfs-strip {
+  background:
+    radial-gradient(ellipse at 48% 0%, rgba(193,96,23,.10), transparent 31%),
+    linear-gradient(180deg, rgba(13,7,4,.99), rgba(2,2,2,.998));
+}
+
+.cinematic-v6 .cfs-scene {
+  min-height: 330px;
+  box-shadow:
+    inset 0 0 0 2px rgba(0,0,0,.78),
+    inset 0 -80px 90px rgba(0,0,0,.48),
+    inset 0 0 70px rgba(111,48,7,.055),
+    0 16px 30px rgba(0,0,0,.42);
+}
+
+.cinematic-v6 .cfs-scene::after {
+  content: "";
+  position: absolute;
+  inset: 38px 0 50px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: .16;
+  background:
+    radial-gradient(circle at 16% 78%, rgba(231,151,59,.20), transparent 8%),
+    radial-gradient(circle at 82% 72%, rgba(231,151,59,.13), transparent 9%),
+    repeating-linear-gradient(90deg, transparent 0 76px, rgba(216,145,56,.07) 77px 78px);
+  mask-image: linear-gradient(to bottom, #000, transparent 92%);
+}
+
+.cinematic-v6 .cfs-scene__lamp {
+  width: 180px;
+  height: 128px;
+  background: radial-gradient(ellipse at 50% 0%, rgba(242,167,77,.24), transparent 66%);
+}
+
+.cinematic-v6 .cfs-console i {
+  background:
+    repeating-linear-gradient(0deg, rgba(85,171,102,.11) 0 2px, transparent 2px 7px),
+    repeating-linear-gradient(90deg, transparent 0 17px, rgba(83,165,99,.07) 18px 19px),
+    #061009;
+  box-shadow: inset 0 0 18px rgba(80,164,92,.06), 0 0 13px rgba(80,144,91,.04);
+}
+
+.cinematic-v6 .cfs-commission-table {
+  background:
+    radial-gradient(circle at 52% 36%, rgba(210,127,39,.10), transparent 18%),
+    linear-gradient(180deg,#4a260d,#160b05);
+  box-shadow: inset 0 0 0 1px rgba(228,158,68,.10), 0 20px 24px rgba(0,0,0,.46);
+}
+
+.cinematic-v6 .cfs-scene--max {
+  background:
+    radial-gradient(ellipse at 52% 20%, rgba(237,155,60,.18), transparent 31%),
+    radial-gradient(circle at 83% 35%, rgba(118,69,31,.12), transparent 26%),
+    linear-gradient(155deg, rgba(47,24,11,.99), rgba(5,4,3,.998));
+}
+
+.cinematic-v6 .cfs-max-props {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.02), transparent 16%),
+    linear-gradient(#4a260d,#130904);
+  box-shadow: inset 0 1px 0 rgba(235,165,73,.10), 0 18px 24px rgba(0,0,0,.38);
+}
+
+/* Physical departments: more obvious room identity while state remains external. */
+.cinematic-v6 .spatial-room,
+.cinematic-v6 .spatial-bullpen,
+.cinematic-v6 .spatial-max-platform {
+  box-shadow:
+    inset 0 0 0 2px rgba(0,0,0,.76),
+    inset 0 -46px 68px rgba(0,0,0,.36),
+    0 16px 34px rgba(0,0,0,.38);
+}
+
+.cinematic-v6 .spatial-room.is-event,
+.cinematic-v6 .spatial-bullpen.is-event {
+  box-shadow:
+    inset 0 0 0 2px rgba(0,0,0,.70),
+    inset 0 -46px 68px rgba(0,0,0,.34),
+    0 0 24px rgba(114,212,94,.08),
+    0 16px 34px rgba(0,0,0,.40);
+}
+
+.cinematic-v6 .spatial-desk {
+  background:
+    linear-gradient(180deg, rgba(30,17,9,.91), rgba(4,4,3,.99));
+}
+
+.cinematic-v6 .spatial-desk::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 8px;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, rgba(119,77,32,.28) 0 22px, rgba(10,7,4,.84) 22px 35px);
+  opacity: .48;
+  pointer-events: none;
+}
+
+/* Control room must feel like the same building, not embedded legacy pages. */
+.cinematic-v6 .cinematic-control-room__masthead {
+  background:
+    radial-gradient(circle at 12% 50%, rgba(206,130,43,.10), transparent 31%),
+    linear-gradient(90deg, rgba(24,13,7,.98), rgba(6,5,4,.995));
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.80), 0 18px 44px rgba(0,0,0,.40);
+}
+
+.cinematic-v6 .cinematic-control-index a {
+  transition: background .18s ease, border-color .18s ease, transform .18s ease;
+}
+
+.cinematic-v6 .cinematic-control-index a:hover {
+  transform: translateY(-1px);
+  border-color: rgba(225,157,64,.42);
+  background: rgba(40,22,10,.78);
+}
+
+.cinematic-v6 .cinematic-control-module {
+  background:
+    radial-gradient(circle at 6% 0%, rgba(191,105,25,.045), transparent 27%),
+    linear-gradient(180deg, rgba(15,9,6,.995), rgba(4,3,3,.998));
+  box-shadow: 0 20px 58px rgba(0,0,0,.42), inset 0 0 0 2px rgba(0,0,0,.74);
+}
+
+/* Ambient-only smoke: decorative; state classes do not depend on it. */
+.cinematic-v6 .cfs-scene--max::before,
+.cinematic-v6 .cfd-boss-office::before {
+  animation: v6SmokeDrift 14s ease-in-out infinite alternate;
+}
+
+@keyframes v6SmokeDrift {
+  from { transform: translate3d(-3px,0,0); opacity: .72; }
+  to { transform: translate3d(5px,-3px,0); opacity: .92; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cinematic-v6 .cfs-scene--max::before,
+  .cinematic-v6 .cfd-boss-office::before {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 1100px) {
+  .cinematic-v6 .cfd-brand-lockup::after { display: none; }
+  .cinematic-v6 .cfs-scene { min-height: 285px; }
+}
