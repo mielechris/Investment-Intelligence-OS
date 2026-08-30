@@ -1,5 +1,19 @@
-import familyPortrait from "./assets/v75/iios-family-portrait.webp";
+import familyPart00 from "./assets/v75/family-part-00.txt?raw";
+import familyPart01 from "./assets/v75/family-part-01.txt?raw";
+import familyPart02 from "./assets/v75/family-part-02.txt?raw";
+import familyPart03 from "./assets/v75/family-part-03.txt?raw";
 import "./FamilyWallV75.css";
+
+const familyPortraitPayload = [
+  familyPart00,
+  familyPart01,
+  familyPart02,
+  familyPart03,
+]
+  .join("")
+  .replace(/\s+/g, "");
+
+const familyPortrait = `data:image/webp;base64,${familyPortraitPayload}`;
 
 export default function FamilyWallV75() {
   return (
