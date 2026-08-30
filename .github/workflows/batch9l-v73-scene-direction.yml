@@ -1,0 +1,64 @@
+name: IIOS 9L-V7.3 Scene Direction Superbatch Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v73-scene-direction-superbatch
+  pull_request:
+
+jobs:
+  scene-direction-v73:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify V7.2.1 backend and scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v721-replay-choreography-polish
+          git diff --quiet origin/feature/batch9l-v721-replay-choreography-polish...HEAD -- "BACK END" scripts
+
+      - name: Assert V7.3 scene direction truth boundaries
+        run: |
+          grep -q 'V7.3 · SCENE DIRECTION SUPERBATCH' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q "THE FAMILY DOESN'T JUST SHOW UP" "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'HISTORICAL / PRESENTATION ONLY' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'DIALOGUE · NARRATIVE ≠ RAW MODEL OUTPUT' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'LIVE EXECUTION' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'TRADE AUTHORITY' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'WRITE AUTHORITY' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'SCENE LOG' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'FICTIONAL SET DRESSING ONLY' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'SceneDirectionV73' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'HistoricalReplayV721 view=' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/SceneDirectionV73.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/SceneDirectionV73.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/SceneDirectionV73.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/SceneDirectionV73.tsx"
+
+      - name: Assert room-specific scene templates
+        run: |
+          grep -q 'THE DOSSIER WALK-UP' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE MACRO SHAKEDOWN' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE BULLPEN PILE-ON' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE COMMISSION HEARING' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE CAPITAL SHAKEDOWN' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE PAPER HANDOFF' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE NIGHT WATCH' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'THE CONFESSIONAL' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'FORMATIONS' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'is-interrupting' "FRONT END/src/SceneDirectionV73.tsx"
+          grep -q 'BEAT' "FRONT END/src/SceneDirectionV73.tsx"
+
+      - name: Build V7.3 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
