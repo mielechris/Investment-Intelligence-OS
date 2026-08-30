@@ -268,7 +268,7 @@ function MaxPortrait({ idPrefix }: { idPrefix: string }) {
         <circle className="ccp-max-tag" cx="150" cy="253" r="14" />
         <text className="ccp-max-tag-text" x="150" y="258" textAnchor="middle">M</text>
       </g>
-      <rect x="9" y="8" width="282" height="324" rx="3" filter={`url(#${idPrefix}-max-grain)`} />
+      <rect className="ccp-grain" x="9" y="8" width="282" height="324" rx="3" filter={`url(#${idPrefix}-max-grain)`} />
     </svg>
   );
 }
