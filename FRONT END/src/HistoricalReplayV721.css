@@ -1,0 +1,77 @@
+.hr721-shell .hr72-building {
+  min-height: 525px;
+}
+
+.hr721-shell .hr72-travelers {
+  inset: 145px 0 0;
+}
+
+.hr721-shell .hr72-traveler:nth-child(1) { top: 16px; }
+.hr721-shell .hr72-traveler:nth-child(2) { top: 102px; }
+.hr721-shell .hr72-traveler:nth-child(3) { top: 188px; }
+.hr721-shell .hr72-traveler:nth-child(4) { top: 274px; }
+.hr721-shell .hr72-traveler:nth-child(5) { top: 360px; }
+
+.hr721-shell.is-moving .hr72-traveler {
+  animation: hr721-travel 4.5s cubic-bezier(0.2, 0.76, 0.22, 1) var(--travel-delay) both;
+}
+
+.hr721-shell.is-moving .hr72-traveler::after,
+.hr721-shell.is-assembled .hr72-traveler::after {
+  content: "REPLAY";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  padding: 2px 5px;
+  border: 1px solid rgba(214, 139, 49, 0.32);
+  background: rgba(12, 7, 5, 0.88);
+  color: #d99744;
+  font-size: 6px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.hr721-shell.is-assembled .hr72-traveler {
+  left: calc(var(--end-x) + var(--formation-offset));
+  opacity: 1;
+  filter: saturate(1);
+  transition: left 220ms ease-out, transform 220ms ease-out;
+}
+
+.hr721-shell.is-assembled .hr72-traveler-avatar {
+  border-color: rgba(95, 214, 140, 0.62);
+  box-shadow: 0 0 20px rgba(73, 191, 120, 0.09);
+}
+
+.hr721-shell.is-assembled .hr72-rooms article.is-target {
+  box-shadow: inset 0 0 38px rgba(62, 187, 106, 0.12), 0 0 24px rgba(62, 187, 106, 0.11);
+}
+
+.hr721-shell.is-assembled .hr72-controls button:nth-of-type(2) {
+  border-color: rgba(100, 214, 143, 0.62);
+  color: #83dca3;
+}
+
+@keyframes hr721-travel {
+  0% {
+    left: var(--start-x);
+    opacity: 0.72;
+    filter: saturate(0.62);
+  }
+  10% { opacity: 1; }
+  72%, 100% {
+    left: calc(var(--end-x) + var(--formation-offset));
+    opacity: 1;
+    filter: saturate(1);
+  }
+}
+
+@media (max-width: 1180px) {
+  .hr721-shell .hr72-building { min-height: 600px; }
+  .hr721-shell .hr72-traveler:nth-child(1) { top: 20px; }
+  .hr721-shell .hr72-traveler:nth-child(2) { top: 118px; }
+  .hr721-shell .hr72-traveler:nth-child(3) { top: 216px; }
+  .hr721-shell .hr72-traveler:nth-child(4) { top: 314px; }
+  .hr721-shell .hr72-traveler:nth-child(5) { top: 412px; }
+}
