@@ -1,0 +1,39 @@
+{
+  "schema_version": "batch10m5-brain-shadow-bakeoff-v1",
+  "default_profile": "smoke",
+  "default_case_limit": 1,
+  "max_case_limit": 3,
+  "max_provider_calls_per_run": 30,
+  "live_ledger_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/iios_ledger.db",
+  "live_env_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/.env",
+  "output_directory": "~/Library/Application Support/IIOS/brain-shadow-bakeoff",
+  "experiments": {
+    "openai_committee_smoke": [
+      {"model": "gpt-5.6-luna", "reasoning_effort": "medium"},
+      {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+      {"model": "gpt-5.6-sol", "reasoning_effort": "high"}
+    ],
+    "openai_committee_standard_extra": [
+      {"model": "gpt-5.6-luna", "reasoning_effort": "high"},
+      {"model": "gpt-5.6-terra", "reasoning_effort": "medium"},
+      {"model": "gpt-5.6-sol", "reasoning_effort": "xhigh"}
+    ],
+    "grok_reasoning": ["medium", "high"],
+    "gemini_thinking": ["medium", "high"],
+    "multi_model_arbiter": {"model": "gpt-5.6-terra", "reasoning_effort": "high"}
+  },
+  "safety": {
+    "ledger_mode": "READ_ONLY",
+    "ledger_write": false,
+    "production_routing_change": false,
+    "provider_calls_require_explicit_execute": true,
+    "provider_spend_requires_second_confirmation": true,
+    "committee_change_authority": false,
+    "risk_change_authority": false,
+    "threshold_auto_change": false,
+    "capital_authority": false,
+    "broker_connected": false,
+    "trade_execution_permission": false,
+    "live_execution": false
+  }
+}
