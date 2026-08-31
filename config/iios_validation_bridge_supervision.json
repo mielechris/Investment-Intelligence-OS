@@ -1,0 +1,93 @@
+{
+  "schema_version": "iios-validation-bridge-v1",
+  "runtime_root": "~/.iios/validation-bridge",
+  "heartbeat_directory": "~/.iios/validation-heartbeats",
+  "log_directory": "~/.iios/logs",
+  "state_directory": "~/Library/Application Support/IIOS/market-validation",
+  "supervisor_label": "com.iios.validation-bridge-supervisor",
+  "supervisor_interval_seconds": 300,
+  "restart_cooldown_seconds": 600,
+  "telemetry_repo": "mielechris/IIOS-Telemetry",
+  "live_checkout": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8",
+  "ledger_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/iios_ledger.db",
+  "legacy_labels": [
+    "com.iios.market-benchmark",
+    "com.iios.market-validation",
+    "com.iios.shadow-counterfactual"
+  ],
+  "services": {
+    "9H_COLLECTOR": {
+      "name": "Batch 9H Independent Benchmark Collector",
+      "branch": "feature/batch9h-autonomous-market-benchmark",
+      "worktree": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9h-market-benchmark",
+      "script": "scripts/iios_market_benchmark_collector.py",
+      "interval_seconds": 300,
+      "run_timeout_seconds": 240,
+      "stale_after_seconds": 1200,
+      "terminal_title": "IIOS 9H BENCHMARK SUPERVISED",
+      "legacy_process_fragment": "iios_market_benchmark_collector.py",
+      "allowed_statuses": [
+        "BENCHMARK_SAMPLE_RECORDED",
+        "SKIPPED_OUTSIDE_REGULAR_SESSION",
+        "SKIPPED_NON_MARKET_DAY"
+      ],
+      "productive_statuses": ["BENCHMARK_SAMPLE_RECORDED"]
+    },
+    "9H_VALIDATOR": {
+      "name": "Batch 9H Independent Market Validator",
+      "branch": "feature/batch9h-autonomous-market-benchmark",
+      "worktree": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9h-market-benchmark",
+      "script": "scripts/iios_daily_market_validation.py",
+      "interval_seconds": 900,
+      "run_timeout_seconds": 600,
+      "stale_after_seconds": 3600,
+      "terminal_title": "IIOS 9H VALIDATOR SUPERVISED",
+      "legacy_process_fragment": "iios_daily_market_validation.py",
+      "github_issue_title": "IIOS Market Validation - Latest",
+      "allowed_statuses": [
+        "BATCH9H_DAILY_MARKET_VALIDATION_COMPLETE",
+        "SKIPPED_NON_MARKET_DAY",
+        "SKIPPED_BEFORE_VALIDATION_WINDOW",
+        "SKIPPED_ALREADY_VALIDATED",
+        "SKIPPED_NO_BENCHMARK_SAMPLES"
+      ],
+      "productive_statuses": ["BATCH9H_DAILY_MARKET_VALIDATION_COMPLETE"]
+    },
+    "9I_SHADOW": {
+      "name": "Batch 9I Shadow Strategy / Counterfactual Lab",
+      "branch": "feature/batch9i-shadow-counterfactual-lab",
+      "worktree": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9i-shadow-counterfactual",
+      "script": "scripts/iios_shadow_counterfactual_lab.py",
+      "interval_seconds": 1800,
+      "run_timeout_seconds": 900,
+      "stale_after_seconds": 7200,
+      "terminal_title": "IIOS 9I SHADOW SUPERVISED",
+      "legacy_process_fragment": "iios_shadow_counterfactual_lab.py",
+      "github_issue_title": "IIOS Shadow Strategy - Latest",
+      "allowed_statuses": [
+        "BATCH9I_SHADOW_COUNTERFACTUAL_COMPLETE",
+        "SKIPPED_BEFORE_SHADOW_WINDOW",
+        "SKIPPED_NON_MARKET_DAY",
+        "SKIPPED_NO_COMPLETE_9H_SESSIONS",
+        "SKIPPED_ALREADY_EVALUATED"
+      ],
+      "productive_statuses": ["BATCH9I_SHADOW_COUNTERFACTUAL_COMPLETE"]
+    }
+  },
+  "safety": {
+    "9A_touched": false,
+    "9B_touched": false,
+    "9E_touched": false,
+    "9G_touched": false,
+    "9J_touched": false,
+    "ledger_mode": "READ_ONLY_FOR_9H_VALIDATOR_AND_9I",
+    "benchmark_collector_ledger_access": "NONE",
+    "auto_apply_threshold_changes": false,
+    "committee_gate_change_authority": false,
+    "risk_gate_change_authority": false,
+    "capital_authority": false,
+    "broker_connected": false,
+    "trade_execution_permission": false,
+    "live_execution": false
+  }
+}
