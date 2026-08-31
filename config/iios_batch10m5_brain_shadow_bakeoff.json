@@ -1,0 +1,126 @@
+{
+  "schema_version": "batch10m5-brain-shadow-bakeoff-v2",
+  "default_profile": "smoke",
+  "default_case_limit": 1,
+  "max_case_limit": 3,
+  "max_provider_calls_per_run": 30,
+  "live_ledger_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/iios_ledger.db",
+  "live_env_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/.env",
+  "output_directory": "~/Library/Application Support/IIOS/brain-shadow-bakeoff",
+  "experiments": {
+    "openai_committee_smoke": [
+      {"model": "gpt-5.6-luna", "reasoning_effort": "medium"},
+      {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+      {"model": "gpt-5.6-sol", "reasoning_effort": "high"}
+    ],
+    "openai_committee_standard_extra": [
+      {"model": "gpt-5.6-luna", "reasoning_effort": "high"},
+      {"model": "gpt-5.6-terra", "reasoning_effort": "medium"},
+      {"model": "gpt-5.6-sol", "reasoning_effort": "xhigh"}
+    ],
+    "grok_reasoning": ["medium", "high"],
+    "gemini_thinking": ["medium", "high"],
+    "multi_model_arbiter": {"model": "gpt-5.6-terra", "reasoning_effort": "high"}
+  },
+  "capability_coverage": {
+    "verified_at": "2026-08-31",
+    "rule": "Audit every relevant documented capability, but do not enable a capability merely because it exists. Mark USED, SHADOW_TEST, INTENTIONALLY_OFF, or NOT_RELEVANT_TO_CURRENT_ROLE and require measured benefit before production adoption.",
+    "openai": {
+      "models": {
+        "gpt-5.6-luna": {"positioning": "cost-sensitive high-volume", "production_state": "USED_EIGHT_DESKS_AND_COMMITTEE_BASELINE"},
+        "gpt-5.6-terra": {"positioning": "intelligence-cost balance", "production_state": "SHADOW_TEST"},
+        "gpt-5.6-sol": {"positioning": "complex professional reasoning", "production_state": "SHADOW_TEST"}
+      },
+      "common_documented_capabilities": {
+        "responses_api": "USED",
+        "reasoning_none_low_medium_high_xhigh_max": "SHADOW_TEST",
+        "text_input_output": "USED",
+        "image_input_vision": "SHADOW_TEST_FOR_CHARTS_FILINGS_ONLY",
+        "function_calling": "INTENTIONALLY_OFF_ON_GOVERNED_DESKS",
+        "web_search": "INTENTIONALLY_OFF_ON_GOVERNED_DESKS",
+        "file_search": "SHADOW_TEST_AS_SEPARATE_EVIDENCE_ACQUISITION_LANE",
+        "computer_use": "INTENTIONALLY_OFF_HIGHER_RISK_NOT_REQUIRED",
+        "context_window_1_05m": "AVAILABLE_NOT_STRESS_TESTED",
+        "max_output_128k": "AVAILABLE_NOT_NEEDED_FOR_NORMAL_DESK_OUTPUT"
+      },
+      "primary_shadow_tests": [
+        "LUNA_VS_TERRA_VS_SOL_IDENTICAL_COMMITTEE_PACKET",
+        "REASONING_LEVEL_SENSITIVITY_BY_TASK",
+        "TERRA_OR_SOL_FOR_SKEPTIC_AND_COMMITTEE_ONLY",
+        "SEPARATE_TOOL_ENABLED_EVIDENCE_LANE_WITHOUT_CHANGING_GOVERNED_DESKS"
+      ]
+    },
+    "grok": {
+      "model": "grok-4.6",
+      "documented_capabilities": {
+        "responses_api": "USED",
+        "reasoning_low_medium_high_xhigh": "SHADOW_TEST_MEDIUM_VS_HIGH_FIRST",
+        "x_search": "USED",
+        "web_search": "USED",
+        "code_execution": "SHADOW_TEST_FOR_QUANTITATIVE_VERIFICATION_ONLY",
+        "function_calling": "INTENTIONALLY_OFF_CURRENT_WIRE_ROLE",
+        "structured_outputs": "PARTIAL_JSON_CONTRACT_NOT_NATIVE_SCHEMA_ENFORCED",
+        "image_input": "SHADOW_TEST_IF_VISUAL_MARKET_EVIDENCE_BECOMES_RELEVANT",
+        "prompt_caching": "USED",
+        "context_window_500k": "AVAILABLE_NOT_STRESS_TESTED"
+      },
+      "primary_shadow_tests": [
+        "MEDIUM_VS_HIGH_REASONING_IDENTICAL_RADAR_PACKET",
+        "CODE_EXECUTION_INCREMENTAL_VALUE_ON_QUANTITATIVE_CATALYSTS",
+        "NATIVE_STRUCTURED_OUTPUTS_VS_PROMPT_JSON"
+      ]
+    },
+    "gemini": {
+      "models": {
+        "gemini-3.7-flash": {"role": "rapid grounded research", "production_state": "USED"},
+        "gemini-3.1-pro-preview": {"role": "selective deep evidence", "production_state": "USED"}
+      },
+      "documented_capabilities": {
+        "google_search_grounding": "USED",
+        "url_context": "USED",
+        "structured_outputs": "USED",
+        "thinking": "USED_MEDIUM_FLASH_HIGH_PRO_WITH_ADAPTIVE_SHADOW_TEST",
+        "text_image_video_audio_pdf_input": "TEXT_USED_MULTIMODAL_SHADOW_TEST_AS_NEEDED",
+        "code_execution": "SHADOW_TEST_FOR_QUANTITATIVE_EVIDENCE",
+        "function_calling": "INTENTIONALLY_OFF_CURRENT_RESEARCH_ROLE",
+        "file_search": "SHADOW_TEST_FOR_GOVERNED_FILING_CORPUS",
+        "computer_use": "INTENTIONALLY_OFF_NOT_REQUIRED_FOR_MARKET_RESEARCH",
+        "caching": "AVAILABLE_USAGE_NOT_YET_PROVEN",
+        "maps_grounding": "NOT_RELEVANT_TO_CURRENT_EQUITY_RESEARCH_ROLE",
+        "context_window_1_048m": "AVAILABLE_NOT_STRESS_TESTED"
+      },
+      "primary_shadow_tests": [
+        "FLASH_MEDIUM_VS_HIGH_ON_COMPLEX_CASES",
+        "PRO_INCREMENTAL_VALUE_VS_FLASH_ON_SAME_EVIDENCE_GAPS",
+        "FILE_SEARCH_ON_FILINGS_AND_DOCUMENT_CORPUS",
+        "CODE_EXECUTION_ON_QUANTITATIVE_CROSS_CHECKS",
+        "CACHING_VALUE_ON_REPEATED_CASE_CONTEXT"
+      ]
+    },
+    "multi_model": {
+      "current_specialization": "GROK_WIRE_TO_GEMINI_BOOKS_TO_OPENAI_COMMITTEE",
+      "shadow_variants": [
+        "SEQUENTIAL_GROK_TO_GEMINI_TO_OPENAI",
+        "PARALLEL_GROK_PLUS_GEMINI_TO_OPENAI_ARBITER",
+        "OPENAI_ONLY_CONTROL",
+        "GROK_ONLY_CONTROL",
+        "GEMINI_ONLY_CONTROL"
+      ],
+      "decision_rule": "Do not reward complexity by assumption; compare detection, evidence quality, contradiction resolution, latency, provider usage, and later exact-linked outcomes."
+    }
+  },
+  "safety": {
+    "ledger_mode": "READ_ONLY",
+    "ledger_write": false,
+    "production_routing_change": false,
+    "provider_calls_require_explicit_execute": true,
+    "provider_spend_requires_second_confirmation": true,
+    "committee_change_authority": false,
+    "risk_change_authority": false,
+    "threshold_auto_change": false,
+    "capital_authority": false,
+    "broker_connected": false,
+    "trade_execution_permission": false,
+    "live_execution": false
+  }
+}
