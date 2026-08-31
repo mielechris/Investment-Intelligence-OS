@@ -1,0 +1,79 @@
+name: IIOS Batch 10M.4 Brain Capability Audit Superbatch
+
+on:
+  push:
+    branches:
+      - feature/batch10m4-brain-capability-audit-superbatch
+  pull_request:
+    branches:
+      - feature/batch10m3-overnight-readiness-brain-league
+
+jobs:
+  brain-capability-audit-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile Batch 10M.4
+        run: >-
+          python -m py_compile
+          scripts/iios_brain_capability_audit.py
+          scripts/test_batch10m4_brain_capability_audit.py
+
+      - name: Run Batch 10M.4 regression suite
+        run: PYTHONPATH=scripts python scripts/test_batch10m4_brain_capability_audit.py
+
+      - name: Run inherited Batch 10M.3 regression suite
+        run: PYTHONPATH=scripts python scripts/test_batch10m3_overnight_readiness.py
+
+      - name: Run inherited Batch 10M.2 scientific measurement suite
+        run: PYTHONPATH=scripts python scripts/test_batch10m2_scientific_measurement_superbatch.py
+
+      - name: Build static read-only audit artifact
+        run: |
+          mkdir -p /tmp/iios-audit
+          PYTHONPATH=scripts python scripts/iios_brain_capability_audit.py --output /tmp/iios-audit/latest.json
+          python - <<'PY'
+          import json
+          p=json.load(open('/tmp/iios-audit/latest.json'))
+          assert p['status']=='BRAIN_CAPABILITY_AUDIT_COMPLETE_READ_ONLY'
+          assert p['decision']['production_routing_state']=='HOLD_CURRENT_ROUTING_COLLECT_EVIDENCE'
+          assert p['decision']['auto_apply'] is False
+          assert p['safety']['provider_calls_from_audit'] is False
+          assert p['safety']['live_execution'] is False
+          assert p['safety']['trade_execution_permission'] is False
+          print('Static audit artifact: PASS')
+          PY
+
+      - name: Assert current provider capability findings
+        run: |
+          grep -q 'COMMITTEE_LUNA_VS_TERRA_VS_SOL_SAME_CASE_PACKET' scripts/iios_brain_capability_audit.py
+          grep -q 'GROK_REASONING_MEDIUM_VS_HIGH_ON_IDENTICAL_RADAR_PACKETS' scripts/iios_brain_capability_audit.py
+          grep -q 'GEMINI_FLASH_MEDIUM_VS_HIGH_ON_HIGH_COMPLEXITY_FINALISTS' scripts/iios_brain_capability_audit.py
+          grep -q 'MODEL_TIER_SPECIALIZATION' scripts/iios_brain_capability_audit.py
+          grep -q 'EXPLICIT_REASONING_EFFORT' scripts/iios_brain_capability_audit.py
+
+      - name: Assert official documentation provenance
+        run: |
+          grep -q 'https://docs.x.ai/' config/iios_brain_capability_audit_contract.json
+          grep -q 'https://ai.google.dev/' config/iios_brain_capability_audit_contract.json
+          grep -q 'https://platform.openai.com/docs/models' config/iios_brain_capability_audit_contract.json
+          grep -q '"verified_on": "2026-08-31"' config/iios_brain_capability_audit_contract.json
+
+      - name: Assert audit makes no provider calls
+        run: |
+          ! grep -Eq 'OpenAI\(|research_json\(|urlopen\(|requests\.(get|post)|httpx\.' scripts/iios_brain_capability_audit.py
+          grep -q '"provider_calls_from_audit": false' config/iios_brain_capability_audit_contract.json
+
+      - name: Assert no autonomous authority
+        run: |
+          grep -q '"model_routing_auto_change": false' config/iios_brain_capability_audit_contract.json
+          grep -q '"threshold_auto_change": false' config/iios_brain_capability_audit_contract.json
+          grep -q '"committee_change_authority": false' config/iios_brain_capability_audit_contract.json
+          grep -q '"risk_change_authority": false' config/iios_brain_capability_audit_contract.json
+          grep -q '"capital_authority": false' config/iios_brain_capability_audit_contract.json
+          grep -q '"trade_execution_permission": false' config/iios_brain_capability_audit_contract.json
+          grep -q '"live_execution": false' config/iios_brain_capability_audit_contract.json

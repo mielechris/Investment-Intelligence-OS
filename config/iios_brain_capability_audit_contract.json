@@ -1,0 +1,117 @@
+{
+  "schema_version": "batch10m4-brain-capability-audit-contract-v1",
+  "verified_on": "2026-08-31",
+  "purpose": "Read-only audit of how IIOS uses Grok, Gemini, and OpenAI versus provider-documented capabilities. No provider calls, routing changes, threshold changes, or trading authority.",
+  "provider_capability_snapshot": {
+    "GROK": {
+      "model": "grok-4.6",
+      "provider": "xAI",
+      "documented": {
+        "reasoning_levels": ["low", "medium", "high", "xhigh"],
+        "apis": ["Responses API", "Chat Completions"],
+        "tools": ["function calling", "web search", "X search", "code execution"],
+        "prompt_cache_key_recommended": true
+      },
+      "source_urls": [
+        "https://docs.x.ai/developers/grok-4-6",
+        "https://docs.x.ai/developers/tools/x-search",
+        "https://docs.x.ai/developers/tools/web-search"
+      ]
+    },
+    "GEMINI_FLASH": {
+      "model": "gemini-3.7-flash",
+      "provider": "Google",
+      "documented": {
+        "context_window_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "thinking_levels": ["low", "medium", "high"],
+        "tools": ["Google Search grounding", "URL Context", "structured outputs", "code execution", "file search", "function calling", "computer use preview"],
+        "production_status": "GA"
+      },
+      "source_urls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash",
+        "https://ai.google.dev/gemini-api/docs/latest-model",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/url-context"
+      ]
+    },
+    "GEMINI_PRO": {
+      "model": "gemini-3.1-pro-preview",
+      "provider": "Google",
+      "documented": {
+        "thinking_levels": ["low", "medium", "high"],
+        "url_context": true,
+        "search_grounding": true,
+        "structured_outputs_with_tools": true
+      },
+      "source_urls": [
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/url-context",
+        "https://ai.google.dev/gemini-api/docs/generate-content/structured-output"
+      ]
+    },
+    "OPENAI_LUNA": {
+      "model": "gpt-5.6-luna",
+      "provider": "OpenAI",
+      "documented": {
+        "positioning": "cost-sensitive high-volume workloads",
+        "context_window_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "reasoning_levels": ["none", "low", "medium", "high", "xhigh", "max"],
+        "tools": ["functions", "web search", "file search", "computer use"]
+      },
+      "source_urls": ["https://platform.openai.com/docs/models"]
+    },
+    "OPENAI_TERRA": {
+      "model": "gpt-5.6-terra",
+      "provider": "OpenAI",
+      "documented": {
+        "positioning": "balance intelligence and cost",
+        "context_window_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "reasoning_levels": ["none", "low", "medium", "high", "xhigh", "max"],
+        "tools": ["functions", "web search", "file search", "computer use"]
+      },
+      "source_urls": ["https://platform.openai.com/docs/models"]
+    },
+    "OPENAI_SOL": {
+      "model": "gpt-5.6-sol",
+      "provider": "OpenAI",
+      "documented": {
+        "positioning": "flagship complex professional work",
+        "context_window_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "reasoning_levels": ["none", "low", "medium", "high", "xhigh", "max"],
+        "tools": ["functions", "web search", "file search", "computer use"]
+      },
+      "source_urls": ["https://platform.openai.com/docs/models"]
+    }
+  },
+  "audit_order": [
+    "GROK",
+    "GEMINI",
+    "OPENAI",
+    "MODEL_COMBINATIONS",
+    "UNDERUSED_CAPABILITIES",
+    "SHADOW_EXPERIMENTS"
+  ],
+  "truth_rules": {
+    "configured_capability_is_not_equal_to_quality": true,
+    "provider_benchmark_is_not_equal_to_iios_task_accuracy": true,
+    "latency_is_not_equal_to_usefulness": true,
+    "low_cost_is_not_equal_to_best_model": true,
+    "stronger_model_is_not_equal_to_better_economic_choice": true,
+    "no_production_routing_change_without_outcome_linkage": true
+  },
+  "safety": {
+    "provider_calls_from_audit": false,
+    "model_routing_auto_change": false,
+    "threshold_auto_change": false,
+    "committee_change_authority": false,
+    "risk_change_authority": false,
+    "capital_authority": false,
+    "broker_connected": false,
+    "trade_execution_permission": false,
+    "live_execution": false
+  }
+}
