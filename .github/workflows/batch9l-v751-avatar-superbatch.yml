@@ -1,0 +1,56 @@
+name: IIOS 9L-V7.5.1 Avatar Install Superbatch Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v751-avatar-superbatch
+  pull_request:
+
+jobs:
+  avatar-install-v751:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify backend and governed scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v75-final-avatar-installation
+          git diff --quiet origin/feature/batch9l-v75-final-avatar-installation...HEAD -- "BACK END" scripts
+
+      - name: Verify all nine final portrait assets
+        run: |
+          for f in max policy macro fundamentals market_structure commodities geo_weather skeptic portfolio
+          do
+            test -s "FRONT END/src/assets/v751/${f}.webp"
+            test "$(stat -c%s "FRONT END/src/assets/v751/${f}.webp")" -gt 50000
+          done
+
+      - name: Verify portrait registry and fallback wiring
+        run: |
+          grep -q 'FINAL_PORTRAITS_V751' "FRONT END/src/finalPortraitsV751.ts"
+          grep -q 'ccp-portrait__fallback' "FRONT END/src/CinematicCharacterPortrait.tsx"
+          grep -q 'ccp-portrait__final-art' "FRONT END/src/CinematicCharacterPortrait.tsx"
+          grep -q 'living-avatar__final-art' "FRONT END/src/LivingCharacterAvatar.tsx"
+          grep -q 'event.currentTarget.style.display = "none"' "FRONT END/src/CinematicCharacterPortrait.tsx"
+          grep -q 'event.currentTarget.style.display = "none"' "FRONT END/src/LivingCharacterAvatar.tsx"
+
+      - name: Verify presentation-only truth boundary
+        run: |
+          ! grep -q 'method: "POST"' "FRONT END/src/finalPortraitsV751.ts"
+          ! grep -q 'method: "PUT"' "FRONT END/src/finalPortraitsV751.ts"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/finalPortraitsV751.ts"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/finalPortraitsV751.ts"
+
+      - name: Build V7.5.1 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build

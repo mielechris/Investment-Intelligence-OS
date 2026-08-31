@@ -205,3 +205,55 @@
     animation: none !important;
   }
 }
+
+/* V7.5.1 FINAL MOVING AVATARS — final art over preserved line-art fallback. */
+.living-avatar__final-art {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  left: 2px;
+  width: 82px;
+  height: 100px;
+  object-fit: cover;
+  object-position: center 48%;
+  border: 1px solid rgba(196,126,43,.45);
+  border-radius: 5px;
+  box-shadow: 0 8px 18px rgba(0,0,0,.48);
+  pointer-events: none;
+  user-select: none;
+}
+
+.living-avatar > svg {
+  position: relative;
+  z-index: 0;
+}
+
+.living-avatar__badge {
+  z-index: 3;
+}
+
+.living-avatar.is-active .living-avatar__final-art {
+  border-color: rgba(94,227,181,.62);
+  box-shadow: 0 0 14px rgba(94,227,181,.10), 0 8px 18px rgba(0,0,0,.48);
+  filter: brightness(1.04);
+}
+
+.living-avatar.is-reacting .living-avatar__final-art {
+  filter: brightness(1.05) contrast(1.025);
+}
+
+.living-avatar--skeptic .living-avatar__final-art {
+  border-color: rgba(255,125,125,.48);
+}
+
+.living-avatar--max .living-avatar__final-art {
+  top: 4px;
+  left: 3px;
+  width: 122px;
+  height: 132px;
+}
+
+.living-avatar--max.is-compact .living-avatar__final-art {
+  width: 88px;
+  height: 98px;
+}

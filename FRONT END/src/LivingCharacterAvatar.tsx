@@ -1,5 +1,6 @@
 import type { LivingCastKey } from "./livingCast";
 import { LIVING_CAST } from "./livingCast";
+import { FINAL_PORTRAITS_V751 } from "./finalPortraitsV751";
 import "./LivingCharacterAvatar.css";
 
 type Props = {
@@ -104,6 +105,16 @@ function HumanAvatar({ characterKey, active, reacting }: Props) {
           </g>
         ) : null}
       </svg>
+      <img
+        className="living-avatar__final-art"
+        src={FINAL_PORTRAITS_V751[characterKey]}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        onError={(event) => {
+          event.currentTarget.style.display = "none";
+        }}
+      />
       <div className="living-avatar__badge"><span>{member.monogram}</span><i /></div>
     </div>
   );
@@ -127,6 +138,16 @@ function MaxAvatar({ active, reacting, compact }: Props) {
         <circle className="max-avatar__tag" cx="70" cy="118" r="9" />
         <text x="70" y="122" textAnchor="middle" className="max-avatar__tag-text">M</text>
       </svg>
+      <img
+        className="living-avatar__final-art"
+        src={FINAL_PORTRAITS_V751.max}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        onError={(event) => {
+          event.currentTarget.style.display = "none";
+        }}
+      />
       <div className="living-avatar__badge"><span>MAX</span><i /></div>
     </div>
   );

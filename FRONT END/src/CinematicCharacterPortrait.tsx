@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { LIVING_CAST, type LivingCastKey } from "./livingCast";
+import { FINAL_PORTRAITS_V751 } from "./finalPortraitsV751";
 import "./CinematicCharacterPortrait.css";
 
 type HumanCastKey = Exclude<LivingCastKey, "max">;
@@ -295,7 +296,19 @@ export default function CinematicCharacterPortrait({
       role="img"
       aria-label={`${member.displayName}, ${member.governedRole}`}
     >
-      <div className="ccp-portrait__art">{portrait}</div>
+      <div className="ccp-portrait__art">
+        <div className="ccp-portrait__fallback">{portrait}</div>
+        <img
+          className="ccp-portrait__final-art"
+          src={FINAL_PORTRAITS_V751[characterKey]}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+      </div>
       {showLabel ? (
         <figcaption>
           <span>{member.title}</span>

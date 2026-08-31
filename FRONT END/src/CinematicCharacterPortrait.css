@@ -235,3 +235,31 @@
   .ccp-portrait,
   .ccp-portrait.is-reacting { animation: none !important; }
 }
+
+/* V7.5.1 FINAL AVATAR INSTALL — final art overlays the preserved SVG fallback. */
+.ccp-portrait__fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.ccp-portrait__final-art {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 48%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.ccp-portrait.is-active .ccp-portrait__final-art {
+  filter: brightness(1.035) contrast(1.02);
+}
+
+.ccp-portrait.is-reacting .ccp-portrait__final-art {
+  filter: brightness(1.045) contrast(1.025);
+}
