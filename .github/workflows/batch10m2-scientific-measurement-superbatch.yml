@@ -24,7 +24,7 @@ jobs:
           scripts/activate_batch10m2_scientific_measurement_superbatch.py
           scripts/test_batch10m2_scientific_measurement_superbatch.py
           scripts/install_iios_validation_bridge_supervision.py
-          scripts/iios_validation_terminal_worker.py
+          scripts/iios_validation_bridge_worker.py
           scripts/iios_validation_bridge_supervisor.py
 
       - name: Run scientific measurement tests
