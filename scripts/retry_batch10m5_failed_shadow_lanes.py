@@ -5,7 +5,6 @@ import argparse
 import importlib.util
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +13,8 @@ BASE_SCRIPT = ROOT / "scripts" / "iios_brain_shadow_bakeoff.py"
 CONFIG_PATH = ROOT / "config" / "iios_batch10m5_brain_shadow_bakeoff.json"
 APP = Path.home() / "Library" / "Application Support" / "IIOS"
 LATEST = APP / "brain-shadow-bakeoff" / "latest_brain_shadow_bakeoff.json"
+GEMINI_RETRY_TIMEOUT_SECONDS = "180"
+GEMINI_RETRY_COUNT = "2"
 
 
 def _load_module():
@@ -48,6 +49,17 @@ def _install_ca_bundle() -> str:
     return bundle
 
 
+def _install_gemini_transient_retry_policy() -> dict[str, int]:
+    # This applies only to the failed-lane shadow retry process. It does not
+    # mutate production 9E runtime configuration.
+    os.environ["IIOS_GEMINI_TIMEOUT_SECONDS"] = GEMINI_RETRY_TIMEOUT_SECONDS
+    os.environ["IIOS_GEMINI_RETRIES"] = GEMINI_RETRY_COUNT
+    return {
+        "timeout_seconds": int(GEMINI_RETRY_TIMEOUT_SECONDS),
+        "request_retries": int(GEMINI_RETRY_COUNT),
+    }
+
+
 def _replace_failed(existing: list[dict], retry_fn) -> tuple[list[dict], int]:
     out: list[dict] = []
     calls = 0
@@ -78,6 +90,7 @@ def main() -> int:
     base = _load_module()
     ca_bundle = _install_ca_bundle()
     base.load_dotenv(base.expand(str(config.get("live_env_path") or "")))
+    gemini_retry_policy = _install_gemini_transient_retry_policy()
 
     case_id = str(cases[0].get("case_id") or "")
     ledger = base.expand(str(config.get("live_ledger_path") or ""))
@@ -97,6 +110,7 @@ def main() -> int:
         level = str(row.get("thinking_level") or "medium")
         return base.annotate_result(base.call_gemini(prompt, level), "research")
 
+    # Only FAILED_CLOSED rows are retried. Completed Grok/OpenAI rows are retained.
     grok, grok_calls = _replace_failed(case.get("grok_reasoning_variants") or [], retry_grok)
     gemini, gemini_calls = _replace_failed(case.get("gemini_thinking_variants") or [], retry_gemini)
     case["grok_reasoning_variants"] = grok
@@ -139,9 +153,12 @@ def main() -> int:
         "mode": "FAILED_GROK_GEMINI_LANES_ONLY",
         "provider_calls_this_retry": grok_calls + gemini_calls + arbiter_calls,
         "openai_committee_calls_repeated": 0,
+        "completed_grok_calls_repeated": 0,
         "ca_bundle": ca_bundle,
         "ssl_cert_file_set": True,
         "requests_ca_bundle_set": True,
+        "gemini_transient_retry_policy": gemini_retry_policy,
+        "production_gemini_runtime_changed": False,
     }
     payload["production_routing_state"] = "UNCHANGED"
     payload["ledger_mode"] = "READ_ONLY"
