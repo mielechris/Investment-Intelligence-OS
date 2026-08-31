@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "iios_brain_shadow_bakeoff.py"
 RETRY = ROOT / "scripts" / "retry_batch10m5_failed_shadow_lanes.py"
+FALLBACK_RETRY = ROOT / "scripts" / "retry_batch10m5_gemini_fallback_only.py"
 CONFIG = ROOT / "config" / "iios_batch10m5_brain_shadow_bakeoff.json"
 
 spec = importlib.util.spec_from_file_location("bakeoff", SCRIPT)
@@ -104,6 +105,21 @@ class Batch10M5Tests(unittest.TestCase):
         self.assertIn('openai_committee_calls_repeated": 0', text)
         self.assertIn('FAILED_GROK_GEMINI_LANES_ONLY', text)
         self.assertIn('--confirm-shadow-provider-spend', text)
+        self.assertNotIn('for variant in selected_openai_variants', text)
+        self.assertNotIn('record_object(', text)
+        self.assertNotIn('record_event(', text)
+
+    def test_gemini_fallback_retry_preserves_model_identity_and_other_completed_lanes(self) -> None:
+        text = FALLBACK_RETRY.read_text(encoding="utf-8")
+        self.assertIn('FAILED_GEMINI_FALLBACK_ONLY', text)
+        self.assertIn('gemini-3.6-flash', text)
+        self.assertIn('fallback_used', text)
+        self.assertIn('preferred_model_error', text)
+        self.assertIn('primary_gemini_calls_repeated": 0', text)
+        self.assertIn('completed_grok_calls_repeated": 0', text)
+        self.assertIn('openai_committee_calls_repeated": 0', text)
+        self.assertIn('--confirm-shadow-provider-spend', text)
+        self.assertNotIn('base.call_grok(', text)
         self.assertNotIn('for variant in selected_openai_variants', text)
         self.assertNotIn('record_object(', text)
         self.assertNotIn('record_event(', text)
