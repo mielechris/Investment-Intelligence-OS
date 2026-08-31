@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_BUILDER = REPO / "scripts" / "iios_scientific_measurement_superbatch.py"
 VALIDATION_BRIDGE_INSTALLER = REPO / "scripts" / "install_iios_validation_bridge_supervision.py"
+LIVE_ROOT = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8")
+BACKEND_PYTHON = LIVE_ROOT / "BACK END" / "backend" / ".venv" / "bin" / "python"
 RUNTIME_ROOT = Path.home() / ".iios" / "scientific-measurement"
 RUNTIME_BIN = RUNTIME_ROOT / "bin"
 RUNTIME_BUILDER = RUNTIME_BIN / "iios_scientific_measurement_superbatch.py"
@@ -47,6 +49,8 @@ def validate() -> list[str]:
         errors.append(f"Missing builder: {SOURCE_BUILDER}")
     if not VALIDATION_BRIDGE_INSTALLER.exists():
         errors.append(f"Missing 9H/9I validation bridge installer: {VALIDATION_BRIDGE_INSTALLER}")
+    if not BACKEND_PYTHON.exists() or not os.access(BACKEND_PYTHON, os.X_OK):
+        errors.append(f"Missing executable IIOS backend Python: {BACKEND_PYTHON}")
     return errors
 
 
@@ -58,6 +62,7 @@ def print_plan() -> int:
     print("Runtime mutation: NONE")
     print("Purpose: prove case-flow integrity, validation recall, model task measurement, benchmark attribution, and data health")
     print("9H/9I hardening: INCLUDED through existing validation Terminal-Bridge installer")
+    print("Validation bridge interpreter:", BACKEND_PYTHON)
     print("10J/10K/10L/10M/10M.1 artifacts: CONSUMED WHEN PRESENT; NOT DUPLICATED")
     print("Scientific measurement cadence: 5 minutes")
     print("Runtime root:", RUNTIME_ROOT)
@@ -120,7 +125,7 @@ def activate() -> int:
         print("SESSION GUARD ACTIVE: refusing to migrate 9H/9I during the regular market session. Run again after 16:10 ET.")
         return 3
 
-    validation = subprocess.run(["/usr/bin/python3", str(VALIDATION_BRIDGE_INSTALLER), "--activate"], text=True, check=False)
+    validation = subprocess.run([str(BACKEND_PYTHON), str(VALIDATION_BRIDGE_INSTALLER), "--activate"], text=True, check=False)
     failures: list[str] = []
     if validation.returncode != 0:
         failures.append(f"9H/9I validation bridge activation returned {validation.returncode}")
@@ -131,7 +136,7 @@ def activate() -> int:
     print("=" * 78)
     print("IIOS BATCH 10M.2 — SCIENTIFIC MEASUREMENT SUPERBATCH ACTIVATION")
     print("=" * 78)
-    print("9H/9I validation bridge: requested")
+    print("9H/9I validation bridge: requested via IIOS backend Python")
     print("Scientific measurement worker:", LABEL)
     print("Runtime root:", RUNTIME_ROOT)
     print("9A/9B/9E: UNTOUCHED")
