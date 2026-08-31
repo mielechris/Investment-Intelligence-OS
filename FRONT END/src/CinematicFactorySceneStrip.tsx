@@ -6,6 +6,7 @@ import LiveFactoryEpisodeV74 from "./LiveFactoryEpisodeV74";
 import LivingCharacterBehaviorV7 from "./LivingCharacterBehaviorV7";
 import PersistedStateReconstructionV732 from "./PersistedStateReconstructionV732";
 import SceneDirectionV73 from "./SceneDirectionV73";
+import VoiceAudioSoundstageV77 from "./VoiceAudioSoundstageV77";
 import "./CinematicFactorySceneStrip.css";
 
 type Props = {
@@ -77,6 +78,7 @@ export default function CinematicFactorySceneStrip({ view }: Props) {
 
       <LivingCharacterBehaviorV7 view={view} />
       <DialoguePersonalityV76 view={view} />
+      <VoiceAudioSoundstageV77 view={view} />
       <LiveFactoryEpisodeV74 view={view} />
       <SceneDirectionV73 view={view} />
       <PersistedStateReconstructionV732 view={view} />
