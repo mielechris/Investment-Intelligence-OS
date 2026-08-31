@@ -48,10 +48,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _has(text: str, *needles: str) -> bool:
-    return all(needle in text for needle in needles)
-
-
 def _runtime_brain_row(brain_league: dict[str, Any], brain: str) -> dict[str, Any]:
     for row in brain_league.get("brains") or []:
         if isinstance(row, dict) and str(row.get("brain") or "").upper() == brain.upper():
@@ -187,8 +183,8 @@ def audit_openai(agent: str, committee: str, runtime: dict[str, Any]) -> dict[st
         "evidence_only_specialist_contract": "Use only evidence supplied in this packet" in agent,
         "explicit_reasoning_effort_specialists": "reasoning_effort" in agent or "reasoning=" in agent,
         "explicit_reasoning_effort_committee": "reasoning_effort" in committee or "reasoning=" in committee,
-        "specialist_tools_enabled": 'tools=' in agent or '"tools"' in agent,
-        "committee_tools_enabled": 'tools=' in committee or '"tools"' in committee,
+        "specialist_tools_enabled": "tools=" in agent or '"tools"' in agent,
+        "committee_tools_enabled": "tools=" in committee or '"tools"' in committee,
         "different_model_for_committee": not ('MODEL = "gpt-5.6-luna"' in agent and 'model="gpt-5.6-luna"' in committee),
     }
     core = [
@@ -291,37 +287,37 @@ def build_audit(contract: dict[str, Any], brain_league: dict[str, Any], scientif
             "priority": 1,
             "code": "OPENAI_COMMITTEE_MODEL_TIER_SHADOW",
             "action": "Replay identical completed case packets through Luna, Terra, and Sol Committee variants in shadow and compare decision quality, dissent preservation, evidence-gap usefulness, latency, and exact cost.",
-            "production_change": false,
+            "production_change": False,
         },
         {
             "priority": 2,
             "code": "OPENAI_REASONING_EFFORT_SHADOW",
             "action": "Test explicit reasoning levels on Committee and Skeptic before changing the eight high-volume desks.",
-            "production_change": false,
+            "production_change": False,
         },
         {
             "priority": 3,
             "code": "GROK_REASONING_EFFORT_SHADOW",
             "action": "Run bounded medium/high reasoning comparisons on identical complex radar packets with X Search and Web Search unchanged.",
-            "production_change": false,
+            "production_change": False,
         },
         {
             "priority": 4,
             "code": "GEMINI_COMPLEXITY_ADAPTIVE_THINKING_SHADOW",
             "action": "Compare medium versus high Flash thinking only on high-complexity finalists; retain Pro for evidence-gap-driven deep work.",
-            "production_change": false,
+            "production_change": False,
         },
         {
             "priority": 5,
             "code": "MULTI_MODEL_COMBINATION_BAKEOFF",
             "action": "Run specialized sequential, parallel-arbiter, and single-model controls on the same historical/live shadow cases.",
-            "production_change": false,
+            "production_change": False,
         },
         {
             "priority": 6,
             "code": "PERSIST_EXACT_MODEL_TASK_OUTCOME_LINKAGE",
             "action": "Do not declare a winner until model/task outputs can be linked to later benchmark and case outcomes.",
-            "production_change": false,
+            "production_change": False,
         },
     ]
 
@@ -345,7 +341,7 @@ def build_audit(contract: dict[str, Any], brain_league: dict[str, Any], scientif
         "decision": {
             "production_routing_state": "HOLD_CURRENT_ROUTING_COLLECT_EVIDENCE",
             "why": "Configuration/capability gaps can be audited now, but task-level superiority must be proven with exact outcome linkage and shadow comparison.",
-            "auto_apply": false,
+            "auto_apply": False,
         },
         "truth_rules": contract.get("truth_rules") or {},
         "safety": contract.get("safety") or {},
