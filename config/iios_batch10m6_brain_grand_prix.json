@@ -1,0 +1,71 @@
+{
+  "schema_version": "batch10m6-brain-grand-prix-v1",
+  "default_case_limit": 5,
+  "max_case_limit": 10,
+  "max_provider_calls_per_run": 100,
+  "source_bakeoff_config": "config/iios_batch10m5_brain_shadow_bakeoff.json",
+  "live_ledger_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/iios_ledger.db",
+  "live_env_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/.env",
+  "output_directory": "~/Library/Application Support/IIOS/brain-grand-prix",
+  "case_selection": {
+    "latest_complete_eight_agent_cases": true,
+    "prefer_distinct_topics": true,
+    "prefer_mixed_production_confidence": true,
+    "minimum_agent_count": 8
+  },
+  "lanes_per_case": {
+    "openai_committee": [
+      {"model": "gpt-5.6-luna", "reasoning_effort": "medium"},
+      {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+      {"model": "gpt-5.6-sol", "reasoning_effort": "high"}
+    ],
+    "grok_research": ["medium", "high"],
+    "gemini_primary": ["medium", "high"],
+    "gemini_fallback_model": "gemini-3.6-flash",
+    "gemini_fallback_on_failed_closed": true,
+    "multi_model_arbiter": {"model": "gpt-5.6-terra", "reasoning_effort": "high"}
+  },
+  "capability_policy": {
+    "test_relevant_capabilities_in_assigned_role": true,
+    "do_not_enable_every_tool_blindly": true,
+    "openai_governed_committee_external_tools": "INTENTIONALLY_OFF",
+    "grok_x_search": "USED",
+    "grok_web_search": "USED",
+    "grok_reasoning_levels": "TESTED",
+    "gemini_google_search_grounding": "USED",
+    "gemini_url_context": "USED",
+    "gemini_structured_output": "USED",
+    "gemini_thinking_levels": "TESTED",
+    "gemini_primary_fallback_resilience": "TESTED",
+    "openai_model_tiers": "TESTED",
+    "openai_reasoning_levels": "TESTED",
+    "vision_file_code_computer_tools": "SEPARATE_TARGETED_SHADOW_TEST_WHEN_CASE_RELEVANT"
+  },
+  "scorecard": {
+    "measure_reliability": true,
+    "measure_latency": true,
+    "measure_response_completeness": true,
+    "measure_disposition_agreement": true,
+    "measure_confidence": true,
+    "measure_evidence_gap_count": true,
+    "measure_provider_model_identity": true,
+    "measure_fallback_usage": true,
+    "accuracy_requires_exact_task_to_outcome_linkage": true,
+    "cost_requires_exact_persisted_provider_cost": true
+  },
+  "safety": {
+    "ledger_mode": "READ_ONLY",
+    "ledger_write": false,
+    "production_model_routing_change": false,
+    "provider_calls_require_explicit_execute": true,
+    "provider_spend_requires_second_confirmation": true,
+    "committee_change_authority": false,
+    "risk_change_authority": false,
+    "threshold_auto_change": false,
+    "capital_authority": false,
+    "broker_connected": false,
+    "trade_execution_permission": false,
+    "live_execution": false,
+    "auto_apply_winner": false
+  }
+}
