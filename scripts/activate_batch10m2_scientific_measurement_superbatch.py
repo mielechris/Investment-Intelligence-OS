@@ -15,7 +15,10 @@ REPO = Path(__file__).resolve().parents[1]
 SOURCE_BUILDER = REPO / "scripts" / "iios_scientific_measurement_superbatch.py"
 VALIDATION_BRIDGE_INSTALLER = REPO / "scripts" / "install_iios_validation_bridge_supervision.py"
 LIVE_ROOT = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8")
-BACKEND_PYTHON = LIVE_ROOT / "BACK END" / "backend" / ".venv" / "bin" / "python"
+BACKEND_PYTHON_CANDIDATES = (
+    LIVE_ROOT / "BACK END" / "backend" / ".venv" / "bin" / "python",
+    Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
+)
 RUNTIME_ROOT = Path.home() / ".iios" / "scientific-measurement"
 RUNTIME_BIN = RUNTIME_ROOT / "bin"
 RUNTIME_BUILDER = RUNTIME_BIN / "iios_scientific_measurement_superbatch.py"
@@ -43,14 +46,22 @@ def regular_session_guard_active() -> bool:
     return clock_time(9, 30) <= now.time().replace(tzinfo=None) < clock_time(16, 10)
 
 
+def resolve_backend_python() -> Path:
+    for candidate in BACKEND_PYTHON_CANDIDATES:
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+    searched = ", ".join(str(path) for path in BACKEND_PYTHON_CANDIDATES)
+    raise SystemExit(f"No executable IIOS backend Python found. Checked: {searched}")
+
+
 def validate() -> list[str]:
     errors: list[str] = []
     if not SOURCE_BUILDER.exists():
         errors.append(f"Missing builder: {SOURCE_BUILDER}")
     if not VALIDATION_BRIDGE_INSTALLER.exists():
         errors.append(f"Missing 9H/9I validation bridge installer: {VALIDATION_BRIDGE_INSTALLER}")
-    if not BACKEND_PYTHON.exists() or not os.access(BACKEND_PYTHON, os.X_OK):
-        errors.append(f"Missing executable IIOS backend Python: {BACKEND_PYTHON}")
+    if not any(path.exists() and os.access(path, os.X_OK) for path in BACKEND_PYTHON_CANDIDATES):
+        errors.append("No executable IIOS backend Python found in known live/main checkout locations")
     return errors
 
 
@@ -62,10 +73,13 @@ def print_plan() -> int:
     print("Runtime mutation: NONE")
     print("Purpose: prove case-flow integrity, validation recall, model task measurement, benchmark attribution, and data health")
     print("9H/9I hardening: INCLUDED through existing validation Terminal-Bridge installer")
-    print("Validation bridge interpreter:", BACKEND_PYTHON)
     print("10J/10K/10L/10M/10M.1 artifacts: CONSUMED WHEN PRESENT; NOT DUPLICATED")
     print("Scientific measurement cadence: 5 minutes")
     print("Runtime root:", RUNTIME_ROOT)
+    try:
+        print("Validation bridge Python:", resolve_backend_python())
+    except SystemExit:
+        print("Validation bridge Python: UNRESOLVED")
     print("Core 9A/9B/9E workers: UNTOUCHED")
     print("Backend 8002: UNCHANGED")
     print("Live execution: FALSE / UNCHANGED")
@@ -125,7 +139,9 @@ def activate() -> int:
         print("SESSION GUARD ACTIVE: refusing to migrate 9H/9I during the regular market session. Run again after 16:10 ET.")
         return 3
 
-    validation = subprocess.run([str(BACKEND_PYTHON), str(VALIDATION_BRIDGE_INSTALLER), "--activate"], text=True, check=False)
+    backend_python = resolve_backend_python()
+    print("Validation bridge Python:", backend_python)
+    validation = subprocess.run([str(backend_python), str(VALIDATION_BRIDGE_INSTALLER), "--activate"], text=True, check=False)
     failures: list[str] = []
     if validation.returncode != 0:
         failures.append(f"9H/9I validation bridge activation returned {validation.returncode}")
@@ -136,7 +152,7 @@ def activate() -> int:
     print("=" * 78)
     print("IIOS BATCH 10M.2 — SCIENTIFIC MEASUREMENT SUPERBATCH ACTIVATION")
     print("=" * 78)
-    print("9H/9I validation bridge: requested via IIOS backend Python")
+    print("9H/9I validation bridge: requested")
     print("Scientific measurement worker:", LABEL)
     print("Runtime root:", RUNTIME_ROOT)
     print("9A/9B/9E: UNTOUCHED")
