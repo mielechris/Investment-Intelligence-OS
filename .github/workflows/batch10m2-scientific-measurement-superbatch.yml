@@ -1,0 +1,61 @@
+name: IIOS Batch 10M.2 Scientific Measurement Superbatch
+
+on:
+  push:
+    branches:
+      - feature/batch10m2-scientific-measurement-superbatch
+  pull_request:
+    branches:
+      - feature/batch9h-9i-validation-bridge-hardening
+
+jobs:
+  scientific-measurement-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile superbatch
+        run: >-
+          python -m py_compile
+          scripts/iios_scientific_measurement_superbatch.py
+          scripts/activate_batch10m2_scientific_measurement_superbatch.py
+          scripts/test_batch10m2_scientific_measurement_superbatch.py
+          scripts/install_iios_validation_bridge_supervision.py
+          scripts/iios_validation_terminal_worker.py
+          scripts/iios_validation_bridge_supervisor.py
+
+      - name: Run scientific measurement tests
+        run: PYTHONPATH=scripts python scripts/test_batch10m2_scientific_measurement_superbatch.py
+
+      - name: Run inherited 9H/9I bridge safety contract
+        run: python scripts/test_iios_validation_bridge_supervision.py
+
+      - name: Assert scientific truth rules
+        run: |
+          grep -q 'validation_miss_is_not_equal_to_lost_trade.*True' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'promotion_is_not_equal_to_buy.*True' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'paper_profit_is_not_equal_to_alpha.*True' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'low_model_cost_is_not_equal_to_high_model_quality.*True' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'INCOMPLETE_BENCHMARK_DO_NOT_TUNE' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'MEASUREMENT_GAP_OUTCOME_LINK_NOT_PERSISTED' scripts/iios_scientific_measurement_superbatch.py
+
+      - name: Assert case pipeline governance
+        run: |
+          grep -q 'EIGHT_AGENT_COMPLETION_MISSING' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'COMMITTEE_DECISION_MISSING' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'PAPER_EXECUTION_WITHOUT_APPROVED_RISK' scripts/iios_scientific_measurement_superbatch.py
+          grep -q 'WORKING_AS_DESIGNED' scripts/iios_scientific_measurement_superbatch.py
+
+      - name: Assert runtime isolation and session guard
+        run: |
+          grep -q 'RUNTIME_ROOT = Path.home() / ".iios" / "scientific-measurement"' scripts/activate_batch10m2_scientific_measurement_superbatch.py
+          grep -q 'SESSION GUARD ACTIVE' scripts/activate_batch10m2_scientific_measurement_superbatch.py
+          grep -q '9A/9B/9E: UNTOUCHED' scripts/activate_batch10m2_scientific_measurement_superbatch.py
+          grep -q 'Backend 8002: UNCHANGED' scripts/activate_batch10m2_scientific_measurement_superbatch.py
+
+      - name: Assert no autonomous authority
+        run: |
+          ! grep -Eq '"(auto_change_thresholds|auto_change_agent_weights|auto_change_model_routing|provider_change_authority|committee_change_authority|risk_rule_change_authority|capital_authority|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_scientific_measurement_superbatch.py scripts/activate_batch10m2_scientific_measurement_superbatch.py
