@@ -1,0 +1,33 @@
+name: IIOS Batch 10M.6 Brain Grand Prix
+
+on:
+  pull_request:
+    branches:
+      - feature/batch10m5-brain-shadow-bakeoff
+    paths:
+      - 'config/iios_batch10m6_brain_grand_prix.json'
+      - 'scripts/iios_brain_grand_prix.py'
+      - 'scripts/run_batch10m6_brain_grand_prix.py'
+      - 'scripts/test_batch10m6_brain_grand_prix.py'
+      - '.github/workflows/batch10m6-brain-grand-prix.yml'
+
+jobs:
+  brain-grand-prix-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Batch 10M.6
+        run: python -m py_compile scripts/iios_brain_grand_prix.py scripts/run_batch10m6_brain_grand_prix.py scripts/test_batch10m6_brain_grand_prix.py
+      - name: Run Batch 10M.6 regression suite
+        run: python scripts/test_batch10m6_brain_grand_prix.py
+      - name: Run inherited Batch 10M.5 suite
+        run: python scripts/test_batch10m5_brain_shadow_bakeoff.py
+      - name: Run inherited Batch 10M.4 suite
+        run: python scripts/test_batch10m4_brain_capability_audit.py
+      - name: Run inherited Batch 10M.3 suite
+        run: python scripts/test_batch10m3_overnight_readiness.py
+      - name: Run inherited Batch 10M.2 suite
+        run: python scripts/test_batch10m2_scientific_measurement_superbatch.py
