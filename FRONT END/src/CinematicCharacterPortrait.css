@@ -263,3 +263,24 @@
 .ccp-portrait.is-reacting .ccp-portrait__final-art {
   filter: brightness(1.045) contrast(1.025);
 }
+
+/* V7.5.2 AVATAR INTEGRATION POLISH — per-character focal control. */
+.ccp-portrait--max .ccp-portrait__final-art { object-position: 50% 44%; }
+.ccp-portrait--policy .ccp-portrait__final-art { object-position: 50% 45%; }
+.ccp-portrait--macro .ccp-portrait__final-art { object-position: 50% 44%; }
+.ccp-portrait--fundamentals .ccp-portrait__final-art { object-position: 49% 44%; }
+.ccp-portrait--market_structure .ccp-portrait__final-art { object-position: 51% 44%; }
+.ccp-portrait--commodities .ccp-portrait__final-art { object-position: 50% 44%; }
+.ccp-portrait--geo_weather .ccp-portrait__final-art { object-position: 50% 43%; }
+.ccp-portrait--skeptic .ccp-portrait__final-art { object-position: 50% 43%; }
+.ccp-portrait--portfolio .ccp-portrait__final-art { object-position: 50% 43%; }
+
+.ccp-portrait--max.ccp-portrait--boss .ccp-portrait__final-art {
+  object-position: 50% 42%;
+  transform: scale(1.018);
+}
+
+.ccp-portrait--scene .ccp-portrait__final-art,
+.ccp-portrait--boss .ccp-portrait__final-art {
+  border-radius: 1px;
+}

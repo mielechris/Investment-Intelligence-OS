@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { LIVING_CAST, type LivingCastKey } from "./livingCast";
-import { FINAL_PORTRAITS_V751 } from "./finalPortraitsV751";
+import { CINEMATIC_PORTRAITS_V752 } from "./finalPortraitsV752";
 import "./CinematicCharacterPortrait.css";
 
 type HumanCastKey = Exclude<LivingCastKey, "max">;
@@ -300,7 +300,7 @@ export default function CinematicCharacterPortrait({
         <div className="ccp-portrait__fallback">{portrait}</div>
         <img
           className="ccp-portrait__final-art"
-          src={FINAL_PORTRAITS_V751[characterKey]}
+          src={CINEMATIC_PORTRAITS_V752[characterKey]}
           alt=""
           aria-hidden="true"
           draggable={false}

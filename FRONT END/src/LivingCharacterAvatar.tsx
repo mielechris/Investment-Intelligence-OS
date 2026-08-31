@@ -1,6 +1,6 @@
 import type { LivingCastKey } from "./livingCast";
 import { LIVING_CAST } from "./livingCast";
-import { FINAL_PORTRAITS_V751 } from "./finalPortraitsV751";
+import { MOVING_PORTRAITS_V752 } from "./finalPortraitsV752";
 import "./LivingCharacterAvatar.css";
 
 type Props = {
@@ -107,7 +107,7 @@ function HumanAvatar({ characterKey, active, reacting }: Props) {
       </svg>
       <img
         className="living-avatar__final-art"
-        src={FINAL_PORTRAITS_V751[characterKey]}
+        src={MOVING_PORTRAITS_V752[characterKey]}
         alt=""
         aria-hidden="true"
         draggable={false}
@@ -140,7 +140,7 @@ function MaxAvatar({ active, reacting, compact }: Props) {
       </svg>
       <img
         className="living-avatar__final-art"
-        src={FINAL_PORTRAITS_V751.max}
+        src={MOVING_PORTRAITS_V752.max}
         alt=""
         aria-hidden="true"
         draggable={false}

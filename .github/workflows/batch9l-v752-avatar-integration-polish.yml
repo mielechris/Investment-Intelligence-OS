@@ -1,0 +1,58 @@
+name: IIOS 9L-V7.5.2 Avatar Integration Polish Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v752-avatar-integration-polish
+  pull_request:
+
+jobs:
+  avatar-polish-v752:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify V7.5.1 backend and governed scripts remain untouched
+        run: |
+          git fetch origin feature/batch9l-v751-avatar-superbatch
+          git diff --quiet origin/feature/batch9l-v751-avatar-superbatch...HEAD -- "BACK END" scripts
+
+      - name: Verify all nine V7.5.2 moving portrait assets
+        run: |
+          for f in max policy macro fundamentals market_structure commodities geo_weather skeptic portfolio
+          do
+            test -s "FRONT END/src/assets/v752/${f}-move.webp"
+            test "$(stat -c%s "FRONT END/src/assets/v752/${f}-move.webp")" -gt 35000
+          done
+
+      - name: Verify V7.5.2 registry and presentation wiring
+        run: |
+          grep -q 'CINEMATIC_PORTRAITS_V752' "FRONT END/src/finalPortraitsV752.ts"
+          grep -q 'MOVING_PORTRAITS_V752' "FRONT END/src/finalPortraitsV752.ts"
+          grep -q 'CINEMATIC_PORTRAITS_V752' "FRONT END/src/CinematicCharacterPortrait.tsx"
+          grep -q 'MOVING_PORTRAITS_V752' "FRONT END/src/LivingCharacterAvatar.tsx"
+          grep -q 'V7.5.2 LIVING CUTOUT POLISH' "FRONT END/src/LivingCharacterAvatar.css"
+          grep -q 'V7.5.2 AVATAR INTEGRATION POLISH' "FRONT END/src/CinematicCharacterPortrait.css"
+          grep -q 'event.currentTarget.style.display = "none"' "FRONT END/src/CinematicCharacterPortrait.tsx"
+          grep -q 'event.currentTarget.style.display = "none"' "FRONT END/src/LivingCharacterAvatar.tsx"
+
+      - name: Verify artwork layer has no write authority
+        run: |
+          ! grep -q 'method: "POST"' "FRONT END/src/finalPortraitsV752.ts"
+          ! grep -q 'method: "PUT"' "FRONT END/src/finalPortraitsV752.ts"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/finalPortraitsV752.ts"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/finalPortraitsV752.ts"
+
+      - name: Build V7.5.2 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
