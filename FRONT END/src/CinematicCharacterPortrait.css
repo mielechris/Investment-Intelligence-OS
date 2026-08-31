@@ -297,3 +297,31 @@
   object-position: 50% 48% !important;
   transform: none !important;
 }
+
+/* V7.5.2.2 — MAX SMALL-SCENE SLOT FIX
+   V7.3 character stages are 76x92. Override the global MAX boss width
+   only when MAX is inside that stage. MAX's Office / large boss art
+   remains unchanged. */
+.v73-character-avatar > .ccp-portrait--max.ccp-portrait--boss {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+}
+
+.v73-character-avatar
+  > .ccp-portrait--max.ccp-portrait--boss
+  .ccp-portrait__art {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+.v73-character-avatar
+  > .ccp-portrait--max.ccp-portrait--boss
+  .ccp-portrait__final-art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 48% !important;
+  transform: none !important;
+}
