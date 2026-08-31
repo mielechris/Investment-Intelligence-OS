@@ -26,12 +26,13 @@ jobs:
           scripts/install_iios_validation_bridge_supervision.py
           scripts/iios_validation_bridge_worker.py
           scripts/iios_validation_bridge_supervisor.py
+          scripts/test_iios_validation_bridge_contract.py
 
       - name: Run scientific measurement tests
         run: PYTHONPATH=scripts python scripts/test_batch10m2_scientific_measurement_superbatch.py
 
       - name: Run inherited 9H/9I bridge safety contract
-        run: python scripts/test_iios_validation_bridge_supervision.py
+        run: python scripts/test_iios_validation_bridge_contract.py
 
       - name: Assert scientific truth rules
         run: |
