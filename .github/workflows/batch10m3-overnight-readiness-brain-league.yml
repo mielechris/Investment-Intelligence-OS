@@ -1,0 +1,66 @@
+name: IIOS Batch 10M.3 Overnight Readiness + Brain League
+
+on:
+  push:
+    branches:
+      - feature/batch10m3-overnight-readiness-brain-league
+  pull_request:
+    branches:
+      - feature/batch10m2-scientific-measurement-superbatch
+
+jobs:
+  overnight-readiness-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile Batch 10M.3
+        run: >-
+          python -m py_compile
+          scripts/iios_9e_terminal_bridge_worker.py
+          scripts/iios_9e_terminal_bridge_supervisor.py
+          scripts/iios_preopen_readiness.py
+          scripts/iios_brain_capability_scorecard.py
+          scripts/activate_batch10m3_overnight_readiness.py
+          scripts/test_batch10m3_overnight_readiness.py
+
+      - name: Run Batch 10M.3 tests
+        run: PYTHONPATH=scripts python scripts/test_batch10m3_overnight_readiness.py
+
+      - name: Run inherited scientific measurement tests
+        run: PYTHONPATH=scripts python scripts/test_batch10m2_scientific_measurement_superbatch.py
+
+      - name: Assert isolated 9E supervision
+        run: |
+          grep -q 'runner_process_fragment.*iios_high_speed_factory_runner.py' config/iios_batch10m3_overnight_readiness.json
+          grep -q '9A_touched.*false' config/iios_batch10m3_overnight_readiness.json
+          grep -q '9B_touched.*false' config/iios_batch10m3_overnight_readiness.json
+          grep -q '9H_touched.*false' config/iios_batch10m3_overnight_readiness.json
+          grep -q '9I_touched.*false' config/iios_batch10m3_overnight_readiness.json
+          ! grep -q 'iios_observation_runner.py' scripts/iios_9e_terminal_bridge_supervisor.py
+          ! grep -q 'iios_paper_trading_runner.py' scripts/iios_9e_terminal_bridge_supervisor.py
+
+      - name: Assert opening-bell gate and awake guard
+        run: |
+          grep -q 'READY_FOR_OPENING_BELL' scripts/iios_preopen_readiness.py
+          grep -q 'telemetry_local_ledger_read_only' scripts/iios_preopen_readiness.py
+          grep -q 'live_capital_locked' scripts/iios_preopen_readiness.py
+          grep -q 'trade_execution_permission_false' scripts/iios_preopen_readiness.py
+          grep -q 'caffeinate.*-imsu' scripts/activate_batch10m3_overnight_readiness.py
+          grep -q 'SESSION GUARD ACTIVE' scripts/activate_batch10m3_overnight_readiness.py
+
+      - name: Assert brain league truth rules
+        run: |
+          grep -q 'HOLD_CURRENT_ROUTING_COLLECT_EVIDENCE' scripts/iios_brain_capability_scorecard.py
+          grep -q 'WAITING_FOR_EXACT_OUTCOME_LINKAGE' scripts/iios_brain_capability_scorecard.py
+          grep -q 'PARALLEL_GROK_GEMINI_OPENAI_ARBITRATION' scripts/iios_brain_capability_scorecard.py
+          grep -q 'OPENAI_CONTROL' scripts/iios_brain_capability_scorecard.py
+          grep -q 'model_routing_auto_change.*False' scripts/iios_brain_capability_scorecard.py
+
+      - name: Assert no autonomous authority
+        run: |
+          ! grep -Eq '"(model_routing_auto_change|threshold_auto_change|committee_change_authority|risk_change_authority|capital_authority|broker_connected|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*true' config/iios_batch10m3_overnight_readiness.json
+          ! grep -Eq '"(model_routing_auto_change|threshold_auto_change|committee_change_authority|risk_change_authority|capital_authority|broker_connected|trade_execution_permission|live_execution)"[[:space:]]*:[[:space:]]*True' scripts/iios_brain_capability_scorecard.py scripts/iios_preopen_readiness.py scripts/activate_batch10m3_overnight_readiness.py
