@@ -292,7 +292,20 @@ export default function DialoguePersonalityV76({ view }: { view: View }) {
         <span>WRITE AUTHORITY · {safety.backend_write_permission ? "TRUE" : "NONE"}</span>
       </div>
 
-      {error ? <div className="v76-error">{error}</div> : null}
+      {error ? (
+        <div className={`v76-source-state ${snapshot ? "is-retrying" : "is-hard-failure"}`}>
+          <strong>
+            {snapshot
+              ? "SOURCE POLL MISSED · LAST GOOD RECEIPT RETAINED"
+              : "DIALOGUE SOURCE UNAVAILABLE"}
+          </strong>
+          <span>
+            {snapshot
+              ? "Presentation remains bound to the last successful persisted snapshot. Retrying automatically."
+              : error}
+          </span>
+        </div>
+      ) : null}
 
       <div className="v76-layout">
         <aside className="v76-bible">

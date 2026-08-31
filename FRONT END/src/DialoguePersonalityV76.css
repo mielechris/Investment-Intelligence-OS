@@ -405,3 +405,39 @@
   .v76-script-room > footer { grid-template-columns: 1fr; }
   .v76-script-room > footer span { border-right: 0; border-bottom: 1px solid rgba(72,138,94,.16); }
 }
+
+/* V7.6.1 · graceful source-poll degradation */
+.v76-source-state {
+  margin: 14px 18px 0;
+  padding: 11px 14px;
+  border: 1px solid rgba(190, 132, 48, .34);
+  background: rgba(34, 24, 8, .42);
+  text-align: center;
+}
+
+.v76-source-state strong,
+.v76-source-state span {
+  display: block;
+}
+
+.v76-source-state strong {
+  color: #d9ad62;
+  font-size: 9px;
+  letter-spacing: .11em;
+}
+
+.v76-source-state span {
+  margin-top: 4px;
+  color: rgba(205, 188, 151, .64);
+  font-size: 8px;
+}
+
+.v76-source-state.is-hard-failure {
+  border-color: rgba(176, 69, 55, .42);
+  background: rgba(45, 12, 10, .38);
+}
+
+.v76-source-state.is-hard-failure strong,
+.v76-source-state.is-hard-failure span {
+  color: #d28c78;
+}
