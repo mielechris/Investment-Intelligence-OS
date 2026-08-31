@@ -1,0 +1,28 @@
+name: IIOS Batch 10M.5 Brain Shadow Bakeoff
+
+on:
+  pull_request:
+    branches:
+      - feature/batch10m4-brain-capability-audit-superbatch
+  push:
+    branches:
+      - feature/batch10m5-brain-shadow-bakeoff
+
+jobs:
+  shadow-bakeoff-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile new batch
+        run: python -m py_compile scripts/iios_brain_shadow_bakeoff.py scripts/test_batch10m5_brain_shadow_bakeoff.py
+      - name: Run new batch tests
+        run: python scripts/test_batch10m5_brain_shadow_bakeoff.py
+      - name: Run inherited brain-audit tests
+        run: python scripts/test_batch10m4_brain_capability_audit.py
+      - name: Run inherited overnight-readiness tests
+        run: python scripts/test_batch10m3_overnight_readiness.py
+      - name: Run inherited scientific-measurement tests
+        run: python scripts/test_batch10m2_scientific_measurement_superbatch.py
