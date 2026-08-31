@@ -1,0 +1,75 @@
+name: IIOS 9L-V7.6 Dialogue Personality Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v76-dialogue-personality-engine
+  pull_request:
+
+jobs:
+  dialogue-personality-v76:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify frozen visual base and governed backend remain untouched
+        run: |
+          git fetch origin checkpoint/v7-visual-canon-frozen
+          git diff --quiet origin/checkpoint/v7-visual-canon-frozen...HEAD -- "BACK END" scripts
+
+      - name: Verify nine-character personality bible
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('FRONT END/src/dialogueEngineV76.ts').read_text()
+          required = [
+              'max:', 'policy:', 'macro:', 'fundamentals:', 'market_structure:',
+              'commodities:', 'geo_weather:', 'skeptic:', 'portfolio:'
+          ]
+          for token in required:
+              assert token in text, token
+          assert 'V76_PERSONALITY_BIBLE' in text
+          assert 'V76_RELATIONSHIPS' in text
+          assert 'Math.random' not in text
+          print('V7.6 nine-character personality bible verified')
+          PY
+
+      - name: Verify backward-compatible dialogue routing
+        run: |
+          grep -q 'v76ReactionLine' "FRONT END/src/mobVoice.ts"
+          grep -q 'v76AmbientLine' "FRONT END/src/mobVoice.ts"
+          grep -q 'v76ReplayBannerLine' "FRONT END/src/mobVoice.ts"
+          grep -q 'DialoguePersonalityV76' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+
+      - name: Verify presentation-only truth boundary
+        run: |
+          grep -q 'PRESENTATION ONLY' "FRONT END/src/DialoguePersonalityV76.tsx"
+          grep -q 'RECEIPT-BOUND' "FRONT END/src/DialoguePersonalityV76.tsx"
+          ! grep -q 'method: "POST"' "FRONT END/src/dialogueEngineV76.ts"
+          ! grep -q 'method: "PUT"' "FRONT END/src/dialogueEngineV76.ts"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/dialogueEngineV76.ts"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/dialogueEngineV76.ts"
+          ! grep -q 'method: "POST"' "FRONT END/src/DialoguePersonalityV76.tsx"
+          ! grep -q 'method: "PUT"' "FRONT END/src/DialoguePersonalityV76.tsx"
+          ! grep -q 'method: "PATCH"' "FRONT END/src/DialoguePersonalityV76.tsx"
+          ! grep -q 'method: "DELETE"' "FRONT END/src/DialoguePersonalityV76.tsx"
+
+      - name: Verify receipt-bound alternate takes
+        run: |
+          grep -q 'NEW PRESENTATION TAKE' "FRONT END/src/DialoguePersonalityV76.tsx"
+          grep -q 'TAKE .* CHANGES WORDING ONLY' "FRONT END/src/DialoguePersonalityV76.tsx"
+          grep -q 'RECEIPT FACTS NEVER CHANGE' "FRONT END/src/DialoguePersonalityV76.tsx"
+
+      - name: Build V7.6 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
