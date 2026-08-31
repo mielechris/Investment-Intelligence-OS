@@ -1,0 +1,55 @@
+name: IIOS 9H 9I Validation Bridge Hardening
+
+on:
+  push:
+    branches:
+      - feature/batch9h-9i-validation-bridge-hardening
+  pull_request:
+    branches:
+      - feature/batch9h-9j-learning-activation-superbatch
+
+jobs:
+  validation-bridge-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile bridge scripts
+        run: >-
+          python -m py_compile
+          scripts/iios_validation_bridge_worker.py
+          scripts/iios_validation_bridge_supervisor.py
+          scripts/install_iios_validation_bridge_supervision.py
+          scripts/test_iios_validation_bridge_contract.py
+      - name: Run validation bridge safety contract
+        run: python scripts/test_iios_validation_bridge_contract.py
+      - name: Assert core factory workers remain excluded
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path('config/iios_validation_bridge_supervision.json').read_text())
+          assert set(cfg['services']) == {'9H_COLLECTOR', '9H_VALIDATOR', '9I_SHADOW'}
+          for key in ('9A_touched', '9B_touched', '9E_touched', '9G_touched', '9J_touched'):
+              assert cfg['safety'][key] is False
+          print('Core-factory exclusion: PASS')
+          PY
+      - name: Assert launchd runtime stays outside Documents
+        run: |
+          python - <<'PY'
+          import importlib.util, json
+          from pathlib import Path
+          path = Path('scripts/install_iios_validation_bridge_supervision.py')
+          spec = importlib.util.spec_from_file_location('installer', path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          cfg = json.loads(Path('config/iios_validation_bridge_supervision.json').read_text())
+          paths = module.runtime_paths(cfg)
+          plist = module.supervisor_plist(cfg, paths)
+          text = json.dumps(plist)
+          assert '/Documents/' not in text
+          assert '.iios/validation-bridge' in text
+          print('Protected-folder launchd boundary: PASS')
+          PY
