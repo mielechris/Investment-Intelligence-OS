@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "iios_brain_shadow_bakeoff.py"
+RETRY = ROOT / "scripts" / "retry_batch10m5_failed_shadow_lanes.py"
 CONFIG = ROOT / "config" / "iios_batch10m5_brain_shadow_bakeoff.json"
 
 spec = importlib.util.spec_from_file_location("bakeoff", SCRIPT)
@@ -92,6 +93,18 @@ class Batch10M5Tests(unittest.TestCase):
         self.assertIn('if not args.execute:', text)
         self.assertIn('if not args.confirm_shadow_provider_spend:', text)
         self.assertIn('--confirm-shadow-provider-spend', text)
+        self.assertNotIn('record_object(', text)
+        self.assertNotIn('record_event(', text)
+
+    def test_retry_is_ca_hardened_and_does_not_repeat_openai_committee(self) -> None:
+        text = RETRY.read_text(encoding="utf-8")
+        self.assertIn('import certifi', text)
+        self.assertIn('SSL_CERT_FILE', text)
+        self.assertIn('REQUESTS_CA_BUNDLE', text)
+        self.assertIn('openai_committee_calls_repeated": 0', text)
+        self.assertIn('FAILED_GROK_GEMINI_LANES_ONLY', text)
+        self.assertIn('--confirm-shadow-provider-spend', text)
+        self.assertNotIn('for variant in selected_openai_variants', text)
         self.assertNotIn('record_object(', text)
         self.assertNotIn('record_event(', text)
 
