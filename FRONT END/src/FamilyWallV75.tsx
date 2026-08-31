@@ -1,4 +1,4 @@
-import familyPortrait from "./assets/v75/iios-family-portrait.avif";
+import familyPortrait from "./assets/v75/iios-family-portrait-hq.webp";
 import "./FamilyWallV75.css";
 
 export default function FamilyWallV75() {

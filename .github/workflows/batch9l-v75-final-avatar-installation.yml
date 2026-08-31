@@ -27,8 +27,8 @@ jobs:
 
       - name: Assert approved V7.5 family wall truth boundaries
         run: |
-          test -s "FRONT END/src/assets/v75/iios-family-portrait.avif"
-          grep -q 'iios-family-portrait.avif' "FRONT END/src/FamilyWallV75.tsx"
+          test -s "FRONT END/src/assets/v75/iios-family-portrait-hq.webp"
+          grep -q 'iios-family-portrait-hq.webp' "FRONT END/src/FamilyWallV75.tsx"
           grep -q 'V7.5 · FINAL AVATAR INSTALLATION · APPROVED FAMILY WALL' "FRONT END/src/FamilyWallV75.tsx"
           grep -q "THE FAMILY IS IN THE FUCKIN' BUILDING" "FRONT END/src/FamilyWallV75.tsx"
           grep -q 'PRESENTATION ONLY' "FRONT END/src/FamilyWallV75.tsx"
@@ -44,19 +44,20 @@ jobs:
 
       - name: Verify approved family portrait payload bytes
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY2'
           from hashlib import sha256
           from pathlib import Path
 
-          path = Path('FRONT END/src/assets/v75/iios-family-portrait.avif')
+          path = Path('FRONT END/src/assets/v75/iios-family-portrait-hq.webp')
           data = path.read_bytes()
-          expected = 'd9e9c25fa1a38082a5b8deaa9bdf3f727d2285b13515e2f01a3ce0ab0a21f170'
-          assert len(data) == 13826, f'unexpected portrait size: {len(data)}'
-          assert data[4:12] == b'ftypavif', data[:16]
+          expected = '49f24888d463f11d808cad55f282d6b88d66d7306f09c6d8e6092ae5403e35c0'
+          assert len(data) == 738566, f'unexpected portrait size: {len(data)}'
+          assert data[:4] == b'RIFF', data[:12]
+          assert data[8:12] == b'WEBP', data[:12]
           actual = sha256(data).hexdigest()
           assert actual == expected, f'portrait SHA mismatch: {actual}'
-          print(f'V7.5 approved portrait verified: {len(data)} bytes · {actual}')
-          PY
+          print(f'V7.5 HQ portrait verified: {len(data)} bytes · {actual}')
+          PY2
 
       - name: Build V7.5 browser
         working-directory: FRONT END
