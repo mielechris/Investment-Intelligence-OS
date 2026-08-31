@@ -1,0 +1,62 @@
+name: IIOS 9L-V7.7 Voice Audio Soundstage Gate
+
+on:
+  push:
+    branches:
+      - feature/batch9l-v77-voice-audio-soundstage
+  pull_request:
+
+jobs:
+  voice-audio-v77:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'FRONT END/package-lock.json'
+
+      - name: Verify frozen V7.6 backend and governed scripts remain untouched
+        run: |
+          git fetch origin checkpoint/v76-dialogue-personality-frozen
+          git diff --quiet origin/checkpoint/v76-dialogue-personality-frozen...HEAD -- "BACK END" scripts
+
+      - name: Verify soundstage truth boundaries
+        run: |
+          grep -q 'AUDIO OFF BY DEFAULT' "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          grep -q 'SOURCE · PERSISTED 9G RECEIPT' "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          grep -q 'V7.6 NARRATIVE ≠ MODEL SPEECH' "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          grep -q 'AUTO_FRESH_MS = 15 \* 60 \* 1000' "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          grep -q 'initialReceiptRef' "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          grep -q 'ARM SOUNDSTAGE' "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+
+      - name: Verify nine voice profiles and browser-audio primitives
+        run: |
+          grep -q 'V77_VOICE_PROFILES' "FRONT END/src/audioSoundstageV77.ts"
+          grep -q 'speechSynthesis' "FRONT END/src/audioSoundstageV77.ts"
+          grep -q 'AudioContext' "FRONT END/src/audioSoundstageV77.ts"
+          for key in max policy macro fundamentals market_structure commodities geo_weather skeptic portfolio
+          do
+            grep -q "${key}:" "FRONT END/src/audioSoundstageV77.ts"
+          done
+
+      - name: Verify presentation audio has no write methods
+        run: |
+          ! grep -R 'method: "POST"' "FRONT END/src/audioSoundstageV77.ts" "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          ! grep -R 'method: "PUT"' "FRONT END/src/audioSoundstageV77.ts" "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          ! grep -R 'method: "PATCH"' "FRONT END/src/audioSoundstageV77.ts" "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+          ! grep -R 'method: "DELETE"' "FRONT END/src/audioSoundstageV77.ts" "FRONT END/src/VoiceAudioSoundstageV77.tsx"
+
+      - name: Verify soundstage mounted in cinematic factory
+        run: |
+          grep -q 'VoiceAudioSoundstageV77' "FRONT END/src/CinematicFactorySceneStrip.tsx"
+
+      - name: Build V7.7 browser
+        working-directory: FRONT END
+        run: |
+          npm ci
+          npm run build
