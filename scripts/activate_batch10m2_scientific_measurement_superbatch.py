@@ -15,6 +15,9 @@ REPO = Path(__file__).resolve().parents[1]
 SOURCE_BUILDER = REPO / "scripts" / "iios_scientific_measurement_superbatch.py"
 VALIDATION_BRIDGE_INSTALLER = REPO / "scripts" / "install_iios_validation_bridge_supervision.py"
 LIVE_ROOT = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8")
+LIVE_LEDGER = LIVE_ROOT / "BACK END" / "backend" / "iios_ledger.db"
+RADAR_ROOT = Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch9e-radar")
+RADAR_BACKEND = RADAR_ROOT / "BACK END" / "backend"
 BACKEND_PYTHON_CANDIDATES = (
     LIVE_ROOT / "BACK END" / "backend" / ".venv" / "bin" / "python",
     Path("/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python"),
@@ -54,6 +57,75 @@ def resolve_backend_python() -> Path:
     raise SystemExit(f"No executable IIOS backend Python found. Checked: {searched}")
 
 
+def refresh_governed_universe_seed(backend_python: Path) -> tuple[bool, str]:
+    """Persist a fresh verified production universe for Batch 9H to seed from.
+
+    This uses the same governed S&P 500 + Nasdaq-100 production input adapter that
+    Batch 9E uses. It writes only a production-universe snapshot to the live IIOS
+    ledger. It does not create cases, orders, positions, threshold changes, or any
+    trading authority. Verification remains fail-closed.
+    """
+    if not RADAR_BACKEND.exists():
+        return False, f"Batch 9E backend not found: {RADAR_BACKEND}"
+    if not LIVE_LEDGER.exists():
+        return False, f"Live IIOS ledger not found: {LIVE_LEDGER}"
+
+    code = r'''
+import json
+from index_tls_bootstrap import configure_verified_tls
+
+tls = configure_verified_tls()
+from batch8c_production_inputs import refresh_production_universe
+
+result = refresh_production_universe(force=True)
+summary = {
+    "status": result.get("status"),
+    "verified_complete": result.get("verified_complete") is True,
+    "strict_membership": result.get("strict_membership") is True,
+    "symbol_count": int(result.get("symbol_count") or 0),
+    "tls_verified": bool(
+        tls.get("configured") is True
+        and tls.get("certificate_verification") is True
+        and tls.get("hostname_verification") is True
+    ),
+    "paper_mode": result.get("paper_mode") is True,
+    "trade_execution_permission": bool(result.get("trade_execution_permission")),
+    "live_execution": bool(result.get("live_execution")),
+}
+print(json.dumps(summary, sort_keys=True))
+ok = bool(
+    summary["verified_complete"]
+    and summary["strict_membership"]
+    and summary["tls_verified"]
+    and 500 <= summary["symbol_count"] <= 620
+    and summary["trade_execution_permission"] is False
+    and summary["live_execution"] is False
+)
+raise SystemExit(0 if ok else 4)
+'''
+
+    env = dict(os.environ)
+    env["IIOS_DB_PATH"] = str(LIVE_LEDGER)
+    env["PYTHONUNBUFFERED"] = "1"
+    try:
+        result = subprocess.run(
+            [str(backend_python), "-c", code],
+            cwd=str(RADAR_BACKEND),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Governed universe refresh timed out after 120 seconds"
+
+    output = (result.stdout or "").strip()
+    error = (result.stderr or "").strip()
+    detail = output or error or f"exit={result.returncode}"
+    return result.returncode == 0, detail[:3000]
+
+
 def validate() -> list[str]:
     errors: list[str] = []
     if not SOURCE_BUILDER.exists():
@@ -62,6 +134,10 @@ def validate() -> list[str]:
         errors.append(f"Missing 9H/9I validation bridge installer: {VALIDATION_BRIDGE_INSTALLER}")
     if not any(path.exists() and os.access(path, os.X_OK) for path in BACKEND_PYTHON_CANDIDATES):
         errors.append("No executable IIOS backend Python found in known live/main checkout locations")
+    if not RADAR_BACKEND.exists():
+        errors.append(f"Batch 9E backend not found: {RADAR_BACKEND}")
+    if not LIVE_LEDGER.exists():
+        errors.append(f"Live IIOS ledger not found: {LIVE_LEDGER}")
     return errors
 
 
@@ -73,6 +149,7 @@ def print_plan() -> int:
     print("Runtime mutation: NONE")
     print("Purpose: prove case-flow integrity, validation recall, model task measurement, benchmark attribution, and data health")
     print("9H/9I hardening: INCLUDED through existing validation Terminal-Bridge installer")
+    print("Governed universe seed: AUTO-REFRESHED from the same verified production input layer used by 9E")
     print("10J/10K/10L/10M/10M.1 artifacts: CONSUMED WHEN PRESENT; NOT DUPLICATED")
     print("Scientific measurement cadence: 5 minutes")
     print("Runtime root:", RUNTIME_ROOT)
@@ -141,6 +218,15 @@ def activate() -> int:
 
     backend_python = resolve_backend_python()
     print("Validation bridge Python:", backend_python)
+
+    universe_ok, universe_detail = refresh_governed_universe_seed(backend_python)
+    print("Governed universe seed refresh:", "PASS" if universe_ok else "FAIL")
+    print("Governed universe seed detail:", universe_detail)
+    if not universe_ok:
+        print("Activation: ATTENTION")
+        print(" - Refusing 9H/9I activation because a fresh verified governed universe could not be persisted")
+        return 2
+
     validation = subprocess.run([str(backend_python), str(VALIDATION_BRIDGE_INSTALLER), "--activate"], text=True, check=False)
     failures: list[str] = []
     if validation.returncode != 0:
