@@ -284,3 +284,16 @@
 .ccp-portrait--boss .ccp-portrait__final-art {
   border-radius: 1px;
 }
+
+/* V7.5.2.1 MAX FRAMING FIX
+   MAX gets a dedicated face/jowls/cigar crop.
+   Other eight approved portraits remain untouched. */
+.ccp-portrait--max .ccp-portrait__final-art {
+  object-position: 50% 50% !important;
+  transform: none !important;
+}
+
+.ccp-portrait--max.ccp-portrait--boss .ccp-portrait__final-art {
+  object-position: 50% 48% !important;
+  transform: none !important;
+}

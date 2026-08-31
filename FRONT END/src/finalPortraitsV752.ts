@@ -1,4 +1,5 @@
 import { FINAL_PORTRAITS_V751 } from "./finalPortraitsV751";
+import maxCinematic from "./assets/v752/max-cinematic.webp";
 import maxMove from "./assets/v752/max-move.webp";
 import policyMove from "./assets/v752/policy-move.webp";
 import macroMove from "./assets/v752/macro-move.webp";
@@ -16,8 +17,10 @@ import type { LivingCastKey } from "./livingCast";
  * Moving avatars use tighter head/torso cuts from the same approved HQ wall.
  * Artwork remains presentation-only; persisted IIOS state is authoritative.
  */
-export const CINEMATIC_PORTRAITS_V752: Record<LivingCastKey, string> =
-  FINAL_PORTRAITS_V751;
+export const CINEMATIC_PORTRAITS_V752: Record<LivingCastKey, string> = {
+  ...FINAL_PORTRAITS_V751,
+  max: maxCinematic,
+};
 
 export const MOVING_PORTRAITS_V752: Record<LivingCastKey, string> = {
   max: maxMove,
