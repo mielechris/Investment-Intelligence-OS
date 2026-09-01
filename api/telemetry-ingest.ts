@@ -25,7 +25,7 @@ export default {
       ? authorization.slice("Bearer ".length)
       : "";
     if (!(await tokenMatches(candidate, expected))) {
-      return json({ error: "unauthorized", diagnostic: { expected_configured: expected.length > 0, expected_length: expected.length, candidate_length: candidate.length } }, 401);
+      return json({ error: "unauthorized" }, 401);
     }
 
     const contentLength = Number(request.headers.get("content-length") ?? "0");
