@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "FRONT END/dist",
+  "rewrites": [
+    {
+      "source": "/living/overview",
+      "destination": "/api/living-overview"
+    },
+    {
+      "source": "/telemetry/ingest",
+      "destination": "/api/telemetry-ingest"
+    }
+  ]
+}

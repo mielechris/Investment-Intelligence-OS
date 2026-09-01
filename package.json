@@ -1,0 +1,10 @@
+{
+  "name": "iios-remote-observation",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix \"FRONT END\" ci && npm --prefix \"FRONT END\" run build"
+  },
+  "dependencies": {
+    "@vercel/functions": "^3.9.5"
+  }
+}
