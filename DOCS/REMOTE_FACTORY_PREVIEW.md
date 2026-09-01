@@ -22,3 +22,8 @@ This preview is isolated from the running IIOS paper test.
 
 The first deployment is deliberately display-only. It cannot start, stop, trade,
 reset, or otherwise control the factory running on the Mac.
+
+## Preview checkpoint
+
+The initial Vercel project was created on 2026-09-01. This isolated-branch
+checkpoint triggers the first governed preview deployment.
