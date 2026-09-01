@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
-from model_cost_enforcement import preflight_xai_request, record_xai_failure, record_xai_response, register_hook
+from model_cost_enforcement import preflight_xai_request, record_xai_failure, record_xai_response
 
 
 router = APIRouter()

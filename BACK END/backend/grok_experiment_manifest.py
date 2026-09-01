@@ -53,7 +53,9 @@ def grok_experiment_manifest() -> dict[str, Any]:
         "grok_nominations_require_standard_iios_revalidation": opportunities.get("standard_opportunity_score_required") is True,
         "grok_nominations_do_not_auto_promote": opportunities.get("automatic_promotion") is False,
         "grok_nominations_do_not_auto_run_agents": opportunities.get("automatic_agent_run") is False,
-        "xai_official_sdk_adapter_installed": getattr(grok_social, "_xai_official_sdk_adapter_installed", False) is True,
+        "xai_official_sdk_adapter_preserves_governed_boundary": getattr(
+            grok_social, "_xai_official_sdk_adapter_skipped_for_cost_governor", False
+        ) is True,
         "x_status_id_matcher_installed": getattr(grok_social, "_grok_status_matcher_installed", False) is True,
     }
     all_pass = all(invariants.values())

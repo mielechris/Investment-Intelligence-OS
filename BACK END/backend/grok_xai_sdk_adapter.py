@@ -132,7 +132,16 @@ def install_xai_sdk_x_search(module) -> None:
         return
     module._xai_official_sdk_adapter_installed = True
 
-    def official_x_search(_openai_client, *, prompt: str, from_date: str, to_date: str):
+    def official_x_search(
+        _openai_client,
+        *,
+        prompt: str,
+        from_date: str,
+        to_date: str,
+        case_id: str | None = None,
+        query_label: str | None = None,
+    ):
+        del case_id, query_label
         last_error: Exception | None = None
         for attempt in range(1, module.MAX_X_SEARCH_ATTEMPTS + 1):
             try:

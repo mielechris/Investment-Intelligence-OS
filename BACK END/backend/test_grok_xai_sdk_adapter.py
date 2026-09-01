@@ -43,6 +43,8 @@ class GrokXaiSdkAdapterTests(unittest.TestCase):
                 prompt="test",
                 from_date="2026-08-22",
                 to_date="2026-08-25",
+                case_id="case-123",
+                query_label="test query",
             )
         self.assertEqual(attempts, 1)
         self.assertEqual(response.citations, FakeResponse.citations)
@@ -63,6 +65,20 @@ class GrokXaiSdkAdapterTests(unittest.TestCase):
                     to_date="2026-08-25",
                 )
         self.assertEqual(sample.call_count, 1)
+
+    def test_installer_skips_sdk_transport_when_governed_boundary_is_binding(self):
+        original_run_x_search = object()
+        module = SimpleNamespace(
+            _xai_official_sdk_adapter_installed=False,
+            _run_x_search=original_run_x_search,
+            grok_plan=lambda: {"cost_governor_binding": True},
+        )
+
+        adapter.install_xai_sdk_x_search(module)
+
+        self.assertFalse(module._xai_official_sdk_adapter_installed)
+        self.assertTrue(module._xai_official_sdk_adapter_skipped_for_cost_governor)
+        self.assertIs(module._run_x_search, original_run_x_search)
 
 
 if __name__ == "__main__":

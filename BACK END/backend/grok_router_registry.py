@@ -37,6 +37,19 @@ OPTIONAL_ROUTER_MODULES = (
 ROUTER_MODULES = REQUIRED_ROUTER_MODULES + OPTIONAL_ROUTER_MODULES
 
 
+def _router_is_already_registered(app: Any, router: Any) -> bool:
+    def contains_router(routes: Any) -> bool:
+        for route in routes:
+            included_router = getattr(route, "original_router", None)
+            if included_router is router:
+                return True
+            if included_router is not None and contains_router(getattr(included_router, "routes", ())):
+                return True
+        return False
+
+    return contains_router(getattr(app, "routes", ()))
+
+
 def install_grok_routers(app: Any) -> dict[str, Any]:
     if getattr(app.state, "_iios_grok_router_registry_installed", False):
         return {
@@ -45,24 +58,41 @@ def install_grok_routers(app: Any) -> dict[str, Any]:
             "already_installed": True,
             "modules": list(getattr(app.state, "_iios_grok_router_modules", ())),
             "non_router_modules": list(getattr(app.state, "_iios_grok_non_router_modules", ())),
+            "unavailable_modules": list(getattr(app.state, "_iios_grok_unavailable_router_modules", ())),
+            "already_registered_modules": list(getattr(app.state, "_iios_grok_already_registered_router_modules", ())),
         }
 
     mounted: list[str] = []
     non_router_modules: list[str] = []
+    unavailable_modules: list[dict[str, str]] = []
+    already_registered_modules: list[str] = []
 
     for module_name in REQUIRED_ROUTER_MODULES:
-        module = import_module(module_name)
+        try:
+            module = import_module(module_name)
+        except Exception:
+            raise RuntimeError(f"Required Grok HTTP surface failed to import: {module_name}") from None
         router = getattr(module, "router", None)
         if router is None:
             raise RuntimeError(f"Required Grok HTTP surface is missing {module_name}.router")
+        if _router_is_already_registered(app, router):
+            already_registered_modules.append(module_name)
+            continue
         app.include_router(router)
         mounted.append(module_name)
 
     for module_name in OPTIONAL_ROUTER_MODULES:
-        module = import_module(module_name)
+        try:
+            module = import_module(module_name)
+        except Exception:
+            unavailable_modules.append({"module": module_name, "status": "IMPORT_FAILED"})
+            continue
         router = getattr(module, "router", None)
         if router is None:
             non_router_modules.append(module_name)
+            continue
+        if _router_is_already_registered(app, router):
+            already_registered_modules.append(module_name)
             continue
         app.include_router(router)
         mounted.append(module_name)
@@ -70,12 +100,16 @@ def install_grok_routers(app: Any) -> dict[str, Any]:
     app.state._iios_grok_router_registry_installed = True
     app.state._iios_grok_router_modules = tuple(mounted)
     app.state._iios_grok_non_router_modules = tuple(non_router_modules)
+    app.state._iios_grok_unavailable_router_modules = tuple(unavailable_modules)
+    app.state._iios_grok_already_registered_router_modules = tuple(already_registered_modules)
     return {
         "registry_version": REGISTRY_VERSION,
         "installed": True,
         "already_installed": False,
         "modules": mounted,
         "non_router_modules": non_router_modules,
+        "unavailable_modules": unavailable_modules,
+        "already_registered_modules": already_registered_modules,
         "research_only": True,
         "paper_mode": True,
         "capital_authority": False,
