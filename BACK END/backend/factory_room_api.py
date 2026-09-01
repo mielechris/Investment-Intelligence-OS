@@ -608,15 +608,32 @@ def factory_room_status():
         for row in cases
     )
 
-    scorecard = (
-        build_validation_scorecard()
-    )
+    # The governed-case projection is the authoritative floor inventory. Keep
+    # it observable even if the heavier validation/freeze summary experiences
+    # a transient failure. Previously an exception here caused Factory
+    # Intelligence to collapse a real case ledger into `cases: []`.
+    validation_error = None
 
-    manifest = (
-        build_paper_portfolio_freeze_manifest(
-            scorecard=scorecard
+    try:
+        scorecard = (
+            build_validation_scorecard()
         )
-    )
+
+        manifest = (
+            build_paper_portfolio_freeze_manifest(
+                scorecard=scorecard
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve core read-only view
+        scorecard = {}
+        manifest = {}
+        validation_error = {
+            "availability":
+                "OFFLINE",
+
+            "error_type":
+                type(exc).__name__,
+        }
 
     performance = (
         scorecard.get(
@@ -849,6 +866,25 @@ def factory_room_status():
         },
 
         "validation": {
+            "availability":
+                (
+                    "OFFLINE"
+                    if validation_error
+                    else "AVAILABLE"
+                ),
+
+            "error_type":
+                (
+                    validation_error.get(
+                        "error_type"
+                    )
+                    if validation_error
+                    else None
+                ),
+
+            "case_projection_available":
+                True,
+
             "cases":
                 (
                     scorecard.get(
