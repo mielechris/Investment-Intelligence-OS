@@ -68,7 +68,7 @@ def _publish(destination: str, token: str, payload: bytes) -> dict[str, object]:
         method="POST",
         headers={
             "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
+            "x-iios-telemetry-token": f"Bearer {token}",
             "Content-Type": "application/json",
         },
     )

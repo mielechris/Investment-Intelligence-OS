@@ -20,7 +20,7 @@ export default {
     }
 
     const expected = process.env.IIOS_TELEMETRY_INGEST_TOKEN ?? "";
-    const authorization = request.headers.get("authorization") ?? "";
+    const authorization = request.headers.get("x-iios-telemetry-token") ?? "";
     const candidate = authorization.startsWith("Bearer ")
       ? authorization.slice("Bearer ".length)
       : "";
