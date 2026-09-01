@@ -78,19 +78,27 @@ def _read_snapshot(source: str) -> bytes:
     return normalized
 
 
-def _publish(destination: str, token: str, payload: bytes) -> dict[str, object]:
+def _publish(
+    destination: str,
+    token: str,
+    payload: bytes,
+    bypass_secret: str = "",
+) -> dict[str, object]:
     parsed = urllib.parse.urlparse(destination)
     if parsed.scheme != "https":
         raise ValueError("telemetry destination must use HTTPS")
+    headers = {
+        "Accept": "application/json",
+        "x-iios-telemetry-token": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    if bypass_secret:
+        headers["x-vercel-protection-bypass"] = bypass_secret
     request = urllib.request.Request(
         destination,
         data=payload,
         method="POST",
-        headers={
-            "Accept": "application/json",
-            "x-iios-telemetry-token": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
     )
     with urllib.request.urlopen(request, timeout=15) as response:
         return _record(json.loads(response.read(MAX_BYTES)))
@@ -110,11 +118,12 @@ def main() -> int:
             return 0
 
         token = os.getenv("IIOS_TELEMETRY_INGEST_TOKEN", "")
+        bypass_secret = os.getenv("VERCEL_AUTOMATION_BYPASS_SECRET", "")
         if not args.destination or not token:
             raise ValueError(
                 "IIOS_TELEMETRY_INGEST_URL and IIOS_TELEMETRY_INGEST_TOKEN are required"
             )
-        result = _publish(args.destination, token, payload)
+        result = _publish(args.destination, token, payload, bypass_secret)
         if result.get("accepted") is not True:
             raise ValueError("remote receiver did not accept the snapshot")
         print(
