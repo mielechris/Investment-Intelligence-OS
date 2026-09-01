@@ -1,0 +1,61 @@
+{
+  "schema_version": "batch10m7-nightly-market-reconstruction-v1",
+  "live_ledger_path": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/iios_ledger.db",
+  "backend_python_candidates": [
+    "/Users/crm/Documents/GitHub/Investment-Intelligence-OS/BACK END/backend/.venv/bin/python",
+    "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/.venv/bin/python"
+  ],
+  "historical_worktrees": {
+    "10h": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10h-historical-market-intelligence",
+    "10j": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10j-historical-event-reconstruction",
+    "10k": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10k-historical-macro-regime-library"
+  },
+  "historical_branches": {
+    "10h": "feature/batch10h-historical-market-intelligence",
+    "10j": "feature/batch10j-historical-event-reconstruction",
+    "10k": "feature/batch10k-historical-macro-regime-library"
+  },
+  "output_root": "~/Library/Application Support/IIOS/nightly-reconstruction",
+  "runtime_root": "~/.iios/nightly-reconstruction",
+  "post_close_not_before_et": "16:30",
+  "supervisor_interval_seconds": 1800,
+  "mover_sweep": {
+    "min_verified_universe": 400,
+    "max_verified_universe": 700,
+    "absolute_move_threshold_pct": 3.0,
+    "top_movers_limit": 30,
+    "max_workers": 12,
+    "provider_timeout_seconds": 20,
+    "stooq_primary": true,
+    "yahoo_fallback": true
+  },
+  "historical_research": {
+    "top_movers_for_deep_reconstruction": 24,
+    "10h_targets_per_cycle": 12,
+    "10j_symbols_per_cycle": 8
+  },
+  "truth_contract": {
+    "detection_mode": "RETROSPECTIVE_BACKFILL",
+    "counts_as_live_detection": false,
+    "eligible_for_9h_live_score": false,
+    "official_9h_score_impact": "NONE",
+    "backfill_may_explain_misses": true,
+    "backfill_may_not_reclassify_live_detection": true,
+    "association_is_not_causation": true,
+    "incomplete_sources_fail_closed": true
+  },
+  "safety": {
+    "ledger_mode": "READ_ONLY",
+    "ledger_write": false,
+    "backend_8002_change": false,
+    "production_model_routing_change": false,
+    "provider_change_authority": false,
+    "threshold_auto_change": false,
+    "committee_change_authority": false,
+    "risk_change_authority": false,
+    "capital_authority": false,
+    "broker_connected": false,
+    "trade_execution_permission": false,
+    "live_execution": false
+  }
+}
