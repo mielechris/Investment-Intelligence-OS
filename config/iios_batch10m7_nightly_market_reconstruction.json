@@ -6,9 +6,9 @@
     "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-Batch8/BACK END/backend/.venv/bin/python"
   ],
   "historical_worktrees": {
-    "10h": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10h-historical-market-intelligence",
-    "10j": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10j-historical-event-reconstruction",
-    "10k": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10k-historical-macro-regime-library"
+    "10h": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-nightly-10h",
+    "10j": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-nightly-10j",
+    "10k": "/Users/crm/Documents/GitHub/Investment-Intelligence-OS-nightly-10k"
   },
   "historical_branches": {
     "10h": "feature/batch10h-historical-market-intelligence",
