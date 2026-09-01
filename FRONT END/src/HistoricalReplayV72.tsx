@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import { LIVING_CAST, type LivingCastKey } from "./livingCast";
 import { mobReactionLine, mobReplayBannerLine } from "./mobVoice";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./HistoricalReplayV72.css";
 
 type JsonObject = Record<string, unknown>;
@@ -186,7 +187,7 @@ function castFor(station: StationKey | null, promotion: Promotion | null): Livin
 }
 
 async function loadOverview(signal: AbortSignal): Promise<LivingOverview> {
-  const response = await fetch("/living/overview", { headers: { Accept: "application/json" }, cache: "no-store", signal });
+  const response = await fetch(telemetryUrl("/living/overview"), { headers: { Accept: "application/json" }, cache: "no-store", signal });
   if (!response.ok) throw new Error(`V7.2 replay source unavailable: HTTP ${response.status}`);
   return response.json() as Promise<LivingOverview>;
 }

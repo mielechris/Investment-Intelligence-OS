@@ -6,6 +6,7 @@ import {
   maxNarrativeForStation,
   type LivingCastKey,
 } from "./livingCast";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./LivingCharacterDirectorV7.css";
 
 type JsonObject = Record<string, unknown>;
@@ -213,7 +214,7 @@ function speakersForEvent(
 }
 
 async function loadOverview(signal: AbortSignal): Promise<LivingOverview> {
-  const response = await fetch("/living/overview", {
+  const response = await fetch(telemetryUrl("/living/overview"), {
     headers: { Accept: "application/json" },
     cache: "no-store",
     signal,

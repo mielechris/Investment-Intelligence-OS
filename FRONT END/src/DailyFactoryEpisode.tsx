@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./DailyFactoryEpisode.css";
 import "./Batch9OTruthSeal.css";
 
@@ -460,7 +461,7 @@ export default function DailyFactoryEpisode() {
       controller = new AbortController();
       try {
         const nextLiving = await fetchJson<LivingSnapshot>(
-          "/living/overview",
+          telemetryUrl("/living/overview"),
           controller.signal,
         );
         let nextPersisted: Episode | null = null;

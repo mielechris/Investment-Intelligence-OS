@@ -5,6 +5,7 @@ import {
   maxNarrativeForStation,
   type LivingCastKey,
 } from "./livingCast";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./CinematicFactoryCommandDeck.css";
 
 type JsonObject = Record<string, unknown>;
@@ -226,7 +227,7 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
       controller = new AbortController();
       try {
         const next = await sameOriginJson<LivingOverview>(
-          "/living/overview",
+          telemetryUrl("/living/overview"),
           controller.signal,
         );
         if (disposed) return;

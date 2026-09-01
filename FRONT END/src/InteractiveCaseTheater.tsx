@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./InteractiveCaseTheater.css";
 
 type JsonObject = Record<string, unknown>;
@@ -752,7 +753,7 @@ export default function InteractiveCaseTheater() {
     const refresh = async () => {
       controller = new AbortController();
       try {
-        const next = await getJson<LivingSnapshot>("/living/overview", controller.signal);
+        const next = await getJson<LivingSnapshot>(telemetryUrl("/living/overview"), controller.signal);
         if (disposed) return;
         setSnapshot(next);
         setSnapshotError(null);
@@ -785,7 +786,7 @@ export default function InteractiveCaseTheater() {
     const controller = new AbortController();
     let disposed = false;
     void getJson<CaseDetail>(
-      `/living/case/${encodeURIComponent(selected.caseId)}`,
+      telemetryUrl(`/living/case/${encodeURIComponent(selected.caseId)}`),
       controller.signal,
     )
       .then((next) => {

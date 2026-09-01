@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./CharacterStoryEngine.css";
 
 type ValidationLayer = {
@@ -434,7 +435,7 @@ function buildStoryBeats(snapshot: LivingSnapshot): StoryBeat[] {
 }
 
 async function loadSnapshot(signal: AbortSignal): Promise<LivingSnapshot> {
-  const response = await fetch("/living/overview", {
+  const response = await fetch(telemetryUrl("/living/overview"), {
     headers: { Accept: "application/json" },
     cache: "no-store",
     signal,

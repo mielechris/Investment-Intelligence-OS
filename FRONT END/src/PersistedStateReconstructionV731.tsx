@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import { LIVING_CAST, type LivingCastKey } from "./livingCast";
 import { mobReactionLine } from "./mobVoice";
+import { telemetryUrl } from "./telemetryEndpoint";
 import "./PersistedStateReconstructionV731.css";
 
 type JsonObject = Record<string, unknown>;
@@ -236,7 +237,7 @@ function directorLine(key: LivingCastKey, scene: Scene): string {
 }
 
 async function loadOverview(signal: AbortSignal): Promise<LivingOverview> {
-  const response = await fetch("/living/overview", {
+  const response = await fetch(telemetryUrl("/living/overview"), {
     headers: { Accept: "application/json" },
     cache: "no-store",
     signal,

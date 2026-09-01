@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import { LIVING_CAST, type LivingCastKey } from "./livingCast";
+import { telemetryUrl } from "./telemetryEndpoint";
 import {
   V76_PERSONALITY_BIBLE,
   v76ReactionLine,
@@ -160,7 +161,7 @@ function tickerFor(event: FactoryEvent | null, promotion: Promotion | null): str
 }
 
 async function loadOverview(signal: AbortSignal): Promise<LivingOverview> {
-  const response = await fetch("/living/overview", {
+  const response = await fetch(telemetryUrl("/living/overview"), {
     headers: { Accept: "application/json" },
     cache: "no-store",
     signal,
