@@ -1,0 +1,78 @@
+name: IIOS Batch 10M.7 Nightly Post-Close Reconstruction Gate
+
+on:
+  push:
+    branches:
+      - feature/batch10m7-nightly-post-close-reconstruction
+  pull_request:
+    branches:
+      - feature/batch10k-historical-macro-regime-library
+
+jobs:
+  nightly-reconstruction-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile 10M.7 and inherited engines
+        run: >-
+          python -m py_compile
+          scripts/iios_nightly_post_close_reconstruction.py
+          scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          scripts/test_batch10m7_nightly_post_close_reconstruction.py
+          scripts/iios_historical_event_reconstruction.py
+          scripts/iios_historical_macro_regime_library.py
+
+      - name: Run 10M.7 nightly reconstruction contract
+        run: PYTHONPATH=scripts python scripts/test_batch10m7_nightly_post_close_reconstruction.py
+
+      - name: Run inherited 10J regressions
+        run: |
+          PYTHONPATH=scripts python scripts/test_batch10j_historical_event_reconstruction.py
+          PYTHONPATH=scripts python scripts/test_batch10j_runtime_correction.py
+
+      - name: Run inherited 10K regressions
+        run: |
+          PYTHONPATH=scripts python scripts/test_batch10k_historical_macro_regime_library.py
+          PYTHONPATH=scripts python scripts/test_batch10k_10i_feedback.py
+
+      - name: Assert post-close and idempotency controls
+        run: |
+          grep -q 'POST_CLOSE_HOUR = 16' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q 'POST_CLOSE_MINUTE = 20' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q 'SYMBOLS_PER_NIGHT = 8' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q 'ALREADY_RECONSTRUCTED' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q 'MARKET_CLOSED_WEEKEND' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q 'WAITING_FOR_POST_CLOSE' scripts/iios_nightly_post_close_reconstruction.py
+
+      - name: Assert Terminal-Bridge isolation and preserved factory
+        run: |
+          grep -q 'com.iios.nightly-reconstruction' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          grep -q 'CADENCE_SECONDS = 15 \* 60' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          grep -q '"/usr/bin/open", "-g", "-a", "Terminal"' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          grep -q '"9A_observation": "UNCHANGED"' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          grep -q '"9B_paper_trading": "UNCHANGED"' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          grep -q '"9E_radar": "UNCHANGED"' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+          grep -q '"backend_8002": "UNCHANGED"' scripts/activate_batch10m7_nightly_post_close_reconstruction.py
+
+      - name: Assert no autonomous authority
+        run: |
+          grep -q '"live_execution": False' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q '"live_capital_locked": True' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q '"trade_execution_permission": False' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q '"no_broker_authority": True' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q '"no_committee_or_risk_authority": True' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q '"no_automatic_parameter_changes": True' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q '"no_case_promotion_authority": True' scripts/iios_nightly_post_close_reconstruction.py
+
+      - name: Assert execution order is historical only
+        run: |
+          grep -q 'event_runner(' scripts/iios_nightly_post_close_reconstruction.py
+          grep -q 'macro_runner(' scripts/iios_nightly_post_close_reconstruction.py
+          if grep -Eq 'governed_paper_execution|paper_order|broker_order|live_order' scripts/iios_nightly_post_close_reconstruction.py; then
+            echo 'Forbidden execution path found in 10M.7 worker'
+            exit 1
+          fi
