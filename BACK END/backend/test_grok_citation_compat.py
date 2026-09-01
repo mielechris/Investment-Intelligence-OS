@@ -53,7 +53,7 @@ class FakeWithRaw:
 
 
 class GrokCitationCompatTests(unittest.TestCase):
-    def test_untyped_raw_xai_citations_survive_sdk_model_parsing_without_trusting_prose(self):
+    def test_compatibility_layer_does_not_replace_the_governed_request_boundary(self):
         def normalize(value):
             text = str(value or "").split("?", 1)[0].rstrip("/")
             return text or None
@@ -89,26 +89,12 @@ class GrokCitationCompatTests(unittest.TestCase):
         )
         compat.install_grok_citation_compat(module)
 
-        client = SimpleNamespace(
-            responses=SimpleNamespace(with_raw_response=FakeWithRaw())
-        )
-        response, attempts = module._run_x_search(
-            client,
-            prompt="test",
-            from_date="2026-08-22",
-            to_date="2026-08-25",
-        )
-        citations = module._extract_citation_urls(response)
+        original_run_x_search = module._run_x_search if hasattr(module, "_run_x_search") else None
+        compat.install_grok_citation_compat(module)
 
-        self.assertEqual(attempts, 1)
-        self.assertEqual(
-            citations,
-            {
-                "https://x.com/real_one/status/1",
-                "https://x.com/real_two/status/2",
-            },
-        )
-        self.assertNotIn("https://x.com/fake/status/999", citations)
+        self.assertFalse(module._xai_raw_x_search_installed)
+        self.assertTrue(module._xai_raw_x_search_skipped_for_cost_governor)
+        self.assertIs(getattr(module, "_run_x_search", None), original_run_x_search)
 
 
 if __name__ == "__main__":

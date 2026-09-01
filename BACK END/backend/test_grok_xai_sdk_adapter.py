@@ -29,42 +29,28 @@ class GrokXaiSdkAdapterTests(unittest.TestCase):
         self.assertEqual(dumped["usage"]["cost_in_usd_ticks"], 123456789)
         self.assertEqual(dumped["usage"]["num_server_side_tools_used"], 3)
 
-    def test_installer_routes_only_x_search_transport(self):
+    def test_installer_never_replaces_the_governed_x_search_transport(self):
+        original = object()
         module = SimpleNamespace(
             _xai_official_sdk_adapter_installed=False,
             MAX_X_SEARCH_ATTEMPTS=2,
+            _run_x_search=original,
         )
         adapter.install_xai_sdk_x_search(module)
-        self.assertTrue(module._xai_official_sdk_adapter_installed)
+        self.assertFalse(module._xai_official_sdk_adapter_installed)
+        self.assertTrue(module._xai_official_sdk_adapter_skipped_for_cost_governor)
+        self.assertIs(module._run_x_search, original)
 
-        with patch.object(adapter, "_sample_xai_once", return_value=FakeResponse()):
-            response, attempts = module._run_x_search(
-                None,
-                prompt="test",
-                from_date="2026-08-22",
-                to_date="2026-08-25",
-                case_id="case-123",
-                query_label="test query",
-            )
-        self.assertEqual(attempts, 1)
-        self.assertEqual(response.citations, FakeResponse.citations)
-        self.assertEqual(response.output_text, FakeResponse.content)
-
-    def test_nonretryable_error_fails_without_hidden_retry(self):
+    def test_nonbinding_plan_cannot_enable_ungoverned_sdk_transport(self):
+        original = object()
         module = SimpleNamespace(
             _xai_official_sdk_adapter_installed=False,
-            MAX_X_SEARCH_ATTEMPTS=2,
+            _run_x_search=original,
+            grok_plan=lambda: {"cost_governor_binding": False},
         )
         adapter.install_xai_sdk_x_search(module)
-        with patch.object(adapter, "_sample_xai_once", side_effect=ValueError("bad request")) as sample:
-            with self.assertRaises(ValueError):
-                module._run_x_search(
-                    None,
-                    prompt="test",
-                    from_date="2026-08-22",
-                    to_date="2026-08-25",
-                )
-        self.assertEqual(sample.call_count, 1)
+        self.assertFalse(module._xai_official_sdk_adapter_installed)
+        self.assertIs(module._run_x_search, original)
 
     def test_installer_skips_sdk_transport_when_governed_boundary_is_binding(self):
         original_run_x_search = object()

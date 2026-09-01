@@ -4,9 +4,18 @@ import hashlib
 import json
 import math
 import os
+import re
+import stat
+import threading
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+
+import fcntl
 
 SCHEMA_VERSION = "batch10m-grok-cost-enforcement-v1"
 DEFAULT_COST_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "model-cost"
@@ -14,17 +23,38 @@ LEDGER_NAME = "model_usage.jsonl"
 ADMISSION_LEDGER_NAME = "admission_events.jsonl"
 ARTIFACT_NAME = "latest_model_cost_governor.json"
 HOOK_REGISTRY_NAME = "enforcement_hooks.json"
+RESERVATION_NAME = "active_reservations.json"
+INTEGRITY_NAME = "budget_integrity.json"
+LOCK_NAME = ".model-cost.lock"
+LOCK_TIMEOUT_SECONDS = 2.0
+_PROCESS_LOCK = threading.RLock()
+USD_TICKS_PER_USD = 10_000_000_000
 
 POLICY = {
-    "daily_soft_limit_usd": 10.0,
-    "daily_hard_limit_usd": 20.0,
-    "rolling_7d_soft_limit_usd": 50.0,
-    "rolling_7d_hard_limit_usd": 75.0,
+    "daily_soft_limit_ticks": 100_000_000_000,
+    "daily_hard_limit_ticks": 200_000_000_000,
+    "rolling_7d_soft_limit_ticks": 500_000_000_000,
+    "rolling_7d_hard_limit_ticks": 750_000_000_000,
     "max_expensive_requests_per_case": 8,
     "max_estimated_input_tokens_per_request": 16000,
     "max_expensive_calls_per_hour": 20,
     "max_x_search_tool_calls_per_request": 3,
     "duplicate_query_ttl_seconds": 1800,
+    "max_output_tokens_per_request": 2000,
+    "pricing_model": "grok-4.6",
+    "pricing_verified": False,
+    "pricing_source_name": "",
+    "pricing_source_reference": "",
+    "pricing_verified_date": "",
+    "pricing_verifier_id": "",
+    "pricing_expires_date": "",
+    "pricing_max_age_days": 90,
+    "input_ticks_per_million_tokens": 20_000_000_000,
+    "output_ticks_per_million_tokens": 100_000_000_000,
+    "x_search_ticks_per_call": 500_000_000,
+    "reservation_safety_margin_numerator": 125,
+    "reservation_safety_margin_denominator": 100,
+    "currency": "USD",
 }
 
 
@@ -60,8 +90,90 @@ def _float(value: Any) -> float | None:
 
 
 def _cost_dir() -> Path:
-    value = str(os.getenv("IIOS_MODEL_COST_DIR", "")).strip()
-    return Path(value).expanduser() if value else DEFAULT_COST_DIR
+    return DEFAULT_COST_DIR
+
+
+def max_x_search_tool_calls() -> int:
+    return int(POLICY["max_x_search_tool_calls_per_request"])
+
+
+def max_output_tokens() -> int:
+    return int(POLICY["max_output_tokens_per_request"])
+
+
+def _required_positive_int(name: str) -> int:
+    value = POLICY.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError("Grok pricing policy is invalid; request denied")
+    return value
+
+
+def maximum_request_reservation_ticks(*, model: str) -> int:
+    provenance = ("pricing_source_name", "pricing_source_reference", "pricing_verified_date", "pricing_verifier_id", "pricing_expires_date")
+    if POLICY.get("pricing_verified") is not True or any(not isinstance(POLICY.get(field), str) or not POLICY[field].strip() or POLICY[field].strip().lower() in {"todo", "placeholder", "unverified"} for field in provenance):
+        raise RuntimeError("Grok pricing is unverified; request denied")
+    if model != str(POLICY.get("pricing_model") or ""):
+        raise RuntimeError("Grok pricing policy has no matching model; request denied")
+    try:
+        effective_date = datetime.fromisoformat(str(POLICY["pricing_verified_date"])).date()
+        expires_date = datetime.fromisoformat(str(POLICY["pricing_expires_date"])).date()
+        max_age_days = int(POLICY["pricing_max_age_days"])
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Grok pricing policy is invalid; request denied") from exc
+    if POLICY.get("currency") != "USD" or max_age_days < 1 or (_utc_now().date() - effective_date).days > max_age_days or _utc_now().date() > expires_date:
+        raise RuntimeError("Grok pricing policy is stale; request denied")
+    input_limit = int(POLICY["max_estimated_input_tokens_per_request"])
+    output_limit = int(POLICY["max_output_tokens_per_request"])
+    tool_limit = max_x_search_tool_calls()
+    if input_limit < 1 or output_limit < 1 or tool_limit < 1:
+        raise RuntimeError("Grok request limits are invalid; request denied")
+    base = (
+        input_limit * _required_positive_int("input_ticks_per_million_tokens") // 1_000_000
+        + output_limit * _required_positive_int("output_ticks_per_million_tokens") // 1_000_000
+        + tool_limit * _required_positive_int("x_search_ticks_per_call")
+    )
+    return (base * _required_positive_int("reservation_safety_margin_numerator") + _required_positive_int("reservation_safety_margin_denominator") - 1) // _required_positive_int("reservation_safety_margin_denominator")
+
+
+def _safe_cost_dir() -> Path:
+    path = _cost_dir()
+    approved_root = DEFAULT_COST_DIR.resolve()
+    if not path.is_absolute() or any(part == ".." for part in path.parts):
+        raise RuntimeError("Grok cost ledger path is unsafe")
+    try:
+        path.resolve().relative_to(approved_root)
+    except ValueError as exc:
+        raise RuntimeError("Grok cost ledger path is outside the approved root") from exc
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if path.is_symlink() or (hasattr(os, "getuid") and path.stat().st_uid != os.getuid()) or mode & 0o077:
+        raise RuntimeError("Grok cost ledger path is not owner-private")
+    return path
+
+
+@contextmanager
+def _ledger_lock():
+    with _PROCESS_LOCK:
+        directory = _safe_cost_dir()
+        descriptor = os.open(directory / LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600)
+        os.fchmod(descriptor, 0o600)
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        acquired = False
+        try:
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("Grok cost ledger lock unavailable; request denied")
+                    time.sleep(0.02)
+            yield directory
+        finally:
+            if acquired:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 def query_fingerprint(query: str | None) -> str | None:
@@ -71,30 +183,116 @@ def query_fingerprint(query: str | None) -> str | None:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
 
 
+def sanitize_error(value: Any) -> str:
+    text = str(value or "")
+    def redact_url(match: re.Match[str]) -> str:
+        parts = urlsplit(match.group(0))
+        query = []
+        for name, item in parse_qsl(parts.query, keep_blank_values=True):
+            sensitive = unquote(name).lower() in {"api_key", "apikey", "token", "secret", "password", "access_token"}
+            query.append((name, "[REDACTED]" if sensitive else item))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+    text = re.sub(r"https?://[^\s]+", redact_url, text)
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)([?&](?:api[_-]?key|token|secret|password|access_token)=)[^&#\s]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(?:xai-|sk-|AIza)[A-Za-z0-9._-]{8,}", "[REDACTED]", text)
+    text = re.sub(r"https?://([^/@\s]+)@", "https://[REDACTED]@", text)
+    return text[:500]
+
+
 def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+    flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        payload = (json.dumps(row, sort_keys=True, default=str) + "\n").encode("utf-8")
+        os.write(descriptor, payload)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
-def _read_events() -> list[dict[str, Any]]:
-    path = _cost_dir() / LEDGER_NAME
+def _read_reservations(directory: Path) -> list[dict[str, Any]]:
+    path = directory / RESERVATION_NAME
     if not path.exists():
         return []
+    if path.is_symlink():
+        raise RuntimeError("Grok cost reservations are unsafe; request denied")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Grok cost reservations are unreadable; request denied") from exc
+    reservations = payload.get("reservations") if isinstance(payload, dict) else None
+    if not isinstance(reservations, list):
+        raise RuntimeError("Grok cost reservations are malformed; request denied")
+    for item in reservations:
+        amount = item.get("amount_ticks") if isinstance(item, dict) else None
+        if not isinstance(item, dict) or not isinstance(item.get("reservation_id"), str) or not re.fullmatch(r"[a-f0-9]{32}", item["reservation_id"]) or isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0 or _parse_time(item.get("created_at")) is None:
+            raise RuntimeError("Grok cost reservations are malformed; request denied")
+    return reservations
+
+
+def _write_reservations(directory: Path, reservations: list[dict[str, Any]]) -> None:
+    path = directory / RESERVATION_NAME
+    temporary = directory / (RESERVATION_NAME + ".tmp")
+    _atomic_json_write(directory, RESERVATION_NAME, {"reservations": reservations})
+
+
+def _atomic_json_write(directory: Path, filename: str, payload: dict[str, Any]) -> None:
+    temporary = directory / (filename + ".tmp")
+    flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, directory / filename)
+    directory_descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _integrity_state(directory: Path) -> dict[str, Any]:
+    path = directory / INTEGRITY_NAME
+    if not path.exists():
+        return {"blocked": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Grok budget integrity state is unreadable; request denied") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("blocked"), bool):
+        raise RuntimeError("Grok budget integrity state is malformed; request denied")
+    return payload
+
+
+def _read_events(directory: Path) -> list[dict[str, Any]]:
+    path = directory / LEDGER_NAME
+    if not path.exists():
+        return []
+    if path.is_symlink():
+        raise RuntimeError("Grok cost ledger is unsafe; request denied")
     output: list[dict[str, Any]] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
+    except OSError as exc:
+        raise RuntimeError("Grok cost ledger is unreadable; request denied") from exc
     for line in lines:
         if not line.strip():
             continue
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict) and _parse_time(row.get("timestamp")) is not None:
-            output.append(row)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Grok cost ledger is malformed; request denied") from exc
+        amount = row.get("cost_ticks") if isinstance(row, dict) else None
+        if not isinstance(row, dict) or row.get("event_type") != "SETTLEMENT" or _parse_time(row.get("timestamp")) is None or not isinstance(row.get("reservation_id"), str) or not re.fullmatch(r"[a-f0-9]{32}", row["reservation_id"]) or isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise RuntimeError("Grok cost ledger is malformed; request denied")
+        output.append(row)
     return output
 
 
@@ -107,13 +305,14 @@ def _window(events: list[dict[str, Any]], start: datetime, end: datetime) -> lis
     return selected
 
 
-def _sum_exact(events: list[dict[str, Any]]) -> float:
-    return round(sum(_float(row.get("cost_usd")) or 0.0 for row in events), 8)
+def _sum_exact(events: list[dict[str, Any]]) -> int:
+    return sum(row["cost_ticks"] for row in events)
 
 
-def _current_state(now: datetime | None = None) -> dict[str, Any]:
+def _current_state(directory: Path, now: datetime | None = None) -> dict[str, Any]:
     now_value = now or _utc_now()
-    events = _read_events()
+    events = _read_events(directory)
+    reservations = _read_reservations(directory)
     today_start = now_value.replace(hour=0, minute=0, second=0, microsecond=0)
     hour_start = now_value - timedelta(hours=1)
     week_start = now_value - timedelta(days=7)
@@ -128,14 +327,15 @@ def _current_state(now: datetime | None = None) -> dict[str, Any]:
         "today": today,
         "hour": hour,
         "week": week,
-        "daily_exact_spend_usd": daily,
-        "weekly_exact_spend_usd": weekly,
+        "daily_exact_spend_ticks": daily,
+        "weekly_exact_spend_ticks": weekly,
+        "active_reservations": reservations,
     }
 
 
-def _decision_event(decision: dict[str, Any], *, query_fp: str | None, case_id: str | None, model: str, estimated_input_tokens: int) -> None:
+def _decision_event(directory: Path, decision: dict[str, Any], *, query_fp: str | None, case_id: str | None, model: str, estimated_input_tokens: int) -> None:
     _append_jsonl(
-        _cost_dir() / ADMISSION_LEDGER_NAME,
+        directory / ADMISSION_LEDGER_NAME,
         {
             "timestamp": _iso(_utc_now()),
             "decision": decision.get("decision"),
@@ -154,18 +354,29 @@ def _decision_event(decision: dict[str, Any], *, query_fp: str | None, case_id: 
 
 def preflight_xai_request(*, query: str, model: str, case_id: str | None = None, estimated_input_tokens: int = 0) -> dict[str, Any]:
     """Binding admission gate for the Grok/X-search request boundary only."""
-    state = _current_state()
+    with _ledger_lock() as directory:
+        return _preflight_xai_request(directory, query=query, model=model, case_id=case_id, estimated_input_tokens=estimated_input_tokens)
+
+
+def _preflight_xai_request(directory: Path, *, query: str, model: str, case_id: str | None, estimated_input_tokens: int) -> dict[str, Any]:
+    state = _current_state(directory)
     now_value: datetime = state["now"]
     fp = query_fingerprint(query)
     reasons: list[str] = []
     decision = "ALLOW"
 
-    daily = float(state["daily_exact_spend_usd"])
-    weekly = float(state["weekly_exact_spend_usd"])
-    if daily >= float(POLICY["daily_hard_limit_usd"]) or weekly >= float(POLICY["rolling_7d_hard_limit_usd"]):
+    daily = state["daily_exact_spend_ticks"]
+    weekly = state["weekly_exact_spend_ticks"]
+    reservation_amount = maximum_request_reservation_ticks(model=model)
+    reserved = sum(item["amount_ticks"] for item in state["active_reservations"])
+    integrity = _integrity_state(directory)
+    if integrity["blocked"]:
+        decision = "BLOCK_BUDGET_INTEGRITY"
+        reasons.append("BUDGET_INTEGRITY_REMEDIATION_REQUIRED")
+    elif daily + reserved + reservation_amount > POLICY["daily_hard_limit_ticks"] or weekly + reserved + reservation_amount > POLICY["rolling_7d_hard_limit_ticks"]:
         decision = "BLOCK_HARD_BUDGET"
-        reasons.append("EXACT_SPEND_AT_OR_ABOVE_HARD_LIMIT")
-    elif daily >= float(POLICY["daily_soft_limit_usd"]) or weekly >= float(POLICY["rolling_7d_soft_limit_usd"]):
+        reasons.append("COMPLETED_SPEND_AND_RESERVATIONS_WOULD_EXCEED_HARD_LIMIT")
+    elif daily >= POLICY["daily_soft_limit_ticks"] or weekly >= POLICY["rolling_7d_soft_limit_ticks"]:
         decision = "DEFER_SOFT_BUDGET"
         reasons.append("EXACT_SPEND_AT_OR_ABOVE_SOFT_LIMIT")
 
@@ -200,15 +411,22 @@ def preflight_xai_request(*, query: str, model: str, case_id: str | None = None,
         "allow": decision == "ALLOW",
         "reasons": reasons or ["WITHIN_BINDING_GROK_COST_POLICY"],
         "binding": True,
-        "daily_exact_spend_usd": daily,
-        "rolling_7d_exact_spend_usd": weekly,
+        "daily_exact_spend_ticks": daily,
+        "rolling_7d_exact_spend_ticks": weekly,
+        "active_reservations_ticks": reserved,
         "query_fingerprint": fp,
         "policy_version": SCHEMA_VERSION,
         "trade_execution_permission": False,
         "capital_authority": False,
         "live_execution": False,
     }
-    _decision_event(result, query_fp=fp, case_id=case_id, model=model, estimated_input_tokens=estimated_input_tokens)
+    if result["allow"]:
+        reservation_id = uuid.uuid4().hex
+        state["active_reservations"].append({"reservation_id": reservation_id, "amount_ticks": reservation_amount, "case_id": case_id, "created_at": _iso(now_value)})
+        _write_reservations(directory, state["active_reservations"])
+        result["reservation_id"] = reservation_id
+        result["reserved_cost_ticks"] = reservation_amount
+    _decision_event(directory, result, query_fp=fp, case_id=case_id, model=model, estimated_input_tokens=estimated_input_tokens)
     return result
 
 
@@ -223,14 +441,67 @@ def _response_dump(response: Any) -> dict[str, Any]:
     return response if isinstance(response, dict) else {}
 
 
-def record_xai_response(response: Any, *, model: str, query: str, case_id: str | None, latency_ms: float | None, task_type: str = "GROK_X_SEARCH") -> dict[str, Any]:
+def _settle_reservation(directory: Path, reservation_id: str | None) -> int | None:
+    if not reservation_id:
+        return None
+    reservations = _read_reservations(directory)
+    selected = next((item for item in reservations if item.get("reservation_id") == reservation_id), None)
+    if selected is None:
+        raise RuntimeError("Grok cost reservation is missing; accounting denied")
+    return selected["amount_ticks"]
+
+
+def _remove_settled_reservation(directory: Path, reservation_id: str) -> None:
+    reservations = _read_reservations(directory)
+    _write_reservations(directory, [item for item in reservations if item.get("reservation_id") != reservation_id])
+
+
+def _existing_settlement(events: list[dict[str, Any]], reservation_id: str | None) -> dict[str, Any] | None:
+    return next((event for event in reversed(events) if event.get("reservation_id") == reservation_id and event.get("event_type") == "SETTLEMENT"), None)
+
+
+def record_xai_response(response: Any, *, model: str, query: str, case_id: str | None, latency_ms: float | None, reservation_id: str | None = None, task_type: str = "GROK_X_SEARCH") -> dict[str, Any]:
     dump = _response_dump(response)
     usage = dump.get("usage") if isinstance(dump.get("usage"), dict) else {}
     details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
-    ticks = _int(usage.get("cost_in_usd_ticks"))
-    exact_cost = round(ticks / 10_000_000_000, 10) if ticks > 0 else None
+    provider_ticks = usage.get("cost_in_usd_ticks")
+    ticks = provider_ticks if isinstance(provider_ticks, int) and not isinstance(provider_ticks, bool) and provider_ticks >= 0 else None
+    with _ledger_lock() as directory:
+        existing = _existing_settlement(_read_events(directory), reservation_id)
+        if existing is not None:
+            _remove_settled_reservation(directory, str(reservation_id))
+            return existing
+        reservation_ticks = _settle_reservation(directory, reservation_id)
+        settled_ticks = ticks if ticks is not None else reservation_ticks
+        if settled_ticks is None:
+            raise RuntimeError("Grok response cost is unavailable without a reservation; accounting denied")
+        row = _accounting_row(
+            completed=True,
+            model=model,
+            query=query,
+            case_id=case_id,
+            latency_ms=latency_ms,
+            task_type=task_type,
+            cost_ticks=settled_ticks,
+            cost_source="XAI_COST_IN_USD_TICKS" if ticks is not None else "RESERVATION_CONSERVATIVE_ESTIMATE",
+            usage=usage,
+        )
+        row["event_type"] = "SETTLEMENT"
+        row["reservation_id"] = reservation_id
+        if ticks is not None and ticks > reservation_ticks:
+            row["budget_integrity_breach"] = True
+        if row.get("budget_integrity_breach"):
+            _atomic_json_write(directory, INTEGRITY_NAME, {"blocked": True, "reason": "EXACT_COST_EXCEEDED_RESERVATION"})
+        _append_jsonl(directory / LEDGER_NAME, row)
+        _remove_settled_reservation(directory, str(reservation_id))
+        _publish_governor_artifact(directory)
+        return row
+
+
+def _accounting_row(*, completed: bool, model: str, query: str, case_id: str | None, latency_ms: float | None, task_type: str, cost_ticks: int, cost_source: str, usage: dict[str, Any]) -> dict[str, Any]:
+    details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
     tool_calls = _int(usage.get("num_server_side_tools_used"))
-    row = {
+    return {
         "timestamp": _iso(_utc_now()),
         "provider": "XAI",
         "model": model,
@@ -243,51 +514,49 @@ def record_xai_response(response: Any, *, model: str, query: str, case_id: str |
         "web_search_calls": 0,
         "x_search_calls": tool_calls,
         "server_side_tool_calls": tool_calls,
-        "cost_usd": exact_cost,
-        "cost_source": "XAI_COST_IN_USD_TICKS" if exact_cost is not None else "NOT_REPORTED",
-        "cost_in_usd_ticks": ticks or None,
+        "cost_ticks": cost_ticks,
+        "cost_source": cost_source,
+        "cost_in_usd_ticks": cost_ticks if cost_source == "XAI_COST_IN_USD_TICKS" else None,
         "latency_ms": _float(latency_ms),
         "query_fingerprint": query_fingerprint(query),
-        "request_completed": True,
+        "request_completed": completed,
         "prompt_persisted": False,
         "api_key_persisted": False,
     }
-    _append_jsonl(_cost_dir() / LEDGER_NAME, row)
-    publish_governor_artifact()
-    return row
 
 
-def record_xai_failure(*, model: str, query: str, case_id: str | None, latency_ms: float | None, error_type: str, task_type: str = "GROK_X_SEARCH") -> dict[str, Any]:
-    row = {
-        "timestamp": _iso(_utc_now()),
-        "provider": "XAI",
-        "model": model,
-        "task_type": task_type,
-        "case_id": case_id,
-        "agent": "GROK_SOCIAL_INTELLIGENCE",
-        "input_tokens": 0,
-        "cached_input_tokens": 0,
-        "output_tokens": 0,
-        "web_search_calls": 0,
-        "x_search_calls": 0,
-        "server_side_tool_calls": 0,
-        "cost_usd": None,
-        "cost_source": "NOT_REPORTED_ON_FAILED_REQUEST",
-        "latency_ms": _float(latency_ms),
-        "query_fingerprint": query_fingerprint(query),
-        "request_completed": False,
-        "error_type": str(error_type or "UNKNOWN")[:120],
-        "prompt_persisted": False,
-        "api_key_persisted": False,
-    }
-    _append_jsonl(_cost_dir() / LEDGER_NAME, row)
-    publish_governor_artifact()
-    return row
+def record_xai_failure(*, model: str, query: str, case_id: str | None, latency_ms: float | None, error_type: str, reservation_id: str | None = None, task_type: str = "GROK_X_SEARCH") -> dict[str, Any]:
+    with _ledger_lock() as directory:
+        existing = _existing_settlement(_read_events(directory), reservation_id)
+        if existing is not None:
+            _remove_settled_reservation(directory, str(reservation_id))
+            return existing
+        reservation_ticks = _settle_reservation(directory, reservation_id)
+        if reservation_ticks is None:
+            raise RuntimeError("Grok failed request has no reservation; accounting denied")
+        existing = _existing_settlement(_read_events(directory), reservation_id)
+        if existing is not None:
+            _remove_settled_reservation(directory, str(reservation_id))
+            return existing
+        row = _accounting_row(
+            completed=False, model=model, query=query, case_id=case_id, latency_ms=latency_ms, task_type=task_type,
+            cost_ticks=reservation_ticks, cost_source="RESERVATION_CONSERVATIVE_ESTIMATE", usage={},
+        )
+        row["event_type"] = "SETTLEMENT"
+        row["reservation_id"] = reservation_id
+        row["error_type"] = sanitize_error(error_type) or "UNKNOWN"
+        _append_jsonl(directory / LEDGER_NAME, row)
+        _remove_settled_reservation(directory, str(reservation_id))
+        _publish_governor_artifact(directory)
+        return row
 
 
 def register_hook() -> dict[str, Any]:
-    cost_dir = _cost_dir()
-    cost_dir.mkdir(parents=True, exist_ok=True)
+    with _ledger_lock() as cost_dir:
+        return _register_hook(cost_dir)
+
+
+def _register_hook(cost_dir: Path) -> dict[str, Any]:
     payload = {
         "schema_version": SCHEMA_VERSION,
         "updated_at": _iso(_utc_now()),
@@ -305,25 +574,28 @@ def register_hook() -> dict[str, Any]:
         "capital_authority": False,
         "live_execution": False,
     }
-    tmp = cost_dir / (HOOK_REGISTRY_NAME + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(cost_dir / HOOK_REGISTRY_NAME)
-    publish_governor_artifact()
+    _atomic_json_write(cost_dir, HOOK_REGISTRY_NAME, payload)
+    _publish_governor_artifact(cost_dir)
     return payload
 
 
 def publish_governor_artifact() -> dict[str, Any]:
-    state = _current_state()
+    with _ledger_lock() as cost_dir:
+        return _publish_governor_artifact(cost_dir)
+
+
+def _publish_governor_artifact(cost_dir: Path) -> dict[str, Any]:
+    state = _current_state(cost_dir)
     week = list(state["week"])
     today = list(state["today"])
-    priced = [row for row in week if _float(row.get("cost_usd")) is not None]
+    priced = list(week)
     unpriced = len(week) - len(priced)
     coverage = round((len(priced) / len(week) * 100.0), 1) if week else 0.0
-    daily = float(state["daily_exact_spend_usd"])
-    weekly = float(state["weekly_exact_spend_usd"])
-    if daily >= POLICY["daily_hard_limit_usd"] or weekly >= POLICY["rolling_7d_hard_limit_usd"]:
+    daily = state["daily_exact_spend_ticks"]
+    weekly = state["weekly_exact_spend_ticks"]
+    if daily >= POLICY["daily_hard_limit_ticks"] or weekly >= POLICY["rolling_7d_hard_limit_ticks"]:
         budget_state = "HARD_LIMIT"
-    elif daily >= POLICY["daily_soft_limit_usd"] or weekly >= POLICY["rolling_7d_soft_limit_usd"]:
+    elif daily >= POLICY["daily_soft_limit_ticks"] or weekly >= POLICY["rolling_7d_soft_limit_ticks"]:
         budget_state = "SOFT_LIMIT"
     else:
         budget_state = "WITHIN_BUDGET" if week else "INSTRUMENTATION_BOOTSTRAP"
@@ -341,7 +613,7 @@ def publish_governor_artifact() -> dict[str, Any]:
         "today": {
             "requests": len(today),
             "priced_requests": sum(1 for row in today if _float(row.get("cost_usd")) is not None),
-            "exact_spend_usd": round(daily, 4) if today else None,
+            "exact_spend_ticks": daily if today else None,
             "input_tokens": sum(_int(row.get("input_tokens")) for row in today),
             "cached_input_tokens": sum(_int(row.get("cached_input_tokens")) for row in today),
             "output_tokens": sum(_int(row.get("output_tokens")) for row in today),
@@ -352,7 +624,7 @@ def publish_governor_artifact() -> dict[str, Any]:
             "priced_requests": len(priced),
             "unpriced_requests": unpriced,
             "exact_cost_coverage_pct": coverage,
-            "exact_spend_usd": round(weekly, 4) if week else None,
+            "exact_spend_ticks": weekly if week else None,
             "input_tokens": sum(_int(row.get("input_tokens")) for row in week),
             "cached_input_tokens": sum(_int(row.get("cached_input_tokens")) for row in week),
             "output_tokens": sum(_int(row.get("output_tokens")) for row in week),
@@ -371,11 +643,7 @@ def publish_governor_artifact() -> dict[str, Any]:
             "no_portfolio_change": True,
         },
     }
-    cost_dir = _cost_dir()
-    cost_dir.mkdir(parents=True, exist_ok=True)
-    tmp = cost_dir / (ARTIFACT_NAME + ".tmp")
-    tmp.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(cost_dir / ARTIFACT_NAME)
+    _atomic_json_write(cost_dir, ARTIFACT_NAME, artifact)
     return artifact
 
 

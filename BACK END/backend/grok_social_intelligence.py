@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
-from model_cost_enforcement import preflight_xai_request, record_xai_failure, record_xai_response
+from model_cost_enforcement import max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
 
 
 router = APIRouter()
@@ -98,7 +98,7 @@ def grok_plan() -> dict[str, Any]:
         "max_x_search_attempts": MAX_X_SEARCH_ATTEMPTS,
         "cost_governor_binding": True,
         "cost_governor_policy": "batch10m-grok-cost-enforcement-v1",
-        "max_server_side_tool_calls_per_request": 3,
+        "max_server_side_tool_calls_per_request": max_x_search_tool_calls(),
         "prompt_cache_key_enabled": True,
         "automatic_injection": False,
         "automatic_opportunity_promotion": False,
@@ -121,11 +121,7 @@ def grok_plan() -> dict[str, Any]:
 
 
 def _safe_error(exc: Exception) -> str:
-    text = f"{type(exc).__name__}: {exc}"
-    key = os.getenv("XAI_API_KEY", "").strip()
-    if key:
-        text = text.replace(key, "[REDACTED_XAI_API_KEY]")
-    return text[:1000]
+    return f"{type(exc).__name__}: {sanitize_error(exc)}"[:1000]
 
 
 def _clean_json_text(text: str) -> str:
@@ -384,16 +380,17 @@ def _run_x_search(
         if admission.get("allow") is not True:
             reason = ",".join(str(value) for value in admission.get("reasons") or [])
             raise RuntimeError(f"GROK_COST_GOVERNOR_{admission.get('decision')}: {reason}"[:1000])
+        reservation_id = admission.get("reservation_id")
         started = time.monotonic()
         try:
             response = client.responses.create(
                 model=grok_model(),
                 input=prompt,
                 tools=[{"type": "x_search", "from_date": from_date, "to_date": to_date}],
-                max_output_tokens=2000,
+                max_output_tokens=max_output_tokens(),
                 extra_body={
                     "prompt_cache_key": "iios-grok-social-v1",
-                    "max_tool_calls": 3,
+                    "max_tool_calls": max_x_search_tool_calls(),
                 },
             )
             record_xai_response(
@@ -402,6 +399,7 @@ def _run_x_search(
                 query=query_value,
                 case_id=case_id,
                 latency_ms=(time.monotonic() - started) * 1000.0,
+                reservation_id=reservation_id,
             )
             return response, attempt
         except APITimeoutError as exc:
@@ -411,6 +409,7 @@ def _run_x_search(
                 case_id=case_id,
                 latency_ms=(time.monotonic() - started) * 1000.0,
                 error_type="APITimeoutError",
+                reservation_id=reservation_id,
             )
             last_error = exc
             if attempt >= MAX_X_SEARCH_ATTEMPTS:
@@ -421,7 +420,8 @@ def _run_x_search(
                 query=query_value,
                 case_id=case_id,
                 latency_ms=(time.monotonic() - started) * 1000.0,
-                error_type=type(exc).__name__,
+                error_type=sanitize_error(exc),
+                reservation_id=reservation_id,
             )
             raise
     raise last_error or RuntimeError("Grok X Search failed")

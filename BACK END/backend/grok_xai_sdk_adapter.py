@@ -112,50 +112,6 @@ def _retryable_xai_error(exc: Exception) -> bool:
 
 
 def install_xai_sdk_x_search(module) -> None:
-    """Install the official xAI SDK transport only when no binding cost gate owns the boundary.
-
-    Once Batch 10M cost enforcement is active, the governed OpenAI-compatible
-    Responses boundary remains authoritative because it carries pre-call admission,
-    prompt caching, tool-call caps, output caps, and exact post-call accounting.
-    This prevents a later SDK adapter install from silently bypassing the governor.
-    """
-    try:
-        plan = module.grok_plan()
-    except Exception:
-        plan = {}
-    if isinstance(plan, dict) and plan.get("cost_governor_binding") is True:
-        module._xai_official_sdk_adapter_installed = False
-        module._xai_official_sdk_adapter_skipped_for_cost_governor = True
-        return
-
-    if getattr(module, "_xai_official_sdk_adapter_installed", False):
-        return
-    module._xai_official_sdk_adapter_installed = True
-
-    def official_x_search(
-        _openai_client,
-        *,
-        prompt: str,
-        from_date: str,
-        to_date: str,
-        case_id: str | None = None,
-        query_label: str | None = None,
-    ):
-        del case_id, query_label
-        last_error: Exception | None = None
-        for attempt in range(1, module.MAX_X_SEARCH_ATTEMPTS + 1):
-            try:
-                response = _sample_xai_once(
-                    module,
-                    prompt=prompt,
-                    from_date=from_date,
-                    to_date=to_date,
-                )
-                return _XaiSdkResponseAdapter(response), attempt
-            except Exception as exc:
-                last_error = exc
-                if attempt >= module.MAX_X_SEARCH_ATTEMPTS or not _retryable_xai_error(exc):
-                    raise
-        raise last_error or RuntimeError("Grok X Search failed")
-
-    module._run_x_search = official_x_search
+    """Fail closed: the SDK transport cannot bypass IIOS governed Responses calls."""
+    module._xai_official_sdk_adapter_installed = False
+    module._xai_official_sdk_adapter_skipped_for_cost_governor = True
