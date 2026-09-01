@@ -66,6 +66,11 @@ class GrokXaiSdkAdapterTests(unittest.TestCase):
         self.assertTrue(module._xai_official_sdk_adapter_skipped_for_cost_governor)
         self.assertIs(module._run_x_search, original_run_x_search)
 
+    def test_direct_sdk_helper_fails_before_credential_or_provider_access(self):
+        with patch.object(adapter.os, "getenv", side_effect=AssertionError("credential read")):
+            with self.assertRaisesRegex(RuntimeError, "SDK transport is disabled"):
+                adapter._sample_xai_once(SimpleNamespace(), prompt="prompt", from_date="2026-08-01", to_date="2026-08-02")
+
 
 if __name__ == "__main__":
     unittest.main()

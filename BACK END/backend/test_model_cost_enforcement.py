@@ -66,6 +66,12 @@ class ModelCostEnforcementTests(unittest.TestCase):
         with patch.dict(cost.POLICY, {"pricing_verified_date": "2000-01-01"}):
             with self.assertRaisesRegex(RuntimeError, "pricing policy is stale"):
                 cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)
+
+    def test_unverified_pricing_creates_no_reservation(self):
+        with patch.dict(cost.POLICY, {"pricing_verified": False}):
+            with self.assertRaisesRegex(RuntimeError, "pricing is unverified"):
+                cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)
+        self.assertFalse(Path(self.temporary_directory.name, cost.RESERVATION_NAME).exists())
         with patch.dict(cost.POLICY, {"x_search_ticks_per_call": 0}):
             with self.assertRaisesRegex(RuntimeError, "pricing policy is invalid"):
                 cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)
@@ -109,6 +115,19 @@ class ModelCostEnforcementTests(unittest.TestCase):
         self.assertNotIn("xai-secret-token-value", row["error_type"])
         self.assertNotIn("xai-secret-token-value", persisted)
         self.assertEqual(row["cost_source"], "RESERVATION_CONSERVATIVE_ESTIMATE")
+
+    def test_pre_provider_cancellation_is_idempotent_and_provider_start_rejects_it(self):
+        admission = cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)
+        first = cost.cancel_xai_reservation(reservation_id=admission["reservation_id"], reason="MISSING_CREDENTIALS")
+        second = cost.cancel_xai_reservation(reservation_id=admission["reservation_id"], reason="MISSING_CREDENTIALS")
+        self.assertFalse(first["already_cancelled"])
+        self.assertTrue(second["already_cancelled"])
+        self.assertEqual(cost._read_reservations(Path(self.temporary_directory.name)), [])
+
+        started = cost.preflight_xai_request(query="different", model="grok-4.6", estimated_input_tokens=1)
+        cost.mark_xai_provider_invocation_started(reservation_id=started["reservation_id"])
+        with self.assertRaisesRegex(RuntimeError, "invocation has started"):
+            cost.cancel_xai_reservation(reservation_id=started["reservation_id"], reason="TOO_LATE")
 
     def test_charge_write_failure_retains_reservation_and_removal_failure_is_idempotent(self):
         admission = cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)

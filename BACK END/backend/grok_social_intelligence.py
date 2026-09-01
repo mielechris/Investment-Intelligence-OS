@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
-from model_cost_enforcement import max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
+from model_cost_enforcement import cancel_xai_reservation, mark_xai_provider_invocation_started, max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
 
 
 router = APIRouter()
@@ -366,21 +366,20 @@ def _run_x_search(
     to_date: str,
     case_id: str | None = None,
     query_label: str | None = None,
+    admission: dict[str, Any] | None = None,
 ) -> tuple[Any, int]:
     last_error: Exception | None = None
     query_value = query_label or prompt
     estimated_input_tokens = max(1, (len(prompt) + 3) // 4)
     for attempt in range(1, MAX_X_SEARCH_ATTEMPTS + 1):
-        admission = preflight_xai_request(
-            query=query_value,
-            model=grok_model(),
-            case_id=case_id,
-            estimated_input_tokens=estimated_input_tokens,
-        )
+        admission = admission or preflight_xai_request(query=query_value, model=grok_model(), case_id=case_id, estimated_input_tokens=estimated_input_tokens)
         if admission.get("allow") is not True:
             reason = ",".join(str(value) for value in admission.get("reasons") or [])
             raise RuntimeError(f"GROK_COST_GOVERNOR_{admission.get('decision')}: {reason}"[:1000])
         reservation_id = admission.get("reservation_id")
+        if not isinstance(reservation_id, str):
+            raise RuntimeError("GROK_COST_GOVERNOR_MISSING_RESERVATION")
+        mark_xai_provider_invocation_started(reservation_id=reservation_id)
         started = time.monotonic()
         try:
             response = client.responses.create(
@@ -430,9 +429,6 @@ def _run_x_search(
 def fetch_grok_social_context(topic: str, *, ticker: str | None = None, days: int = 3) -> dict[str, Any]:
     if not grok_enabled():
         raise RuntimeError("Grok experiment is disabled. Set IIOS_GROK_ENABLED=1 to make xAI API calls.")
-    api_key = os.getenv("XAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("XAI_API_KEY is not configured")
     topic = " ".join(str(topic or "").split()).strip()
     if not topic:
         raise ValueError("topic is required")
@@ -475,14 +471,25 @@ Return ONLY JSON:
 }}
 """
 
-    timeout_seconds = grok_timeout_seconds()
-    client = OpenAI(
-        api_key=api_key,
-        base_url=grok_base_url(),
-        timeout=timeout_seconds,
-        max_retries=0,
-    )
-    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date, case_id=ticker, query_label=subject)
+    admission = preflight_xai_request(query=subject, model=grok_model(), case_id=ticker, estimated_input_tokens=max(1, (len(prompt) + 3) // 4))
+    if admission.get("allow") is not True:
+        reason = ",".join(str(value) for value in admission.get("reasons") or [])
+        raise RuntimeError(f"GROK_COST_GOVERNOR_{admission.get('decision')}: {reason}"[:1000])
+    reservation_id = admission.get("reservation_id")
+    if not isinstance(reservation_id, str):
+        raise RuntimeError("GROK_COST_GOVERNOR_MISSING_RESERVATION")
+    api_key = os.getenv("XAI_API_KEY", "").strip()
+    if not api_key:
+        cancel_xai_reservation(reservation_id=reservation_id, reason="MISSING_CREDENTIALS")
+        raise RuntimeError("XAI_API_KEY is not configured")
+
+    try:
+        timeout_seconds = grok_timeout_seconds()
+        client = OpenAI(api_key=api_key, base_url=grok_base_url(), timeout=timeout_seconds, max_retries=0)
+    except Exception:
+        cancel_xai_reservation(reservation_id=reservation_id, reason="CLIENT_CONFIGURATION_FAILED")
+        raise
+    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date, case_id=ticker, query_label=subject, admission=admission)
     parsed = _parse_model_json(getattr(response, "output_text", ""))
     citations = _extract_citation_urls(response)
     filtered = filter_grok_claims(parsed.get("claims"), citations)

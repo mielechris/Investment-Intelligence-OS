@@ -25,6 +25,7 @@ ARTIFACT_NAME = "latest_model_cost_governor.json"
 HOOK_REGISTRY_NAME = "enforcement_hooks.json"
 RESERVATION_NAME = "active_reservations.json"
 INTEGRITY_NAME = "budget_integrity.json"
+CANCELLATION_LEDGER_NAME = "reservation_cancellations.jsonl"
 LOCK_NAME = ".model-cost.lock"
 LOCK_TIMEOUT_SECONDS = 2.0
 _PROCESS_LOCK = threading.RLock()
@@ -422,7 +423,7 @@ def _preflight_xai_request(directory: Path, *, query: str, model: str, case_id: 
     }
     if result["allow"]:
         reservation_id = uuid.uuid4().hex
-        state["active_reservations"].append({"reservation_id": reservation_id, "amount_ticks": reservation_amount, "case_id": case_id, "created_at": _iso(now_value)})
+        state["active_reservations"].append({"reservation_id": reservation_id, "amount_ticks": reservation_amount, "case_id": case_id, "created_at": _iso(now_value), "provider_invocation_started": False})
         _write_reservations(directory, state["active_reservations"])
         result["reservation_id"] = reservation_id
         result["reserved_cost_ticks"] = reservation_amount
@@ -454,6 +455,47 @@ def _settle_reservation(directory: Path, reservation_id: str | None) -> int | No
 def _remove_settled_reservation(directory: Path, reservation_id: str) -> None:
     reservations = _read_reservations(directory)
     _write_reservations(directory, [item for item in reservations if item.get("reservation_id") != reservation_id])
+
+
+def _read_cancellations(directory: Path) -> set[str]:
+    path = directory / CANCELLATION_LEDGER_NAME
+    if not path.exists():
+        return set()
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Grok reservation cancellation ledger is unreadable; request denied") from exc
+    if not all(isinstance(row, dict) and row.get("event_type") == "CANCELLATION" and isinstance(row.get("reservation_id"), str) for row in rows):
+        raise RuntimeError("Grok reservation cancellation ledger is malformed; request denied")
+    return {row["reservation_id"] for row in rows}
+
+
+def mark_xai_provider_invocation_started(*, reservation_id: str) -> None:
+    with _ledger_lock() as directory:
+        reservations = _read_reservations(directory)
+        for reservation in reservations:
+            if reservation["reservation_id"] == reservation_id:
+                reservation["provider_invocation_started"] = True
+                _write_reservations(directory, reservations)
+                return
+        raise RuntimeError("Grok cost reservation is missing before provider invocation")
+
+
+def cancel_xai_reservation(*, reservation_id: str, reason: str) -> dict[str, Any]:
+    """Cancel only before provider dispatch; cancellation is durable and idempotent."""
+    with _ledger_lock() as directory:
+        if reservation_id in _read_cancellations(directory):
+            return {"reservation_id": reservation_id, "event_type": "CANCELLATION", "cancelled": True, "already_cancelled": True}
+        reservations = _read_reservations(directory)
+        reservation = next((item for item in reservations if item["reservation_id"] == reservation_id), None)
+        if reservation is None:
+            raise RuntimeError("Grok cost reservation is missing; cancellation denied")
+        if reservation.get("provider_invocation_started") is True:
+            raise RuntimeError("Grok provider invocation has started; cancellation denied")
+        event = {"timestamp": _iso(_utc_now()), "event_type": "CANCELLATION", "reservation_id": reservation_id, "reason": sanitize_error(reason)[:120], "billable": False}
+        _append_jsonl(directory / CANCELLATION_LEDGER_NAME, event)
+        _remove_settled_reservation(directory, reservation_id)
+        return {**event, "cancelled": True, "already_cancelled": False}
 
 
 def _existing_settlement(events: list[dict[str, Any]], reservation_id: str | None) -> dict[str, Any] | None:

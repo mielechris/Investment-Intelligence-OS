@@ -76,27 +76,9 @@ def _parse_date(value: str) -> datetime:
 
 
 def _sample_xai_once(module, *, prompt: str, from_date: str, to_date: str):
-    """Call xAI through its official SDK, which exposes response.citations directly."""
-    from xai_sdk import Client
-    from xai_sdk.chat import user
-    from xai_sdk.tools import x_search
-
-    client = Client(
-        api_key=os.getenv("XAI_API_KEY"),
-        timeout=module.grok_timeout_seconds(),
-        channel_options=[("grpc.enable_retries", 0)],
-    )
-    chat = client.chat.create(
-        model=module.grok_model(),
-        tools=[
-            x_search(
-                from_date=_parse_date(from_date),
-                to_date=_parse_date(to_date),
-            )
-        ],
-    )
-    chat.append(user(prompt))
-    return chat.sample()
+    """The SDK path is intentionally disabled until it can enforce the governor."""
+    del module, prompt, from_date, to_date
+    raise RuntimeError("Grok SDK transport is disabled; use the governed request boundary")
 
 
 def _retryable_xai_error(exc: Exception) -> bool:
