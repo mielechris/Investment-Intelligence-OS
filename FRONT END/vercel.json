@@ -2,5 +2,15 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "buildCommand": "npm run build",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/living/overview",
+      "destination": "/api/living-overview"
+    },
+    {
+      "source": "/telemetry/ingest",
+      "destination": "/api/telemetry-ingest"
+    }
+  ]
 }
