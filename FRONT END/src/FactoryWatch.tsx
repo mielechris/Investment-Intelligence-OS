@@ -23,6 +23,7 @@ type Overview = {
   factory?: {
     availability?: string;
     payload?: {
+      source_availability?: Record<string, { availability?: string; error_type?: string | null }>;
       factory?: { desks?: Array<{ key?: string; name?: string; recent_completions?: number }> };
       cases?: Array<{ case_id?: string; ticker?: string; stage?: string; active_room?: string }>;
     } | null;
@@ -252,6 +253,7 @@ export default function FactoryWatch() {
     const cadence = record(telemetry.cadence);
     const providers = record(telemetry.providers);
     const events = rows(telemetry.recent_meaningful_events);
+    const promotions = rows(telemetry.recent_promotions);
     const latestEvent = events[0] ?? null;
     const marketValidation = record(layers.market_validation?.payload);
     const shadow = record(layers.shadow_strategy?.payload);
@@ -295,6 +297,7 @@ export default function FactoryWatch() {
       radar,
       fund,
       events,
+      promotions,
       latestEvent,
       cases,
       agents,
@@ -320,6 +323,16 @@ export default function FactoryWatch() {
     ? model.telemetryHealth.flags.map((item) => text(item, "")).filter(Boolean)
     : [];
   const providerErrorCount = numberValue(model.providers.provider_error_count) ?? 0;
+  const promotedCaseIds = new Set(
+    [
+      ...model.promotions.map((row) => text(row.case_id, "")),
+      ...model.events
+        .filter((row) => text(row.event_type, "") === "OPPORTUNITY_PROMOTED_TO_CASE")
+        .map((row) => text(row.case_id, "")),
+    ].filter(Boolean),
+  );
+  const factorySource = overview?.factory?.payload?.source_availability?.factory;
+  const bridgeMismatch = promotedCaseIds.size > 0 && model.cases.length === 0;
 
   const freshness: FreshnessSpec[] = [
     { code: "9G", label: "Factory Telemetry", layer: model.layers.factory_telemetry, freshSeconds: 120, agingSeconds: 600, staleSeconds: 1800 },
@@ -364,6 +377,14 @@ export default function FactoryWatch() {
         <article><span>PAPER NAV</span><strong>{money(model.fund.nav)}</strong><em>{text(model.fund.position_count, "0")} positions</em></article>
         <article><span>SIDECAR</span><strong>{healthState}</strong><em>read-only 5176</em></article>
       </section>
+
+      {bridgeMismatch ? (
+        <section className="fw-age-alert fw-bridge-alert">
+          <strong>CASE BRIDGE ATTENTION</strong>
+          <span>9G proves {promotedCaseIds.size} recent promoted case ID(s), while Backend 8002 currently exposes 0 governed case objects.</span>
+          <em>Factory source {readable(factorySource?.availability, "UNKNOWN")}{factorySource?.error_type ? ` · ${factorySource.error_type}` : ""}. The floor will not invent movement.</em>
+        </section>
+      ) : null}
 
       {staleLayers.length ? (
         <section className="fw-age-alert">
