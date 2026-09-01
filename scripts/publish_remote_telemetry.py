@@ -23,6 +23,26 @@ def _record(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+
+FORBIDDEN_REMOTE_KEYS = {
+    "api_key", "apikey", "password", "secret", "credential",
+    "authorization", "access_token", "refresh_token", "private_key",
+    "account_number", "broker_account",
+}
+
+
+def _sanitize(value: object) -> object:
+    if isinstance(value, list):
+        return [_sanitize(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _sanitize(child)
+            for key, child in value.items()
+            if key.strip().lower().replace("-", "_") not in FORBIDDEN_REMOTE_KEYS
+        }
+    return value
+
+
 def _validate(snapshot: object) -> dict[str, object]:
     root = _record(snapshot)
     safety = _record(root.get("safety"))
@@ -36,7 +56,7 @@ def _validate(snapshot: object) -> dict[str, object]:
     telemetry_safety = _record(payload.get("safety"))
     if telemetry_safety.get("telemetry_read_only") is not True:
         raise ValueError("local snapshot does not prove telemetry_read_only=true")
-    return root
+    return _sanitize(root)
 
 
 def _read_snapshot(source: str) -> bytes:
