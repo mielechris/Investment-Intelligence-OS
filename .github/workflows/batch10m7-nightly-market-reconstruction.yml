@@ -1,0 +1,35 @@
+name: IIOS Batch 10M.7 Nightly Market Reconstruction
+
+on:
+  pull_request:
+    branches:
+      - feature/batch10m6-brain-grand-prix
+    paths:
+      - 'config/iios_batch10m7_nightly_market_reconstruction.json'
+      - 'scripts/iios_nightly_market_reconstruction.py'
+      - 'scripts/activate_batch10m7_nightly_market_reconstruction.py'
+      - 'scripts/test_batch10m7_nightly_market_reconstruction.py'
+      - '.github/workflows/batch10m7-nightly-market-reconstruction.yml'
+
+jobs:
+  nightly-reconstruction-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Batch 10M.7
+        run: python -m py_compile scripts/iios_nightly_market_reconstruction.py scripts/activate_batch10m7_nightly_market_reconstruction.py scripts/test_batch10m7_nightly_market_reconstruction.py
+      - name: Run Batch 10M.7 regression suite
+        run: python scripts/test_batch10m7_nightly_market_reconstruction.py
+      - name: Run inherited Brain Grand Prix suite
+        run: python scripts/test_batch10m6_brain_grand_prix.py
+      - name: Run inherited Brain Shadow Bakeoff suite
+        run: python scripts/test_batch10m5_brain_shadow_bakeoff.py
+      - name: Run inherited Brain Audit suite
+        run: python scripts/test_batch10m4_brain_capability_audit.py
+      - name: Run inherited Overnight Readiness suite
+        run: python scripts/test_batch10m3_overnight_readiness.py
+      - name: Run inherited Scientific Measurement suite
+        run: python scripts/test_batch10m2_scientific_measurement_superbatch.py
