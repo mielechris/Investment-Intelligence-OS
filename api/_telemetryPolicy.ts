@@ -1,4 +1,4 @@
-const MAX_SNAPSHOT_BYTES = 256 * 1024;
+const MAX_SNAPSHOT_BYTES = 512 * 1024;
 
 const FORBIDDEN_KEYS = new Set([
   "api_key",
@@ -88,7 +88,7 @@ export function validateSnapshot(input: unknown): JsonRecord {
   assertSafeTree(snapshot);
   const serialized = JSON.stringify(snapshot);
   if (new TextEncoder().encode(serialized).byteLength > MAX_SNAPSHOT_BYTES) {
-    throw new Error("snapshot exceeds 256 KiB");
+    throw new Error("snapshot exceeds 512 KiB");
   }
   return snapshot;
 }

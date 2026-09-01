@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_SOURCE = "http://127.0.0.1:5176/living/overview"
-MAX_BYTES = 256 * 1024
+MAX_BYTES = 512 * 1024
 
 
 def _record(value: object) -> dict[str, object]:
@@ -47,14 +47,14 @@ def _read_snapshot(source: str) -> bytes:
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = response.read(MAX_BYTES + 1)
     if len(payload) > MAX_BYTES:
-        raise ValueError("local snapshot exceeds 256 KiB")
+        raise ValueError("local snapshot exceeds 512 KiB")
     normalized = json.dumps(
         _validate(json.loads(payload)),
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
     if len(normalized) > MAX_BYTES:
-        raise ValueError("normalized snapshot exceeds 256 KiB")
+        raise ValueError("normalized snapshot exceeds 512 KiB")
     return normalized
 
 

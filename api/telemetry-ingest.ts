@@ -29,7 +29,7 @@ export default {
     }
 
     const contentLength = Number(request.headers.get("content-length") ?? "0");
-    if (contentLength > 256 * 1024) {
+    if (contentLength > 512 * 1024) {
       return json({ error: "payload_too_large" }, 413);
     }
 
