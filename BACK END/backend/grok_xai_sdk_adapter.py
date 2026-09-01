@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 
-ADAPTER_VERSION = "xai-official-sdk-citations-v4"
+ADAPTER_VERSION = "xai-official-sdk-citations-v5-cost-governor-aware"
 
 
 class _XaiSdkResponseAdapter:
@@ -27,6 +27,24 @@ class _XaiSdkResponseAdapter:
         except (TypeError, ValueError):
             cost_ticks = 0
 
+        def usage_int(primary: str, fallback: str | None = None) -> int:
+            value = getattr(usage, primary, None)
+            if value is None and fallback:
+                value = getattr(usage, fallback, 0)
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        input_tokens = usage_int("input_tokens", "prompt_tokens")
+        output_tokens = usage_int("output_tokens", "completion_tokens")
+        cached_tokens = 0
+        details = getattr(usage, "input_tokens_details", None) or getattr(usage, "prompt_tokens_details", None)
+        try:
+            cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            cached_tokens = 0
+
         server_usage = getattr(self._response, "server_side_tool_usage", None)
         tool_count = 0
         if isinstance(server_usage, dict):
@@ -44,6 +62,9 @@ class _XaiSdkResponseAdapter:
         return {
             "citations": list(self.citations),
             "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": {"cached_tokens": cached_tokens},
+                "output_tokens": output_tokens,
                 "cost_in_usd_ticks": cost_ticks,
                 "num_server_side_tools_used": tool_count,
             },
@@ -55,27 +76,9 @@ def _parse_date(value: str) -> datetime:
 
 
 def _sample_xai_once(module, *, prompt: str, from_date: str, to_date: str):
-    """Call xAI through its official SDK, which exposes response.citations directly."""
-    from xai_sdk import Client
-    from xai_sdk.chat import user
-    from xai_sdk.tools import x_search
-
-    client = Client(
-        api_key=os.getenv("XAI_API_KEY"),
-        timeout=module.grok_timeout_seconds(),
-        channel_options=[("grpc.enable_retries", 0)],
-    )
-    chat = client.chat.create(
-        model=module.grok_model(),
-        tools=[
-            x_search(
-                from_date=_parse_date(from_date),
-                to_date=_parse_date(to_date),
-            )
-        ],
-    )
-    chat.append(user(prompt))
-    return chat.sample()
+    """The SDK path is intentionally disabled until it can enforce the governor."""
+    del module, prompt, from_date, to_date
+    raise RuntimeError("Grok SDK transport is disabled; use the governed request boundary")
 
 
 def _retryable_xai_error(exc: Exception) -> bool:
@@ -91,30 +94,6 @@ def _retryable_xai_error(exc: Exception) -> bool:
 
 
 def install_xai_sdk_x_search(module) -> None:
-    """Replace only Grok's X-search transport with the official xAI SDK.
-
-    The existing IIOS firewall, agent routing, evidence qualification, committee,
-    sizing, authorization, and execution paths are unchanged.
-    """
-    if getattr(module, "_xai_official_sdk_adapter_installed", False):
-        return
-    module._xai_official_sdk_adapter_installed = True
-
-    def official_x_search(_openai_client, *, prompt: str, from_date: str, to_date: str):
-        last_error: Exception | None = None
-        for attempt in range(1, module.MAX_X_SEARCH_ATTEMPTS + 1):
-            try:
-                response = _sample_xai_once(
-                    module,
-                    prompt=prompt,
-                    from_date=from_date,
-                    to_date=to_date,
-                )
-                return _XaiSdkResponseAdapter(response), attempt
-            except Exception as exc:
-                last_error = exc
-                if attempt >= module.MAX_X_SEARCH_ATTEMPTS or not _retryable_xai_error(exc):
-                    raise
-        raise last_error or RuntimeError("Grok X Search failed")
-
-    module._run_x_search = official_x_search
+    """Fail closed: the SDK transport cannot bypass IIOS governed Responses calls."""
+    module._xai_official_sdk_adapter_installed = False
+    module._xai_official_sdk_adapter_skipped_for_cost_governor = True

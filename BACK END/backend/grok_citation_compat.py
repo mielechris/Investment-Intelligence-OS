@@ -46,41 +46,9 @@ def _direct_urls(response: Any, module) -> set[str]:
 
 
 def _install_raw_x_search(module) -> None:
-    """Capture untyped xAI JSON before SDK model parsing can drop extension fields."""
-    if getattr(module, "_xai_raw_x_search_installed", False):
-        return
-    module._xai_raw_x_search_installed = True
-
-    def raw_x_search(client, *, prompt: str, from_date: str, to_date: str):
-        last_error: Exception | None = None
-        for attempt in range(1, module.MAX_X_SEARCH_ATTEMPTS + 1):
-            try:
-                raw = client.responses.with_raw_response.create(
-                    model=module.grok_model(),
-                    input=prompt,
-                    tools=[{"type": "x_search", "from_date": from_date, "to_date": to_date}],
-                )
-
-                # LegacyAPIResponse.parse(to=dict) asks the SDK to return the complete
-                # JSON object without coercing it into OpenAI's typed Response model.
-                # That preserves xAI extension fields such as top-level `citations`.
-                try:
-                    raw_payload = raw.parse(to=dict)
-                except Exception:
-                    raw_payload = {}
-                if not isinstance(raw_payload, dict):
-                    raw_payload = {}
-
-                # Parse the ordinary typed response separately for output_text/usage.
-                parsed = raw.parse()
-                return _ResponseWithRawCitations(parsed, raw_payload), attempt
-            except module.APITimeoutError as exc:
-                last_error = exc
-                if attempt >= module.MAX_X_SEARCH_ATTEMPTS:
-                    raise
-        raise last_error or RuntimeError("Grok X Search failed")
-
-    module._run_x_search = raw_x_search
+    """Do not replace the governed request boundary with a raw SDK transport."""
+    module._xai_raw_x_search_installed = False
+    module._xai_raw_x_search_skipped_for_cost_governor = True
 
 
 def install_grok_citation_compat(module) -> None:

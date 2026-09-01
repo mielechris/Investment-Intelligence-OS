@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
+from model_cost_enforcement import cancel_xai_reservation, mark_xai_provider_invocation_started, max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
 
 
 router = APIRouter()
@@ -23,7 +25,7 @@ DEFAULT_BASE_URL = "https://api.x.ai/v1"
 DEFAULT_TIMEOUT_SECONDS = 180.0
 MIN_TIMEOUT_SECONDS = 30.0
 MAX_TIMEOUT_SECONDS = 240.0
-MAX_X_SEARCH_ATTEMPTS = 2
+MAX_X_SEARCH_ATTEMPTS = 1
 MAX_CONTEXT_ITEMS = 5
 MAX_RAW_CLAIMS = 10
 MIN_ADMITTED_SOURCES = 2
@@ -94,6 +96,10 @@ def grok_plan() -> dict[str, Any]:
         "tool": "x_search",
         "timeout_seconds": grok_timeout_seconds(),
         "max_x_search_attempts": MAX_X_SEARCH_ATTEMPTS,
+        "cost_governor_binding": True,
+        "cost_governor_policy": "batch10m-grok-cost-enforcement-v1",
+        "max_server_side_tool_calls_per_request": max_x_search_tool_calls(),
+        "prompt_cache_key_enabled": True,
         "automatic_injection": False,
         "automatic_opportunity_promotion": False,
         "max_context_items": MAX_CONTEXT_ITEMS,
@@ -115,11 +121,7 @@ def grok_plan() -> dict[str, Any]:
 
 
 def _safe_error(exc: Exception) -> str:
-    text = f"{type(exc).__name__}: {exc}"
-    key = os.getenv("XAI_API_KEY", "").strip()
-    if key:
-        text = text.replace(key, "[REDACTED_XAI_API_KEY]")
-    return text[:1000]
+    return f"{type(exc).__name__}: {sanitize_error(exc)}"[:1000]
 
 
 def _clean_json_text(text: str) -> str:
@@ -222,14 +224,22 @@ def _extract_citation_urls(response: Any) -> set[str]:
 def _usage_summary(response: Any) -> dict[str, Any]:
     dump = _response_dump(response)
     usage = dump.get("usage") if isinstance(dump.get("usage"), dict) else {}
+    details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
     try:
         cost_ticks = int(usage.get("cost_in_usd_ticks") or 0)
     except (TypeError, ValueError):
         cost_ticks = 0
+    exact_cost = round(cost_ticks / 1e10, 8) if cost_ticks else None
     return {
+        "input_tokens": int(usage.get("input_tokens") or 0),
+        "cached_input_tokens": int(details.get("cached_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
         "server_side_tools_used": usage.get("num_server_side_tools_used"),
         "cost_in_usd_ticks": cost_ticks,
-        "estimated_cost_usd": round(cost_ticks / 1e10, 6) if cost_ticks else None,
+        "exact_cost_usd": exact_cost,
+        "cost_is_provider_reported_exact": exact_cost is not None,
+        "estimated_cost_usd": exact_cost,
+        "estimated_cost_usd_note": "BACKWARD_COMPATIBILITY_ALIAS_OF_PROVIDER_REPORTED_EXACT_COST",
     }
 
 
@@ -348,29 +358,77 @@ def _search_dates(days: int = 3) -> tuple[str, str]:
     return start.isoformat(), today.isoformat()
 
 
-def _run_x_search(client: OpenAI, *, prompt: str, from_date: str, to_date: str) -> tuple[Any, int]:
+def _run_x_search(
+    client: OpenAI,
+    *,
+    prompt: str,
+    from_date: str,
+    to_date: str,
+    case_id: str | None = None,
+    query_label: str | None = None,
+    admission: dict[str, Any] | None = None,
+) -> tuple[Any, int]:
     last_error: Exception | None = None
+    query_value = query_label or prompt
+    estimated_input_tokens = max(1, (len(prompt) + 3) // 4)
     for attempt in range(1, MAX_X_SEARCH_ATTEMPTS + 1):
+        admission = admission or preflight_xai_request(query=query_value, model=grok_model(), case_id=case_id, estimated_input_tokens=estimated_input_tokens)
+        if admission.get("allow") is not True:
+            reason = ",".join(str(value) for value in admission.get("reasons") or [])
+            raise RuntimeError(f"GROK_COST_GOVERNOR_{admission.get('decision')}: {reason}"[:1000])
+        reservation_id = admission.get("reservation_id")
+        if not isinstance(reservation_id, str):
+            raise RuntimeError("GROK_COST_GOVERNOR_MISSING_RESERVATION")
+        mark_xai_provider_invocation_started(reservation_id=reservation_id)
+        started = time.monotonic()
         try:
             response = client.responses.create(
                 model=grok_model(),
                 input=prompt,
                 tools=[{"type": "x_search", "from_date": from_date, "to_date": to_date}],
+                max_output_tokens=max_output_tokens(),
+                extra_body={
+                    "prompt_cache_key": "iios-grok-social-v1",
+                    "max_tool_calls": max_x_search_tool_calls(),
+                },
+            )
+            record_xai_response(
+                response,
+                model=grok_model(),
+                query=query_value,
+                case_id=case_id,
+                latency_ms=(time.monotonic() - started) * 1000.0,
+                reservation_id=reservation_id,
             )
             return response, attempt
         except APITimeoutError as exc:
+            record_xai_failure(
+                model=grok_model(),
+                query=query_value,
+                case_id=case_id,
+                latency_ms=(time.monotonic() - started) * 1000.0,
+                error_type="APITimeoutError",
+                reservation_id=reservation_id,
+            )
             last_error = exc
             if attempt >= MAX_X_SEARCH_ATTEMPTS:
                 raise
+        except Exception as exc:
+            record_xai_failure(
+                model=grok_model(),
+                query=query_value,
+                case_id=case_id,
+                latency_ms=(time.monotonic() - started) * 1000.0,
+                error_type=sanitize_error(exc),
+                reservation_id=reservation_id,
+            )
+            raise
     raise last_error or RuntimeError("Grok X Search failed")
 
 
 def fetch_grok_social_context(topic: str, *, ticker: str | None = None, days: int = 3) -> dict[str, Any]:
     if not grok_enabled():
         raise RuntimeError("Grok experiment is disabled. Set IIOS_GROK_ENABLED=1 to make xAI API calls.")
-    api_key = os.getenv("XAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("XAI_API_KEY is not configured")
     topic = " ".join(str(topic or "").split()).strip()
     if not topic:
         raise ValueError("topic is required")
@@ -413,14 +471,25 @@ Return ONLY JSON:
 }}
 """
 
-    timeout_seconds = grok_timeout_seconds()
-    client = OpenAI(
-        api_key=api_key,
-        base_url=grok_base_url(),
-        timeout=timeout_seconds,
-        max_retries=0,
-    )
-    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date)
+    admission = preflight_xai_request(query=subject, model=grok_model(), case_id=ticker, estimated_input_tokens=max(1, (len(prompt) + 3) // 4))
+    if admission.get("allow") is not True:
+        reason = ",".join(str(value) for value in admission.get("reasons") or [])
+        raise RuntimeError(f"GROK_COST_GOVERNOR_{admission.get('decision')}: {reason}"[:1000])
+    reservation_id = admission.get("reservation_id")
+    if not isinstance(reservation_id, str):
+        raise RuntimeError("GROK_COST_GOVERNOR_MISSING_RESERVATION")
+    api_key = os.getenv("XAI_API_KEY", "").strip()
+    if not api_key:
+        cancel_xai_reservation(reservation_id=reservation_id, reason="MISSING_CREDENTIALS")
+        raise RuntimeError("XAI_API_KEY is not configured")
+
+    try:
+        timeout_seconds = grok_timeout_seconds()
+        client = OpenAI(api_key=api_key, base_url=grok_base_url(), timeout=timeout_seconds, max_retries=0)
+    except Exception:
+        cancel_xai_reservation(reservation_id=reservation_id, reason="CLIENT_CONFIGURATION_FAILED")
+        raise
+    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date, case_id=ticker, query_label=subject, admission=admission)
     parsed = _parse_model_json(getattr(response, "output_text", ""))
     citations = _extract_citation_urls(response)
     filtered = filter_grok_claims(parsed.get("claims"), citations)

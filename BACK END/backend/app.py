@@ -46,6 +46,7 @@ from paper_capital_api import router as paper_capital_router
 from paper_sizing_profile import router as paper_sizing_profile_router
 from paper_authorization_api import router as paper_authorization_router
 from governed_paper_execution_api import router as governed_paper_execution_router
+from grok_router_registry import install_grok_routers
 import primary_evidence
 import public_case_router
 import source_ingestion
@@ -151,6 +152,7 @@ app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
 app.include_router(semiconductor_router)
+install_grok_routers(app)
 app.version = "0.13.5"
 
 
