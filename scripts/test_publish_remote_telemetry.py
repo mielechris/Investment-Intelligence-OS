@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import unittest
@@ -29,6 +30,7 @@ class PublishRemoteTelemetryTests(unittest.TestCase):
     def _local_snapshot(self) -> dict[str, object]:
         return {
             "schema_version": "batch9l-living-factory-provenance-v1",
+            "generated_at": "2026-09-02T12:00:00+00:00",
             "safety": {"live_execution": False},
             "validation": {
                 "layers": {
@@ -71,7 +73,9 @@ class PublishRemoteTelemetryTests(unittest.TestCase):
         self.assertEqual(headers["x-vercel-protection-bypass"], "test-bypass-secret")
 
     def test_normalizes_remote_schema_and_preserves_source_provenance(self) -> None:
-        normalized = publisher._validate(self._local_snapshot())
+        normalized = publisher._validate(
+            self._local_snapshot(), now=datetime(2026, 9, 2, 12, 0, 30, tzinfo=timezone.utc)
+        )
 
         self.assertEqual(normalized["schema_version"], "iios_remote_telemetry.v1")
         self.assertEqual(
@@ -82,13 +86,41 @@ class PublishRemoteTelemetryTests(unittest.TestCase):
     def test_normalization_preserves_sanitization_and_authority_guards(self) -> None:
         snapshot = self._local_snapshot()
         snapshot["credential"] = "must-not-leave-localhost"
-        normalized = publisher._validate(snapshot)
+        normalized = publisher._validate(
+            snapshot, now=datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+        )
         self.assertNotIn("credential", normalized)
 
         unsafe = self._local_snapshot()
         unsafe["safety"] = {"live_execution": True}
         with self.assertRaisesRegex(ValueError, "live_execution=false"):
-            publisher._validate(unsafe)
+            publisher._validate(
+                unsafe, now=datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+            )
+
+    def test_source_freshness_boundaries(self) -> None:
+        now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+        for age in (0, 30):
+            snapshot = self._local_snapshot()
+            snapshot["generated_at"] = (now - timedelta(seconds=age)).isoformat()
+            self.assertEqual(publisher._validate(snapshot, now=now)["schema_version"], publisher.REMOTE_SCHEMA_VERSION)
+
+        stale = self._local_snapshot()
+        stale["generated_at"] = (now - timedelta(seconds=31)).isoformat()
+        with self.assertRaisesRegex(ValueError, "stale"):
+            publisher._validate(stale, now=now)
+
+    def test_invalid_naive_and_materially_future_timestamps_are_rejected(self) -> None:
+        now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+        for value, message in (
+            ("not-a-date", "invalid"),
+            ("2026-09-02T12:00:00", "timezone"),
+            ((now + timedelta(seconds=6)).isoformat(), "future"),
+        ):
+            snapshot = self._local_snapshot()
+            snapshot["generated_at"] = value
+            with self.assertRaisesRegex(ValueError, message):
+                publisher._validate(snapshot, now=now)
 
 
 if __name__ == "__main__":

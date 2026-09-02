@@ -8,8 +8,8 @@ broker, order, ledger, scheduler, or process-control capability.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
-import os
 import sys
 import urllib.error
 import urllib.parse
@@ -18,6 +18,8 @@ import urllib.request
 DEFAULT_SOURCE = "http://127.0.0.1:5176/living/overview"
 MAX_BYTES = 512 * 1024
 REMOTE_SCHEMA_VERSION = "iios_remote_telemetry.v1"
+MAX_SOURCE_AGE_SECONDS = 30
+MAX_FUTURE_SKEW_SECONDS = 5
 
 
 def _record(value: object) -> dict[str, object]:
@@ -44,8 +46,33 @@ def _sanitize(value: object) -> object:
     return value
 
 
-def _validate(snapshot: object) -> dict[str, object]:
+def _parse_generated_at(value: object) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("local snapshot generated_at is required")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("local snapshot generated_at is invalid") from error
+    if parsed.tzinfo is None:
+        raise ValueError("local snapshot generated_at must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _validate(
+    snapshot: object,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: int = MAX_SOURCE_AGE_SECONDS,
+) -> dict[str, object]:
     root = _record(snapshot)
+    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    generated_at = _parse_generated_at(root.get("generated_at"))
+    age_seconds = (observed_at - generated_at).total_seconds()
+    if age_seconds < -MAX_FUTURE_SKEW_SECONDS:
+        raise ValueError("local snapshot generated_at is materially in the future")
+    if age_seconds > max_age_seconds:
+        raise ValueError("local snapshot is stale")
+
     safety = _record(root.get("safety"))
     if safety.get("live_execution") is not False:
         raise ValueError("local snapshot does not prove live_execution=false")
@@ -113,7 +140,6 @@ def _publish(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default=DEFAULT_SOURCE)
-    parser.add_argument("--destination", default=os.getenv("IIOS_TELEMETRY_INGEST_URL", ""))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -122,21 +148,9 @@ def main() -> int:
         if args.dry_run:
             print(f"validated read-only snapshot ({len(payload)} bytes); nothing uploaded")
             return 0
-
-        token = os.getenv("IIOS_TELEMETRY_INGEST_TOKEN", "")
-        bypass_secret = os.getenv("VERCEL_AUTOMATION_BYPASS_SECRET", "")
-        if not args.destination or not token:
-            raise ValueError(
-                "IIOS_TELEMETRY_INGEST_URL and IIOS_TELEMETRY_INGEST_TOKEN are required"
-            )
-        result = _publish(args.destination, token, payload, bypass_secret)
-        if result.get("accepted") is not True:
-            raise ValueError("remote receiver did not accept the snapshot")
-        print(
-            "published governed read-only snapshot; "
-            f"generated_at={result.get('generated_at')}"
+        raise ValueError(
+            "direct publication is disabled; use run_preview_living_wall_publisher.py"
         )
-        return 0
     except (ValueError, json.JSONDecodeError, urllib.error.URLError) as error:
         print(f"telemetry publish failed closed: {error}", file=sys.stderr)
         return 1

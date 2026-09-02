@@ -1,0 +1,25 @@
+{
+  "schema_version": "iios_preview_living_wall_publisher.v1",
+  "label": "com.iios.living-wall-preview-publisher",
+  "branch": "feature/iios-living-wall-gallery",
+  "preview_host": "investment-intelligence-os-git-feature-iios-l-104899-chris-2274.vercel.app",
+  "ingest_path": "/telemetry/ingest",
+  "truth_path": "/living-wall/truth",
+  "local_source": "http://127.0.0.1:5176/living/overview",
+  "source_max_age_seconds": 30,
+  "future_skew_seconds": 5,
+  "connect_timeout_seconds": 5,
+  "request_timeout_seconds": 15,
+  "interval_seconds": 30,
+  "backoff_seconds": [30, 60, 120, 300],
+  "ingest_keychain": {
+    "service": "com.iios.living-wall-preview.ingest",
+    "account": "feature/iios-living-wall-gallery"
+  },
+  "bypass_keychain": {
+    "service": "com.iios.living-wall-preview.vercel-bypass",
+    "account": "investment-intelligence-os"
+  },
+  "state_directory": "~/Library/Application Support/IIOS/LivingWallPublisher",
+  "log_path": "~/Library/Logs/IIOS/living-wall-preview-publisher.log"
+}
