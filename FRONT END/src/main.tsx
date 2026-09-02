@@ -1,10 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import UnifiedCommandCenter from "./UnifiedCommandCenter.tsx";
+import LivingWallApp from "./LivingWallApp.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <UnifiedCommandCenter />
+    <LivingWallApp />
   </StrictMode>,
 );
