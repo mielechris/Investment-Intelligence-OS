@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Repository-owned launchd template for the IIOS-9L-V7-LIVING read-only
+  factory truth sidecar (port 5176).
+
+  This label is intentionally distinct from the pre-existing, unrelated
+  ~/Library/LaunchAgents/com.iios.factory-browser-preview.plist, which points
+  at a different checkout
+  (Investment-Intelligence-OS-batch10l-10m-measurement-health-superbatch) and
+  is NOT modified, loaded, or removed by this template or its install scripts.
+
+  Install with scripts/ops/install_truth_sidecar_5176.sh (copies this file to
+  ~/Library/LaunchAgents/ and bootstraps it). See
+  DOCS/RUNBOOK_TRUTH_SIDECAR_5176.md for operations.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.iios.v7living-truth-sidecar</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+    <string>/Users/crm/Documents/GitHub/IIOS-9L-V7-LIVING/scripts/iios_factory_browser_preview.py</string>
+    <string>--root</string>
+    <string>/Users/crm/Documents/GitHub/IIOS-9L-V7-LIVING/FRONT END/dist</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>5176</string>
+    <string>--ledger-path</string>
+    <string>/Users/crm/Documents/GitHub/IIOS-9L-V7-LIVING/BACK END/backend/iios_ledger.db</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/crm/Documents/GitHub/IIOS-9L-V7-LIVING</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart only on unexpected (non-zero/crash) exit; a clean exit(0) is not respawned. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- Minimum seconds between respawns, avoids a crash-restart loop. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/crm/Library/Logs/IIOS/v7living-truth-sidecar.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/crm/Library/Logs/IIOS/v7living-truth-sidecar.err.log</string>
+</dict>
+</plist>
