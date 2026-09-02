@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "outDir": "../.test-dist/api",
+    "rootDir": ".",
+    "types": ["node"],
+    "typeRoots": ["../FRONT END/node_modules/@types"],
+    "skipLibCheck": true
+  },
+  "include": ["_telemetryPolicy.ts", "_livingWallTruth.ts", "_livingWallTruthHandler.ts", "living-wall-truth.test.ts"]
+}

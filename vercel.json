@@ -9,6 +9,10 @@
       "destination": "/api/living-overview"
     },
     {
+      "source": "/living-wall/truth",
+      "destination": "/api/living-wall-truth"
+    },
+    {
       "source": "/telemetry/ingest",
       "destination": "/api/telemetry-ingest"
     }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import { LIVING_CAST, type LivingCastKey } from "./livingCast";
+import { loadFactoryTruth } from "./TruthSourceAdapter";
 import "./UnifiedCommandCenter.css";
 
 type Json = Record<string, unknown>;
@@ -8,7 +9,7 @@ type Room = "floor" | "control" | "watch" | "deep";
 type Mode = "guided" | "operator";
 type Status = "LIVE" | "WARMING" | "DEGRADED" | "STALE" | "OFFLINE" | "DISABLED BY POLICY" | "UNKNOWN";
 type Layer = { availability?: string; age_seconds?: number | null; payload?: Json | null; source_identity?: string; generation_cutoff?: string; lineage_status?: string };
-type Snapshot = { generated_at?: string; factory?: { availability?: string; payload?: Json | null }; validation?: { layers?: Record<string, Layer> }; safety?: Json; source_status?: Json; source_conflict?: unknown; source_identity?: unknown; source_fingerprint?: unknown; generation_cutoff?: unknown; fallback_age?: unknown; overview_timeout?: unknown; lineage_status?: unknown };
+type Snapshot = { schema_version?: string; generated_at?: string; freshness?: { state?: string; age_seconds?: number | null }; availability?: string; factory?: { availability?: string; payload?: Json | null; paper_fund?: Json | null }; validation?: { layers?: Record<string, Layer> }; safety?: Json; source_status?: Json; source_conflict?: unknown; source_identity?: unknown; source_fingerprint?: unknown; generation_cutoff?: unknown; fallback_age?: unknown; overview_timeout?: unknown; lineage_status?: unknown };
 type Alert = { kind: "SOURCE CONFLICT" | "DATA DEGRADED" | "FALLBACK ACTIVE" | "LINEAGE INCOMPLETE" | "REVIEW REQUIRED"; message: string; source: string };
 type Detail = { title: string; source: string; timestamp: string; freshness: string; session: string; conflict: string; lineage: string; authority: string };
 
@@ -31,7 +32,8 @@ function assess(snapshot: Snapshot | null, fetchError: string | null) {
   const layers = snapshot?.validation?.layers ?? {};
   const factoryPayload = record(snapshot?.factory?.payload);
   const telemetryPayload = record(layers.factory_telemetry?.payload);
-  const payload = Object.keys(factoryPayload).length ? factoryPayload : telemetryPayload;
+  const remoteTruth = snapshot?.schema_version === "living_wall_truth.v1";
+  const payload = remoteTruth ? { factory: snapshot?.factory, paper_fund: snapshot?.factory?.paper_fund } : Object.keys(factoryPayload).length ? factoryPayload : telemetryPayload;
   const factory = record(payload.factory);
   const casesKnown = Array.isArray(payload.cases);
   const cases = rows(payload.cases);
@@ -39,7 +41,9 @@ function assess(snapshot: Snapshot | null, fetchError: string | null) {
   const events = rows(payload.recent_events ?? payload.events ?? payload.recent_meaningful_events);
   const alerts: Alert[] = [];
   const add = (kind: Alert["kind"], message: string, source: string) => alerts.push({ kind, message, source });
-  if (fetchError || !snapshot?.factory?.payload || snapshot.overview_timeout === true) add("DATA DEGRADED", fetchError ? "The factory overview could not be refreshed. Displayed data may be older than the current operating state." : "The factory overview is incomplete or timed out. Unknown values are withheld.", "factory overview");
+  if (fetchError || (!remoteTruth && !snapshot?.factory?.payload) || snapshot.overview_timeout === true) add("DATA DEGRADED", fetchError ? "The factory overview could not be refreshed. Displayed data may be older than the current operating state." : "The factory overview is incomplete or timed out. Unknown values are withheld.", "factory overview");
+  if (remoteTruth && snapshot.availability === "UNAVAILABLE") add("DATA DEGRADED", "Remote truth is currently unavailable. Unknown values are withheld.", "living-wall truth");
+  if (remoteTruth && snapshot.availability === "STALE") add("DATA DEGRADED", `Remote truth is stale (age ${age(snapshot.freshness?.age_seconds)}).`, "living-wall truth");
   if (events.length && (!casesKnown || cases.length === 0)) add("SOURCE CONFLICT", "Persisted activity exists, but the case list is missing or reports no cases. Case totals are not treated as zero.", "factory events / cases");
   if (snapshot?.source_conflict === true || /CONFLICT/.test(label(record(snapshot?.source_status).state, ""))) add("SOURCE CONFLICT", "Telemetry sources report a conflict. Only individually sourced values remain trustworthy.", "source status");
   if (snapshot?.lineage_status && !/COMPLETE|AVAILABLE|OK/.test(label(snapshot.lineage_status))) add("LINEAGE INCOMPLETE", `Lineage status is ${label(snapshot.lineage_status)}.`, "lineage status");
@@ -50,7 +54,7 @@ function assess(snapshot: Snapshot | null, fetchError: string | null) {
   const market = layers.market_validation;
   if (market && /NO DETECTION|ZERO DETECTION/.test(label(market.availability, "")) && (promotions.length || cases.length)) add("SOURCE CONFLICT", "Market validation reports no detections while persisted promotion or case activity exists.", "market validation / cases");
   if (new Set(Object.values(layers).map((layer) => layer.source_identity).filter(Boolean)).size > 1) add("SOURCE CONFLICT", "Telemetry layers report different source-session identities.", "validation identities");
-  const reportedHealth = Object.keys(factoryPayload).length
+  const reportedHealth = remoteTruth ? snapshot?.availability : Object.keys(factoryPayload).length
     ? snapshot?.factory?.availability
     : payload.health;
   return { payload, factory, layers, cases, casesKnown, promotions, events, alerts, health: status(reportedHealth, layers.factory_telemetry?.age_seconds), safety: record(snapshot?.safety) };
@@ -62,7 +66,7 @@ export default function UnifiedCommandCenter() {
   const [room, setRoom] = useState<Room>("floor");
   const [mode, setMode] = useState<Mode>("guided");
   const [detail, setDetail] = useState<Detail | null>(null);
-  useEffect(() => { let disposed = false; const load = async () => { const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10_000); try { const response = await fetch("/living/overview", { headers: { Accept: "application/json" }, cache: "no-store", signal: controller.signal }); if (!response.ok) throw new Error(`Telemetry overview unavailable (${response.status})`); const next = await response.json() as Snapshot; if (!disposed) { setSnapshot(next); setError(null); } } catch (reason) { if (!disposed) setError(reason instanceof Error && reason.name === "AbortError" ? "Telemetry overview timed out" : reason instanceof Error ? reason.message : "Telemetry overview unavailable"); } finally { clearTimeout(timeout); } }; void load(); const timer = window.setInterval(() => void load(), 15_000); return () => { disposed = true; window.clearInterval(timer); }; }, []);
+  useEffect(() => { let disposed = false; const load = async () => { const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10_000); try { const { data } = await loadFactoryTruth(controller.signal); const next = data as Snapshot; if (!disposed) { setSnapshot(next); setError(null); } } catch (reason) { if (!disposed) setError(reason instanceof Error && reason.name === "AbortError" ? "Telemetry overview timed out" : reason instanceof Error ? reason.message : "Telemetry overview unavailable"); } finally { clearTimeout(timeout); } }; void load(); const timer = window.setInterval(() => void load(), 15_000); return () => { disposed = true; window.clearInterval(timer); }; }, []);
   const data = assess(snapshot, error);
   const open = (title: string, source: string, extra: Partial<Detail> = {}) => setDetail({ title, source, timestamp: date(snapshot?.generated_at), freshness: extra.freshness ?? age(data.layers.factory_telemetry?.age_seconds), session: extra.session ?? text(snapshot?.source_identity, "UNKNOWN"), conflict: extra.conflict ?? (data.alerts.length ? data.alerts.map((item) => item.kind).join(" · ") : "NONE REPORTED"), lineage: extra.lineage ?? text(snapshot?.lineage_status, "UNKNOWN"), authority: "READ-ONLY SANITIZED TELEMETRY · NO LEDGER WRITE · NO TRADE EXECUTION · LIVE EXECUTION FALSE" });
   const portfolio = record(data.payload.portfolio ?? data.payload.paper_fund);
