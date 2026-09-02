@@ -10,13 +10,52 @@ launchd label: `com.iios.v7living-truth-sidecar`
 Installed plist: `~/Library/LaunchAgents/com.iios.v7living-truth-sidecar.plist`
 Repository template: `ops/launchd/com.iios.v7living-truth-sidecar.plist`
 
-**Important:** a pre-existing, unrelated
-`~/Library/LaunchAgents/com.iios.factory-browser-preview.plist` also targets
-port 5176 but points at a different, stale checkout
+**Retired (Phase 5):** a pre-existing, unrelated
+`com.iios.factory-browser-preview.plist` also targeted port 5176 but pointed
+at a different, stale checkout
 (`Investment-Intelligence-OS-batch10l-10m-measurement-health-superbatch`)
-and has no `--ledger-path`. It is currently unloaded. Do **not** load it — if
-it were ever loaded it would occupy port 5176 with the wrong checkout. None
-of the scripts here touch that file.
+with no `--ledger-path`. It was never loaded at the time of retirement, but
+its presence in `~/Library/LaunchAgents/` meant macOS could auto-load it at
+a future login and reintroduce a wrong-checkout sidecar on 5176. It has been
+moved out of `~/Library/LaunchAgents/` into a disabled-services archive so it
+can no longer auto-load. See "Retired stale service archive" below for the
+exact archive path, checksum, and restoration command.
+
+## Retired stale service archive (Phase 5)
+
+- **Old label:** `com.iios.factory-browser-preview`
+- **Old config:** `RunAtLoad: true`, `KeepAlive: true`, port `5176`,
+  `ProgramArguments` running
+  `/Users/crm/Documents/GitHub/Investment-Intelligence-OS-batch10l-10m-measurement-health-superbatch/scripts/iios_factory_browser_preview.py`
+  with `--root .../FRONT END/dist --host 127.0.0.1 --port 5176` (no
+  `--ledger-path`), `WorkingDirectory` set to that same stale checkout.
+- **Reason retired:** wrong checkout, no explicit ledger path, latent risk of
+  auto-loading at login and colliding with the correct
+  `com.iios.v7living-truth-sidecar` service on port 5176.
+- **Load state at retirement:** not loaded (`launchctl print` returned "could
+  not find service"; confirmed via `launchctl list` as well).
+- **Archived copy:** `~/Library/Application Support/IIOS/DisabledLaunchAgents/com.iios.factory-browser-preview.plist.disabled-20260902T054606Z`
+- **SHA-256 checksum:** `58b6cb05367ad128d6c0ad93da4c724120a4ac27ff0538741b6e7f6ab71d6296`
+  (verified identical between the original and the archived copy before the
+  original was removed from `~/Library/LaunchAgents/`)
+- **Original logs (preserved in place, untouched):**
+  - `~/Library/Logs/IIOS/factory-browser-preview.out.log` (2,265,189 bytes as of retirement)
+  - `~/Library/Logs/IIOS/factory-browser-preview.err.log` (6,318,118 bytes as of retirement)
+
+### Restoration procedure (only if the stale checkout must be revived)
+
+```zsh
+cp "$HOME/Library/Application Support/IIOS/DisabledLaunchAgents/com.iios.factory-browser-preview.plist.disabled-20260902T054606Z" \
+   "$HOME/Library/LaunchAgents/com.iios.factory-browser-preview.plist"
+shasum -a 256 "$HOME/Library/LaunchAgents/com.iios.factory-browser-preview.plist"
+# Expect: 58b6cb05367ad128d6c0ad93da4c724120a4ac27ff0538741b6e7f6ab71d6296
+plutil -lint "$HOME/Library/LaunchAgents/com.iios.factory-browser-preview.plist"
+launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.iios.factory-browser-preview.plist"
+```
+
+Restoring this service will make it compete for port 5176 with
+`com.iios.v7living-truth-sidecar`; do not restore it while the correct
+service is running unless you first change one of their ports.
 
 ## Install
 
