@@ -14,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
+from grok_governed_observation import advisory_read_model, observation_status, record_observation
 from model_cost_enforcement import cancel_xai_reservation, mark_xai_provider_invocation_started, max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
 
 
@@ -30,6 +31,7 @@ MAX_CONTEXT_ITEMS = 5
 MAX_RAW_CLAIMS = 10
 MIN_ADMITTED_SOURCES = 2
 CONTEXT_FILE_ENV = "IIOS_GROK_CONTEXT_FILE"
+CONTROLLED_PROVIDER_TEST_APPROVED = False
 
 _CONTEXT_LOCK = threading.Lock()
 _CONTEXT_CACHE: dict[str, Any] = {"path": None, "mtime": None, "payload": None}
@@ -90,6 +92,8 @@ def grok_plan() -> dict[str, Any]:
     return {
         "policy_version": POLICY_VERSION,
         "enabled": grok_enabled(),
+        "controlled_provider_test_approved": False,
+        "provider_activation_state": "DISABLED_PENDING_OWNER_VERIFICATION_AND_APPROVAL",
         "api_key_configured": bool(os.getenv("XAI_API_KEY", "").strip()),
         "model": grok_model(),
         "base_url": grok_base_url(),
@@ -367,6 +371,7 @@ def _run_x_search(
     case_id: str | None = None,
     query_label: str | None = None,
     admission: dict[str, Any] | None = None,
+    governance_metadata: dict[str, Any] | None = None,
 ) -> tuple[Any, int]:
     last_error: Exception | None = None
     query_value = query_label or prompt
@@ -392,7 +397,7 @@ def _run_x_search(
                     "max_tool_calls": max_x_search_tool_calls(),
                 },
             )
-            record_xai_response(
+            settlement = record_xai_response(
                 response,
                 model=grok_model(),
                 query=query_value,
@@ -400,6 +405,8 @@ def _run_x_search(
                 latency_ms=(time.monotonic() - started) * 1000.0,
                 reservation_id=reservation_id,
             )
+            if governance_metadata is not None:
+                governance_metadata.update({"reservation_id": reservation_id, "settlement_id": settlement.get("reservation_id"), "reserved_cost_ticks": admission.get("reserved_cost_ticks"), "actual_cost_ticks": settlement.get("cost_ticks"), "cost_source": settlement.get("cost_source")})
             return response, attempt
         except APITimeoutError as exc:
             record_xai_failure(
@@ -429,6 +436,8 @@ def _run_x_search(
 def fetch_grok_social_context(topic: str, *, ticker: str | None = None, days: int = 3) -> dict[str, Any]:
     if not grok_enabled():
         raise RuntimeError("Grok experiment is disabled. Set IIOS_GROK_ENABLED=1 to make xAI API calls.")
+    if not CONTROLLED_PROVIDER_TEST_APPROVED:
+        raise RuntimeError("Grok provider activation is disabled pending explicit controlled-test approval")
     topic = " ".join(str(topic or "").split()).strip()
     if not topic:
         raise ValueError("topic is required")
@@ -489,7 +498,8 @@ Return ONLY JSON:
     except Exception:
         cancel_xai_reservation(reservation_id=reservation_id, reason="CLIENT_CONFIGURATION_FAILED")
         raise
-    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date, case_id=ticker, query_label=subject, admission=admission)
+    governance_metadata: dict[str, Any] = {"reservation_id": reservation_id, "reserved_cost_ticks": admission.get("reserved_cost_ticks")}
+    response, api_attempts = _run_x_search(client, prompt=prompt, from_date=from_date, to_date=to_date, case_id=ticker, query_label=subject, admission=admission, governance_metadata=governance_metadata)
     parsed = _parse_model_json(getattr(response, "output_text", ""))
     citations = _extract_citation_urls(response)
     filtered = filter_grok_claims(parsed.get("claims"), citations)
@@ -527,6 +537,7 @@ Return ONLY JSON:
         "trade_execution_permission": False,
         "live_execution": False,
         "created_at": utc_now(),
+        **governance_metadata,
     }
 
 
@@ -553,6 +564,7 @@ def build_case_grok_context(case_id: str, *, days: int = 3, persist: bool = True
         object_id = f"grok_social_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         result["grok_social_context_id"] = object_id
         record_object(object_id, "grok_social_context", case_id, result, parent_id=case_id, topic=case.get("topic"))
+        record_observation(result)
         record_event(case_id, "GROK_SOCIAL_CONTEXT_COLLECTED", entity_id=object_id, payload={
             "admitted_count": result.get("admitted_count"),
             "quarantined_count": result.get("quarantined_count"),
@@ -624,7 +636,7 @@ def grok_context_status(case_id: str):
     latest = latest_object("grok_social_context", case_id=case_id)
     return {
         "case_id": case_id,
-        "latest_context": latest,
+        "latest_context": advisory_read_model(latest) if isinstance(latest, dict) else None,
         "plan": grok_plan(),
         "paper_mode": True,
         "auto_trade_authority": False,
@@ -632,3 +644,8 @@ def grok_context_status(case_id: str):
         "trade_execution_permission": False,
         "live_execution": False,
     }
+
+
+@router.get("/grok/observation/status")
+def get_grok_observation_status():
+    return observation_status()
