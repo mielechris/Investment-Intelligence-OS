@@ -206,5 +206,232 @@ class PreviewLivingWallPublisherTests(unittest.TestCase):
         self.assertEqual(calls, [("bootout", installer.launch_service())])
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.current
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.current += seconds
+
+
+class FakeInstallerRunner:
+    def __init__(self, policy: dict, states: list[dict]) -> None:
+        self.policy = policy
+        self.states = [dict(state) for state in states]
+        self.last_state: dict = {}
+
+    def load_policy(self) -> dict:
+        return self.policy
+
+    def keychain_secret(self, item: dict) -> str:
+        return "opaque-test-value"
+
+    def read_state(self, policy: dict) -> dict:
+        if self.states:
+            self.last_state = self.states.pop(0)
+        return dict(self.last_state)
+
+
+class PreviewLivingWallInstallerAcceptanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.target = self.root / "Library" / "LaunchAgents" / f"{installer.LABEL}.plist"
+        self.policy = json.loads((ROOT / "config" / "preview_living_wall_publisher.json").read_text())
+        self.baseline = {
+            "event": "CYCLE_OK", "last_attempt_at": "before",
+            "last_success_at": "before", "http_status": 200,
+            "availability": "AVAILABLE", "freshness": "CURRENT",
+            "age_seconds": 1, "consecutive_failures": 0,
+            "next_attempt_at": None,
+            "live_execution": False, "telemetry_read_only": True,
+        }
+
+    def successful_state(self) -> dict:
+        return {
+            "event": "CYCLE_OK", "last_attempt_at": "after",
+            "last_success_at": "after", "http_status": 200,
+            "availability": "AVAILABLE", "freshness": "CURRENT",
+            "age_seconds": 1, "consecutive_failures": 0,
+            "next_attempt_at": None,
+            "live_execution": False, "telemetry_read_only": True,
+        }
+
+    @staticmethod
+    def completed(arguments, returncode: int = 0):
+        return subprocess.CompletedProcess(arguments, returncode, "", "")
+
+    def install_with(self, module, launchctl, **constant_overrides):
+        clock = FakeClock()
+        patches = [
+            patch.object(installer.sys, "platform", "darwin"),
+            patch.object(installer, "_runner_module", return_value=module),
+            patch.object(installer, "launch_agent_path", return_value=self.target),
+            patch.object(installer, "_launchctl", side_effect=launchctl),
+            patch.object(installer.time, "monotonic", side_effect=clock.monotonic),
+            patch.object(installer.time, "sleep", side_effect=clock.sleep),
+            patch("builtins.print"),
+        ]
+        for name, value in constant_overrides.items():
+            patches.append(patch.object(installer, name, value))
+        entered = [item.start() for item in patches]
+        self.addCleanup(lambda: [item.stop() for item in reversed(patches)])
+        result = installer.install()
+        return result, clock, entered[-1 if not constant_overrides else 6]
+
+    def test_bootstrap_and_run_at_load_succeed_without_kickstart(self) -> None:
+        module = FakeInstallerRunner(self.policy, [self.baseline, self.successful_state()])
+        calls = []
+
+        def launchctl(*arguments, **kwargs):
+            calls.append(arguments)
+            if arguments[0] == "kickstart":
+                self.fail("RunAtLoad success must not invoke kickstart")
+            return self.completed(arguments)
+
+        result, _, printed = self.install_with(module, launchctl)
+        self.assertEqual(result, 0)
+        self.assertTrue(self.target.exists())
+        self.assertIn(("bootstrap", installer.launch_domain(), str(self.target)), calls)
+        self.assertNotIn("kickstart", [call[0] for call in calls])
+        output = str(printed.call_args)
+        self.assertIn('"acceptance": "CYCLE_OK"', output)
+        self.assertNotIn("opaque-test-value", output)
+
+    def test_kickstart_timeout_then_proven_cycle_is_accepted(self) -> None:
+        module = FakeInstallerRunner(self.policy, [self.baseline, {}, self.successful_state()])
+        calls = []
+
+        def launchctl(*arguments, **kwargs):
+            calls.append(arguments)
+            if arguments[0] == "kickstart":
+                raise subprocess.TimeoutExpired(arguments, kwargs["timeout_seconds"])
+            return self.completed(arguments)
+
+        result, _, _ = self.install_with(
+            module, launchctl, RUN_AT_LOAD_GRACE_SECONDS=0,
+            INSTALL_ACCEPTANCE_TIMEOUT_SECONDS=3,
+        )
+        self.assertEqual(result, 0)
+        self.assertIn("kickstart", [call[0] for call in calls])
+        self.assertNotIn("bootout", [call[0] for call in calls])
+
+    def test_kickstart_timeout_without_success_rolls_back(self) -> None:
+        module = FakeInstallerRunner(self.policy, [self.baseline, {}])
+        calls = []
+
+        def launchctl(*arguments, **kwargs):
+            calls.append(arguments)
+            if arguments[0] == "kickstart":
+                raise subprocess.TimeoutExpired(arguments, kwargs["timeout_seconds"])
+            return self.completed(arguments)
+
+        result, clock, printed = self.install_with(
+            module, launchctl, RUN_AT_LOAD_GRACE_SECONDS=0,
+            INSTALL_ACCEPTANCE_TIMEOUT_SECONDS=2,
+        )
+        self.assertEqual(result, 1)
+        self.assertLessEqual(clock.current, 2)
+        self.assertFalse(self.target.exists())
+        self.assertEqual(calls[-1], ("bootout", installer.launch_service()))
+        self.assertIn("INSTALL_ACCEPTANCE_TIMEOUT", str(printed.call_args))
+
+    def test_job_never_loading_fails_closed(self) -> None:
+        module = FakeInstallerRunner(self.policy, [self.baseline, {}])
+        calls = []
+
+        def launchctl(*arguments, **kwargs):
+            calls.append(arguments)
+            if arguments[0] == "print":
+                return self.completed(arguments, 1)
+            return self.completed(arguments)
+
+        result, _, printed = self.install_with(
+            module, launchctl, RUN_AT_LOAD_GRACE_SECONDS=10,
+            INSTALL_ACCEPTANCE_TIMEOUT_SECONDS=2,
+        )
+        self.assertEqual(result, 1)
+        self.assertFalse(self.target.exists())
+        self.assertIn("LAUNCHCTL_JOB_NOT_LOADED", str(printed.call_args))
+
+    def test_new_cycle_failure_fails_closed(self) -> None:
+        failed = {
+            "event": "CYCLE_FAILED", "last_attempt_at": "after",
+            "last_success_at": "before", "failure_code": "SENSITIVE-DIAGNOSTIC",
+        }
+        module = FakeInstallerRunner(self.policy, [self.baseline, failed])
+        calls = []
+
+        def launchctl(*arguments, **kwargs):
+            calls.append(arguments)
+            return self.completed(arguments)
+
+        result, _, printed = self.install_with(module, launchctl)
+        self.assertEqual(result, 1)
+        self.assertFalse(self.target.exists())
+        self.assertIn("PUBLISHER_CYCLE_FAILED", str(printed.call_args))
+        self.assertNotIn("SENSITIVE-DIAGNOSTIC", str(printed.call_args))
+        self.assertEqual(calls[-1], ("bootout", installer.launch_service()))
+
+    def test_acceptance_timeout_is_bounded(self) -> None:
+        module = FakeInstallerRunner(self.policy, [self.baseline, {}])
+        print_calls = 0
+
+        def launchctl(*arguments, **kwargs):
+            nonlocal print_calls
+            if arguments[0] == "print":
+                print_calls += 1
+            return self.completed(arguments)
+
+        result, clock, _ = self.install_with(
+            module, launchctl, RUN_AT_LOAD_GRACE_SECONDS=10,
+            INSTALL_ACCEPTANCE_TIMEOUT_SECONDS=3,
+        )
+        self.assertEqual(result, 1)
+        self.assertEqual(clock.current, 3)
+        self.assertEqual(print_calls, 3)
+
+    def test_timeout_output_is_fixed_and_sanitized(self) -> None:
+        module = FakeInstallerRunner(self.policy, [self.baseline])
+
+        def launchctl(*arguments, **kwargs):
+            if arguments[0] == "bootstrap":
+                raise subprocess.TimeoutExpired(
+                    ["launchctl", "SENSITIVE-DIAGNOSTIC"], 15,
+                    output="SENSITIVE-DIAGNOSTIC",
+                )
+            return self.completed(arguments)
+
+        result, _, printed = self.install_with(module, launchctl)
+        self.assertEqual(result, 1)
+        output = str(printed.call_args)
+        self.assertIn("LAUNCHCTL_BOOTSTRAP_TIMEOUT", output)
+        self.assertNotIn("SENSITIVE-DIAGNOSTIC", output)
+
+    def test_install_rollback_removes_only_target_label(self) -> None:
+        self.target.parent.mkdir(parents=True)
+        self.target.write_text("target")
+        unrelated = self.target.parent / "com.iios.existing-worker.plist"
+        unrelated.write_text("preserve")
+        calls = []
+
+        def launchctl(*arguments, **kwargs):
+            calls.append(arguments)
+            return self.completed(arguments)
+
+        with patch.object(installer, "_launchctl", side_effect=launchctl), \
+             patch("builtins.print"):
+            self.assertEqual(installer._fail_install(self.target, "INSTALL_ACCEPTANCE_TIMEOUT"), 1)
+        self.assertFalse(self.target.exists())
+        self.assertEqual(unrelated.read_text(), "preserve")
+        self.assertEqual(calls, [("bootout", installer.launch_service())])
+
+
 if __name__ == "__main__":
     unittest.main()

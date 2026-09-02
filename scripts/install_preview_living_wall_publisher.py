@@ -12,12 +12,25 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 
 REPO = Path(__file__).resolve().parents[1]
 RUNNER = REPO / "scripts" / "run_preview_living_wall_publisher.py"
 LABEL = "com.iios.living-wall-preview-publisher"
+LAUNCHCTL_TIMEOUT_SECONDS = 15
+INSTALL_ACCEPTANCE_TIMEOUT_SECONDS = 90
+RUN_AT_LOAD_GRACE_SECONDS = 45
+INSTALL_POLL_INTERVAL_SECONDS = 1
+
+INSTALL_FAILURE_CODES = {
+    "LAUNCHCTL_BOOTSTRAP_FAILED",
+    "LAUNCHCTL_BOOTSTRAP_TIMEOUT",
+    "LAUNCHCTL_JOB_NOT_LOADED",
+    "PUBLISHER_CYCLE_FAILED",
+    "INSTALL_ACCEPTANCE_TIMEOUT",
+}
 
 
 def _runner_module() -> Any:
@@ -60,10 +73,13 @@ def build_plist(policy: dict[str, Any], *, python: str = sys.executable) -> dict
     }
 
 
-def _launchctl(*arguments: str) -> subprocess.CompletedProcess[str]:
+def _launchctl(
+    *arguments: str,
+    timeout_seconds: float = LAUNCHCTL_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["/bin/launchctl", *arguments], text=True, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, timeout=15, check=False,
+        stderr=subprocess.DEVNULL, timeout=timeout_seconds, check=False,
         env={"PATH": "/usr/bin:/bin"},
     )
 
@@ -84,6 +100,110 @@ def _write_plist(path: Path, payload: dict[str, Any]) -> None:
             pass
 
 
+def _rollback_install(path: Path) -> None:
+    try:
+        _launchctl("bootout", launch_service())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _fail_install(path: Path, failure_code: str) -> int:
+    if failure_code not in INSTALL_FAILURE_CODES:
+        failure_code = "INSTALL_ACCEPTANCE_TIMEOUT"
+    _rollback_install(path)
+    print(json.dumps({"status": "FAILED_CLOSED", "failure_code": failure_code}))
+    return 1
+
+
+def _new_cycle(state: dict[str, Any], baseline: dict[str, Any]) -> bool:
+    attempt = state.get("last_attempt_at")
+    return isinstance(attempt, str) and bool(attempt) and attempt != baseline.get("last_attempt_at")
+
+
+def _successful_cycle(state: dict[str, Any], baseline: dict[str, Any]) -> bool:
+    return (
+        _new_cycle(state, baseline)
+        and state.get("event") == "CYCLE_OK"
+        and isinstance(state.get("last_success_at"), str)
+        and bool(state["last_success_at"])
+        and state["last_success_at"] != baseline.get("last_success_at")
+        and state.get("last_attempt_at") == state.get("last_success_at")
+        and state.get("consecutive_failures") == 0
+        and state.get("next_attempt_at") is None
+        and state.get("http_status") == 200
+        and state.get("availability") == "AVAILABLE"
+        and state.get("freshness") == "CURRENT"
+        and isinstance(state.get("age_seconds"), int)
+        and 0 <= state["age_seconds"] <= 60
+        and state.get("live_execution") is False
+        and state.get("telemetry_read_only") is True
+    )
+
+
+def _await_installation(
+    module: Any,
+    policy: dict[str, Any],
+    baseline: dict[str, Any],
+) -> str | None:
+    started = time.monotonic()
+    deadline = started + INSTALL_ACCEPTANCE_TIMEOUT_SECONDS
+    ever_loaded = False
+    kickstart_attempted = False
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            result = _launchctl(
+                "print", launch_service(),
+                timeout_seconds=min(LAUNCHCTL_TIMEOUT_SECONDS, remaining),
+            )
+            loaded = result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            loaded = False
+        ever_loaded = ever_loaded or loaded
+
+        try:
+            state = module.read_state(policy)
+        except Exception:
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        if loaded and _successful_cycle(state, baseline):
+            return None
+        if _new_cycle(state, baseline) and state.get("event") == "CYCLE_FAILED":
+            return "PUBLISHER_CYCLE_FAILED"
+
+        now = time.monotonic()
+        if not kickstart_attempted and now - started >= RUN_AT_LOAD_GRACE_SECONDS:
+            kickstart_attempted = True
+            remaining = deadline - now
+            if remaining > 0:
+                try:
+                    _launchctl(
+                        "kickstart", "-k", launch_service(),
+                        timeout_seconds=min(LAUNCHCTL_TIMEOUT_SECONDS, remaining),
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    # A kickstart timeout is not authoritative. The launchd
+                    # registration and sanitized cycle status remain the gates.
+                    pass
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(INSTALL_POLL_INTERVAL_SECONDS, remaining))
+
+    if not ever_loaded:
+        return "LAUNCHCTL_JOB_NOT_LOADED"
+    return "INSTALL_ACCEPTANCE_TIMEOUT"
+
+
 def install() -> int:
     if sys.platform != "darwin":
         print(json.dumps({"status": "FAILED_CLOSED", "failure_code": "MACOS_REQUIRED"}))
@@ -99,18 +219,33 @@ def install() -> int:
         return 1
     path = launch_agent_path()
     payload = build_plist(policy)
+    try:
+        baseline = module.read_state(policy)
+    except Exception:
+        baseline = {}
+    if not isinstance(baseline, dict):
+        baseline = {}
     if path.exists():
-        _launchctl("bootout", launch_service())
+        try:
+            _launchctl("bootout", launch_service())
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     _write_plist(path, payload)
-    result = _launchctl("bootstrap", launch_domain(), str(path))
+    try:
+        result = _launchctl("bootstrap", launch_domain(), str(path))
+    except subprocess.TimeoutExpired:
+        return _fail_install(path, "LAUNCHCTL_BOOTSTRAP_TIMEOUT")
+    except OSError:
+        return _fail_install(path, "LAUNCHCTL_BOOTSTRAP_FAILED")
     if result.returncode != 0:
-        print(json.dumps({"status": "FAILED_CLOSED", "failure_code": "LAUNCHCTL_BOOTSTRAP_FAILED"}))
-        return 1
-    result = _launchctl("kickstart", "-k", launch_service())
-    if result.returncode != 0:
-        print(json.dumps({"status": "FAILED_CLOSED", "failure_code": "LAUNCHCTL_KICKSTART_FAILED"}))
-        return 1
-    print(json.dumps({"status": "INSTALLED", "label": LABEL, "interval_seconds": 30}))
+        return _fail_install(path, "LAUNCHCTL_BOOTSTRAP_FAILED")
+    failure_code = _await_installation(module, policy, baseline)
+    if failure_code is not None:
+        return _fail_install(path, failure_code)
+    print(json.dumps({
+        "status": "INSTALLED", "label": LABEL, "interval_seconds": 30,
+        "acceptance": "CYCLE_OK",
+    }))
     return 0
 
 
