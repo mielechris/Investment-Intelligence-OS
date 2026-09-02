@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from typing import Any
+
+
+ADAPTER_VERSION = "xai-official-sdk-citations-v5-cost-governor-aware"
+
+
+class _XaiSdkResponseAdapter:
+    """Expose the small Responses-like surface IIOS already consumes."""
+
+    def __init__(self, response: Any):
+        self._response = response
+        self.output_text = str(getattr(response, "content", "") or "")
+        self.citations = list(getattr(response, "citations", None) or [])
+        self.sources = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+    def model_dump(self, *args, **kwargs) -> dict[str, Any]:
+        usage = getattr(self._response, "usage", None)
+        try:
+            cost_ticks = int(getattr(usage, "cost_in_usd_ticks", 0) or 0)
+        except (TypeError, ValueError):
+            cost_ticks = 0
+
+        def usage_int(primary: str, fallback: str | None = None) -> int:
+            value = getattr(usage, primary, None)
+            if value is None and fallback:
+                value = getattr(usage, fallback, 0)
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        input_tokens = usage_int("input_tokens", "prompt_tokens")
+        output_tokens = usage_int("output_tokens", "completion_tokens")
+        cached_tokens = 0
+        details = getattr(usage, "input_tokens_details", None) or getattr(usage, "prompt_tokens_details", None)
+        try:
+            cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            cached_tokens = 0
+
+        server_usage = getattr(self._response, "server_side_tool_usage", None)
+        tool_count = 0
+        if isinstance(server_usage, dict):
+            for value in server_usage.values():
+                try:
+                    tool_count += int(value or 0)
+                except (TypeError, ValueError):
+                    pass
+        else:
+            try:
+                tool_count = int(getattr(usage, "num_server_side_tools_used", 0) or 0)
+            except (TypeError, ValueError):
+                tool_count = 0
+
+        return {
+            "citations": list(self.citations),
+            "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": {"cached_tokens": cached_tokens},
+                "output_tokens": output_tokens,
+                "cost_in_usd_ticks": cost_ticks,
+                "num_server_side_tools_used": tool_count,
+            },
+        }
+
+
+def _parse_date(value: str) -> datetime:
+    return datetime.fromisoformat(str(value))
+
+
+def _sample_xai_once(module, *, prompt: str, from_date: str, to_date: str):
+    """The SDK path is intentionally disabled until it can enforce the governor."""
+    del module, prompt, from_date, to_date
+    raise RuntimeError("Grok SDK transport is disabled; use the governed request boundary")
+
+
+def _retryable_xai_error(exc: Exception) -> bool:
+    try:
+        import grpc
+
+        if isinstance(exc, grpc.RpcError):
+            code = exc.code()
+            return code in {grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE}
+    except Exception:
+        pass
+    return False
+
+
+def install_xai_sdk_x_search(module) -> None:
+    """Fail closed: the SDK transport cannot bypass IIOS governed Responses calls."""
+    module._xai_official_sdk_adapter_installed = False
+    module._xai_official_sdk_adapter_skipped_for_cost_governor = True
