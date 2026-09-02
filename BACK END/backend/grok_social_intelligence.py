@@ -15,7 +15,7 @@ from openai import APITimeoutError, OpenAI
 
 from ledger import get_object, latest_object, record_event, record_object, utc_now
 from grok_governed_observation import advisory_read_model, observation_status, record_observation
-from model_cost_enforcement import cancel_xai_reservation, mark_xai_provider_invocation_started, max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
+from model_cost_enforcement import cancel_xai_reservation, consume_controlled_xai_request, controlled_activation_status, mark_xai_provider_invocation_started, max_output_tokens, max_x_search_tool_calls, preflight_xai_request, record_xai_failure, record_xai_response, sanitize_error
 
 
 router = APIRouter()
@@ -31,7 +31,6 @@ MAX_CONTEXT_ITEMS = 5
 MAX_RAW_CLAIMS = 10
 MIN_ADMITTED_SOURCES = 2
 CONTEXT_FILE_ENV = "IIOS_GROK_CONTEXT_FILE"
-CONTROLLED_PROVIDER_TEST_APPROVED = False
 
 _CONTEXT_LOCK = threading.Lock()
 _CONTEXT_CACHE: dict[str, Any] = {"path": None, "mtime": None, "payload": None}
@@ -89,11 +88,12 @@ def grok_timeout_seconds() -> float:
 
 
 def grok_plan() -> dict[str, Any]:
+    activation = controlled_activation_status()
     return {
         "policy_version": POLICY_VERSION,
         "enabled": grok_enabled(),
-        "controlled_provider_test_approved": False,
-        "provider_activation_state": "DISABLED_PENDING_OWNER_VERIFICATION_AND_APPROVAL",
+        "controlled_provider_test_approved": activation["provider_activation_allowed"],
+        "provider_activation_state": activation["state"],
         "api_key_configured": bool(os.getenv("XAI_API_KEY", "").strip()),
         "model": grok_model(),
         "base_url": grok_base_url(),
@@ -436,7 +436,8 @@ def _run_x_search(
 def fetch_grok_social_context(topic: str, *, ticker: str | None = None, days: int = 3) -> dict[str, Any]:
     if not grok_enabled():
         raise RuntimeError("Grok experiment is disabled. Set IIOS_GROK_ENABLED=1 to make xAI API calls.")
-    if not CONTROLLED_PROVIDER_TEST_APPROVED:
+    activation = controlled_activation_status()
+    if activation["provider_activation_allowed"] is not True:
         raise RuntimeError("Grok provider activation is disabled pending explicit controlled-test approval")
     topic = " ".join(str(topic or "").split()).strip()
     if not topic:
@@ -487,6 +488,11 @@ Return ONLY JSON:
     reservation_id = admission.get("reservation_id")
     if not isinstance(reservation_id, str):
         raise RuntimeError("GROK_COST_GOVERNOR_MISSING_RESERVATION")
+    try:
+        consume_controlled_xai_request(reservation_id=reservation_id)
+    except Exception:
+        cancel_xai_reservation(reservation_id=reservation_id, reason="ONE_SHOT_ACTIVATION_NOT_CONSUMED")
+        raise
     api_key = os.getenv("XAI_API_KEY", "").strip()
     if not api_key:
         cancel_xai_reservation(reservation_id=reservation_id, reason="MISSING_CREDENTIALS")
