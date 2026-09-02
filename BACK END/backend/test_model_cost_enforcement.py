@@ -51,16 +51,47 @@ class ModelCostEnforcementTests(unittest.TestCase):
 
     def test_reservation_uses_named_pricing_formula(self):
         with patch.dict(cost.POLICY, {
-            "max_estimated_input_tokens_per_request": 100,
-            "max_output_tokens_per_request": 10,
-            "max_x_search_tool_calls_per_request": 2,
-            "input_ticks_per_million_tokens": 1_000_000_000,
-            "output_ticks_per_million_tokens": 2_000_000_000,
-            "x_search_ticks_per_call": 30_000_000_000,
-            "reservation_safety_margin_numerator": 3,
-            "reservation_safety_margin_denominator": 2,
+            "max_estimated_input_tokens_per_request": 16_000,
+            "max_output_tokens_per_request": 2_000,
+            "max_x_search_tool_calls_per_request": 3,
+            "input_ticks_per_million_tokens": 20_000_000_000,
+            "output_ticks_per_million_tokens": 60_000_000_000,
+            "x_search_ticks_per_call": 50_000_000,
+            "reservation_safety_margin_numerator": 125,
+            "reservation_safety_margin_denominator": 100,
         }):
-            self.assertEqual(cost.maximum_request_reservation_ticks(model="grok-4.6"), 90_000_180_000)
+            self.assertEqual(cost.maximum_request_reservation_ticks(model="grok-4.6"), 737_500_000)
+
+    def test_verified_pricing_matches_official_one_shot_limits_and_cap(self):
+        self.assertEqual(16_000 * cost.POLICY["input_ticks_per_million_tokens"] // 1_000_000, 320_000_000)
+        self.assertEqual(2_000 * cost.POLICY["output_ticks_per_million_tokens"] // 1_000_000, 120_000_000)
+        self.assertEqual(3 * cost.POLICY["x_search_ticks_per_call"], 150_000_000)
+        self.assertEqual(cost.maximum_request_reservation_ticks(model="grok-4.6"), 737_500_000)
+        self.assertEqual(cost.MAX_CONTROLLED_REQUEST_TICKS, 800_000_000)
+
+    def test_one_shot_activation_consumes_before_dispatch_and_cannot_replay(self):
+        armed = cost.arm_controlled_xai_request(approval_token="synthetic-test-approval-token", activation_id="test-activation")
+        self.assertEqual(armed["state"], "ARMED")
+        admission = cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)
+        cost.consume_controlled_xai_request(reservation_id=admission["reservation_id"])
+        self.assertEqual(cost.controlled_activation_status()["state"], "CONSUMED")
+        with self.assertRaisesRegex(RuntimeError, "not armed"):
+            cost.consume_controlled_xai_request(reservation_id=admission["reservation_id"])
+
+    def test_malformed_activation_state_fails_closed_and_armed_activation_can_revoke(self):
+        activation_path = Path(self.temporary_directory.name, cost.ONE_SHOT_ACTIVATION_NAME)
+        activation_path.write_text("not-json")
+        with self.assertRaisesRegex(RuntimeError, "activation state is unreadable"):
+            cost.controlled_activation_status()
+        activation_path.unlink()
+        cost.arm_controlled_xai_request(approval_token="synthetic-test-approval-token", activation_id="test-activation")
+        self.assertEqual(cost.revoke_controlled_xai_request(activation_id="test-activation")["state"], "REVOKED")
+        self.assertFalse(cost.controlled_activation_status()["provider_activation_allowed"])
+
+    def test_over_cap_exact_cost_blocks_future_admission(self):
+        admission = cost.preflight_xai_request(query="query", model="grok-4.6", estimated_input_tokens=1)
+        cost.record_xai_response({"usage": {"cost_in_usd_ticks": cost.MAX_CONTROLLED_REQUEST_TICKS + 1}}, model="grok-4.6", query="query", case_id=None, latency_ms=1, reservation_id=admission["reservation_id"])
+        self.assertEqual(cost.preflight_xai_request(query="other", model="grok-4.6", estimated_input_tokens=1)["decision"], "BLOCK_BUDGET_INTEGRITY")
 
     def test_stale_or_invalid_pricing_fails_closed(self):
         with patch.dict(cost.POLICY, {"pricing_verified_date": "2000-01-01"}):

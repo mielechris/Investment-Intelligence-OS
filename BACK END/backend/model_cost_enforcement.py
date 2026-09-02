@@ -26,10 +26,12 @@ HOOK_REGISTRY_NAME = "enforcement_hooks.json"
 RESERVATION_NAME = "active_reservations.json"
 INTEGRITY_NAME = "budget_integrity.json"
 CANCELLATION_LEDGER_NAME = "reservation_cancellations.jsonl"
+ONE_SHOT_ACTIVATION_NAME = "one_shot_activation.json"
 LOCK_NAME = ".model-cost.lock"
 LOCK_TIMEOUT_SECONDS = 2.0
 _PROCESS_LOCK = threading.RLock()
 USD_TICKS_PER_USD = 10_000_000_000
+MAX_CONTROLLED_REQUEST_TICKS = 800_000_000
 
 POLICY = {
     "daily_soft_limit_ticks": 100_000_000_000,
@@ -43,16 +45,16 @@ POLICY = {
     "duplicate_query_ttl_seconds": 1800,
     "max_output_tokens_per_request": 2000,
     "pricing_model": "grok-4.6",
-    "pricing_verified": False,
-    "pricing_source_name": "",
-    "pricing_source_reference": "",
-    "pricing_verified_date": "",
-    "pricing_verifier_id": "",
-    "pricing_expires_date": "",
+    "pricing_verified": True,
+    "pricing_source_name": "xAI API Pricing",
+    "pricing_source_reference": "https://docs.x.ai/developers/pricing",
+    "pricing_verified_date": "2026-09-02",
+    "pricing_verifier_id": "OWNER_REVIEW_2026-09-02",
+    "pricing_expires_date": "2026-12-01",
     "pricing_max_age_days": 90,
     "input_ticks_per_million_tokens": 20_000_000_000,
-    "output_ticks_per_million_tokens": 100_000_000_000,
-    "x_search_ticks_per_call": 500_000_000,
+    "output_ticks_per_million_tokens": 60_000_000_000,
+    "x_search_ticks_per_call": 50_000_000,
     "reservation_safety_margin_numerator": 125,
     "reservation_safety_margin_denominator": 100,
     "currency": "USD",
@@ -133,7 +135,10 @@ def maximum_request_reservation_ticks(*, model: str) -> int:
         + output_limit * _required_positive_int("output_ticks_per_million_tokens") // 1_000_000
         + tool_limit * _required_positive_int("x_search_ticks_per_call")
     )
-    return (base * _required_positive_int("reservation_safety_margin_numerator") + _required_positive_int("reservation_safety_margin_denominator") - 1) // _required_positive_int("reservation_safety_margin_denominator")
+    reservation = (base * _required_positive_int("reservation_safety_margin_numerator") + _required_positive_int("reservation_safety_margin_denominator") - 1) // _required_positive_int("reservation_safety_margin_denominator")
+    if reservation > MAX_CONTROLLED_REQUEST_TICKS:
+        raise RuntimeError("Grok controlled request reservation exceeds hard cap; request denied")
+    return reservation
 
 
 def _safe_cost_dir() -> Path:
@@ -470,6 +475,93 @@ def _read_cancellations(directory: Path) -> set[str]:
     return {row["reservation_id"] for row in rows}
 
 
+def _activation_state(directory: Path) -> dict[str, Any]:
+    path = directory / ONE_SHOT_ACTIVATION_NAME
+    if not path.exists():
+        return {"state": "DISABLED"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Grok one-shot activation state is unreadable; request denied") from exc
+    if not isinstance(payload, dict) or payload.get("state") not in {"ARMED", "CONSUMED", "REVOKED"}:
+        raise RuntimeError("Grok one-shot activation state is malformed; request denied")
+    return payload
+
+
+def controlled_activation_status() -> dict[str, Any]:
+    if not (_cost_dir() / ONE_SHOT_ACTIVATION_NAME).exists():
+        return {
+            "state": "DISABLED",
+            "provider_activation_allowed": False,
+            "one_request_only": True,
+            "max_reservation_ticks": MAX_CONTROLLED_REQUEST_TICKS,
+            "max_actual_cost_ticks": MAX_CONTROLLED_REQUEST_TICKS,
+        }
+    with _ledger_lock() as directory:
+        state = _activation_state(directory)
+        return {
+            "state": state["state"],
+            "provider_activation_allowed": state["state"] == "ARMED",
+            "one_request_only": True,
+            "max_reservation_ticks": MAX_CONTROLLED_REQUEST_TICKS,
+            "max_actual_cost_ticks": MAX_CONTROLLED_REQUEST_TICKS,
+        }
+
+
+def arm_controlled_xai_request(*, approval_token: str, activation_id: str) -> dict[str, Any]:
+    """Owner-only operation: persist a token fingerprint, never the approval secret."""
+    if not isinstance(approval_token, str) or len(approval_token.strip()) < 16:
+        raise RuntimeError("Grok controlled approval is invalid")
+    if not isinstance(activation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", activation_id):
+        raise RuntimeError("Grok controlled activation ID is invalid")
+    with _ledger_lock() as directory:
+        if _activation_state(directory)["state"] != "DISABLED":
+            raise RuntimeError("Grok controlled activation is not available")
+        reservation = maximum_request_reservation_ticks(model=str(POLICY["pricing_model"]))
+        payload = {
+            "state": "ARMED",
+            "activation_id": activation_id,
+            "approval_fingerprint": hashlib.sha256(approval_token.encode("utf-8")).hexdigest(),
+            "armed_at": _iso(_utc_now()),
+            "max_reservation_ticks": reservation,
+            "max_actual_cost_ticks": MAX_CONTROLLED_REQUEST_TICKS,
+        }
+        _atomic_json_write(directory, ONE_SHOT_ACTIVATION_NAME, payload)
+        return {"activation_id": activation_id, "state": "ARMED", "max_actual_cost_ticks": MAX_CONTROLLED_REQUEST_TICKS}
+
+
+def revoke_controlled_xai_request(*, activation_id: str) -> dict[str, Any]:
+    with _ledger_lock() as directory:
+        state = _activation_state(directory)
+        if state["state"] == "CONSUMED":
+            raise RuntimeError("Grok controlled activation was consumed and cannot be revoked")
+        if state["state"] == "DISABLED":
+            return {"state": "DISABLED", "already_revoked": True}
+        if state.get("activation_id") != activation_id:
+            raise RuntimeError("Grok controlled activation ID does not match")
+        _atomic_json_write(directory, ONE_SHOT_ACTIVATION_NAME, {"state": "REVOKED", "revoked_at": _iso(_utc_now())})
+        return {"state": "REVOKED", "already_revoked": False}
+
+
+def consume_controlled_xai_request(*, reservation_id: str) -> None:
+    with _ledger_lock() as directory:
+        state = _activation_state(directory)
+        if state["state"] != "ARMED":
+            raise RuntimeError("Grok controlled activation is not armed")
+        reservations = _read_reservations(directory)
+        reservation = next((item for item in reservations if item["reservation_id"] == reservation_id), None)
+        if reservation is None or reservation["amount_ticks"] > MAX_CONTROLLED_REQUEST_TICKS:
+            raise RuntimeError("Grok controlled activation reservation is invalid")
+        _atomic_json_write(directory, ONE_SHOT_ACTIVATION_NAME, {
+            "state": "CONSUMED",
+            "activation_id": state.get("activation_id"),
+            "approval_fingerprint": state.get("approval_fingerprint"),
+            "consumed_at": _iso(_utc_now()),
+            "reservation_id": reservation_id,
+            "max_actual_cost_ticks": MAX_CONTROLLED_REQUEST_TICKS,
+        })
+
+
 def mark_xai_provider_invocation_started(*, reservation_id: str) -> None:
     with _ledger_lock() as directory:
         reservations = _read_reservations(directory)
@@ -530,7 +622,7 @@ def record_xai_response(response: Any, *, model: str, query: str, case_id: str |
         )
         row["event_type"] = "SETTLEMENT"
         row["reservation_id"] = reservation_id
-        if ticks is not None and ticks > reservation_ticks:
+        if ticks is not None and (ticks > reservation_ticks or ticks > MAX_CONTROLLED_REQUEST_TICKS):
             row["budget_integrity_breach"] = True
         if row.get("budget_integrity_breach"):
             _atomic_json_write(directory, INTEGRITY_NAME, {"blocked": True, "reason": "EXACT_COST_EXCEEDED_RESERVATION"})

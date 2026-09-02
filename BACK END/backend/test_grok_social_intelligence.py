@@ -11,7 +11,7 @@ import grok_social_intelligence as grok
 
 class GrokSocialIntelligenceTests(unittest.TestCase):
     def test_plan_is_disabled_by_default_and_has_no_authority(self):
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {}, clear=True), patch.object(grok, "controlled_activation_status", return_value={"state": "DISABLED", "provider_activation_allowed": False}):
             plan = grok.grok_plan()
         self.assertFalse(plan["enabled"])
         self.assertFalse(plan["automatic_injection"])
@@ -25,7 +25,7 @@ class GrokSocialIntelligenceTests(unittest.TestCase):
         self.assertFalse(plan["controlled_provider_test_approved"])
 
     def test_provider_activation_requires_explicit_controlled_test_approval(self):
-        with patch.object(grok, "grok_enabled", return_value=True):
+        with patch.object(grok, "grok_enabled", return_value=True), patch.object(grok, "controlled_activation_status", return_value={"state": "DISABLED", "provider_activation_allowed": False}):
             with self.assertRaisesRegex(RuntimeError, "activation is disabled"):
                 grok.fetch_grok_social_context("topic")
 
