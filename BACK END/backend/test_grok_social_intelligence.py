@@ -22,6 +22,12 @@ class GrokSocialIntelligenceTests(unittest.TestCase):
         self.assertFalse(plan["paper_order_permission"])
         self.assertFalse(plan["trade_execution_permission"])
         self.assertFalse(plan["live_execution"])
+        self.assertFalse(plan["controlled_provider_test_approved"])
+
+    def test_provider_activation_requires_explicit_controlled_test_approval(self):
+        with patch.object(grok, "grok_enabled", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "activation is disabled"):
+                grok.fetch_grok_social_context("topic")
 
     def test_firewall_requires_two_verified_x_sources_and_quarantines_injection(self):
         url1 = "https://x.com/alpha/status/1"

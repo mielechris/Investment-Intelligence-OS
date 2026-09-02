@@ -25,13 +25,13 @@ class GrokSocialGovernorBoundaryTests(unittest.TestCase):
                 raise AssertionError("credential read")
             return default
 
-        with patch.object(social, "grok_enabled", return_value=True), patch.object(social, "preflight_xai_request", return_value=denied), patch.object(social.os, "getenv", side_effect=getenv), patch.object(social, "OpenAI", side_effect=AssertionError("client created")):
+        with patch.object(social, "grok_enabled", return_value=True), patch.object(social, "CONTROLLED_PROVIDER_TEST_APPROVED", True), patch.object(social, "preflight_xai_request", return_value=denied), patch.object(social.os, "getenv", side_effect=getenv), patch.object(social, "OpenAI", side_effect=AssertionError("client created")):
             with self.assertRaisesRegex(RuntimeError, "BLOCK_PRICING"):
                 social.fetch_grok_social_context("topic")
 
     def test_missing_credentials_cancels_admitted_reservation_nonbillably(self):
         admission = {"allow": True, "reservation_id": "reservation-1"}
-        with patch.object(social, "grok_enabled", return_value=True), patch.object(social, "preflight_xai_request", return_value=admission), patch.object(social.os, "getenv", return_value=""), patch.object(social, "cancel_xai_reservation") as cancel, patch.object(social, "OpenAI", side_effect=AssertionError("client created")):
+        with patch.object(social, "grok_enabled", return_value=True), patch.object(social, "CONTROLLED_PROVIDER_TEST_APPROVED", True), patch.object(social, "preflight_xai_request", return_value=admission), patch.object(social.os, "getenv", return_value=""), patch.object(social, "cancel_xai_reservation") as cancel, patch.object(social, "OpenAI", side_effect=AssertionError("client created")):
             with self.assertRaisesRegex(RuntimeError, "not configured"):
                 social.fetch_grok_social_context("topic")
         self.assertEqual(cancel.call_args.kwargs["reservation_id"], "reservation-1")
