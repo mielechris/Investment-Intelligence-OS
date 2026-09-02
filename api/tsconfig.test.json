@@ -9,5 +9,5 @@
     "typeRoots": ["../FRONT END/node_modules/@types"],
     "skipLibCheck": true
   },
-  "include": ["_telemetryPolicy.ts", "_livingWallTruth.ts", "_livingWallTruthHandler.ts", "living-wall-truth.test.ts"]
+  "include": ["_telemetryPolicy.ts", "_telemetryIngestHandler.ts", "_livingWallTruth.ts", "_livingWallTruthHandler.ts", "living-wall-truth.test.ts"]
 }

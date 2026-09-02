@@ -26,6 +26,21 @@ class FakeResponse:
 
 
 class PublishRemoteTelemetryTests(unittest.TestCase):
+    def _local_snapshot(self) -> dict[str, object]:
+        return {
+            "schema_version": "batch9l-living-factory-provenance-v1",
+            "safety": {"live_execution": False},
+            "validation": {
+                "layers": {
+                    "factory_telemetry": {
+                        "payload": {
+                            "safety": {"telemetry_read_only": True},
+                        }
+                    }
+                }
+            },
+        }
+
     def _publish_headers(self, bypass_secret: str = "") -> dict[str, str]:
         captured: dict[str, str] = {}
 
@@ -54,6 +69,26 @@ class PublishRemoteTelemetryTests(unittest.TestCase):
 
         self.assertEqual(headers["x-iios-telemetry-token"], "Bearer test-ingest-token")
         self.assertEqual(headers["x-vercel-protection-bypass"], "test-bypass-secret")
+
+    def test_normalizes_remote_schema_and_preserves_source_provenance(self) -> None:
+        normalized = publisher._validate(self._local_snapshot())
+
+        self.assertEqual(normalized["schema_version"], "iios_remote_telemetry.v1")
+        self.assertEqual(
+            normalized["source_schema_version"],
+            "batch9l-living-factory-provenance-v1",
+        )
+
+    def test_normalization_preserves_sanitization_and_authority_guards(self) -> None:
+        snapshot = self._local_snapshot()
+        snapshot["credential"] = "must-not-leave-localhost"
+        normalized = publisher._validate(snapshot)
+        self.assertNotIn("credential", normalized)
+
+        unsafe = self._local_snapshot()
+        unsafe["safety"] = {"live_execution": True}
+        with self.assertRaisesRegex(ValueError, "live_execution=false"):
+            publisher._validate(unsafe)
 
 
 if __name__ == "__main__":

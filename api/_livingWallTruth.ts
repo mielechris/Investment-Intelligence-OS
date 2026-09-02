@@ -1,4 +1,4 @@
-import { TELEMETRY_TTL_SECONDS } from "./_telemetryPolicy.js";
+import { REMOTE_SCHEMA_VERSION, TELEMETRY_TTL_SECONDS } from "./_telemetryPolicy.js";
 
 type JsonRecord = Record<string, unknown>;
 type TruthAvailability = "AVAILABLE" | "STALE" | "SOURCE_CONFLICT" | "UNAVAILABLE";
@@ -66,7 +66,7 @@ export function unavailableLivingWallTruth(): LivingWallTruthDto {
 
 export function projectLivingWallTruth(input: unknown, now = Date.now()): LivingWallTruthDto {
   const snapshot = record(input);
-  if (snapshot.schema_version !== undefined && snapshot.schema_version !== "iios_remote_telemetry.v1") {
+  if (snapshot.schema_version !== REMOTE_SCHEMA_VERSION) {
     throw new Error("unsupported snapshot schema");
   }
   const generatedAt = string(snapshot.generated_at);

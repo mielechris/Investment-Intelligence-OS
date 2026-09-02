@@ -17,6 +17,7 @@ import urllib.request
 
 DEFAULT_SOURCE = "http://127.0.0.1:5176/living/overview"
 MAX_BYTES = 512 * 1024
+REMOTE_SCHEMA_VERSION = "iios_remote_telemetry.v1"
 
 
 def _record(value: object) -> dict[str, object]:
@@ -56,7 +57,12 @@ def _validate(snapshot: object) -> dict[str, object]:
     telemetry_safety = _record(payload.get("safety"))
     if telemetry_safety.get("telemetry_read_only") is not True:
         raise ValueError("local snapshot does not prove telemetry_read_only=true")
-    return _sanitize(root)
+    normalized = _record(_sanitize(root))
+    source_schema = root.get("schema_version")
+    if isinstance(source_schema, str) and source_schema != REMOTE_SCHEMA_VERSION:
+        normalized["source_schema_version"] = source_schema
+    normalized["schema_version"] = REMOTE_SCHEMA_VERSION
+    return normalized
 
 
 def _read_snapshot(source: str) -> bytes:

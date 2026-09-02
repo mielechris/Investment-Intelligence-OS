@@ -66,6 +66,9 @@ function assertSafeTree(value: unknown, path = "$"): void {
 
 export function validateSnapshot(input: unknown): JsonRecord {
   const snapshot = record(input);
+  if (snapshot.schema_version !== REMOTE_SCHEMA_VERSION) {
+    throw new Error("unsupported snapshot schema");
+  }
   const generatedAt = snapshot.generated_at;
   if (typeof generatedAt !== "string" || Number.isNaN(Date.parse(generatedAt))) {
     throw new Error("generated_at must be an ISO timestamp");
@@ -111,3 +114,4 @@ export async function tokenMatches(candidate: string, expected: string): Promise
 
 export const TELEMETRY_CACHE_KEY = "iios:remote:living-overview:v1";
 export const TELEMETRY_TTL_SECONDS = 120;
+export const REMOTE_SCHEMA_VERSION = "iios_remote_telemetry.v1";
