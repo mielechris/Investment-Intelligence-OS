@@ -74,6 +74,18 @@ def _identity(
     }
 
 
+def _same_checkout(left: Any, right: Any) -> bool:
+    if not left or not right:
+        return True
+    left_path = Path(str(left)).resolve()
+    right_path = Path(str(right)).resolve()
+    return (
+        left_path == right_path
+        or left_path in right_path.parents
+        or right_path in left_path.parents
+    )
+
+
 def build_factory_truth(
     db_path: str | os.PathLike[str] | None = None,
     *,
@@ -91,11 +103,17 @@ def build_factory_truth(
     probe = backend_probe() if backend_probe is not None else {"responsive": None}
     probe = probe if isinstance(probe, dict) else {"responsive": None}
     backend_responsive = probe.get("responsive") is True
+    artifact_time = _parse_time(telemetry.get("generated_at"))
+    artifact_age_seconds = (
+        max(0, int((now - artifact_time).total_seconds()))
+        if artifact_time is not None
+        else None
+    )
 
     mismatches: list[str] = []
     runtime_checkout = runtime.get("checkout")
     sidecar_checkout = sidecar.get("checkout")
-    if runtime_checkout and sidecar_checkout and runtime_checkout != sidecar_checkout:
+    if not _same_checkout(runtime_checkout, sidecar_checkout):
         mismatches.append("CHECKOUT_MISMATCH")
     for identity_name, identity in (("RUNTIME", runtime), ("SIDECAR", sidecar)):
         identity_ledger = identity.get("ledger_path")
@@ -155,7 +173,7 @@ def build_factory_truth(
         "artifact": {
             "state": "EXTERNAL ARTIFACT" if mismatches else "LOCAL ARTIFACT",
             "mismatches": mismatches,
-            "age_seconds": probe.get("artifact_age_seconds"),
+            "age_seconds": artifact_age_seconds,
         },
         "checkpoints": checkpoints,
         "runners": runners,

@@ -1,7 +1,7 @@
 import { defineConfig, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const READ_ONLY_SIDECAR = 'http://127.0.0.1:5176'
+const READ_ONLY_SIDECAR = process.env.IIOS_READ_ONLY_SIDECAR ?? 'http://127.0.0.1:5176'
 
 // These are browser artifacts already published into the active, localhost-only
 // IIOS sidecar by the preserved 9O–10M publishers. V6 only reads them; it does

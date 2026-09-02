@@ -184,6 +184,9 @@ export default function SpecialistDeskFloor() {
   const activeCount = activeKeys.size;
   const latestEvent = telemetry.recentEvents[0];
   const safetyHold = telemetry.factory?.safety?.all_invariants === true && telemetry.factory?.safety?.live_execution === false;
+  const feedStatus = telemetry.online
+    ? `BACKEND REACHABLE · POLL CHECKPOINT ${telemetry.loadedAt ? "RECORDED" : "WAITING"} · RUNNER STATE UNVERIFIED`
+    : "BACKEND UNREACHABLE · POLL CHECKPOINT WAITING · RUNNER STATE UNVERIFIED";
 
   const maxMessage = useMemo(() => {
     if (!telemetry.online) return "No telemetry, no theater. MAX is off the floor.";
@@ -202,7 +205,7 @@ export default function SpecialistDeskFloor() {
         <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,.82fr) minmax(520px,1.9fr) minmax(270px,.78fr)", gap: 8, padding: 8 }}>
           <aside style={ornamentedPanel({ padding: 12, minHeight: 184 })}>
             <div style={{ color: BRASS_BRIGHT, fontSize: 11, letterSpacing: 1.8 }}>MARKET INTELLIGENCE FEED</div>
-            <div style={{ color: telemetry.online ? GREEN : RED, fontSize: 8, marginTop: 3, letterSpacing: 1.2 }}>{telemetry.online ? "LIVE 24/7" : "OFFLINE"}</div>
+            <div style={{ color: telemetry.online ? GREEN : RED, fontSize: 8, marginTop: 3, letterSpacing: 1.2 }}>{feedStatus}</div>
             <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
               {[
                 ["SYSTEM", telemetry.online ? "NORMAL" : "OFFLINE", telemetry.online ? GREEN : RED],

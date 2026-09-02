@@ -64,6 +64,16 @@ class FactoryTruthTest(unittest.TestCase):
         self.assertIn("SIDECAR_LEDGER_MISMATCH", truth["artifact"]["mismatches"])
         self.assertEqual(truth["checkpoints"]["9A"]["checkpoint_state"], "STALE_CHECKPOINT")
 
+    def test_nested_runtime_checkout_is_local_artifact(self) -> None:
+        truth = factory_truth.build_factory_truth(
+            self.db_path,
+            runtime_identity={"checkout": "/workspace/BACK END/backend"},
+            sidecar_identity={"checkout": "/workspace"},
+            now=self.now,
+        )
+        self.assertEqual(truth["artifact"]["state"], "LOCAL ARTIFACT")
+        self.assertEqual(truth["artifact"]["mismatches"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -286,6 +286,41 @@ def _process_observation() -> dict[str, Any]:
     return observed
 
 
+def _backend_runtime_identity() -> dict[str, Any]:
+    try:
+        listener = subprocess.run(
+            ["lsof", "-t", "-nP", "-iTCP:8002", "-sTCP:LISTEN"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        pid = next(
+            (
+                int(line.strip())
+                for line in listener.stdout.splitlines()
+                if line.strip().isdigit()
+            ),
+            None,
+        )
+        if pid is None:
+            return {"pid": None, "checkout": None, "observed": False}
+        cwd = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"pid": None, "checkout": None, "observed": False}
+    checkout = next(
+        (line[1:] for line in cwd.stdout.splitlines() if line.startswith("n")),
+        None,
+    )
+    return {"pid": pid, "checkout": checkout, "observed": True}
+
+
 def build_living_factory_snapshot(
     *,
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
@@ -395,8 +430,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                 build_factory_truth(
                     self.preview_server.ledger_path,
                     runtime_identity={
-                        "pid": None,
-                        "checkout": str(BACKEND_ROOT.parents[1]),
+                        **_backend_runtime_identity(),
                         "ledger_path": str(self.preview_server.ledger_path),
                         "runners": _process_observation(),
                     },

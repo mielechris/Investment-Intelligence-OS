@@ -103,7 +103,7 @@
 }
 
 .cinematic-v6 .cfd-feed::after {
-  content: "LIVE INTELLIGENCE WIRE";
+  content: "PERSISTED EVENT WIRE";
   position: absolute;
   left: 16px;
   bottom: 10px;
