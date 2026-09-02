@@ -330,7 +330,7 @@ export default function SpecialistDeskFloor() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 <div style={{ color: BRASS_BRIGHT, fontSize: 13, letterSpacing: 2 }}>THE OPERATING FLOOR</div>
-                <div style={{ color: "#7f6949", fontSize: 8, marginTop: 4 }}>LIVE TELEMETRY DRIVES THE LIGHTS. THE ART DOESN'T GET A VOTE.</div>
+                <div style={{ color: "#7f6949", fontSize: 8, marginTop: 4 }}>REACHABILITY-GATED TELEMETRY DRIVES THE LIGHTS. RUNNER STATE UNVERIFIED. THE ART DOESN'T GET A VOTE.</div>
               </div>
               <div style={{ color: telemetry.online ? GREEN : RED, fontFamily: "ui-monospace,monospace", fontSize: 8 }}>{telemetry.online ? "FLOOR OPEN" : "FLOOR DARK"}</div>
             </div>
@@ -360,7 +360,7 @@ export default function SpecialistDeskFloor() {
 
         <div style={{ margin: "0 8px 8px", padding: "7px 9px", border: `1px solid ${BRASS_DARK}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", fontFamily: "ui-monospace,monospace", fontSize: 7 }}>
           <span style={{ color: "#806a4a" }}>CAPITAL IS SACRED. EGO IS EXPENSIVE.</span>
-          <span style={{ color: telemetry.online ? GREEN : RED }}>{telemetry.online ? "TELEMETRY LIVE" : "TELEMETRY OFFLINE"}</span>
+          <span style={{ color: telemetry.online ? GREEN : RED }}>{telemetry.online ? "BACKEND REACHABLE · CHECKPOINT RECORDED" : "BACKEND UNREACHABLE · CHECKPOINT STALE"}</span>
           <span style={{ color: "#806a4a" }}>LAST POLL {telemetry.loadedAt ? new Date(telemetry.loadedAt).toLocaleTimeString() : "NEVER"}</span>
         </div>
       </div>
