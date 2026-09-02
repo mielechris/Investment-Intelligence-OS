@@ -48,6 +48,10 @@ function proxyConfig(): Record<string, string | ProxyOptions> {
       target: READ_ONLY_SIDECAR,
       changeOrigin: true,
     },
+    '/truth': {
+      target: READ_ONLY_SIDECAR,
+      changeOrigin: true,
+    },
   }
 
   for (const artifact of PRESERVED_BROWSER_ARTIFACTS) {

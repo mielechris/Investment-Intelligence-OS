@@ -50,6 +50,13 @@ type LivingOverview = {
   safety?: SafetyState;
 };
 
+type FactoryTruth = {
+  truth_states?: string[];
+  backend?: { state?: string };
+  artifact?: { state?: string };
+  checkpoints?: Record<string, { checkpoint_state?: string }>;
+};
+
 type Props = {
   view: DeckView;
 };
@@ -214,6 +221,7 @@ async function sameOriginJson<T>(path: string, signal?: AbortSignal): Promise<T>
 
 export default function CinematicFactoryCommandDeck({ view }: Props) {
   const [snapshot, setSnapshot] = useState<LivingOverview | null>(null);
+  const [truth, setTruth] = useState<FactoryTruth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [, setPulse] = useState(0);
 
@@ -225,13 +233,22 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
       controller?.abort();
       controller = new AbortController();
       try {
-        const next = await sameOriginJson<LivingOverview>(
-          "/living/overview",
-          controller.signal,
-        );
+        const [overviewResult, truthResult] = await Promise.allSettled([
+          sameOriginJson<LivingOverview>("/living/overview", controller.signal),
+          sameOriginJson<FactoryTruth>("/truth/factory", controller.signal),
+        ]);
         if (disposed) return;
-        setSnapshot(next);
-        setError(null);
+        if (overviewResult.status !== "fulfilled") {
+          throw overviewResult.reason;
+        }
+        setSnapshot(overviewResult.value);
+        if (truthResult.status === "fulfilled") {
+          setTruth(truthResult.value);
+          setError(null);
+        } else {
+          setTruth(null);
+          setError("Factory Truth endpoint unavailable; external artifact remains unrebound.");
+        }
         setPulse((value) => value + 1);
       } catch (reason) {
         if (
@@ -367,7 +384,13 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
     model.latestStation,
     model.latestType,
   );
-  const heartbeat = readable(model.telemetryLayer.availability, "WARMING");
+  const telemetryState = truth?.truth_states?.includes("TELEMETRY AVAILABLE") ||
+    (!truth && model.telemetryLayer.availability === "AVAILABLE")
+    ? "TELEMETRY AVAILABLE"
+    : "TELEMETRY UNAVAILABLE";
+  const backendState = truth?.backend?.state ?? "BACKEND DEGRADED";
+  const artifactState = truth?.artifact?.state ?? "EXTERNAL ARTIFACT";
+  const checkpointState = truth?.checkpoints?.["9E"]?.checkpoint_state ?? "NO CHECKPOINT";
 
   return (
     <section className={`cfd-shell cfd-shell--${view}`} aria-label="IIOS cinematic command deck">
@@ -383,7 +406,7 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
               <span>MARKET INTELLIGENCE FEED</span>
               <strong>Persisted event wire</strong>
             </div>
-            <em>{heartbeat === "AVAILABLE" ? "LIVE 24/7" : heartbeat}</em>
+            <em>{telemetryState}</em>
           </header>
           <div className="cfd-feed-list">
             {model.events.slice(0, 7).map((event, index) => {
@@ -458,9 +481,12 @@ export default function CinematicFactoryCommandDeck({ view }: Props) {
 
       <div className="cfd-middle-grid">
         <aside className="cfd-panel cfd-status-board">
-          <header><span>FACTORY STATUS</span><em>{error ? "DEGRADED" : heartbeat}</em></header>
+          <header><span>FACTORY STATUS</span><em>{error ? "BACKEND DEGRADED" : telemetryState}</em></header>
           <dl>
-            <div><dt>SYSTEM STATUS</dt><dd className={error ? "is-bad" : "is-good"}>{error ? "SIDECAR WARNING" : heartbeat}</dd></div>
+            <div><dt>TELEMETRY</dt><dd className={telemetryState === "TELEMETRY AVAILABLE" ? "is-good" : "is-bad"}>{telemetryState}</dd></div>
+            <div><dt>BACKEND</dt><dd className={backendState === "BACKEND RESPONSIVE" ? "is-good" : "is-bad"}>{backendState}</dd></div>
+            <div><dt>ARTIFACT</dt><dd>{artifactState}</dd></div>
+            <div><dt>9E CHECKPOINT</dt><dd>{checkpointState.replaceAll("_", " ")}</dd></div>
             <div><dt>LIVE CAPITAL</dt><dd className="is-good">{boolLabel(safety.live_execution, "ENABLED", "DISABLED")}</dd></div>
             <div><dt>WRITE AUTHORITY</dt><dd className="is-good">{boolLabel(safety.backend_write_permission, "ENABLED", "NONE")}</dd></div>
             <div><dt>TRADE AUTHORITY</dt><dd className="is-good">{boolLabel(safety.trade_execution_permission, "ENABLED", "FALSE")}</dd></div>

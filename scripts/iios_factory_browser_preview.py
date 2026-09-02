@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import re
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -14,6 +17,12 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1] / "BACK END" / "backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from factory_truth import build_factory_truth
 
 SCHEMA_VERSION = "batch9k-live-factory-browser-v1"
 LIVING_SCHEMA_VERSION = "batch9l-living-factory-provenance-v1"
@@ -26,6 +35,7 @@ CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 BACKEND_EXACT_PATHS = {
     "/experience/factory-intelligence/overview",
     "/intelligence/dislocation/status",
+    "/system/status",
 }
 
 
@@ -234,6 +244,48 @@ def _backend_layer(name: str, path: str) -> dict[str, Any]:
     }
 
 
+def _backend_truth_probe() -> dict[str, Any]:
+    try:
+        _backend_get_json("/system/status")
+    except Exception as exc:  # noqa: BLE001 - response health must be explicit
+        return {"responsive": False, "detail": f"{type(exc).__name__}: {exc}"}
+    return {"responsive": True}
+
+
+def _process_observation() -> dict[str, Any]:
+    runners = {
+        "9E": "iios_high_speed_factory_runner.py",
+        "9A": "iios_observation_runner.py",
+        "9B": "iios_paper_trading_runner.py",
+    }
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {key: {"observed": False, "pid": None} for key in runners}
+
+    observed: dict[str, dict[str, Any]] = {}
+    for key, marker in runners.items():
+        match = next(
+            (
+                line.strip().split(maxsplit=1)
+                for line in result.stdout.splitlines()
+                if marker in line
+            ),
+            None,
+        )
+        observed[key] = {
+            "observed": bool(match),
+            "pid": int(match[0]) if match and match[0].isdigit() else None,
+        }
+    return observed
+
+
 def build_living_factory_snapshot(
     *,
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
@@ -338,6 +390,25 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                 )
             )
             return
+        if parsed.path == "/truth/factory":
+            self._send_json(
+                build_factory_truth(
+                    self.preview_server.ledger_path,
+                    runtime_identity={
+                        "pid": None,
+                        "checkout": str(BACKEND_ROOT.parents[1]),
+                        "ledger_path": str(self.preview_server.ledger_path),
+                        "runners": _process_observation(),
+                    },
+                    sidecar_identity={
+                        "pid": os.getpid(),
+                        "checkout": str(Path(__file__).resolve().parents[1]),
+                        "ledger_path": str(self.preview_server.ledger_path),
+                    },
+                    backend_probe=_backend_truth_probe,
+                )
+            )
+            return
         if parsed.path == "/living/overview":
             self._send_json(
                 build_living_factory_snapshot(
@@ -415,10 +486,12 @@ class PreviewServer(ThreadingHTTPServer):
         static_root: Path,
         telemetry_dir: Path,
         state_dir: Path,
+        ledger_path: Path,
     ) -> None:
         self.static_root = static_root
         self.telemetry_dir = telemetry_dir
         self.state_dir = state_dir
+        self.ledger_path = ledger_path.resolve()
 
         def handler(*args, **kwargs):
             return PreviewHandler(
@@ -441,6 +514,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--telemetry-dir", default=str(DEFAULT_TELEMETRY_DIR))
     parser.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
+    parser.add_argument(
+        "--ledger-path",
+        default=str(BACKEND_ROOT / "iios_ledger.db"),
+        help="SQLite ledger read only by the Factory Truth endpoint",
+    )
     return parser.parse_args()
 
 
@@ -454,12 +532,14 @@ def main() -> int:
         raise SystemExit("Batch 9L preview must bind to localhost only")
     telemetry_dir = Path(args.telemetry_dir).expanduser()
     state_dir = Path(args.state_dir).expanduser()
+    ledger_path = Path(args.ledger_path).expanduser().resolve()
     mimetypes.init()
     server = PreviewServer(
         (host, int(args.port)),
         static_root,
         telemetry_dir,
         state_dir,
+        ledger_path,
     )
     print(
         json.dumps(
