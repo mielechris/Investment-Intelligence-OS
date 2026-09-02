@@ -51,6 +51,7 @@ SAFE_EVENT_CODES = {
     "LOCK_HELD",
 }
 SAFE_FAILURE_CODES = {
+    "BYPASS_REJECTED",
     "DESTINATION_HOST_REJECTED", "DESTINATION_NOT_BRANCH_ALIAS",
     "DESTINATION_PATH_REJECTED", "GET_CONTRACT_REJECTED", "INGEST_REJECTED",
     "KEYCHAIN_READ_FAILED", "LOCAL_TRUTH_REJECTED", "METHOD_REJECTED",
@@ -64,8 +65,9 @@ SAFE_FAILURE_CODES = {
 class PublisherFailure(RuntimeError):
     """A bounded failure whose code is safe to persist and log."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, http_status: int | None = None):
         self.code = code
+        self.http_status = http_status if isinstance(http_status, int) and 100 <= http_status <= 599 else None
         super().__init__(code)
 
 
@@ -273,7 +275,7 @@ def _curl_config(headers: dict[str, str]) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
-def curl_json(
+def _curl_response(
     policy: dict[str, Any],
     *,
     method: str,
@@ -281,7 +283,7 @@ def curl_json(
     bypass_secret: str,
     ingest_token: str | None = None,
     payload: bytes | None = None,
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[int, str, bytes]:
     if method not in {"GET", "POST"}:
         raise PublisherFailure("METHOD_REJECTED")
     if method == "POST" and (path != EXPECTED_INGEST_PATH or payload is None or not ingest_token):
@@ -308,7 +310,10 @@ def curl_json(
         str(policy["connect_timeout_seconds"]), "--max-time",
         str(policy["request_timeout_seconds"]), "--max-redirs", "0", "--output", "-",
         "--max-filesize", str(MAX_RESPONSE_BYTES),
-        "--write-out", "\n__IIOS_HTTP_STATUS__:%{http_code}",
+        "--write-out", (
+            "\n__IIOS_HTTP_STATUS__:%{http_code}"
+            "\n__IIOS_CONTENT_TYPE__:%{content_type}"
+        ),
     ]
     if method == "POST":
         command.extend(["--data-binary", "@-"])
@@ -328,24 +333,110 @@ def curl_json(
         raise PublisherFailure("REMOTE_TIMEOUT") from error
     finally:
         os.close(read_fd)
-    if result.returncode != 0 or len(result.stdout) > MAX_RESPONSE_BYTES + 64:
+    if result.returncode != 0 or len(result.stdout) > MAX_RESPONSE_BYTES + 256:
         raise PublisherFailure("REMOTE_REQUEST_FAILED")
-    marker = b"\n__IIOS_HTTP_STATUS__:"
-    if marker not in result.stdout:
+    status_marker = b"\n__IIOS_HTTP_STATUS__:"
+    content_type_marker = b"\n__IIOS_CONTENT_TYPE__:"
+    if status_marker not in result.stdout or content_type_marker not in result.stdout:
         raise PublisherFailure("REMOTE_RESPONSE_INVALID")
-    body, raw_status = result.stdout.rsplit(marker, 1)
+    prefix, raw_content_type = result.stdout.rsplit(content_type_marker, 1)
+    body, raw_status = prefix.rsplit(status_marker, 1)
     try:
         status = int(raw_status.strip())
-        value = json.loads(body)
-    except (ValueError, json.JSONDecodeError) as error:
+        content_type = raw_content_type.decode("ascii").strip().lower()
+    except (UnicodeDecodeError, ValueError) as error:
         raise PublisherFailure("REMOTE_RESPONSE_INVALID") from error
-    if not isinstance(value, dict):
+    if not 100 <= status <= 599 or len(content_type) > 128 or any(
+        character in content_type for character in "\r\n"
+    ):
         raise PublisherFailure("REMOTE_RESPONSE_INVALID")
+    return status, content_type, body
+
+
+def _is_json_content_type(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() == "application/json"
+
+
+def _decode_json_object(body: bytes, failure_code: str, *, http_status: int) -> dict[str, Any]:
+    try:
+        value = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise PublisherFailure(failure_code, http_status=http_status) from error
+    if not isinstance(value, dict):
+        raise PublisherFailure(failure_code, http_status=http_status)
+    return value
+
+
+def curl_json(
+    policy: dict[str, Any],
+    *,
+    method: str,
+    path: str,
+    bypass_secret: str,
+    ingest_token: str | None = None,
+    payload: bytes | None = None,
+) -> tuple[int, dict[str, Any]]:
+    status, content_type, body = _curl_response(
+        policy,
+        method=method,
+        path=path,
+        bypass_secret=bypass_secret,
+        ingest_token=ingest_token,
+        payload=payload,
+    )
+    if not _is_json_content_type(content_type):
+        raise PublisherFailure("REMOTE_RESPONSE_INVALID", http_status=status)
+    value = _decode_json_object(body, "REMOTE_RESPONSE_INVALID", http_status=status)
     return status, value
 
 
-def validate_remote_truth(status: int, truth: dict[str, Any]) -> dict[str, Any]:
+def _truth_safety_is_read_only(truth: dict[str, Any]) -> bool:
     safety = truth.get("safety") if isinstance(truth.get("safety"), dict) else {}
+    return (
+        safety.get("live_execution") is False
+        and safety.get("telemetry_read_only") is True
+        and safety.get("direct_ledger_access") is False
+        and safety.get("backend_write_permission") is False
+        and safety.get("trade_execution_permission") is False
+    )
+
+
+def bypass_preflight(policy: dict[str, Any], bypass_secret: str) -> int:
+    status, content_type, body = _curl_response(
+        policy,
+        method="GET",
+        path=policy["truth_path"],
+        bypass_secret=bypass_secret,
+    )
+    if status not in {200, 503} or not _is_json_content_type(content_type):
+        raise PublisherFailure("BYPASS_REJECTED", http_status=status)
+    truth = _decode_json_object(body, "BYPASS_REJECTED", http_status=status)
+    freshness = truth.get("freshness") if isinstance(truth.get("freshness"), dict) else {}
+    if (
+        truth.get("schema_version") != "living_wall_truth.v1"
+        or not _truth_safety_is_read_only(truth)
+        or not isinstance(truth.get("factory"), dict)
+        or not isinstance(truth.get("validation"), dict)
+        or not isinstance(truth.get("source_conflict"), bool)
+        or (status == 200 and (
+            _parse_timestamp(truth.get("generated_at")) is None
+            or truth.get("availability") not in {"AVAILABLE", "STALE", "SOURCE_CONFLICT"}
+            or freshness.get("state") not in {"CURRENT", "STALE"}
+            or type(freshness.get("age_seconds")) is not int
+            or freshness["age_seconds"] < 0
+        ))
+        or (status == 503 and (
+            truth.get("generated_at") is not None
+            or truth.get("availability") != "UNAVAILABLE"
+            or freshness.get("state") != "UNAVAILABLE"
+            or freshness.get("age_seconds") is not None
+        ))
+    ):
+        raise PublisherFailure("BYPASS_REJECTED", http_status=status)
+    return status
+
+
+def validate_remote_truth(status: int, truth: dict[str, Any]) -> dict[str, Any]:
     freshness = truth.get("freshness") if isinstance(truth.get("freshness"), dict) else {}
     if (
         status != 200
@@ -354,13 +445,9 @@ def validate_remote_truth(status: int, truth: dict[str, Any]) -> dict[str, Any]:
         or freshness.get("state") != "CURRENT"
         or not isinstance(freshness.get("age_seconds"), int)
         or freshness["age_seconds"] > 60
-        or safety.get("live_execution") is not False
-        or safety.get("telemetry_read_only") is not True
-        or safety.get("direct_ledger_access") is not False
-        or safety.get("backend_write_permission") is not False
-        or safety.get("trade_execution_permission") is not False
+        or not _truth_safety_is_read_only(truth)
     ):
-        raise PublisherFailure("REMOTE_TRUTH_UNSAFE")
+        raise PublisherFailure("REMOTE_TRUTH_UNSAFE", http_status=status)
     return {
         "http_status": status,
         "availability": truth["availability"],
@@ -372,19 +459,20 @@ def validate_remote_truth(status: int, truth: dict[str, Any]) -> dict[str, Any]:
 
 
 def publish_cycle(policy: dict[str, Any]) -> dict[str, Any]:
+    bypass_secret = keychain_secret(policy["bypass_keychain"])
+    bypass_preflight(policy, bypass_secret)
     module = _publisher_module()
     try:
         payload = module._read_snapshot(policy["local_source"])
     except Exception as error:
         raise PublisherFailure("LOCAL_TRUTH_REJECTED") from error
     ingest_token = keychain_secret(policy["ingest_keychain"])
-    bypass_secret = keychain_secret(policy["bypass_keychain"])
     status, accepted = curl_json(
         policy, method="POST", path=policy["ingest_path"], bypass_secret=bypass_secret,
         ingest_token=ingest_token, payload=payload,
     )
     if status != 202 or accepted.get("accepted") is not True:
-        raise PublisherFailure("INGEST_REJECTED")
+        raise PublisherFailure("INGEST_REJECTED", http_status=status)
     truth_status, truth = curl_json(
         policy, method="GET", path=policy["truth_path"], bypass_secret=bypass_secret,
     )
@@ -432,9 +520,17 @@ def run_once(policy: dict[str, Any], now: datetime | None = None) -> int:
                 "last_success_at": previous.get("last_success_at"),
                 "next_attempt_at": next_attempt, "consecutive_failures": failures,
             }
+            if error.http_status is not None:
+                record["http_status"] = error.http_status
             write_status(policy, **record)
-            append_log(policy, "CYCLE_FAILED", failure_code=error.code,
-                       consecutive_failures=failures, next_attempt_at=next_attempt)
+            log_fields = {
+                "failure_code": error.code,
+                "consecutive_failures": failures,
+                "next_attempt_at": next_attempt,
+            }
+            if error.http_status is not None:
+                log_fields["http_status"] = error.http_status
+            append_log(policy, "CYCLE_FAILED", **log_fields)
             return 1
         record = {
             "event": "CYCLE_OK", "observed_at": observed.isoformat(),
