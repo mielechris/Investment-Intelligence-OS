@@ -2,7 +2,9 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { type ExpansionSnapshot, SnapshotContext, type TruthState } from "./ExpansionWingSnapshotContext";
 
 const LIVE_READ_ONLY = import.meta.env.VITE_EXPANSION_WING_LIVE_READONLY === "1" && import.meta.env.VITE_BACKEND_RECOVERY_GREEN === "1";
-const ENDPOINT = LIVE_READ_ONLY ? "http://127.0.0.1:8002/expansion-wing/status" : "/fixtures/expansion-wing.json";
+const ENDPOINT = LIVE_READ_ONLY
+  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || "http://127.0.0.1:8002/expansion-wing/status")
+  : "/fixtures/expansion-wing.json";
 
 export function ExpansionWingSnapshotProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<ExpansionSnapshot | null>(null);
