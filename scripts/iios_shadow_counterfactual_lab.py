@@ -21,6 +21,11 @@ from shadow_counterfactual import (  # noqa: E402
     aggregate_counterfactual_sessions,
     build_session_counterfactual,
 )
+from shadow_browser_projection import (  # noqa: E402
+    private_artifact_hash,
+    project_or_unavailable,
+    publish as publish_browser_projection,
+)
 
 NEW_YORK = ZoneInfo("America/New_York")
 DEFAULT_STATE_DIR = Path.home() / "Library" / "Application Support" / "IIOS" / "market-validation"
@@ -46,6 +51,21 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _emit_browser_projection(
+    *, state_dir: Path, browser_source: dict[str, Any], source_artifact_hash: str
+) -> str:
+    browser = project_or_unavailable(
+        browser_source,
+        source_artifact_hash,
+        generated_at=str(browser_source.get("generated_at") or ""),
+    )
+    try:
+        publish_browser_projection(state_dir / "browser" / "shadow_strategy.json", browser)
+    except OSError:
+        return "UNAVAILABLE"
+    return str(browser["truth_state"])
 
 
 def _run_gh(*args: str) -> str:
@@ -228,7 +248,7 @@ def main() -> int:
             json.dumps(
                 {
                     "status": "SKIPPED_NO_COMPLETE_9H_SESSIONS",
-                    "state_dir": str(state_dir),
+                    "reason": "NO_COMPLETE_9H_SESSIONS",
                 }
             )
         )
@@ -247,7 +267,6 @@ def main() -> int:
             json.dumps(
                 {
                     "status": "SKIPPED_ALREADY_EVALUATED",
-                    "latest_session_id": latest_session_id,
                 }
             )
         )
@@ -284,7 +303,37 @@ def main() -> int:
             "factory_cycles": "LOCAL_LEDGER_READ_ONLY",
         },
     }
+    source_artifact_hash = private_artifact_hash(local)
     _atomic_write(latest_path, local)
+    browser_source = {
+        "generated_at": rollup.get("generated_at"),
+        "status": rollup.get("status"),
+        "complete_session_count": rollup.get("complete_session_count"),
+        "minimum_complete_sessions_for_advice": rollup.get("minimum_complete_sessions_for_advice"),
+        "latest_session_id": latest_session_id,
+        "session_ids": rollup.get("session_ids"),
+        "advice_issued": bool(rollup.get("recommendations")),
+        "five_session_mature_count": (
+            max(0, rollup["complete_session_count"] - 4)
+            if isinstance(rollup.get("complete_session_count"), int)
+            and not isinstance(rollup.get("complete_session_count"), bool)
+            else -1
+        ),
+        "safety": {
+            "ledger_mode": "READ_ONLY",
+            "auto_apply_threshold_changes": False,
+            "automatic_agent_weight_changes": False,
+            "auto_write_judgment_bank": False,
+            "trade_execution_permission": False,
+            "broker_connected": False,
+            "live_execution": False,
+        },
+    }
+    browser_truth_state = _emit_browser_projection(
+        state_dir=state_dir,
+        browser_source=browser_source,
+        source_artifact_hash=source_artifact_hash,
+    )
 
     publish_status = "NOT_CONFIGURED"
     if args.github_repo or args.github_issue:
@@ -297,12 +346,8 @@ def main() -> int:
 
     summary = {
         "status": "BATCH9I_SHADOW_COUNTERFACTUAL_COMPLETE",
-        "shadow_status": rollup.get("status"),
-        "complete_session_count": rollup.get("complete_session_count"),
-        "latest_session_id": latest_session_id,
-        "recommendation_count": len(rollup.get("recommendations") or []),
         "publish_status": publish_status,
-        "output": str(latest_path),
+        "browser_truth_state": browser_truth_state,
         "ledger_mode": "READ_ONLY",
         "auto_apply_threshold_changes": False,
         "live_execution": False,
