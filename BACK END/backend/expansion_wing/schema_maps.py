@@ -59,14 +59,22 @@ def _nine_h(payload: dict[str, Any]) -> dict[str, Any]:
             "benchmark_complete": bool(payload.get("benchmark_complete")), "opportunities": opportunities,
             "opportunity_count": metrics.get("opportunity_count", len(opportunities)), "detected_count": metrics.get("detected_count"),
             "missed_count": metrics.get("missed_count"), "miss_rate_pct": metrics.get("opportunity_miss_rate_pct"),
-            "errors": [] if payload.get("session_id") else ["MISSING_SESSION_ID"]}
+            "errors": (["MISSING_SESSION_ID"] if not payload.get("session_id") else [])
+            + (["BENCHMARK_INCOMPLETE"] if payload.get("benchmark_complete") is not True else [])}
 
 
 def _nine_i(payload: dict[str, Any]) -> dict[str, Any]:
+    complete_sessions = payload.get("complete_session_count")
+    minimum_sessions = payload.get("minimum_complete_sessions_for_advice")
+    errors = [] if payload.get("status") else ["MISSING_STATUS"]
+    if not isinstance(complete_sessions, int) or not isinstance(minimum_sessions, int):
+        errors.append("MISSING_WARMUP_COUNTS")
+    elif complete_sessions < minimum_sessions:
+        errors.append("WARMUP_INCOMPLETE")
     return {"observed_at": _time(payload, "generated_at", "created_at"), "status": payload.get("status") or "UNKNOWN",
-            "complete_session_count": payload.get("complete_session_count"), "minimum_complete_sessions_for_advice": payload.get("minimum_complete_sessions_for_advice"),
+            "complete_session_count": complete_sessions, "minimum_complete_sessions_for_advice": minimum_sessions,
             "session_ids": _list(payload.get("session_ids")), "policies": _dict(payload.get("policies")),
-            "errors": [] if payload.get("status") else ["MISSING_STATUS"]}
+            "errors": errors}
 
 
 def _nine_j(payload: dict[str, Any]) -> dict[str, Any]:

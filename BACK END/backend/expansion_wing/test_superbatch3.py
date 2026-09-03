@@ -24,7 +24,14 @@ class SchemaMappingTests(unittest.TestCase):
         for name, contract in CONTRACTS.items():
             payload = json.loads((FIXTURES / f"{name}.json").read_text())
             mapped = contract.map(payload)
-            self.assertTrue(mapped["complete"], (name, mapped["errors"]))
+            if name == "9h" and payload.get("benchmark_complete") is False:
+                self.assertFalse(mapped["complete"])
+                self.assertIn("BENCHMARK_INCOMPLETE", mapped["errors"])
+            elif name == "9i" and payload.get("complete_session_count", 0) < payload.get("minimum_complete_sessions_for_advice", 0):
+                self.assertFalse(mapped["complete"])
+                self.assertIn("WARMUP_INCOMPLETE", mapped["errors"])
+            else:
+                self.assertTrue(mapped["complete"], (name, mapped["errors"]))
             self.assertTrue(mapped["observed_at"])
 
     def test_legacy_schema_is_explicitly_incomplete(self):
@@ -36,6 +43,21 @@ class SchemaMappingTests(unittest.TestCase):
         mapped = CONTRACTS["9j"].map(["not", "an", "object"])
         self.assertFalse(mapped["complete"])
         self.assertIn("MALFORMED_ROOT", mapped["errors"])
+
+    def test_incomplete_9h_cannot_project_healthy(self):
+        payload = json.loads((FIXTURES / "9h.json").read_text())
+        payload["benchmark_complete"] = False
+        mapped = CONTRACTS["9h"].map(payload)
+        self.assertFalse(mapped["complete"])
+        self.assertIn("BENCHMARK_INCOMPLETE", mapped["errors"])
+
+    def test_9i_warmup_cannot_project_healthy(self):
+        payload = json.loads((FIXTURES / "9i.json").read_text())
+        payload["complete_session_count"] = 1
+        payload["minimum_complete_sessions_for_advice"] = 5
+        mapped = CONTRACTS["9i"].map(payload)
+        self.assertFalse(mapped["complete"])
+        self.assertIn("WARMUP_INCOMPLETE", mapped["errors"])
 
 
 class SnapshotCompositorTests(unittest.TestCase):
