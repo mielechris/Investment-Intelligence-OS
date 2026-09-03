@@ -2,18 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import mimetypes
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Hashable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
@@ -37,6 +40,169 @@ BACKEND_EXACT_PATHS = {
     "/intelligence/dislocation/status",
     "/system/status",
 }
+LIVING_CACHE_TTL_SECONDS = 5.0
+LIVING_CACHE_STALE_SECONDS = 30.0
+
+
+def _living_snapshot_healthy(snapshot: dict[str, Any]) -> bool:
+    return all(
+        isinstance(snapshot.get(name), dict)
+        and snapshot[name].get("availability") == "AVAILABLE"
+        for name in ("factory", "jesse_dislocation")
+    )
+
+
+def _degraded_living_snapshot() -> dict[str, Any]:
+    return {
+        "schema_version": LIVING_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status": "BACKEND_DEGRADED",
+        "factory": {"availability": "WAITING", "payload": None},
+        "jesse_dislocation": {"availability": "WAITING", "payload": None},
+        "safety": {
+            "preview_only": True,
+            "localhost_only": True,
+            "direct_ledger_access": False,
+            "backend_access": "READ_ONLY_GET_ONLY",
+            "backend_write_permission": False,
+            "capital_authority": False,
+            "trade_execution_permission": False,
+            "live_execution": False,
+        },
+    }
+
+
+def _sanitize_living_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    sanitized = copy.deepcopy(snapshot)
+    for name in ("factory", "jesse_dislocation"):
+        layer = sanitized.get(name)
+        if not isinstance(layer, dict) or layer.get("availability") == "AVAILABLE":
+            continue
+        raw_category = f"{layer.pop('error_type', '')} {layer.pop('error', '')}".lower()
+        layer["failure_category"] = (
+            "BACKEND_TIMEOUT" if "timeout" in raw_category or "timed out" in raw_category
+            else "BACKEND_UNAVAILABLE"
+        )
+    return sanitized
+
+
+class LivingOverviewCache:
+    """Single-entry, process-local cache with one coalesced refresh."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = LIVING_CACHE_TTL_SECONDS,
+        stale_seconds: float = LIVING_CACHE_STALE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.ttl_seconds = ttl_seconds
+        self.stale_seconds = stale_seconds
+        self.clock = clock
+        self._condition = threading.Condition()
+        self._identity: Hashable | None = None
+        self._snapshot: dict[str, Any] | None = None
+        self._snapshot_at = 0.0
+        self._last_good: dict[str, Any] | None = None
+        self._last_good_at = 0.0
+        self._refreshing = False
+        self._refresh_count = 0
+
+    def _decorate(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        state: str,
+        age_seconds: float | None,
+    ) -> dict[str, Any]:
+        result = copy.deepcopy(snapshot)
+        result["cache"] = {
+            "state": state,
+            "age_seconds": None if age_seconds is None else round(max(0.0, age_seconds), 3),
+            "ttl_seconds": self.ttl_seconds,
+            "stale_after_seconds": self.stale_seconds,
+            "refresh_in_flight": self._refreshing,
+            "backend_refresh_count": self._refresh_count,
+            "bounded_entries": 1,
+        }
+        return result
+
+    def get(
+        self,
+        identity: Hashable,
+        loader: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
+        while True:
+            now = self.clock()
+            with self._condition:
+                if identity != self._identity:
+                    if self._refreshing:
+                        self._condition.wait(timeout=self.ttl_seconds)
+                        if self._refreshing:
+                            return self._decorate(
+                                _degraded_living_snapshot(),
+                                state="DEGRADED_NO_SNAPSHOT",
+                                age_seconds=None,
+                            )
+                        continue
+                    self._identity = identity
+                    self._snapshot = None
+                    self._last_good = None
+                    self._snapshot_at = self._last_good_at = 0.0
+
+                if self._snapshot is not None:
+                    age = now - self._snapshot_at
+                    if age < self.ttl_seconds:
+                        state = "FRESH" if _living_snapshot_healthy(self._snapshot) else "DEGRADED"
+                        return self._decorate(self._snapshot, state=state, age_seconds=age)
+
+                if self._refreshing:
+                    if self._last_good is not None:
+                        age = now - self._last_good_at
+                        state = "STALE_REFRESHING" if age <= self.stale_seconds else "DEGRADED_STALE"
+                        return self._decorate(self._last_good, state=state, age_seconds=age)
+                    self._condition.wait(timeout=self.ttl_seconds)
+                    if self._refreshing:
+                        return self._decorate(
+                            _degraded_living_snapshot(),
+                            state="DEGRADED_NO_SNAPSHOT",
+                            age_seconds=None,
+                        )
+                    continue
+
+                self._refreshing = True
+                break
+
+        try:
+            refreshed = loader()
+            if not isinstance(refreshed, dict):
+                refreshed = _degraded_living_snapshot()
+        except Exception:  # noqa: BLE001 - never expose raw backend evidence
+            refreshed = _degraded_living_snapshot()
+        refreshed = _sanitize_living_snapshot(refreshed)
+
+        now = self.clock()
+        with self._condition:
+            self._refresh_count += 1
+            healthy = _living_snapshot_healthy(refreshed)
+            if healthy:
+                self._last_good = copy.deepcopy(refreshed)
+                self._last_good_at = now
+                self._snapshot = copy.deepcopy(refreshed)
+            elif self._last_good is not None:
+                self._snapshot = copy.deepcopy(self._last_good)
+                self._snapshot["status"] = "BACKEND_DEGRADED"
+            else:
+                self._snapshot = copy.deepcopy(refreshed)
+                self._snapshot["status"] = "BACKEND_DEGRADED"
+            self._snapshot_at = now
+            self._refreshing = False
+            self._condition.notify_all()
+            state = "FRESH" if healthy else "DEGRADED"
+            return self._decorate(self._snapshot, state=state, age_seconds=0.0)
+
+
+_living_overview_cache = LivingOverviewCache()
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -444,10 +610,19 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             )
             return
         if parsed.path == "/living/overview":
+            identity = (
+                LIVING_SCHEMA_VERSION,
+                DEFAULT_BACKEND,
+                str(self.preview_server.telemetry_dir.resolve()),
+                str(self.preview_server.state_dir.resolve()),
+            )
             self._send_json(
-                build_living_factory_snapshot(
-                    telemetry_dir=self.preview_server.telemetry_dir,
-                    state_dir=self.preview_server.state_dir,
+                _living_overview_cache.get(
+                    identity,
+                    lambda: build_living_factory_snapshot(
+                        telemetry_dir=self.preview_server.telemetry_dir,
+                        state_dir=self.preview_server.state_dir,
+                    ),
                 )
             )
             return
