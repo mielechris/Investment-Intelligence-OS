@@ -162,6 +162,14 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
             self.assert_no_authority(result)
             self.assert_no_authority(persisted)
             self.assertEqual(persisted["symbol_count"], 600)
+            self.assertEqual(
+                {key: persisted[key] for key in collector.AGGREGATE_FIELDS},
+                {
+                    "source_symbol_total": 600,
+                    "deduplicated_union_count": 600,
+                    "duplicate_count": 0,
+                },
+            )
             self.assertNotIn("http://", json.dumps(persisted))
             self.assertNotIn("https://", json.dumps(persisted))
 
@@ -258,27 +266,86 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
             "strict_membership": True,
             "symbols": ["AAPL"],
             "cached_at": (now - timedelta(hours=24)).isoformat(),
+            "source_symbol_total": 1,
+            "deduplicated_union_count": 1,
+            "duplicate_count": 0,
             **collector.AUTHORITY,
         }
         self.assertTrue(collector._cache_fresh(payload, now))
         payload["cached_at"] = (now - timedelta(hours=24, seconds=1)).isoformat()
         self.assertFalse(collector._cache_fresh(payload, now))
 
-    def test_legacy_cache_missing_authority_is_rejected_without_gaining_authority(self):
+    def test_legacy_cache_missing_duplicate_count_is_rejected_without_mutation(self):
         now = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
         payload = {
             "verified_complete": True,
             "strict_membership": True,
             "symbols": ["AAPL"],
             "cached_at": now.isoformat(),
+            "source_symbol_total": 1,
+            "deduplicated_union_count": 1,
+            **collector.AUTHORITY,
         }
         self.assertFalse(collector._valid_universe(payload))
-        self.assertNotIn("trade_execution_permission", payload)
+        self.assertNotIn("duplicate_count", payload)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "benchmark_universe.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             self.assertIsNone(collector._load_cached_universe(path, now))
-            self.assertNotIn("trade_execution_permission", json.loads(path.read_text()))
+            self.assertNotIn("duplicate_count", json.loads(path.read_text()))
+
+    def test_live_proven_aggregate_is_504_plus_102_minus_519(self):
+        value = capture(sp_count=504, ndx_count=102)
+        value["symbols"] = [f"U{number}" for number in range(519)]
+        value["symbol_count"] = 519
+        self.assertEqual(
+            collector._capture_aggregate_counts(value),
+            {
+                "source_symbol_total": 606,
+                "deduplicated_union_count": 519,
+                "duplicate_count": 87,
+            },
+        )
+
+    def test_zero_and_complete_overlap_aggregates(self):
+        self.assertEqual(
+            collector._validated_aggregate_counts(606, 606),
+            {
+                "source_symbol_total": 606,
+                "deduplicated_union_count": 606,
+                "duplicate_count": 0,
+            },
+        )
+        self.assertEqual(
+            collector._validated_aggregate_counts(200, 100),
+            {
+                "source_symbol_total": 200,
+                "deduplicated_union_count": 100,
+                "duplicate_count": 100,
+            },
+        )
+
+    def test_negative_impossible_and_mismatched_aggregates_are_rejected(self):
+        invalid = ((-1, 0, None), (10, 11, None), (10, 8, 1), (10.0, 8, 2))
+        for source_total, union_count, duplicate_count in invalid:
+            with self.subTest(values=(source_total, union_count, duplicate_count)):
+                with self.assertRaises(collector.UnsafeArtifact):
+                    collector._validated_aggregate_counts(
+                        source_total, union_count, duplicate_count
+                    )
+
+    def test_mismatched_persisted_duplicate_count_invalidates_cache(self):
+        payload = {
+            "verified_complete": True,
+            "strict_membership": True,
+            "symbols": ["AAPL"],
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "source_symbol_total": 2,
+            "deduplicated_union_count": 1,
+            "duplicate_count": 0,
+            **collector.AUTHORITY,
+        }
+        self.assertFalse(collector._valid_universe(payload))
 
     def test_nasdaq_direct_failure_uses_labeled_governed_mirror(self):
         header = "Ticker,Name,Sector,Asset Class,Market Value"
@@ -325,6 +392,16 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
 
     def test_success_failure_cached_and_snapshot_artifacts_are_explicitly_safe(self):
         now = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
+        cached = {
+            "verified_complete": True,
+            "strict_membership": True,
+            "symbols": [f"U{number}" for number in range(519)],
+            "cached_at": now.isoformat(),
+            "source_symbol_total": 606,
+            "deduplicated_union_count": 519,
+            "duplicate_count": 87,
+            **collector.AUTHORITY,
+        }
         snapshot = collector._sanitize_snapshot(
             {
                 "observed_at": now.isoformat(),
@@ -334,23 +411,29 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
                 "source": "BATCH_9H",
                 "governed_universe_source": "STRICT_UNIVERSE",
                 "governed_universe_count": 519,
-            }
+            },
+            cached,
         )
         status = collector._success_status(snapshot, "2026-09-03")
         failure = collector._failure_status(RuntimeError("provider failed"), now)
-        cached = {
-            "verified_complete": True,
-            "strict_membership": True,
-            "symbols": ["AAPL"],
-            "cached_at": now.isoformat(),
-            **collector.AUTHORITY,
-        }
         for artifact in (snapshot, status, failure, cached):
             self.assert_no_authority(artifact)
             collector._require_safe_artifact(artifact)
             serialized = json.dumps(artifact).lower()
             self.assertNotIn("http://", serialized)
             self.assertNotIn("https://", serialized)
+        expected = {
+            "source_symbol_total": 606,
+            "deduplicated_union_count": 519,
+            "duplicate_count": 87,
+        }
+        for artifact in (cached, snapshot, status):
+            self.assertEqual(
+                {key: artifact[key] for key in collector.AGGREGATE_FIELDS},
+                expected,
+            )
+        self.assertNotIn("duplicate_count", failure)
+        self.assertEqual(failure["status"], "BENCHMARK_COLLECTION_FAILED")
 
     def test_thresholds_and_fail_closed_authority_are_unchanged(self):
         self.assertEqual(collector.production_index_universe.EXPECTED_COUNTS["SP500"], (490, 520))

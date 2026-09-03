@@ -74,6 +74,11 @@ AUTHORITY = {
     "broker_connected": False,
     "live_execution": False,
 }
+AGGREGATE_FIELDS = (
+    "source_symbol_total",
+    "deduplicated_union_count",
+    "duplicate_count",
+)
 
 
 class UniverseRefreshIncomplete(RuntimeError):
@@ -108,7 +113,69 @@ def _require_safe_artifact(payload: object) -> None:
         raise UnsafeArtifact("UNSAFE_ARTIFACT_REJECTED")
 
 
-def _sanitize_snapshot(payload: object) -> dict:
+def _nonnegative_integer(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _validated_aggregate_counts(
+    source_symbol_total: object,
+    deduplicated_union_count: object,
+    duplicate_count: object | None = None,
+) -> dict[str, int]:
+    if not _nonnegative_integer(source_symbol_total) or not _nonnegative_integer(
+        deduplicated_union_count
+    ):
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    source_total = int(source_symbol_total)
+    union_count = int(deduplicated_union_count)
+    if union_count > source_total:
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    expected_duplicate_count = source_total - union_count
+    value = expected_duplicate_count if duplicate_count is None else duplicate_count
+    if not _nonnegative_integer(value) or value != expected_duplicate_count:
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    return {
+        "source_symbol_total": source_total,
+        "deduplicated_union_count": union_count,
+        "duplicate_count": expected_duplicate_count,
+    }
+
+
+def _artifact_aggregate_counts(payload: object) -> dict[str, int]:
+    if not isinstance(payload, dict) or not all(key in payload for key in AGGREGATE_FIELDS):
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    aggregate = _validated_aggregate_counts(
+        payload.get("source_symbol_total"),
+        payload.get("deduplicated_union_count"),
+        payload.get("duplicate_count"),
+    )
+    symbols = payload.get("symbols")
+    if isinstance(symbols, list) and len(symbols) != aggregate["deduplicated_union_count"]:
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    return aggregate
+
+
+def _capture_aggregate_counts(capture: dict) -> dict[str, int]:
+    indexes = capture.get("indexes")
+    symbols = capture.get("symbols")
+    if not isinstance(indexes, dict) or not isinstance(symbols, list):
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    counts: list[int] = []
+    for key in ("SP500", "NASDAQ100"):
+        row = indexes.get(key)
+        count = row.get("symbol_count") if isinstance(row, dict) else None
+        if not isinstance(row, dict) or row.get("verified_complete") is not True:
+            raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+        if not _nonnegative_integer(count):
+            raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+        counts.append(count)
+    union_count = capture.get("symbol_count")
+    if not _nonnegative_integer(union_count) or union_count != len(symbols):
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
+    return _validated_aggregate_counts(sum(counts), union_count)
+
+
+def _sanitize_snapshot(payload: object, aggregate_source: dict) -> dict:
     snapshot = dict(payload) if isinstance(payload, dict) else {}
     errors = snapshot.get("provider_errors")
     snapshot["provider_errors"] = sorted(
@@ -117,12 +184,16 @@ def _sanitize_snapshot(payload: object) -> dict:
             for error in (errors if isinstance(errors, list) else [])
         }
     )
+    snapshot.update(_artifact_aggregate_counts(aggregate_source))
+    if snapshot.get("governed_universe_count") != snapshot["deduplicated_union_count"]:
+        raise UnsafeArtifact("DUPLICATE_COUNT_INVARIANT_FAILED")
     snapshot.update(AUTHORITY)
     _require_safe_artifact(snapshot)
     return snapshot
 
 
 def _success_status(snapshot: dict, session_date: str) -> dict:
+    aggregate_counts = _artifact_aggregate_counts(snapshot)
     status = {
         "status": "BENCHMARK_SAMPLE_RECORDED",
         "session_date": session_date,
@@ -135,6 +206,7 @@ def _success_status(snapshot: dict, session_date: str) -> dict:
         "governed_universe_source": snapshot.get("governed_universe_source"),
         "governed_universe_count": snapshot.get("governed_universe_count"),
         "independent_of_iios_promotion_decisions": True,
+        **aggregate_counts,
         **AUTHORITY,
     }
     _require_safe_artifact(status)
@@ -320,7 +392,7 @@ def _append_jsonl(path: Path, payload: dict) -> None:
 
 
 def _valid_universe(payload: dict) -> bool:
-    return bool(
+    structurally_valid = bool(
         isinstance(payload, dict)
         and payload.get("verified_complete") is True
         and payload.get("strict_membership") is True
@@ -329,6 +401,13 @@ def _valid_universe(payload: dict) -> bool:
         and _has_explicit_no_authority(payload)
         and not _contains_url(payload)
     )
+    if not structurally_valid:
+        return False
+    try:
+        _artifact_aggregate_counts(payload)
+    except UnsafeArtifact:
+        return False
+    return True
 
 
 def _cache_fresh(payload: dict, now: datetime) -> bool:
@@ -375,6 +454,8 @@ def _refresh_official_universe(
     ):
         raise UniverseRefreshIncomplete(_refresh_diagnostics(capture))
 
+    aggregate_counts = _capture_aggregate_counts(capture)
+
     payload = {
         "schema_version": UNIVERSE_SCHEMA_VERSION,
         "source": "OFFICIAL_SP500_PLUS_NASDAQ100_BENCHMARK_SIDECAR",
@@ -386,6 +467,7 @@ def _refresh_official_universe(
         "official_capture_created_at": capture.get("created_at"),
         "cached_at": now.astimezone(timezone.utc).isoformat(),
         "independent_of_iios_promotion_decisions": True,
+        **aggregate_counts,
         **AUTHORITY,
     }
     _require_safe_artifact(payload)
@@ -456,7 +538,7 @@ def main() -> int:
             governed_universe=governed_universe,
             observed_at=now,
         )
-        snapshot = _sanitize_snapshot(snapshot)
+        snapshot = _sanitize_snapshot(snapshot, governed_universe)
     except Exception as exc:  # noqa: BLE001
         failure = _failure_status(exc, now)
         _atomic_write(
