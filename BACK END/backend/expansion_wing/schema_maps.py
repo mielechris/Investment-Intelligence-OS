@@ -64,16 +64,20 @@ def _nine_h(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _nine_i(payload: dict[str, Any]) -> dict[str, Any]:
-    complete_sessions = payload.get("complete_session_count")
-    minimum_sessions = payload.get("minimum_complete_sessions_for_advice")
+    browser_schema = payload.get("schema_version") == "batch9i-browser-shadow-strategy-v1"
+    complete_sessions = payload.get("complete_sessions") if browser_schema else payload.get("complete_session_count")
+    minimum_sessions = payload.get("required_sessions") if browser_schema else payload.get("minimum_complete_sessions_for_advice")
     errors = [] if payload.get("status") else ["MISSING_STATUS"]
     if not isinstance(complete_sessions, int) or not isinstance(minimum_sessions, int):
         errors.append("MISSING_WARMUP_COUNTS")
     elif complete_sessions < minimum_sessions:
         errors.append("WARMUP_INCOMPLETE")
+    if browser_schema and payload.get("truth_state") in {"INCOMPLETE", "UNAVAILABLE"}:
+        errors.append(str(payload.get("reason") or "SOURCE_INCOMPLETE"))
     return {"observed_at": _time(payload, "generated_at", "created_at"), "status": payload.get("status") or "UNKNOWN",
             "complete_session_count": complete_sessions, "minimum_complete_sessions_for_advice": minimum_sessions,
-            "session_ids": _list(payload.get("session_ids")), "policies": _dict(payload.get("policies")),
+            "session_ids": ([payload.get("source_session")] if browser_schema and payload.get("source_session") else _list(payload.get("session_ids"))),
+            "policies": _dict(payload.get("policies")),
             "errors": errors}
 
 
@@ -99,7 +103,7 @@ CONTRACTS = {
     "9b": SchemaContract("9b", ("batch9b-paper-trading-v1", "LEGACY_UNVERSIONED"), lambda p: _worker(p, "cycle_completed_at")),
     "9e": SchemaContract("9e", ("batch9e-high-speed-radar-v1", "LEGACY_UNVERSIONED"), _nine_e),
     "9h": SchemaContract("9h", ("batch9h-independent-market-benchmark-v1", "batch9g-market-validation-scorecard-v1"), _nine_h),
-    "9i": SchemaContract("9i", ("batch9i-remote-shadow-strategy-v1", "batch9i-shadow-counterfactual-rollup-v1"), _nine_i),
+    "9i": SchemaContract("9i", ("batch9i-browser-shadow-strategy-v1", "batch9i-remote-shadow-strategy-v1", "batch9i-shadow-counterfactual-rollup-v1"), _nine_i),
     "9j": SchemaContract("9j", ("batch9j-browser-outcome-summary-v1", "batch9j-outcome-learning-memory-v1"), _nine_j),
     "paper_fund": SchemaContract("paper_fund", ("paper-portfolio-core-v1", "LEGACY_UNVERSIONED"), _paper),
 }
