@@ -34,6 +34,7 @@ FAILURE_CATEGORIES = {
     "HTTP_FORBIDDEN",
     "RATE_LIMITED",
     "TIMEOUT",
+    "CA_BUNDLE_UNAVAILABLE",
     "TLS_VALIDATION_FAILED",
     "PAGINATION_INCOMPLETE",
     "STALE_RESPONSE",
@@ -42,6 +43,14 @@ FAILURE_CATEGORIES = {
     "COUNT_OUT_OF_RANGE",
     "SOURCE_UNAVAILABLE",
 }
+PROVIDER_CATEGORIES = {
+    "NASDAQ",
+    "SP_DJI",
+    "BLACKROCK_ISHARES_IQQ",
+    "BLACKROCK_ISHARES_IVV",
+}
+PROVIDER_ROLES = {"OFFICIAL_PRIMARY", "GOVERNED_FALLBACK", "SOURCE"}
+TRUST_SOURCES = {"SYSTEM_CA", "CERTIFI_CA"}
 
 
 class UniverseRefreshIncomplete(RuntimeError):
@@ -52,6 +61,8 @@ class UniverseRefreshIncomplete(RuntimeError):
 
 def _failure_category(error: object) -> str:
     text = str(error or "").lower()
+    if "ca_bundle_unavailable" in text:
+        return "CA_BUNDLE_UNAVAILABLE"
     if "403" in text or "forbidden" in text:
         return "HTTP_FORBIDDEN"
     if "429" in text or "rate limit" in text:
@@ -94,6 +105,37 @@ def _refresh_diagnostics(capture: object) -> dict:
                 "rejected": rejected,
                 "duplicate_count": max(0, int(row.get("duplicate_count", 0) or 0)),
                 "provider_category": str(row.get("source_mode") or "UNKNOWN")[:80],
+                "trust_source": (
+                    row.get("trust_source")
+                    if row.get("trust_source") in {"SYSTEM_CA", "CERTIFI_CA"}
+                    else None
+                ),
+                "provider_attempts": [
+                    {
+                        "provider": (
+                            attempt.get("provider")
+                            if attempt.get("provider") in PROVIDER_CATEGORIES
+                            else "UNKNOWN"
+                        ),
+                        "role": (
+                            attempt.get("role")
+                            if attempt.get("role") in PROVIDER_ROLES
+                            else "SOURCE"
+                        ),
+                        "result_category": (
+                            attempt.get("result_category")
+                            if attempt.get("result_category") in FAILURE_CATEGORIES | {"SUCCESS"}
+                            else "SOURCE_UNAVAILABLE"
+                        ),
+                        "trust_source": (
+                            attempt.get("trust_source")
+                            if attempt.get("trust_source") in TRUST_SOURCES
+                            else None
+                        ),
+                    }
+                    for attempt in (row.get("source_attempts") or [])
+                    if isinstance(attempt, dict)
+                ],
                 "failure_category": None if verified else _failure_category(row.get("error")),
                 "verified_complete": verified,
             }

@@ -4,12 +4,14 @@ import csv
 import io
 import os
 import re
+import socket
 import ssl
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import production_index_universe as legacy
@@ -55,12 +57,72 @@ class _TextCollector(HTMLParser):
             self.parts.append(value)
 
 
-def _ssl_context() -> ssl.SSLContext:
-    cafile = str(os.getenv("SSL_CERT_FILE") or "").strip()
-    context = ssl.create_default_context(cafile=cafile if cafile and Path(cafile).is_file() else None)
+TRUST_SOURCES = {"SYSTEM_CA", "CERTIFI_CA"}
+FAILURE_CATEGORIES = {
+    "CA_BUNDLE_UNAVAILABLE",
+    "TLS_VALIDATION_FAILED",
+    "HTTP_FORBIDDEN",
+    "RATE_LIMITED",
+    "TIMEOUT",
+    "SOURCE_UNAVAILABLE",
+    "COUNT_OUT_OF_RANGE",
+}
+
+
+class SecureTrustUnavailable(RuntimeError):
+    pass
+
+
+def _usable_file(value: object) -> Path | None:
+    path = Path(str(value or "").strip()).expanduser()
+    return (
+        path
+        if str(value or "").strip()
+        and path.is_file()
+        and os.access(path, os.R_OK)
+        else None
+    )
+
+
+def _ssl_context() -> tuple[ssl.SSLContext, str]:
+    configured = _usable_file(os.getenv("SSL_CERT_FILE"))
+    context = ssl.create_default_context(cafile=str(configured) if configured else None)
+    trust_source = "SYSTEM_CA"
+    if not context.get_ca_certs():
+        try:
+            import certifi  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise SecureTrustUnavailable("CA_BUNDLE_UNAVAILABLE") from exc
+        certifi_path = _usable_file(certifi.where())
+        if certifi_path is None:
+            raise SecureTrustUnavailable("CA_BUNDLE_UNAVAILABLE")
+        context = ssl.create_default_context(cafile=str(certifi_path))
+        trust_source = "CERTIFI_CA"
     if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
         raise RuntimeError("INDEX_SOURCE_TLS_VERIFICATION_NOT_ENFORCED")
-    return context
+    if not context.get_ca_certs():
+        raise SecureTrustUnavailable("CA_BUNDLE_UNAVAILABLE")
+    return context, trust_source
+
+
+def _failure_category(exc: BaseException) -> str:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, SecureTrustUnavailable):
+            return "CA_BUNDLE_UNAVAILABLE"
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return "TLS_VALIDATION_FAILED"
+        if isinstance(current, HTTPError):
+            if current.code == 403:
+                return "HTTP_FORBIDDEN"
+            if current.code == 429:
+                return "RATE_LIMITED"
+        if isinstance(current, (TimeoutError, socket.timeout)):
+            return "TIMEOUT"
+        current = current.__cause__ or current.__context__
+    return "SOURCE_UNAVAILABLE"
 
 
 def _validate_host(url: str) -> None:
@@ -69,7 +131,7 @@ def _validate_host(url: str) -> None:
         raise ValueError(f"INDEX_SOURCE_HOST_NOT_ALLOWED: {host or '<missing>'}")
 
 
-def _fetch(url: str, *, referer: str | None = None) -> tuple[bytes, str | None]:
+def _fetch(url: str, *, referer: str | None = None) -> tuple[bytes, str | None, str]:
     _validate_host(url)
     headers = {
         "User-Agent": BROWSER_USER_AGENT,
@@ -82,8 +144,27 @@ def _fetch(url: str, *, referer: str | None = None) -> tuple[bytes, str | None]:
     if referer:
         headers["Referer"] = referer
     request = Request(url, headers=headers)
-    with urlopen(request, timeout=legacy.DEFAULT_TIMEOUT_SECONDS, context=_ssl_context()) as response:
-        return response.read(), response.headers.get("Content-Type")
+    context, trust_source = _ssl_context()
+    with urlopen(request, timeout=legacy.DEFAULT_TIMEOUT_SECONDS, context=context) as response:
+        return response.read(), response.headers.get("Content-Type"), trust_source
+
+
+def _attempt(
+    provider: str,
+    role: str,
+    result: str,
+    trust_source: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "role": role,
+        "result_category": (
+            result
+            if result in FAILURE_CATEGORIES or result == "SUCCESS"
+            else "SOURCE_UNAVAILABLE"
+        ),
+        "trust_source": trust_source if trust_source in TRUST_SOURCES else None,
+    }
 
 
 def _normalize_symbol(value: Any) -> str | None:
@@ -188,14 +269,14 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
     return _normalize_symbols(fallback)
 
 
-def _read_nasdaq100_direct() -> tuple[dict[str, Any] | None, list[str]]:
-    errors: list[str] = []
+def _read_nasdaq100_direct() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
     url = str(os.getenv("IIOS_NASDAQ100_CONSTITUENTS_URL") or NASDAQ100_DIRECT_URL).strip()
     try:
-        raw, content_type = _fetch(url, referer="https://www.nasdaq.com/")
+        raw, content_type, trust_source = _fetch(url, referer="https://www.nasdaq.com/")
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"{type(exc).__name__}: {exc}")
-        return None, errors
+        attempts.append(_attempt("NASDAQ", "OFFICIAL_PRIMARY", _failure_category(exc)))
+        return None, attempts
 
     # Prefer the publisher's explicitly labeled complete company list. Generic
     # page parsers can see navigation/marketing symbols and therefore over-count.
@@ -208,8 +289,11 @@ def _read_nasdaq100_direct() -> tuple[dict[str, Any] | None, list[str]]:
     symbols = _normalize_symbols(symbols)
     verified, error = legacy.validate_index_count("NASDAQ100", symbols)
     if not verified:
-        errors.append(str(error or "NASDAQ100_SOURCE_INCOMPLETE"))
-        return None, errors
+        attempts.append(
+            _attempt("NASDAQ", "OFFICIAL_PRIMARY", "COUNT_OUT_OF_RANGE", trust_source)
+        )
+        return None, attempts
+    attempts.append(_attempt("NASDAQ", "OFFICIAL_PRIMARY", "SUCCESS", trust_source))
     return {
         "source_mode": "OFFICIAL_WEB_SOURCE",
         "source_ref": url,
@@ -218,16 +302,44 @@ def _read_nasdaq100_direct() -> tuple[dict[str, Any] | None, list[str]]:
         "symbols": symbols,
         "verified_complete": True,
         "error": None,
-    }, errors
+        "source_attempts": attempts,
+        "trust_source": trust_source,
+    }, attempts
 
 
-def _read_nasdaq100_mirror(direct_errors: list[str]) -> dict[str, Any]:
-    raw, _content_type = _fetch(
-        NASDAQ100_IQQ_MIRROR_URL,
-        referer="https://www.ishares.com/",
-    )
+def _read_nasdaq100_mirror(direct_attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        raw, _content_type, trust_source = _fetch(
+            NASDAQ100_IQQ_MIRROR_URL,
+            referer="https://www.ishares.com/",
+        )
+    except Exception as exc:  # noqa: BLE001
+        attempts = direct_attempts + [
+            _attempt(
+                "BLACKROCK_ISHARES_IQQ",
+                "GOVERNED_FALLBACK",
+                _failure_category(exc),
+            )
+        ]
+        return {
+            "source_mode": "ERROR",
+            "source_ref": None,
+            "source_publisher": None,
+            "symbols": [],
+            "verified_complete": False,
+            "error": attempts[-1]["result_category"],
+            "source_attempts": attempts,
+        }
     symbols = _parse_ishares_equity_holdings(raw)
     verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+    attempts = direct_attempts + [
+        _attempt(
+            "BLACKROCK_ISHARES_IQQ",
+            "GOVERNED_FALLBACK",
+            "SUCCESS" if verified else "COUNT_OUT_OF_RANGE",
+            trust_source,
+        )
+    ]
     return {
         "source_mode": "GOVERNED_INDEX_TRACKER_MIRROR",
         "source_ref": NASDAQ100_IQQ_MIRROR_URL,
@@ -235,12 +347,10 @@ def _read_nasdaq100_mirror(direct_errors: list[str]) -> dict[str, Any]:
         "benchmark": "Nasdaq 100 Index",
         "symbols": symbols,
         "verified_complete": verified,
-        "error": error,
-        "lineage_note": (
-            "Nasdaq direct source was attempted first. Fallback is BlackRock "
-            "iShares IQQ first-party holdings for the Nasdaq 100 Index. "
-            + " | ".join(direct_errors)[:1200]
-        ),
+        "error": None if verified else "COUNT_OUT_OF_RANGE",
+        "lineage_note": "Nasdaq official source first; BlackRock iShares IQQ governed fallback second.",
+        "source_attempts": attempts,
+        "trust_source": trust_source,
     }
 
 
@@ -262,19 +372,19 @@ def _read_nasdaq100() -> dict[str, Any]:
             "error": error,
         }
 
-    direct, errors = _read_nasdaq100_direct()
+    direct, attempts = _read_nasdaq100_direct()
     if direct is not None:
         return direct
-    return _read_nasdaq100_mirror(errors)
+    return _read_nasdaq100_mirror(attempts)
 
 
-def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[str]]:
-    errors: list[str] = []
+def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
     configured = str(os.getenv("IIOS_SP500_CONSTITUENTS_URL") or "").strip()
     urls = (configured,) if configured else SP500_DIRECT_URLS
     for url in urls:
         try:
-            raw, content_type = _fetch(url, referer="https://www.spglobal.com/")
+            raw, content_type, trust_source = _fetch(url, referer="https://www.spglobal.com/")
             symbols = _normalize_symbols(legacy.parse_symbols_bytes(raw, content_type))
             verified, error = legacy.validate_index_count("SP500", symbols)
             if verified:
@@ -285,11 +395,16 @@ def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[str]]:
                     "symbols": symbols,
                     "verified_complete": True,
                     "error": None,
-                }, errors
-            errors.append(f"{url}: {error}")
+                    "source_attempts": attempts
+                    + [_attempt("SP_DJI", "OFFICIAL_PRIMARY", "SUCCESS", trust_source)],
+                    "trust_source": trust_source,
+                }, attempts
+            attempts.append(
+                _attempt("SP_DJI", "OFFICIAL_PRIMARY", "COUNT_OUT_OF_RANGE", trust_source)
+            )
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{url}: {type(exc).__name__}: {exc}")
-    return None, errors
+            attempts.append(_attempt("SP_DJI", "OFFICIAL_PRIMARY", _failure_category(exc)))
+    return None, attempts
 
 
 def _parse_ishares_equity_holdings(raw: bytes) -> list[str]:
@@ -322,16 +437,40 @@ def _parse_ishares_equity_holdings(raw: bytes) -> list[str]:
     return _normalize_symbols(symbols)
 
 
-def _read_sp500_mirror(direct_errors: list[str]) -> dict[str, Any]:
-    raw, _content_type = _fetch(SP500_IVV_MIRROR_URL, referer="https://www.ishares.com/")
+def _read_sp500_mirror(direct_attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        raw, _content_type, trust_source = _fetch(SP500_IVV_MIRROR_URL, referer="https://www.ishares.com/")
+    except Exception as exc:  # noqa: BLE001
+        attempts = direct_attempts + [
+            _attempt(
+                "BLACKROCK_ISHARES_IVV",
+                "GOVERNED_FALLBACK",
+                _failure_category(exc),
+            )
+        ]
+        return {
+            "source_mode": "ERROR",
+            "source_ref": None,
+            "source_publisher": None,
+            "symbols": [],
+            "verified_complete": False,
+            "error": attempts[-1]["result_category"],
+            "source_attempts": attempts,
+        }
     symbols = _parse_ishares_equity_holdings(raw)
     verified, error = legacy.validate_index_count("SP500", symbols)
     lineage_note = (
         "S&P publisher direct source was attempted first but did not provide a complete machine-readable list. "
         "Fallback is BlackRock iShares IVV first-party holdings; IVV declares S&P 500 Index (USD) as its benchmark."
     )
-    if direct_errors:
-        lineage_note += " Direct attempt: " + " | ".join(direct_errors)[:1500]
+    attempts = direct_attempts + [
+        _attempt(
+            "BLACKROCK_ISHARES_IVV",
+            "GOVERNED_FALLBACK",
+            "SUCCESS" if verified else "COUNT_OUT_OF_RANGE",
+            trust_source,
+        )
+    ]
     return {
         "source_mode": "GOVERNED_INDEX_TRACKER_MIRROR",
         "source_ref": SP500_IVV_MIRROR_URL,
@@ -339,8 +478,10 @@ def _read_sp500_mirror(direct_errors: list[str]) -> dict[str, Any]:
         "benchmark": "S&P 500 Index (USD)",
         "symbols": symbols,
         "verified_complete": verified,
-        "error": error,
+        "error": None if verified else "COUNT_OUT_OF_RANGE",
         "lineage_note": lineage_note,
+        "source_attempts": attempts,
+        "trust_source": trust_source,
     }
 
 
@@ -361,10 +502,10 @@ def _read_sp500() -> dict[str, Any]:
             "error": error,
         }
 
-    direct, errors = _read_sp500_direct()
+    direct, attempts = _read_sp500_direct()
     if direct is not None:
         return direct
-    return _read_sp500_mirror(errors)
+    return _read_sp500_mirror(attempts)
 
 
 def refresh_official_index_universe() -> dict[str, Any]:
@@ -380,15 +521,19 @@ def refresh_official_index_universe() -> dict[str, Any]:
             verified = result.get("verified_complete") is True
             error = result.get("error")
         except Exception as exc:  # noqa: BLE001
+            category = _failure_category(exc)
             result = {
                 "source_mode": "ERROR",
                 "source_ref": None,
                 "source_publisher": None,
                 "symbols": [],
+                "source_attempts": [
+                    _attempt(key, "SOURCE", category)
+                ],
             }
             symbols = []
             verified = False
-            error = f"{type(exc).__name__}: {exc}"
+            error = category
 
         index_results[key] = {
             "index": key,
@@ -400,6 +545,8 @@ def refresh_official_index_universe() -> dict[str, Any]:
             "source_publisher": result.get("source_publisher"),
             "benchmark": result.get("benchmark"),
             "lineage_note": result.get("lineage_note"),
+            "source_attempts": result.get("source_attempts") or [],
+            "trust_source": result.get("trust_source"),
             "error": error,
             "as_of": legacy.utc_now(),
         }
@@ -427,6 +574,8 @@ def refresh_official_index_universe() -> dict[str, Any]:
                 "benchmark": row.get("benchmark"),
                 "symbol_count": row.get("symbol_count"),
                 "verified_complete": row.get("verified_complete"),
+                "source_attempts": row.get("source_attempts") or [],
+                "trust_source": row.get("trust_source"),
                 "as_of": row.get("as_of"),
             }
             for key, row in index_results.items()
