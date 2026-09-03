@@ -11,6 +11,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,11 @@ def capture(sp_count: int = 500, ndx_count: int = 100) -> dict:
 
 
 class BenchmarkUniverseRefreshTests(unittest.TestCase):
+    def assert_no_authority(self, payload: dict):
+        for key in collector.AUTHORITY:
+            self.assertIn(key, payload)
+            self.assertIs(payload[key], False)
+
     @staticmethod
     def _context(ca_count: int) -> Mock:
         context = Mock()
@@ -99,13 +105,49 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
         self.assertEqual(resilient._failure_category(certificate_error), "TLS_VALIDATION_FAILED")
         self.assertEqual(resilient._failure_category(wrapped), "TLS_VALIDATION_FAILED")
 
+    def test_http_403_retains_verified_trust_source(self):
+        error = HTTPError("https://secret.invalid", 403, "forbidden", {}, None)
+        with patch.object(resilient, "_ssl_context", return_value=(self._context(1), "CERTIFI_CA")):
+            with patch.object(resilient, "urlopen", side_effect=error):
+                with self.assertRaises(resilient.VerifiedNetworkFailure) as raised:
+                    resilient._fetch(resilient.NASDAQ100_DIRECT_URL)
+        self.assertEqual(resilient._failure_category(raised.exception), "HTTP_FORBIDDEN")
+        self.assertEqual(resilient._failure_trust_source(raised.exception), "CERTIFI_CA")
+        self.assertNotIn("http://", str(raised.exception).lower())
+        self.assertNotIn("https://", str(raised.exception).lower())
+        error.close()
+        wrapped = resilient.VerifiedNetworkFailure("HTTP_FORBIDDEN", "CERTIFI_CA")
+        with patch.object(resilient, "_fetch", side_effect=wrapped):
+            result, attempts = resilient._read_nasdaq100_direct()
+        self.assertIsNone(result)
+        self.assertEqual(
+            attempts,
+            [
+                {
+                    "provider": "NASDAQ",
+                    "role": "OFFICIAL_PRIMARY",
+                    "result": "HTTP_FORBIDDEN",
+                    "trust_source": "CERTIFI_CA",
+                }
+            ],
+        )
+
+    def test_tls_failure_retains_constructed_trust_source(self):
+        error = ssl.SSLCertVerificationError(1, "hostname mismatch https://secret.invalid")
+        with patch.object(resilient, "_ssl_context", return_value=(self._context(1), "SYSTEM_CA")):
+            with patch.object(resilient, "urlopen", side_effect=error):
+                with self.assertRaises(resilient.VerifiedNetworkFailure) as raised:
+                    resilient._fetch(resilient.NASDAQ100_DIRECT_URL)
+        self.assertEqual(resilient._failure_category(raised.exception), "TLS_VALIDATION_FAILED")
+        self.assertEqual(resilient._failure_trust_source(raised.exception), "SYSTEM_CA")
+
     def test_no_unverified_tls_or_warning_suppression_constructs(self):
         source = inspect.getsource(resilient)
         forbidden = ("verify=False", "CERT_NONE", "_create_unverified_context", "disable_warnings", "check_hostname = False")
         for token in forbidden:
             self.assertNotIn(token, source)
 
-    def test_complete_official_universe_is_cached_without_authority(self):
+    def test_complete_official_universe_is_cached_with_explicit_no_authority(self):
         now = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "benchmark_universe.json"
@@ -116,10 +158,12 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
             ):
                 result = collector._refresh_official_universe(path, now)
             self.assertEqual(result["symbol_count"], 600)
-            self.assertFalse(result["ledger_read"])
-            self.assertFalse(result["ledger_write"])
-            self.assertFalse(result["live_execution"])
-            self.assertEqual(json.loads(path.read_text())["symbol_count"], 600)
+            persisted = json.loads(path.read_text())
+            self.assert_no_authority(result)
+            self.assert_no_authority(persisted)
+            self.assertEqual(persisted["symbol_count"], 600)
+            self.assertNotIn("http://", json.dumps(persisted))
+            self.assertNotIn("https://", json.dumps(persisted))
 
     def test_incomplete_universe_reproduces_fail_closed_path(self):
         incomplete = capture(ndx_count=5)
@@ -170,7 +214,7 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
                     {
                         "provider": "https://secret.invalid/path",
                         "role": "uncontrolled role",
-                        "result_category": "uncontrolled exception text",
+                        "result": "uncontrolled exception text",
                         "trust_source": "/private/ca.pem",
                     }
                 ],
@@ -185,7 +229,7 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
             {
                 "provider": "UNKNOWN",
                 "role": "SOURCE",
-                "result_category": "SOURCE_UNAVAILABLE",
+                "result": "SOURCE_UNAVAILABLE",
                 "trust_source": None,
             },
         )
@@ -214,10 +258,27 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
             "strict_membership": True,
             "symbols": ["AAPL"],
             "cached_at": (now - timedelta(hours=24)).isoformat(),
+            **collector.AUTHORITY,
         }
         self.assertTrue(collector._cache_fresh(payload, now))
         payload["cached_at"] = (now - timedelta(hours=24, seconds=1)).isoformat()
         self.assertFalse(collector._cache_fresh(payload, now))
+
+    def test_legacy_cache_missing_authority_is_rejected_without_gaining_authority(self):
+        now = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
+        payload = {
+            "verified_complete": True,
+            "strict_membership": True,
+            "symbols": ["AAPL"],
+            "cached_at": now.isoformat(),
+        }
+        self.assertFalse(collector._valid_universe(payload))
+        self.assertNotIn("trade_execution_permission", payload)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "benchmark_universe.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertIsNone(collector._load_cached_universe(path, now))
+            self.assertNotIn("trade_execution_permission", json.loads(path.read_text()))
 
     def test_nasdaq_direct_failure_uses_labeled_governed_mirror(self):
         header = "Ticker,Name,Sector,Asset Class,Market Value"
@@ -232,20 +293,64 @@ class BenchmarkUniverseRefreshTests(unittest.TestCase):
         self.assertEqual(result["source_publisher"], "BLACKROCK_ISHARES")
         self.assertEqual(result["benchmark"], "Nasdaq 100 Index")
         self.assertEqual(
-            [(row["role"], row["result_category"]) for row in result["source_attempts"]],
+            [(row["role"], row["result"]) for row in result["source_attempts"]],
             [("OFFICIAL_PRIMARY", "TIMEOUT"), ("GOVERNED_FALLBACK", "SUCCESS")],
         )
         self.assertEqual(result["trust_source"], "CERTIFI_CA")
+        self.assertEqual(result["source_id"], "NASDAQ100_GOVERNED_IQQ")
+        self.assert_no_authority(result)
+        self.assertNotIn("http", json.dumps(result).lower())
 
     def test_both_nasdaq_paths_fail_with_separate_sanitized_attempts(self):
-        direct_attempt = resilient._attempt("NASDAQ", "OFFICIAL_PRIMARY", "TLS_VALIDATION_FAILED")
+        direct_attempt = resilient._attempt(
+            "NASDAQ", "OFFICIAL_PRIMARY", "TLS_VALIDATION_FAILED", "SYSTEM_CA"
+        )
         with patch.object(resilient, "_read_nasdaq100_direct", return_value=(None, [direct_attempt])):
-            with patch.object(resilient, "_fetch", side_effect=ssl.SSLCertVerificationError(1, "secret URL")):
+            with patch.object(
+                resilient,
+                "_fetch",
+                side_effect=resilient.VerifiedNetworkFailure(
+                    "TLS_VALIDATION_FAILED", "CERTIFI_CA"
+                ),
+            ):
                 result = resilient._read_nasdaq100()
         self.assertFalse(result["verified_complete"])
         self.assertEqual(result["error"], "TLS_VALIDATION_FAILED")
         self.assertEqual(len(result["source_attempts"]), 2)
-        self.assertNotIn("secret", json.dumps(result))
+        self.assertEqual(
+            [row["trust_source"] for row in result["source_attempts"]],
+            ["SYSTEM_CA", "CERTIFI_CA"],
+        )
+        self.assert_no_authority(result)
+
+    def test_success_failure_cached_and_snapshot_artifacts_are_explicitly_safe(self):
+        now = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
+        snapshot = collector._sanitize_snapshot(
+            {
+                "observed_at": now.isoformat(),
+                "candidate_count": 0,
+                "snapshot_complete": True,
+                "provider_errors": [],
+                "source": "BATCH_9H",
+                "governed_universe_source": "STRICT_UNIVERSE",
+                "governed_universe_count": 519,
+            }
+        )
+        status = collector._success_status(snapshot, "2026-09-03")
+        failure = collector._failure_status(RuntimeError("provider failed"), now)
+        cached = {
+            "verified_complete": True,
+            "strict_membership": True,
+            "symbols": ["AAPL"],
+            "cached_at": now.isoformat(),
+            **collector.AUTHORITY,
+        }
+        for artifact in (snapshot, status, failure, cached):
+            self.assert_no_authority(artifact)
+            collector._require_safe_artifact(artifact)
+            serialized = json.dumps(artifact).lower()
+            self.assertNotIn("http://", serialized)
+            self.assertNotIn("https://", serialized)
 
     def test_thresholds_and_fail_closed_authority_are_unchanged(self):
         self.assertEqual(collector.production_index_universe.EXPECTED_COUNTS["SP500"], (490, 520))

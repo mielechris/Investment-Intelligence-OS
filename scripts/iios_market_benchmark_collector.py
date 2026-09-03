@@ -51,12 +51,118 @@ PROVIDER_CATEGORIES = {
 }
 PROVIDER_ROLES = {"OFFICIAL_PRIMARY", "GOVERNED_FALLBACK", "SOURCE"}
 TRUST_SOURCES = {"SYSTEM_CA", "CERTIFI_CA"}
+SOURCE_MODES = {
+    "OFFICIAL_WEB_SOURCE",
+    "GOVERNED_INDEX_TRACKER_MIRROR",
+    "GOVERNED_LOCAL_FILE",
+    "ERROR",
+}
+SOURCE_IDS = {
+    "SP500_SP_DJI_OFFICIAL",
+    "SP500_GOVERNED_IVV",
+    "SP500_OPERATOR_GOVERNED_FILE",
+    "SP500_SOURCE_ERROR",
+    "NASDAQ100_OFFICIAL_COMPANIES",
+    "NASDAQ100_GOVERNED_IQQ",
+    "NASDAQ100_OPERATOR_GOVERNED_FILE",
+    "NASDAQ100_SOURCE_ERROR",
+}
+AUTHORITY = {
+    "ledger_read": False,
+    "ledger_write": False,
+    "trade_execution_permission": False,
+    "broker_connected": False,
+    "live_execution": False,
+}
 
 
 class UniverseRefreshIncomplete(RuntimeError):
     def __init__(self, diagnostics: dict) -> None:
         super().__init__("OFFICIAL_BENCHMARK_UNIVERSE_REFRESH_INCOMPLETE")
         self.diagnostics = diagnostics
+
+
+class UnsafeArtifact(RuntimeError):
+    pass
+
+
+def _has_explicit_no_authority(payload: object) -> bool:
+    return isinstance(payload, dict) and all(
+        key in payload and payload.get(key) is False for key in AUTHORITY
+    )
+
+
+def _contains_url(value: object) -> bool:
+    if isinstance(value, str):
+        lowered = value.lower()
+        return "http://" in lowered or "https://" in lowered
+    if isinstance(value, dict):
+        return any(_contains_url(key) or _contains_url(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_url(item) for item in value)
+    return False
+
+
+def _require_safe_artifact(payload: object) -> None:
+    if not _has_explicit_no_authority(payload) or _contains_url(payload):
+        raise UnsafeArtifact("UNSAFE_ARTIFACT_REJECTED")
+
+
+def _sanitize_snapshot(payload: object) -> dict:
+    snapshot = dict(payload) if isinstance(payload, dict) else {}
+    errors = snapshot.get("provider_errors")
+    snapshot["provider_errors"] = sorted(
+        {
+            _failure_category(error)
+            for error in (errors if isinstance(errors, list) else [])
+        }
+    )
+    snapshot.update(AUTHORITY)
+    _require_safe_artifact(snapshot)
+    return snapshot
+
+
+def _success_status(snapshot: dict, session_date: str) -> dict:
+    status = {
+        "status": "BENCHMARK_SAMPLE_RECORDED",
+        "session_date": session_date,
+        "observed_at": snapshot.get("observed_at"),
+        "candidate_count": snapshot.get("candidate_count"),
+        "snapshot_complete": snapshot.get("snapshot_complete"),
+        "provider_error_count": len(snapshot.get("provider_errors") or []),
+        "artifact_id": f"benchmark_raw/{session_date}.jsonl",
+        "source": snapshot.get("source"),
+        "governed_universe_source": snapshot.get("governed_universe_source"),
+        "governed_universe_count": snapshot.get("governed_universe_count"),
+        "independent_of_iios_promotion_decisions": True,
+        **AUTHORITY,
+    }
+    _require_safe_artifact(status)
+    return status
+
+
+def _failure_status(exc: Exception, now: datetime) -> dict:
+    diagnostics = (
+        exc.diagnostics
+        if isinstance(exc, UniverseRefreshIncomplete)
+        else {
+            "failure_category": _failure_category(exc),
+            **AUTHORITY,
+        }
+    )
+    failure = {
+        "status": "BENCHMARK_COLLECTION_FAILED",
+        "observed_at": now.isoformat(),
+        "error_code": (
+            "OFFICIAL_BENCHMARK_UNIVERSE_REFRESH_INCOMPLETE"
+            if isinstance(exc, UniverseRefreshIncomplete)
+            else "BENCHMARK_COLLECTION_SOURCE_ERROR"
+        ),
+        "diagnostics": diagnostics,
+        **AUTHORITY,
+    }
+    _require_safe_artifact(failure)
+    return failure
 
 
 def _failure_category(error: object) -> str:
@@ -104,7 +210,16 @@ def _refresh_diagnostics(capture: object) -> dict:
                 "valid": valid,
                 "rejected": rejected,
                 "duplicate_count": max(0, int(row.get("duplicate_count", 0) or 0)),
-                "provider_category": str(row.get("source_mode") or "UNKNOWN")[:80],
+                "provider_category": (
+                    row.get("source_mode")
+                    if row.get("source_mode") in SOURCE_MODES
+                    else "ERROR"
+                ),
+                "source_id": (
+                    row.get("source_id")
+                    if row.get("source_id") in SOURCE_IDS
+                    else f"{index_key}_SOURCE_ERROR"
+                ),
                 "trust_source": (
                     row.get("trust_source")
                     if row.get("trust_source") in {"SYSTEM_CA", "CERTIFI_CA"}
@@ -122,9 +237,9 @@ def _refresh_diagnostics(capture: object) -> dict:
                             if attempt.get("role") in PROVIDER_ROLES
                             else "SOURCE"
                         ),
-                        "result_category": (
-                            attempt.get("result_category")
-                            if attempt.get("result_category") in FAILURE_CATEGORIES | {"SUCCESS"}
+                        "result": (
+                            attempt.get("result")
+                            if attempt.get("result") in FAILURE_CATEGORIES | {"SUCCESS"}
                             else "SOURCE_UNAVAILABLE"
                         ),
                         "trust_source": (
@@ -152,11 +267,7 @@ def _refresh_diagnostics(capture: object) -> dict:
         "sources": sources,
         "verified_complete": payload.get("verified_complete") is True,
         "strict_membership": payload.get("strict_membership") is True,
-        "ledger_read": False,
-        "ledger_write": False,
-        "trade_execution_permission": False,
-        "broker_connected": False,
-        "live_execution": False,
+        **AUTHORITY,
     }
 
 
@@ -215,6 +326,8 @@ def _valid_universe(payload: dict) -> bool:
         and payload.get("strict_membership") is True
         and isinstance(payload.get("symbols"), list)
         and payload.get("symbols")
+        and _has_explicit_no_authority(payload)
+        and not _contains_url(payload)
     )
 
 
@@ -272,11 +385,10 @@ def _refresh_official_universe(
         "source_lineage": capture.get("source_lineage") or [],
         "official_capture_created_at": capture.get("created_at"),
         "cached_at": now.astimezone(timezone.utc).isoformat(),
-        "ledger_read": False,
-        "ledger_write": False,
         "independent_of_iios_promotion_decisions": True,
-        "live_execution": False,
+        **AUTHORITY,
     }
+    _require_safe_artifact(payload)
     _atomic_write(path, payload)
     return payload
 
@@ -344,34 +456,9 @@ def main() -> int:
             governed_universe=governed_universe,
             observed_at=now,
         )
+        snapshot = _sanitize_snapshot(snapshot)
     except Exception as exc:  # noqa: BLE001
-        diagnostics = (
-            exc.diagnostics
-            if isinstance(exc, UniverseRefreshIncomplete)
-            else {
-                "failure_category": _failure_category(exc),
-                "ledger_read": False,
-                "ledger_write": False,
-                "trade_execution_permission": False,
-                "broker_connected": False,
-                "live_execution": False,
-            }
-        )
-        failure = {
-            "status": "BENCHMARK_COLLECTION_FAILED",
-            "observed_at": now.isoformat(),
-            "error_code": (
-                "OFFICIAL_BENCHMARK_UNIVERSE_REFRESH_INCOMPLETE"
-                if isinstance(exc, UniverseRefreshIncomplete)
-                else "BENCHMARK_COLLECTION_SOURCE_ERROR"
-            ),
-            "diagnostics": diagnostics,
-            "ledger_read": False,
-            "ledger_write": False,
-            "trade_execution_permission": False,
-            "broker_connected": False,
-            "live_execution": False,
-        }
+        failure = _failure_status(exc, now)
         _atomic_write(
             state_dir / "collector_status.json",
             failure,
@@ -380,34 +467,13 @@ def main() -> int:
         return 2
 
     session_date = now.date().isoformat()
-    raw_path = (
+    artifact_path = (
         state_dir
         / "benchmark_raw"
         / f"{session_date}.jsonl"
     )
-    _append_jsonl(raw_path, snapshot)
-    status = {
-        "status": "BENCHMARK_SAMPLE_RECORDED",
-        "session_date": session_date,
-        "observed_at": snapshot.get("observed_at"),
-        "candidate_count": snapshot.get("candidate_count"),
-        "snapshot_complete": snapshot.get("snapshot_complete"),
-        "provider_error_count": len(
-            snapshot.get("provider_errors") or []
-        ),
-        "raw_path": str(raw_path),
-        "source": snapshot.get("source"),
-        "governed_universe_source": snapshot.get(
-            "governed_universe_source"
-        ),
-        "governed_universe_count": snapshot.get(
-            "governed_universe_count"
-        ),
-        "independent_of_iios_promotion_decisions": True,
-        "ledger_read": False,
-        "ledger_write": False,
-        "live_execution": False,
-    }
+    _append_jsonl(artifact_path, snapshot)
+    status = _success_status(snapshot, session_date)
     _atomic_write(
         state_dir / "collector_status.json",
         status,
