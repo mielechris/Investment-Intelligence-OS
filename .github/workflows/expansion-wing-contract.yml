@@ -1,0 +1,36 @@
+name: IIOS Expansion Wing Contract
+
+on:
+  push:
+    branches: [feature/iios-expansion-wing-dual-book-machinery]
+  pull_request:
+
+jobs:
+  deterministic-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile isolated machinery
+        run: python -m py_compile "BACK END/backend/expansion_wing/"*.py
+      - name: Run deterministic contracts
+        env:
+          PYTHONPATH: BACK END/backend
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s "BACK END/backend/expansion_wing" -p "test_*.py"
+      - name: Assert authority isolation
+        run: |
+          ! grep -REq 'from ledger|import ledger|submit_order|record_object|record_event' "BACK END/backend/expansion_wing" --include='*.py' --exclude='test_*.py'
+          ! grep -REq 'live_execution(_authority)?[" ]*:[ ]*True|broker_connectivity[" ]*:[ ]*True' "BACK END/backend/expansion_wing" --include='*.py'
+          grep -q 'credential_access: bool = False' "BACK END/backend/expansion_wing/models.py"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: FRONT END/package-lock.json
+      - run: npm ci
+        working-directory: FRONT END
+      - run: npm run build
+        working-directory: FRONT END

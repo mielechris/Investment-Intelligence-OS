@@ -8,6 +8,7 @@ import PortfolioThesisWarRoom from "./PortfolioThesisWarRoom";
 import JudgmentBankWorkspace from "./JudgmentBankWorkspace";
 import JudgmentLibraryBrowser from "./JudgmentLibraryBrowser";
 import ExecutiveShowcase from "./ExecutiveShowcase";
+import ExpansionWing from "./ExpansionWing";
 import { ACTIVE_CASE_EVENT, ACTIVE_CASE_KEY } from "./activeCaseStore";
 import "./stateLanguage.css";
 import "./deepIntelligence.css";
@@ -15,7 +16,7 @@ import "./warRoomExperience.css";
 import "./executiveShowcase.css";
 import "./FactoryIntelligenceExperienceShell.css";
 
-type DeepRoom = "factory" | "thesis" | "judgment" | "executive";
+type DeepRoom = "factory" | "thesis" | "judgment" | "executive" | "expansion";
 type CaseMeta = { case_id:string; ticker?:string|null; topic?:string|null };
 
 const API="http://127.0.0.1:8002";
@@ -24,6 +25,7 @@ const ROOMS: Array<{ key: DeepRoom; label: string; detail: string }> = [
   { key: "thesis", label: "Thesis War Room", detail: "Integrity → capital" },
   { key: "judgment", label: "Judgment Library", detail: "Human calibration" },
   { key: "executive", label: "Executive View", detail: "Boardroom briefing" },
+  { key: "expansion", label: "Expansion Wing", detail: "Cross-asset dual books" },
 ];
 
 export default function FactoryIntelligenceExperienceShell() {
@@ -133,6 +135,7 @@ export default function FactoryIntelligenceExperienceShell() {
             ) : null}
 
             {room === "executive" ? <ExecutiveShowcase /> : null}
+            {room === "expansion" ? <ExpansionWing /> : null}
           </div>
         </aside>
       ) : null}

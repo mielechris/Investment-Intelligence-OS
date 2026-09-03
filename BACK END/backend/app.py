@@ -56,6 +56,7 @@ from multi_model_intelligence_council import council_evidence, router as multi_m
 from model_scale_validation import router as model_scale_validation_router
 from factory_intelligence_ui import router as factory_intelligence_ui_router
 from interview_portal import router as interview_portal_router
+from expansion_wing.router import router as expansion_wing_router
 from learning_loop import router as learning_router
 from ledger import latest_object
 import monitoring_engine
@@ -212,6 +213,7 @@ app.include_router(paper_sizing_profile_router)
 app.include_router(paper_authorization_router)
 app.include_router(governed_paper_execution_router)
 app.include_router(interview_portal_router)
+app.include_router(expansion_wing_router)
 app.include_router(learning_router)
 app.include_router(monitoring_router)
 app.include_router(public_case_router_api)
