@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from datetime import datetime, timezone
@@ -19,6 +20,10 @@ ROOMS = [
     "Tactical Book", "Strategic Book", "Capital Allocation Room", "Failure Museum",
     "Strategy Incubator", "Learning Theater",
 ]
+
+
+def _valid_origin(value: str) -> bool:
+    return value.startswith("http://127.0.0.1:") and value.removeprefix("http://127.0.0.1:").isdigit()
 
 
 def _read(path: Path, schema: str) -> dict[str, Any] | None:
@@ -60,6 +65,49 @@ def _safe_authority(payload: dict[str, Any], *, telemetry: bool = False) -> bool
     if any(safety.get(key) is not False for key in false_keys):
         return False
     return not telemetry or safety.get("telemetry_read_only") is True
+
+
+def _safe_outcome(payload: dict[str, Any]) -> bool:
+    safety = payload.get("safety")
+    return isinstance(safety, dict) and safety.get("read_only_browser_payload") is True and all(
+        safety.get(key) is False for key in ("auto_write_judgment_bank", "trade_execution_permission", "live_execution"))
+
+
+def _confidence(value: Any) -> str:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "UNKNOWN"
+    if value >= 0.8: return "HIGH"
+    if value >= 0.5: return "MEDIUM"
+    return "LOW"
+
+
+def _passports(telemetry: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = telemetry.get("recent_promotions")
+    if not isinstance(rows, list):
+        return []
+    output = []
+    for row in rows[:20]:
+        if not isinstance(row, dict): continue
+        candidate = row.get("source_candidate_id") or row.get("case_id")
+        ticker = row.get("ticker")
+        if not isinstance(candidate, str) or not candidate or not isinstance(ticker, str) or not ticker:
+            continue
+        committee = row.get("committee") if isinstance(row.get("committee"), dict) else {}
+        risk = row.get("risk") if isinstance(row.get("risk"), dict) else {}
+        committee_status = str(committee.get("disposition") or "UNKNOWN")[:40]
+        risk_status = str(risk.get("decision") or "UNKNOWN")[:40]
+        output.append({
+            "candidate_id": "candidate_" + hashlib.sha256(candidate.encode()).hexdigest()[:16],
+            "instrument": ticker[:20], "asset_class": "EQUITY", "discovered_at": row.get("promoted_at"),
+            "source_category": "SANITIZED_RADAR_PROMOTION", "governed_stage": "PROMOTED_CASE",
+            "classification": "OBSERVATION_ONLY", "freshness": _state(row.get("promoted_at"), freshness=86_400),
+            "confidence_category": _confidence(committee.get("confidence")), "missing_evidence_categories": [],
+            "committee_status": committee_status, "risk_status": risk_status,
+            "paper_eligibility_status": "NOT_AUTHORIZED",
+            "rejection_category": "OBSERVATION_ONLY_BOUNDARY",
+            "authority": {"paper_order": False, "automatic_promotion": False, "broker": False, "live_execution": False},
+        })
+    return output
 
 
 class Compositor:
@@ -112,6 +160,9 @@ class Compositor:
                 "screener_hit_count": radar.get("screener_hit_count"),
                 "promotion_candidate_count": radar.get("promotion_candidate_count"),
                 "promoted_case_count": radar.get("promoted_case_count")})
+            passports = _passports(telemetry)
+            sections["radar"]["data"]["opportunity_passports"] = passports
+            sections["radar"]["data"]["passport_status"] = "CURRENT" if passports else "AVAILABLE_EMPTY"
             positions = fund.get("position_count") if isinstance(fund.get("position_count"), int) else None
             transactions = fund.get("transaction_count") if isinstance(fund.get("transaction_count"), int) else None
             orders = len(telemetry.get("recent_paper_orders")) if isinstance(telemetry.get("recent_paper_orders"), list) else None
@@ -144,7 +195,7 @@ class Compositor:
                     "trade_execution_permission", "broker_connected", "live_execution", "reason")})
         else:
             sections["shadow_9i"] = _section("UNAVAILABLE", {"truth_state": "UNAVAILABLE", "reason": "BROWSER_SUMMARY_NOT_AVAILABLE"})
-        if outcome and _safe_authority(outcome):
+        if outcome and _safe_outcome(outcome):
             safety = outcome.get("safety") if isinstance(outcome.get("safety"), dict) else {}
             sections["outcomes_9j"] = _section(_state(outcome.get("generated_at"), freshness=86_400), {
                 "status": outcome.get("status") or "UNKNOWN", "complete_session_count": outcome.get("complete_session_count"),
@@ -157,7 +208,34 @@ class Compositor:
             sections["outcomes_9j"] = _section("UNAVAILABLE", None)
         for key in ("cases", "committee", "risk", "resources", "queue"):
             sections[key] = _section("UNAVAILABLE", None)
+        validation_state = sections["benchmark_9h"]["state"]
+        room_states = {
+            "Interview Studio": {"state": "UNAVAILABLE", "presentation_status": "AVAILABLE_FOR_REVIEWED_UPLOAD", "data": {
+                "reviewed_upload_intake": "AVAILABLE_FOR_REVIEWED_UPLOAD", "transcription": "NOT_ACTIVATED",
+                "active_interviews_claimed": False, "consent_required": True, "human_approval_required": True}},
+            "Investor Archive": {"state": "UNAVAILABLE", "presentation_status": "NOT_ACTIVATED", "data": {
+                "durable_store": "NOT_ACTIVATED"}},
+            "Pattern Laboratory": {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                "testing_engine": "AVAILABLE", "experiment_count": 0, "validated_pattern_count": 0,
+                "point_in_time_required": True}},
+            "Strictness Observatory": {"state": validation_state, "presentation_status": validation_state, "data": {
+                "policies": ["CURRENT", "BALANCED", "EXPLORATORY"], "simulation_only": True,
+                "performance_calculated": False, "evidence_state": validation_state}},
+            "Strategy Incubator": {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                "eligible_strategy_count": 0, "observation_only": True, "automatic_promotion": False}},
+            "Learning Theater": {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                "limits": {"max_cpu_pct": 60, "max_memory_mb": 2048, "max_concurrent_ai_tasks": 2,
+                    "provider_requests_per_day": 100, "provider_cost_per_day": 10, "max_queue_depth": 200},
+                "usage_measured": False, "queue_count": None, "raw_tasks_exposed": False}},
+        }
+        section_rooms = {"Philosophy Arena": "outcomes_9j", "Judgment Foundry": "outcomes_9j",
+            "Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",
+            "Strategic Book": "books", "Capital Allocation Room": "books", "Failure Museum": "benchmark_9h"}
+        for room, key in section_rooms.items():
+            room_states[room] = {"state": sections[key]["state"], "presentation_status": sections[key]["state"],
+                                 "data": sections[key]["data"]}
         return {"schema_version": "expansion-wing-truth-v1", "mode": "READ_ONLY", "sections": sections,
+                "room_states": room_states,
                 "rooms": ROOMS, "fabricated_activity": False,
                 "authority": {"paper_mode": True, "credential_access": False, "ledger_write_authority": False,
                     "broker_connectivity": False, "live_execution_authority": False}}
@@ -175,14 +253,17 @@ def main() -> None:
     parser.add_argument("--shadow", required=True, type=Path)
     parser.add_argument("--outcome", required=True, type=Path)
     parser.add_argument("--backend", default="http://127.0.0.1:8002/system/status")
+    parser.add_argument("--allowed-origin", required=True)
     args = parser.parse_args()
+    if not _valid_origin(args.allowed_origin):
+        parser.error("--allowed-origin must be an exact 127.0.0.1 HTTP origin")
     compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend)
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
             body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
             self.send_response(status); self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:49332")
+            self.send_header("Access-Control-Allow-Origin", args.allowed_origin)
             self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body)))
             self.end_headers(); self.wfile.write(body)
 

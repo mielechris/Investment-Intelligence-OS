@@ -8,7 +8,7 @@ import { ExpansionWingSnapshotProvider } from "./ExpansionWingSnapshotProvider.t
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ExpansionWingSnapshotProvider>
-      {import.meta.env.VITE_EXPANSION_WING_FIXTURE === "1"
+      {import.meta.env.VITE_EXPANSION_WING_APP === "1"
         ? <ExpansionWing />
         : <PaperFundOperationsShell />}
     </ExpansionWingSnapshotProvider>

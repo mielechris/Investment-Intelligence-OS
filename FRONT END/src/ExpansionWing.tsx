@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./ExpansionWing.css";
+import "./ExpansionWingStates.css";
 import { useExpansionWingSnapshot } from "./ExpansionWingSnapshotContext";
 
 type Room = { title: string; section: string; description: string };
@@ -19,18 +20,36 @@ const ROOMS: Room[] = [
   { title: "Strategy Incubator", section: "queue", description: "Governed provisional research only." },
   { title: "Learning Theater", section: "resources", description: "Owner reports, maturity, and approval inbox." },
 ];
-const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",cases:"Governed cases",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I strictness",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue"};
+const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",cases:"Governed cases",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I shadow",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue"};
+const compactStatus: Record<string, string> = { AVAILABLE_FOR_REVIEWED_UPLOAD: "UPLOAD READY" };
 
 export default function ExpansionWing() {
-  const { snapshot: status, connection, fixtureMode: FIXTURE_MODE } = useExpansionWingSnapshot();
+  const { snapshot: status, connection, fixtureMode: FIXTURE_MODE, snapshotAgeSeconds } = useExpansionWingSnapshot();
   const [selected, setSelected] = useState<Room | null>(null);
-  useEffect(() => { if (!selected) return; const close = (event: KeyboardEvent) => { if (event.key === "Escape") setSelected(null); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [selected]);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+  const closeDialog = useCallback(() => { setSelected(null); window.requestAnimationFrame(() => openerRef.current?.focus()); }, []);
+  useEffect(() => {
+    if (!selected) return;
+    dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); closeDialog(); return; }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')];
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", keydown); return () => window.removeEventListener("keydown", keydown);
+  }, [selected, closeDialog]);
   const selectedSection = useMemo(() => selected ? status?.sections[selected.section] : undefined, [selected, status]);
+  const selectedRoom = selected ? status?.room_states?.[selected.title] : undefined;
   return <section className="expansion-wing" aria-labelledby="expansion-wing-title" data-mode={FIXTURE_MODE ? "fixture" : "read-only-live"}>
-    <header><div><span>READ-ONLY OPERATIONS</span><h2 id="expansion-wing-title">Expansion Wing</h2></div><div className="wing-badges">{FIXTURE_MODE ? <strong className="wing-fixture">FIXTURE / NON-LIVE</strong> : null}<strong className={`wing-state wing-state--${connection.toLowerCase()}`}>{connection}</strong></div></header>
+    <header><div><span>READ-ONLY OPERATIONS</span><h2 id="expansion-wing-title">Expansion Wing</h2></div><div className="wing-badges">{FIXTURE_MODE ? <strong className="wing-fixture">FIXTURE / NON-LIVE</strong> : null}{snapshotAgeSeconds !== null ? <span>Snapshot age {snapshotAgeSeconds}s</span> : null}<strong className={`wing-state wing-state--${connection.toLowerCase()}`}>{connection}</strong></div></header>
     <p className="wing-boundary">Paper simulation only · no credentials · no raw logs · no ledger writes · no broker or live-capital authority</p>
     <div className="wing-truth-grid" aria-label="Expansion Wing truth states">{Object.entries(labels).map(([key,label]) => { const state=status?.sections[key]?.state??"UNAVAILABLE"; return <article key={key}><span>{label}</span><strong className={`wing-state wing-state--${state.toLowerCase()}`}>{state}</strong></article>; })}</div>
-    <div className="wing-rooms" aria-label="Expansion Wing room registry">{ROOMS.map((room) => { const state=status?.sections[room.section]?.state??"UNAVAILABLE"; return <button type="button" key={room.title} onClick={()=>setSelected(room)} aria-label={`Open ${room.title}, ${state}`}><span className={`wing-state wing-state--${state.toLowerCase()}`}>{state}</span><h3>{room.title}</h3><p>{room.description}</p></button>; })}</div>
-    {selected ? <div className="wing-modal-backdrop" role="presentation" onMouseDown={()=>setSelected(null)}><div className="wing-modal" role="dialog" aria-modal="true" aria-labelledby="wing-dialog-title" onMouseDown={(event)=>event.stopPropagation()}><button type="button" className="wing-close" onClick={()=>setSelected(null)} aria-label="Close room dialog">×</button><span className={`wing-state wing-state--${(selectedSection?.state??"UNAVAILABLE").toLowerCase()}`}>{selectedSection?.state??"UNAVAILABLE"}</span><h3 id="wing-dialog-title">{selected.title}</h3><p>{selected.description}</p><pre>{selectedSection?.data==null?"No sanitized evidence available.":JSON.stringify(selectedSection.data,null,2)}</pre></div></div> : null}
+    <div className="wing-rooms" aria-label="Expansion Wing room registry">{ROOMS.map((room) => { const core=status?.room_states?.[room.title]?.state??status?.sections[room.section]?.state??"UNAVAILABLE"; const state=status?.room_states?.[room.title]?.presentation_status??core; return <button type="button" key={room.title} onClick={(event)=>{openerRef.current=event.currentTarget;setSelected(room);}} aria-label={`Open ${room.title}, ${state}`}><span className={`wing-state wing-state--${state.toLowerCase()}`} aria-hidden="true">{compactStatus[state]??state}</span><h3>{room.title}</h3><p>{room.description}</p></button>; })}</div>
+    {selected ? <div className="wing-modal-backdrop" role="presentation" onMouseDown={closeDialog}><div ref={dialogRef} className="wing-modal" role="dialog" aria-modal="true" aria-labelledby="wing-dialog-title" onMouseDown={(event)=>event.stopPropagation()}><button type="button" className="wing-close" onClick={closeDialog} aria-label="Close room dialog">×</button><span className={`wing-state wing-state--${(selectedRoom?.presentation_status??selectedSection?.state??"UNAVAILABLE").toLowerCase()}`}>{selectedRoom?.presentation_status??selectedSection?.state??"UNAVAILABLE"}</span><h3 id="wing-dialog-title">{selected.title}</h3><p>{selected.description}</p><pre>{(selectedRoom?.data??selectedSection?.data)==null?"No sanitized evidence available.":JSON.stringify(selectedRoom?.data??selectedSection?.data,null,2)}</pre></div></div> : null}
   </section>;
 }

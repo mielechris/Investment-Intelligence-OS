@@ -147,9 +147,10 @@ class EndToEndFixtureTests(unittest.TestCase):
         for marker in ("FIXTURE / NON-LIVE", 'role="dialog"', 'event.key === "Escape"', "aria-label"):
             self.assertIn(marker, text)
         main = (ROOT / "FRONT END/src/main.tsx").read_text()
-        self.assertIn("VITE_EXPANSION_WING_FIXTURE", main)
+        self.assertIn("VITE_EXPANSION_WING_APP", main)
         self.assertIn("? <ExpansionWing />", main)
         provider = (ROOT / "FRONT END/src/ExpansionWingSnapshotProvider.tsx").read_text()
+        self.assertIn("VITE_EXPANSION_WING_FIXTURE", provider)
         self.assertEqual(provider.count("fetch("), 1)
         self.assertNotIn("fetch(", text)
 
