@@ -17,6 +17,7 @@ export type AuctionModel = {
   cases: GovernedCase[];
   activeRoom: AuctionRoomId | null;
   lighting: "day" | "market-open" | "market-close" | "night";
+  motion: { ambient: boolean; evidence: boolean; reason: "AMBIENT_ONLY" | "VERIFIED_RECEIPT" | "FROZEN_UNSAFE" };
 };
 
 const record = (value: unknown): TruthRecord => value !== null && typeof value === "object" && !Array.isArray(value) ? value as TruthRecord : {};
@@ -87,5 +88,8 @@ export function buildAuctionModel(result: TruthResult | null, error: string | nu
     nav: typeof paperFund.nav === "number" && Number.isFinite(paperFund.nav) ? paperFund.nav : null,
     marketValidation: text(record(layers.market_validation).availability), rooms, events,
     replay: events.filter((event) => event.historical), cases, activeRoom: active?.room ?? null, lighting: lightingFor(now),
+    motion: healthy
+      ? { ambient: true, evidence: active !== null, reason: active ? "VERIFIED_RECEIPT" : "AMBIENT_ONLY" }
+      : { ambient: false, evidence: false, reason: "FROZEN_UNSAFE" },
   };
 }

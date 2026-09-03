@@ -43,6 +43,7 @@ test("deployed aggregate truth produces a truthful quiet AVAILABLE factory", () 
   assert.equal(model.rooms.paper, "locked");
   assert.equal(model.safety.telemetryReadOnly, true);
   assert.deepEqual([model.safety.ledger, model.safety.write, model.safety.trade, model.safety.live], [false, false, false, false]);
+  assert.deepEqual(model.motion, { ambient: true, evidence: false, reason: "AMBIENT_ONLY" });
 });
 
 test("a complete exact receipt activates only its authoritative room", () => {
@@ -54,6 +55,7 @@ test("a complete exact receipt activates only its authoritative room", () => {
   assert.equal(model.activeRoom, "committee");
   assert.equal(model.rooms.committee, "active");
   assert.equal(model.rooms.risk, "idle");
+  assert.deepEqual(model.motion, { ambient: true, evidence: true, reason: "VERIFIED_RECEIPT" });
 });
 
 test("stale, unavailable, source-conflict, error, and unsafe inputs freeze movement", () => {
@@ -66,6 +68,7 @@ test("stale, unavailable, source-conflict, error, and unsafe inputs freeze movem
     const model = buildAuctionModel(fixture, null);
     assert.equal(model.quiet, true);
     assert.ok(Object.values(model.rooms).every((room) => ["degraded", "unavailable", "locked"].includes(room)));
+    assert.deepEqual(model.motion, { ambient: false, evidence: false, reason: "FROZEN_UNSAFE" });
   }
   assert.equal(buildAuctionModel(null, "failed").condition, "UNAVAILABLE");
   const unsafe = available();

@@ -8,8 +8,10 @@ const app = readFileSync(new URL("./LivingWallApp.tsx", import.meta.url), "utf8"
 
 test("desktop, ultrawide, and physical-4K layout targets retain the cinematic canvas", () => {
   const targets = [
-    { name: "desktop", width: 1440, height: 900 },
-    { name: "ultrawide", width: 3440, height: 1440 },
+    { name: "Safari review", width: 1512, height: 874 },
+    { name: "Safari recording", width: 1916, height: 1004 },
+    { name: "full-HD", width: 1920, height: 1080 },
+    { name: "QHD", width: 2560, height: 1440 },
     { name: "physical-4K", width: 3840, height: 2160 },
   ];
   for (const target of targets) {
@@ -17,7 +19,7 @@ test("desktop, ultrawide, and physical-4K layout targets retain the cinematic ca
     assert.ok(target.width / target.height >= 1.6, `${target.name} provides a wide cinematic canvas`);
   }
   assert.match(css, /\.auction-gallery\{[^}]*min-height:100svh/);
-  assert.match(css, /\.auction-factory\{[^}]*height:calc\(100svh - 112px\)/);
+  assert.match(css, /\.auction-factory\{[^}]*height:100svh/);
   assert.match(css, /@media\(max-width:1100px\)/);
   assert.match(css, /@media\(max-width:700px\)/);
 });

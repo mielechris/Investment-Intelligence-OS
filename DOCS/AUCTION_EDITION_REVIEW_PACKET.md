@@ -59,3 +59,19 @@ The deployed `living_wall_truth.v1` projection supplies aggregate case/event/des
 - Add asset provenance and this review packet.
 
 Production, main, credentials, LaunchAgents, authority settings, and the pre-existing `.gitignore` modification are outside the proposed commit.
+
+## Museum Master 1.1 checkpoint
+
+Museum Master 1.1 is an additive refinement based on the immutable Auction Edition 1.0 checkpoint `71534ca5c457e4e1ec21c60f1c63aaf3f18038ec`. It adds eighteen explicit room silhouettes, set instruments, lighting identities, and quiet compositions; model-governed ambient/evidence motion; shared accessible behavior for Case Theater and the Collector Plaque; a complete collector narrative and certificate template; and reversible wall-display helpers and configuration.
+
+Validation for this checkpoint:
+
+- Auction Edition and Museum Master deterministic tests: 43/43 passing, including Wall Art Mode persistence under Safety Lock, pause, reduced motion, and unavailable truth.
+- Living Wall API safety/projection: 9/9 passing.
+- Preview publisher and payload sanitation: 32/32 passing.
+- Targeted Auction Edition ESLint: passing.
+- TypeScript plus Vite production build: passing.
+- Bundle: 266.94 kB JavaScript (82.99 kB gzip), 65.25 kB CSS (15.23 kB gzip).
+- Kiosk shell syntax and configuration parse: passing.
+- Extended local display smoke: 24/24 GET samples across two minutes passing.
+- Safari rendered-layout validation: passing at 1512×874, 1916×1004, 1920×1080, 2560×1440, and 3840×2160 CSS viewports, including computed visibility, hit-testing, overlay coverage, Gallery/Replay restoration, Wall Art entry/exit, and Pause/Resume.

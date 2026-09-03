@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import AuctionFactory, { RoomView } from "./AuctionFactory";
 import { AUCTION_ROOMS, type AuctionRoomId } from "./auctionRegistry";
 import { buildAuctionModel, type AuctionModel, type GovernedCase } from "./auctionSceneModel";
 import ExpansionWing from "./ExpansionWing";
 import UnifiedCommandCenter from "./UnifiedCommandCenter";
 import { loadFactoryTruth, type TruthResult } from "./TruthSourceAdapter";
+import { activateDialog, requestDialogClose } from "./dialogAccessibility";
+import { resolveAuctionPresentation, type AuctionMode } from "./auctionPresentation";
 import "./AuctionEdition.css";
 
-type Mode = "gallery" | "story" | "replay" | "command" | "expansion" | "watch";
+type Mode = AuctionMode;
 const MODES: readonly [Mode, string][] = [["gallery", "Gallery"], ["story", "Story"], ["replay", "Replay"], ["command", "Command"], ["expansion", "Expansion Wing"], ["watch", "Factory Watch"]];
 const ROTATION: Mode[] = ["gallery", "story", "replay"];
 
@@ -17,7 +19,7 @@ export default function LivingWallApp() {
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [rotation, setRotation] = useState(true);
-  const [wallMode, setWallMode] = useState(true);
+  const [wallMode, setWallMode] = useState(false);
   const [plaque, setPlaque] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [room, setRoom] = useState<AuctionRoomId | null>(null);
@@ -44,6 +46,8 @@ export default function LivingWallApp() {
   }, []);
 
   const model = useMemo(() => buildAuctionModel(truth, error, now), [truth, error, now]);
+  const safetyLocked = !model.safety.telemetryReadOnly || model.safety.ledger || model.safety.write || model.safety.trade || model.safety.live;
+  const presentation = resolveAuctionPresentation({ mode, wallMode, paused, reducedMotion: false, safetyLocked });
   const closeRoom = useCallback(() => setRoom(null), []);
   useEffect(() => {
     if (!rotation || paused || document.hidden) return;
@@ -51,33 +55,34 @@ export default function LivingWallApp() {
     return () => window.clearInterval(timer);
   }, [paused, rotation]);
 
-  const navigate = (next: Mode) => { setMode(next); setRotation(false); setWallMode(next === "gallery"); };
+  const navigate = (next: Mode) => { setMode(next); setRotation(false); setWallMode(false); };
+  const enterWallArtMode = () => { setMode("gallery"); setRotation(false); setWallMode(true); };
   const toggleFullscreen = async () => {
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.documentElement.requestFullscreen();
   };
-  return <div className={`auction-shell ${paused ? "is-paused" : ""} ${wallMode ? "is-wall-mode" : "is-command-mode"}`}>
-    <Navigation mode={mode} paused={paused} wallMode={wallMode} fullscreen={fullscreen} navigate={navigate} setPaused={setPaused} setWallMode={setWallMode} setPlaque={setPlaque} toggleFullscreen={() => void toggleFullscreen()}/>
-    {!model.safety.telemetryReadOnly || model.safety.ledger || model.safety.write || model.safety.trade || model.safety.live ? <SafetyCurtain/> : null}
+  return <div className={`auction-shell auction-master-1-1 ${paused ? "is-paused" : ""} ${model.motion.ambient ? "" : "is-truth-frozen"} ${wallMode ? "is-wall-mode" : "is-command-mode"}`} data-edition="Museum Master 1.1">
+    <Navigation mode={presentation.effectiveMode} paused={paused} wallMode={wallMode} fullscreen={fullscreen} navigate={navigate} enterWallArtMode={enterWallArtMode} setPaused={setPaused} setWallMode={setWallMode} setPlaque={setPlaque} toggleFullscreen={() => void toggleFullscreen()}/>
+    {safetyLocked ? <SafetyCurtain compact={presentation.compactSafetyIndicator}/> : null}
     {model.condition !== "AVAILABLE" || model.freshness !== "CURRENT" ? <Degraded model={model} error={error}/> : null}
-    {mode === "gallery" ? <Gallery model={model} openRoom={setRoom}/> : null}
-    {mode === "story" ? <Story model={model} openRoom={setRoom}/> : null}
-    {mode === "replay" ? <Replay model={model} openRoom={setRoom}/> : null}
-    {mode === "command" ? <Command model={model} selectCase={setSelectedCase}/> : null}
-    {mode === "expansion" ? <ExpansionWing/> : null}
-    {mode === "watch" ? <FactoryWatch model={model}/> : null}
+    {presentation.factoryVisible ? <Gallery model={model} openRoom={setRoom}/> : null}
+    {presentation.effectiveMode === "story" ? <Story model={model} openRoom={setRoom}/> : null}
+    {presentation.effectiveMode === "replay" ? <Replay model={model} openRoom={setRoom}/> : null}
+    {presentation.effectiveMode === "command" ? <Command model={model} selectCase={setSelectedCase}/> : null}
+    {presentation.effectiveMode === "expansion" ? <ExpansionWing/> : null}
+    {presentation.effectiveMode === "watch" ? <FactoryWatch model={model}/> : null}
     {room ? <RoomView roomId={room} model={model} close={closeRoom}/> : null}
     {selectedCase ? <CaseTheater item={selectedCase} close={() => setSelectedCase(null)}/> : null}
     {plaque ? <CollectorPlaque model={model} close={() => setPlaque(false)}/> : null}
   </div>;
 }
 
-function Navigation({ mode, paused, wallMode, fullscreen, navigate, setPaused, setWallMode, setPlaque, toggleFullscreen }: { mode: Mode; paused: boolean; wallMode: boolean; fullscreen: boolean; navigate: (mode: Mode) => void; setPaused: (value: boolean) => void; setWallMode: (value: boolean) => void; setPlaque: (value: boolean) => void; toggleFullscreen: () => void }) {
-  return <header className="auction-nav"><button className="auction-brand" onClick={() => navigate("gallery")}><span>IIOS LIVING WALL</span><strong>THE AUCTION EDITION</strong></button><nav aria-label="Living Wall experiences">{MODES.map(([key, label]) => <button key={key} className={mode === key ? "is-active" : ""} onClick={() => navigate(key)} aria-current={mode === key ? "page" : undefined}>{label}</button>)}</nav><div className="auction-tools"><button onClick={() => setPaused(!paused)} aria-pressed={paused}>{paused ? "Resume Scene" : "Pause Scene"}</button><button onClick={() => setWallMode(!wallMode)} aria-pressed={wallMode}>{wallMode ? "Reveal Controls" : "Wall Art Mode"}</button><button onClick={toggleFullscreen} aria-pressed={fullscreen}>{fullscreen ? "Exit Full Screen" : "Enter Full Screen"}</button><button onClick={() => setPlaque(true)}>Collector Plaque</button><button disabled title="Sound remains muted until an owned soundscape is supplied">Sound Muted</button></div></header>;
+function Navigation({ mode, paused, wallMode, fullscreen, navigate, enterWallArtMode, setPaused, setWallMode, setPlaque, toggleFullscreen }: { mode: Mode; paused: boolean; wallMode: boolean; fullscreen: boolean; navigate: (mode: Mode) => void; enterWallArtMode: () => void; setPaused: Dispatch<SetStateAction<boolean>>; setWallMode: Dispatch<SetStateAction<boolean>>; setPlaque: Dispatch<SetStateAction<boolean>>; toggleFullscreen: () => void }) {
+  return <header className="auction-nav"><button className="auction-brand" onClick={() => navigate("gallery")}><span>IIOS LIVING WALL</span><strong>THE AUCTION EDITION · MUSEUM MASTER 1.1</strong></button><nav aria-label="Living Wall experiences">{MODES.map(([key, label]) => <button key={key} className={mode === key ? "is-active" : ""} onClick={() => navigate(key)} aria-current={mode === key ? "page" : undefined}>{label}</button>)}</nav><div className="auction-tools"><button onClick={() => setPaused((current) => !current)} aria-pressed={paused}>{paused ? "Resume Scene" : "Pause Scene"}</button><button onClick={() => wallMode ? setWallMode(false) : enterWallArtMode()} aria-pressed={wallMode}>{wallMode ? "Reveal Controls" : "Wall Art Mode"}</button><button onClick={toggleFullscreen} aria-pressed={fullscreen}>{fullscreen ? "Exit Full Screen" : "Enter Full Screen"}</button><button onClick={() => setPlaque(true)}>Collector Plaque</button><button disabled title="Sound remains muted until an owned soundscape is supplied">Sound Muted</button></div></header>;
 }
 
 function Gallery({ model, openRoom }: { model: AuctionModel; openRoom: (id: AuctionRoomId) => void }) {
-  return <main className="auction-gallery"><AuctionFactory model={model} onOpenRoom={openRoom}/><div className="auction-gallery-caption"><span>IIOS LIVING WALL — THE FAMILY FACTORY</span><h1>{model.quiet ? "The House Is Quiet" : "Evidence Is Moving Through the House"}</h1><p>{model.quiet ? "A quiet floor is a truthful floor. MAX patrols; no activity is invented." : "Every illuminated room is anchored to a complete governed receipt."}</p><small>CREATED 2026 · AUCTION EDITION 1.0 · GOVERNED READ MODEL</small></div></main>;
+  return <main className="auction-gallery"><AuctionFactory model={model} onOpenRoom={openRoom}/><div className="auction-gallery-caption" data-testid="quiet-caption"><span>IIOS LIVING WALL — THE FAMILY FACTORY</span><h1>{model.quiet ? "The House Is Quiet" : "Evidence Is Moving Through the House"}</h1><p>{model.quiet ? "A quiet floor is a truthful floor. MAX patrols; no activity is invented." : "Every illuminated room is anchored to a complete governed receipt."}</p><small><span>CREATED 2026</span><i>·</i><span>THE AUCTION EDITION</span><i>·</i><span>MUSEUM MASTER 1.1</span><i>·</i><span>GOVERNED READ MODEL</span></small></div></main>;
 }
 
 function Story({ model, openRoom }: { model: AuctionModel; openRoom: (id: AuctionRoomId) => void }) {
@@ -100,12 +105,26 @@ function FactoryWatch({ model }: { model: AuctionModel }) {
 
 function CaseTheater({ item, close }: { item: GovernedCase; close: () => void }) {
   const fields = [["Case identity", `${item.ticker} · ${item.id}`], ["Thesis", item.thesis], ["Supporting evidence", item.evidenceFor], ["Opposing evidence", item.evidenceAgainst], ["Committee outcome", item.committee], ["Risk inspection", item.risk], ["Paper decision", item.paper], ["Monitoring", item.monitoring], ["Thesis drift", item.drift], ["Learned outcome", item.learned], ["Provenance", item.provenance]];
-  return <div className="auction-room-modal" role="dialog" aria-modal="true" aria-labelledby="case-title" onMouseDown={close}><section onMouseDown={(event) => event.stopPropagation()}><button className="auction-close" onClick={close}>×</button><span>CASE THEATER / READ ONLY</span><h2 id="case-title">{item.ticker}</h2><dl>{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section></div>;
+  return <AccessibleDialog className="auction-room-modal auction-case-theater" titleId="case-title" descriptionId="case-description" close={close}><span>CASE THEATER / READ ONLY</span><h2 id="case-title">{item.ticker}</h2><p id="case-description">A cinematic evidence ledger. Absent fields remain explicitly UNKNOWN.</p><dl>{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></AccessibleDialog>;
 }
 
 function CollectorPlaque({ model, close }: { model: AuctionModel; close: () => void }) {
-  return <div className="auction-plaque-backdrop" role="dialog" aria-modal="true" aria-labelledby="plaque-title" onMouseDown={close}><article className="auction-plaque" onMouseDown={(event) => event.stopPropagation()}><button onClick={close}>×</button><span>THE WORK · GOVERNED EDITION</span><h2 id="plaque-title">IIOS Living Wall — The Family Factory</h2><p>A living architectural portrait of an evidence-governed investment intelligence system. Motion is earned by receipts; silence is treated as information.</p><dl><dt>Edition</dt><dd>Auction Edition 1.0</dd><dt>Creation date</dt><dd>2026</dd><dt>Governed state</dt><dd>{model.condition} / {model.freshness}</dd><dt>Medium</dt><dd>Responsive real-time browser artwork</dd><dt>Authority</dt><dd>Observation only</dd></dl><small>No blockchain, NFT, guaranteed-return, or ownership claim is made.</small></article></div>;
+  return <AccessibleDialog className="auction-plaque-backdrop" surfaceClassName="auction-plaque" titleId="plaque-title" descriptionId="plaque-description" close={close}><span>THE WORK · GOVERNED EDITION</span><h2 id="plaque-title">IIOS Living Wall — The Auction Edition</h2><p id="plaque-description">A living architectural portrait of an evidence-governed intelligence factory. Motion is earned by receipts; silence is treated as information.</p><dl><dt>Edition</dt><dd>Museum Master 1.1</dd><dt>Creation date</dt><dd>2026</dd><dt>Governed state</dt><dd>{model.condition} / {model.freshness}</dd><dt>Medium</dt><dd>Responsive real-time browser artwork</dd><dt>Motion authority</dt><dd>{model.motion.reason}</dd><dt>Authority</dt><dd>Observation and governed paper-market research only</dd></dl><small>No blockchain, NFT, guaranteed-return, autonomous-trading, or live-execution claim is made.</small></AccessibleDialog>;
 }
 
-function Degraded({ model, error }: { model: AuctionModel; error: string | null }) { return <div className="auction-degraded" role="alert"><strong>{model.condition} / {model.freshness}</strong><span>{error ?? "The latest sanitized truth is not both AVAILABLE and CURRENT. Motion is withheld."}</span></div>; }
-function SafetyCurtain() { return <div className="auction-safety-curtain" role="alert"><strong>SAFETY LOCK</strong><span>Read-only authority could not be verified. Factory presentation is frozen.</span></div>; }
+function AccessibleDialog({ className, surfaceClassName, titleId, descriptionId, close, children }: { className: string; surfaceClassName?: string; titleId: string; descriptionId: string; close: () => void; children: ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(typeof document === "undefined" ? null : document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    const initialFocus = closeRef.current;
+    if (!dialog || !initialFocus || !dialog.parentElement) return;
+    const background = Array.from(dialog.parentElement.children).filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialog);
+    return activateDialog({ dialog, initialFocus, opener: openerRef.current, background, close, documentTarget: document });
+  }, [close]);
+  return <div ref={dialogRef} className={className} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} tabIndex={-1} onMouseDown={close}><section className={surfaceClassName} onMouseDown={(event) => event.stopPropagation()}><button ref={closeRef} className="auction-close" onClick={() => requestDialogClose(close)} aria-label="Close dialog">×</button>{children}</section></div>;
+}
+
+function Degraded({ model, error }: { model: AuctionModel; error: string | null }) { return <div className="auction-degraded" data-testid="truth-indicator" role="alert"><strong>{model.condition} / {model.freshness}</strong><span>{error ?? "The latest sanitized truth is not both AVAILABLE and CURRENT. Motion is withheld."}</span></div>; }
+function SafetyCurtain({ compact }: { compact: boolean }) { return <div className={`auction-safety-curtain ${compact ? "is-compact" : ""}`} data-testid="safety-indicator" role="alert"><strong>SAFETY LOCK</strong><span>Read-only authority could not be verified. Factory motion is frozen.</span></div>; }

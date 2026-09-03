@@ -1,0 +1,22 @@
+{
+  "schema_version": "iios_auction_wall_display.v1",
+  "edition": "Museum Master 1.1",
+  "display": {
+    "orientation": "landscape",
+    "target_aspect_ratio": "16:9",
+    "target_resolution": "3840x2160",
+    "minimum_brightness_nits": 500,
+    "reduced_motion": false,
+    "scheduled_dim_start": "22:00",
+    "scheduled_wake_start": "07:00"
+  },
+  "browser": {
+    "fullscreen_manual_confirmation": true,
+    "startup_automation_enabled": false,
+    "preview_url": "https://replace-with-approved-preview.vercel.app/"
+  },
+  "recovery": {
+    "local_server_restart": true,
+    "network_failure_mode": "fail_closed_quiet_composition"
+  }
+}

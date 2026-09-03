@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:rendered-layout": "node ../scripts/test_auction_rendered_layout.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
