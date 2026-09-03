@@ -24,7 +24,7 @@ class ExpansionWingEngine:
         return passport.to_dict()
 
     def request_paper_simulation(self, passport_id: str, *, quantity: float, reference_price: float,
-                                 thesis: str, invalidation: str) -> dict[str, Any]:
+                                 thesis: str, invalidation: str, valuation: dict[str, Any] | None = None) -> dict[str, Any]:
         passport = self.passports.get(passport_id)
         if passport is None:
             return {"status": "REJECTED", "reasons": ["UNKNOWN_PASSPORT"]}
@@ -32,7 +32,7 @@ class ExpansionWingEngine:
             return {"status": "REJECTED", "reasons": ["PASSPORT_NOT_PAPER_ELIGIBLE"], "paper_mode": True}
         return self.portfolio.open_position(book=passport.applicable_book, instrument=passport.instrument,
                                             quantity=quantity, reference_price=reference_price, thesis=thesis,
-                                            invalidation=invalidation,
+                                            invalidation=invalidation, valuation=valuation,
                                             cluster=str(passport.correlation.get("cluster") or "UNKNOWN"))
 
     def fixture_projection(self, sources: dict[str, Any]) -> dict[str, Any]:

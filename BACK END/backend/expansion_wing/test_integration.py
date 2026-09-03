@@ -35,8 +35,9 @@ class EndToEndFixtureTests(unittest.TestCase):
         app_text = (ROOT / "BACK END/backend/app.py").read_text()
         ast.parse(app_text)
         self.assertIn("app.include_router(expansion_wing_router)", app_text)
-        frontend = (ROOT / "FRONT END/src/ExpansionWing.tsx").read_text()
+        frontend = (ROOT / "FRONT END/src/ExpansionWingSnapshotProvider.tsx").read_text()
         self.assertIn("/expansion-wing/status", frontend)
+        self.assertIn("VITE_BACKEND_RECOVERY_GREEN", frontend)
 
     def test_passport_to_book_end_to_end_and_fund_conservation(self):
         engine = ExpansionWingEngine({"total_nav": 10_000, "fixture_label": "SYNTHETIC_FIXTURE_NON_LIVE"})
@@ -148,6 +149,9 @@ class EndToEndFixtureTests(unittest.TestCase):
         main = (ROOT / "FRONT END/src/main.tsx").read_text()
         self.assertIn("VITE_EXPANSION_WING_FIXTURE", main)
         self.assertIn("? <ExpansionWing />", main)
+        provider = (ROOT / "FRONT END/src/ExpansionWingSnapshotProvider.tsx").read_text()
+        self.assertEqual(provider.count("fetch("), 1)
+        self.assertNotIn("fetch(", text)
 
 
 if __name__ == "__main__":

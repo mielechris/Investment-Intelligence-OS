@@ -1,14 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import "./ExpansionWing.css";
+import { useExpansionWingSnapshot } from "./ExpansionWingSnapshotContext";
 
-type TruthState = "AVAILABLE" | "CURRENT" | "STALE" | "INCOMPLETE" | "UNAVAILABLE" | "UNKNOWN";
-type Section = { state: TruthState; data: unknown };
-type WingStatus = { schema_version: string; mode?: string; sections: Record<string, Section>; authority: Record<string, boolean> };
 type Room = { title: string; section: string; description: string };
-
-const LIVE_READ_ONLY = import.meta.env.VITE_EXPANSION_WING_LIVE_READONLY === "1" && import.meta.env.VITE_BACKEND_RECOVERY_GREEN === "1";
-const FIXTURE_MODE = !LIVE_READ_ONLY;
-const ENDPOINT = FIXTURE_MODE ? "/fixtures/expansion-wing.json" : "http://127.0.0.1:8002/expansion-wing/status";
 const ROOMS: Room[] = [
   { title: "Interview Studio", section: "cases", description: "Consent, transcript approval, and human review." },
   { title: "Investor Archive", section: "cases", description: "Attributable notes and limited quotations." },
@@ -28,15 +22,8 @@ const ROOMS: Room[] = [
 const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",cases:"Governed cases",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I strictness",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue"};
 
 export default function ExpansionWing() {
-  const [status, setStatus] = useState<WingStatus | null>(null);
-  const [connection, setConnection] = useState<TruthState>("UNKNOWN");
+  const { snapshot: status, connection, fixtureMode: FIXTURE_MODE } = useExpansionWingSnapshot();
   const [selected, setSelected] = useState<Room | null>(null);
-  useEffect(() => {
-    let live = true;
-    const load = async () => { try { const response = await fetch(ENDPOINT); if (!response.ok) throw new Error(String(response.status)); const payload = await response.json() as WingStatus; if (live) { setStatus(payload); setConnection("CURRENT"); } } catch { if (live) { setStatus(null); setConnection("UNAVAILABLE"); } } };
-    const initial = window.setTimeout(() => void load(), 0); const timer = window.setInterval(() => void load(), 15_000);
-    return () => { live = false; window.clearTimeout(initial); window.clearInterval(timer); };
-  }, []);
   useEffect(() => { if (!selected) return; const close = (event: KeyboardEvent) => { if (event.key === "Escape") setSelected(null); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [selected]);
   const selectedSection = useMemo(() => selected ? status?.sections[selected.section] : undefined, [selected, status]);
   return <section className="expansion-wing" aria-labelledby="expansion-wing-title" data-mode={FIXTURE_MODE ? "fixture" : "read-only-live"}>

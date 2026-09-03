@@ -43,7 +43,7 @@ def state_for(*, present: bool, observed_at: str | None = None, complete: bool =
     return Availability.STALE if (current - timestamp).total_seconds() > stale_after_seconds else Availability.CURRENT
 
 
-def build_living_wall_projection(sources: dict[str, Any]) -> dict[str, Any]:
+def build_living_wall_projection(sources: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     sections: dict[str, Any] = {}
     for key in ALLOWED_TOP_LEVEL:
         source = sources.get(key)
@@ -52,7 +52,7 @@ def build_living_wall_projection(sources: dict[str, Any]) -> dict[str, Any]:
             continue
         state = state_for(present=True, observed_at=source.get("observed_at"),
                           complete=bool(source.get("complete", True)),
-                          stale_after_seconds=int(source.get("stale_after_seconds", 900)))
+                          stale_after_seconds=int(source.get("stale_after_seconds", 900)), now=now)
         sections[key] = {"state": state, "data": _sanitize(source.get("data"))}
     return {"schema_version": "expansion-wing-truth-v1", "sections": sections,
             "authority": AuthorityBoundary().__dict__, "fabricated_activity": False}

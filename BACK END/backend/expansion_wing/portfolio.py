@@ -35,6 +35,7 @@ class PaperPosition:
     thesis: str
     invalidation: str
     correlation_cluster: str = "UNKNOWN"
+    valuation: dict[str, Any] = field(default_factory=dict)
 
     @property
     def market_value(self) -> float:
@@ -87,7 +88,7 @@ class DualBookPortfolio:
 
     def snapshot(self) -> dict[str, Any]:
         def book_state(book: PaperBook) -> dict[str, Any]:
-            return {**asdict(book), "nav": round(book.nav, 2), "deployed": round(book.maximum_allocation - book.cash, 2)}
+            return {**asdict(book), "nav": round(book.nav, 2), "deployed": round(sum(position.market_value for position in book.positions.values()), 2)}
         snapshot = {
             "tactical": book_state(self.tactical), "strategic": book_state(self.strategic),
             "cash_treasury_reserve": self.reserve_cash,
@@ -117,7 +118,8 @@ class DualBookPortfolio:
         return reasons
 
     def open_position(self, *, book: Book, instrument: str, quantity: float, reference_price: float,
-                      thesis: str, invalidation: str, cluster: str = "UNKNOWN", fill_model: FillModel | None = None) -> dict[str, Any]:
+                      thesis: str, invalidation: str, cluster: str = "UNKNOWN", valuation: dict[str, Any] | None = None,
+                      fill_model: FillModel | None = None) -> dict[str, Any]:
         if book not in {Book.TACTICAL, Book.STRATEGIC}:
             raise ValueError("paper positions require a tactical or strategic book")
         model = fill_model or FillModel()
@@ -126,13 +128,51 @@ class DualBookPortfolio:
         reasons = self.validate_open(book, instrument, notional, cluster)
         if not thesis.strip() or not invalidation.strip():
             reasons.append("THESIS_AND_INVALIDATION_REQUIRED")
+        if book == Book.STRATEGIC and not valuation:
+            reasons.append("STRATEGIC_VALUATION_REQUIRED")
         if reasons:
             return {"status": "REJECTED", "reasons": sorted(set(reasons)), "paper_mode": True}
         target = self.tactical if book == Book.TACTICAL else self.strategic
         target.cash -= notional
-        target.positions[instrument] = PaperPosition(instrument, filled_qty, fill_price, fill_price, thesis, invalidation, cluster)
+        target.positions[instrument] = PaperPosition(instrument, filled_qty, fill_price, fill_price, thesis, invalidation, cluster, valuation or {})
         return {"status": "PAPER_FILLED", "book": book, "instrument": instrument, "quantity": filled_qty,
                 "fill_price": fill_price, "notional": round(notional, 2), "live_execution": False}
+
+    def mark(self, book: Book, instrument: str, market_price: float) -> None:
+        target = self.tactical if book == Book.TACTICAL else self.strategic
+        if market_price <= 0 or instrument not in target.positions:
+            raise ValueError("known position and positive market price required")
+        target.positions[instrument].market_price = market_price
+
+    def exit_position(self, *, book: Book, instrument: str, quantity: float, reference_price: float,
+                      reason: str, fill_model: FillModel | None = None) -> dict[str, Any]:
+        target = self.tactical if book == Book.TACTICAL else self.strategic
+        position = target.positions.get(instrument)
+        if position is None or quantity <= 0 or quantity > position.quantity or not reason.strip():
+            return {"status": "REJECTED", "reasons": ["INVALID_EXIT_REQUEST"], "paper_mode": True}
+        filled_qty, fill_price = (fill_model or FillModel()).fill("SELL", quantity, reference_price)
+        if filled_qty > position.quantity:
+            return {"status": "REJECTED", "reasons": ["EXIT_EXCEEDS_POSITION"], "paper_mode": True}
+        proceeds = filled_qty * fill_price
+        realized = filled_qty * (fill_price - position.average_cost)
+        position.quantity = round(position.quantity - filled_qty, 8)
+        target.cash += proceeds
+        target.realized_pnl += realized
+        target.daily_realized_pnl += realized
+        status = "PAPER_FULL_EXIT" if position.quantity == 0 else "PAPER_PARTIAL_EXIT"
+        if position.quantity == 0:
+            del target.positions[instrument]
+        return {"status": status, "book": book, "instrument": instrument, "quantity": filled_qty,
+                "fill_price": fill_price, "proceeds": round(proceeds, 2), "realized_pnl": round(realized, 2),
+                "reason": reason, "live_execution": False}
+
+    def reconcile(self) -> dict[str, Any]:
+        expected = self.tactical.nav + self.strategic.nav + self.reserve_cash
+        snapshot = self.snapshot()
+        return {"status": "RECONCILED" if abs(snapshot["total_nav"] - expected) < .01 else "FAILED",
+                "total_nav": snapshot["total_nav"], "reserve": self.reserve_cash,
+                "book_cash_isolated": self.tactical.cash <= TACTICAL_BUDGET + self.tactical.realized_pnl and self.strategic.cash <= STRATEGIC_BUDGET + self.strategic.realized_pnl,
+                "paper_only": True}
 
     def classify_tactical_eod(self, session: str, classifications: dict[str, str]) -> dict[str, Any]:
         missing = sorted(set(self.tactical.positions) - set(classifications))
