@@ -16,6 +16,7 @@ import production_index_universe as legacy
 
 
 NASDAQ100_DIRECT_URL = "https://www.nasdaq.com/products/global-indexes/nasdaq-100/companies"
+NASDAQ100_IQQ_MIRROR_URL = "https://www.ishares.com/us/products/351653/ishares-nasdaq-100-etf/latest-holdings.csv"
 SP500_DIRECT_URLS = (
     "https://www.spglobal.com/spdji/en/indices/equity/sp-500/?index=&p=",
     "https://www.spglobal.com/spdji/en/indices/equity/sp-500/",
@@ -187,9 +188,14 @@ def _nasdaq_visible_company_symbols(raw: bytes) -> list[str]:
     return _normalize_symbols(fallback)
 
 
-def _read_nasdaq100() -> dict[str, Any]:
+def _read_nasdaq100_direct() -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
     url = str(os.getenv("IIOS_NASDAQ100_CONSTITUENTS_URL") or NASDAQ100_DIRECT_URL).strip()
-    raw, content_type = _fetch(url, referer="https://www.nasdaq.com/")
+    try:
+        raw, content_type = _fetch(url, referer="https://www.nasdaq.com/")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"{type(exc).__name__}: {exc}")
+        return None, errors
 
     # Prefer the publisher's explicitly labeled complete company list. Generic
     # page parsers can see navigation/marketing symbols and therefore over-count.
@@ -201,14 +207,65 @@ def _read_nasdaq100() -> dict[str, Any]:
 
     symbols = _normalize_symbols(symbols)
     verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+    if not verified:
+        errors.append(str(error or "NASDAQ100_SOURCE_INCOMPLETE"))
+        return None, errors
     return {
         "source_mode": "OFFICIAL_WEB_SOURCE",
         "source_ref": url,
         "source_publisher": "NASDAQ",
+        "benchmark": "Nasdaq 100 Index",
+        "symbols": symbols,
+        "verified_complete": True,
+        "error": None,
+    }, errors
+
+
+def _read_nasdaq100_mirror(direct_errors: list[str]) -> dict[str, Any]:
+    raw, _content_type = _fetch(
+        NASDAQ100_IQQ_MIRROR_URL,
+        referer="https://www.ishares.com/",
+    )
+    symbols = _parse_ishares_equity_holdings(raw)
+    verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+    return {
+        "source_mode": "GOVERNED_INDEX_TRACKER_MIRROR",
+        "source_ref": NASDAQ100_IQQ_MIRROR_URL,
+        "source_publisher": "BLACKROCK_ISHARES",
+        "benchmark": "Nasdaq 100 Index",
         "symbols": symbols,
         "verified_complete": verified,
         "error": error,
+        "lineage_note": (
+            "Nasdaq direct source was attempted first. Fallback is BlackRock "
+            "iShares IQQ first-party holdings for the Nasdaq 100 Index. "
+            + " | ".join(direct_errors)[:1200]
+        ),
     }
+
+
+def _read_nasdaq100() -> dict[str, Any]:
+    file_value = str(os.getenv("IIOS_NASDAQ100_CONSTITUENTS_FILE") or "").strip()
+    if file_value:
+        path = Path(file_value).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(path)
+        symbols = _normalize_symbols(legacy.parse_symbols_bytes(path.read_bytes(), None))
+        verified, error = legacy.validate_index_count("NASDAQ100", symbols)
+        return {
+            "source_mode": "GOVERNED_LOCAL_FILE",
+            "source_ref": str(path),
+            "source_publisher": "OPERATOR_GOVERNED_FILE",
+            "benchmark": "Nasdaq 100 Index",
+            "symbols": symbols,
+            "verified_complete": verified,
+            "error": error,
+        }
+
+    direct, errors = _read_nasdaq100_direct()
+    if direct is not None:
+        return direct
+    return _read_nasdaq100_mirror(errors)
 
 
 def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[str]]:
@@ -235,12 +292,17 @@ def _read_sp500_direct() -> tuple[dict[str, Any] | None, list[str]]:
     return None, errors
 
 
-def _parse_ivv_holdings(raw: bytes) -> list[str]:
+def _parse_ishares_equity_holdings(raw: bytes) -> list[str]:
     text = raw.decode("utf-8-sig", errors="replace")
     lines = text.splitlines()
-    header_index = None
+    header_index: int | None = None
     for idx, line in enumerate(lines):
-        if line.startswith("Ticker,Name,Sector,Asset Class,"):
+        try:
+            fields = next(csv.reader([line]))
+        except (csv.Error, StopIteration):
+            continue
+        normalized = {str(field or "").strip().lower() for field in fields}
+        if "ticker" in normalized and "asset class" in normalized:
             header_index = idx
             break
     if header_index is None:
@@ -262,7 +324,7 @@ def _parse_ivv_holdings(raw: bytes) -> list[str]:
 
 def _read_sp500_mirror(direct_errors: list[str]) -> dict[str, Any]:
     raw, _content_type = _fetch(SP500_IVV_MIRROR_URL, referer="https://www.ishares.com/")
-    symbols = _parse_ivv_holdings(raw)
+    symbols = _parse_ishares_equity_holdings(raw)
     verified, error = legacy.validate_index_count("SP500", symbols)
     lineage_note = (
         "S&P publisher direct source was attempted first but did not provide a complete machine-readable list. "

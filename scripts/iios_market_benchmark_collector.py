@@ -15,6 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 import production_index_universe  # noqa: E402
+import production_index_universe_resilient  # noqa: E402
 from market_benchmark import collect_independent_snapshot  # noqa: E402
 
 NEW_YORK = ZoneInfo("America/New_York")
@@ -28,6 +29,93 @@ DEFAULT_STATE_DIR = (
 UNIVERSE_CACHE_NAME = "benchmark_universe.json"
 UNIVERSE_CACHE_MAX_AGE_HOURS = 24.0
 UNIVERSE_SCHEMA_VERSION = "batch9h-benchmark-universe-v1"
+
+FAILURE_CATEGORIES = {
+    "HTTP_FORBIDDEN",
+    "RATE_LIMITED",
+    "TIMEOUT",
+    "TLS_VALIDATION_FAILED",
+    "PAGINATION_INCOMPLETE",
+    "STALE_RESPONSE",
+    "WRONG_SESSION_DATE",
+    "MALFORMED_ROWS",
+    "COUNT_OUT_OF_RANGE",
+    "SOURCE_UNAVAILABLE",
+}
+
+
+class UniverseRefreshIncomplete(RuntimeError):
+    def __init__(self, diagnostics: dict) -> None:
+        super().__init__("OFFICIAL_BENCHMARK_UNIVERSE_REFRESH_INCOMPLETE")
+        self.diagnostics = diagnostics
+
+
+def _failure_category(error: object) -> str:
+    text = str(error or "").lower()
+    if "403" in text or "forbidden" in text:
+        return "HTTP_FORBIDDEN"
+    if "429" in text or "rate limit" in text:
+        return "RATE_LIMITED"
+    if "timed out" in text or "timeout" in text:
+        return "TIMEOUT"
+    if "certificate" in text or "tls" in text or "ssl" in text:
+        return "TLS_VALIDATION_FAILED"
+    if "pagination" in text or "next page" in text:
+        return "PAGINATION_INCOMPLETE"
+    if "stale" in text or "expired" in text:
+        return "STALE_RESPONSE"
+    if "session date" in text or "wrong date" in text:
+        return "WRONG_SESSION_DATE"
+    if "malformed" in text or "invalid symbol" in text:
+        return "MALFORMED_ROWS"
+    if "parsed" in text or "governed range" in text or "count" in text:
+        return "COUNT_OUT_OF_RANGE"
+    return "SOURCE_UNAVAILABLE"
+
+
+def _refresh_diagnostics(capture: object) -> dict:
+    payload = capture if isinstance(capture, dict) else {}
+    indexes = payload.get("indexes") if isinstance(payload.get("indexes"), dict) else {}
+    sources: list[dict] = []
+    for index_key in ("SP500", "NASDAQ100"):
+        row = indexes.get(index_key) if isinstance(indexes.get(index_key), dict) else {}
+        minimum, maximum = production_index_universe.EXPECTED_COUNTS[index_key]
+        received = max(0, int(row.get("received_count", row.get("symbol_count", 0)) or 0))
+        valid = max(0, int(row.get("valid_count", row.get("symbol_count", 0)) or 0))
+        rejected = max(0, int(row.get("rejected_count", received - valid) or 0))
+        verified = row.get("verified_complete") is True
+        sources.append(
+            {
+                "index": index_key,
+                "expected_min": minimum,
+                "expected_max": maximum,
+                "received": received,
+                "valid": valid,
+                "rejected": rejected,
+                "duplicate_count": max(0, int(row.get("duplicate_count", 0) or 0)),
+                "provider_category": str(row.get("source_mode") or "UNKNOWN")[:80],
+                "failure_category": None if verified else _failure_category(row.get("error")),
+                "verified_complete": verified,
+            }
+        )
+    return {
+        "failure_category": "OFFICIAL_UNIVERSE_INCOMPLETE",
+        "expected": {
+            "SP500": {"minimum": 490, "maximum": 520},
+            "NASDAQ100": {"minimum": 95, "maximum": 110},
+        },
+        "received": sum(row["received"] for row in sources),
+        "valid": sum(row["valid"] for row in sources),
+        "rejected": sum(row["rejected"] for row in sources),
+        "sources": sources,
+        "verified_complete": payload.get("verified_complete") is True,
+        "strict_membership": payload.get("strict_membership") is True,
+        "ledger_read": False,
+        "ledger_write": False,
+        "trade_execution_permission": False,
+        "broker_connected": False,
+        "live_execution": False,
+    }
 
 
 def _regular_session(now: datetime) -> tuple[datetime, datetime]:
@@ -123,16 +211,14 @@ def _refresh_official_universe(
     path: Path,
     now: datetime,
 ) -> dict:
-    capture = production_index_universe.refresh_official_index_universe()
+    capture = production_index_universe_resilient.refresh_official_index_universe()
     if (
         not isinstance(capture, dict)
         or capture.get("verified_complete") is not True
         or capture.get("strict_membership") is not True
         or not capture.get("symbols")
     ):
-        raise RuntimeError(
-            "OFFICIAL_BENCHMARK_UNIVERSE_REFRESH_INCOMPLETE"
-        )
+        raise UniverseRefreshIncomplete(_refresh_diagnostics(capture))
 
     payload = {
         "schema_version": UNIVERSE_SCHEMA_VERSION,
@@ -217,12 +303,31 @@ def main() -> int:
             observed_at=now,
         )
     except Exception as exc:  # noqa: BLE001
+        diagnostics = (
+            exc.diagnostics
+            if isinstance(exc, UniverseRefreshIncomplete)
+            else {
+                "failure_category": _failure_category(exc),
+                "ledger_read": False,
+                "ledger_write": False,
+                "trade_execution_permission": False,
+                "broker_connected": False,
+                "live_execution": False,
+            }
+        )
         failure = {
             "status": "BENCHMARK_COLLECTION_FAILED",
             "observed_at": now.isoformat(),
-            "error": f"{type(exc).__name__}: {exc}"[:1200],
+            "error_code": (
+                "OFFICIAL_BENCHMARK_UNIVERSE_REFRESH_INCOMPLETE"
+                if isinstance(exc, UniverseRefreshIncomplete)
+                else "BENCHMARK_COLLECTION_SOURCE_ERROR"
+            ),
+            "diagnostics": diagnostics,
             "ledger_read": False,
             "ledger_write": False,
+            "trade_execution_permission": False,
+            "broker_connected": False,
             "live_execution": False,
         }
         _atomic_write(
