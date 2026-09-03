@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
   const livePair = live && recovered
   const invalid = (app && fixture === livePair) || (!app && (fixture || live || recovered)) || (live !== recovered)
   if (invalid) throw new Error('INVALID_EXPANSION_WING_BUILD_GATES')
-  if (livePair && !/^http:\/\/127\.0\.0\.1:\d+\/snapshot$/.test(env.VITE_EXPANSION_WING_READONLY_ENDPOINT || '')) {
+  if (livePair && !/^(\/snapshot|http:\/\/127\.0\.0\.1:\d+\/snapshot)$/.test(env.VITE_EXPANSION_WING_READONLY_ENDPOINT || '/snapshot')) {
     throw new Error('INVALID_EXPANSION_WING_READONLY_ENDPOINT')
   }
   return {

@@ -36,7 +36,7 @@ class EndToEndFixtureTests(unittest.TestCase):
         ast.parse(app_text)
         self.assertIn("app.include_router(expansion_wing_router)", app_text)
         frontend = (ROOT / "FRONT END/src/ExpansionWingSnapshotProvider.tsx").read_text()
-        self.assertIn("/expansion-wing/status", frontend)
+        self.assertIn('"/snapshot"', frontend)
         self.assertIn("VITE_BACKEND_RECOVERY_GREEN", frontend)
 
     def test_passport_to_book_end_to_end_and_fund_conservation(self):

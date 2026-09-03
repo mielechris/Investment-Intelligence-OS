@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.iios.expansion-wing-preview</string>
+  <key>ProgramArguments</key><array>
+    <string>__PYTHON__</string><string>-m</string><string>expansion_wing.preview_server</string>
+    <string>--port</string><string>__PORT__</string>
+    <string>--static-root</string><string>__STATE_DIR__/www</string>
+    <string>--state-dir</string><string>__STATE_DIR__</string>
+    <string>--telemetry</string><string>__HOME__/Library/Application Support/IIOS/telemetry/latest.json</string>
+    <string>--validation</string><string>__HOME__/Library/Application Support/IIOS/market-validation/latest_market_validation.json</string>
+    <string>--shadow</string><string>__HOME__/Library/Application Support/IIOS/market-validation/browser/shadow_strategy.json</string>
+    <string>--outcome</string><string>__HOME__/Library/Application Support/IIOS/market-validation/browser/outcome_learning.json</string>
+    <string>--backend</string><string>http://127.0.0.1:8002/system/status</string>
+  </array>
+  <key>WorkingDirectory</key><string>__WORKTREE__/BACK END/backend</string>
+  <key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>__WORKTREE__/BACK END/backend</string></dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>__LOG__</string><key>StandardErrorPath</key><string>__LOG__</string>
+  <key>ThrottleInterval</key><integer>30</integer>
+</dict></plist>

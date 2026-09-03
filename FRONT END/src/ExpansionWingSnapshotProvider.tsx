@@ -4,7 +4,7 @@ import { type ExpansionSnapshot, SnapshotContext, type TruthState } from "./Expa
 const LIVE_READ_ONLY = import.meta.env.VITE_EXPANSION_WING_LIVE_READONLY === "1" && import.meta.env.VITE_BACKEND_RECOVERY_GREEN === "1";
 const FIXTURE_MODE = import.meta.env.VITE_EXPANSION_WING_FIXTURE === "1";
 const ENDPOINT = LIVE_READ_ONLY
-  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || "http://127.0.0.1:8002/expansion-wing/status")
+  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || "/snapshot")
   : "/fixtures/expansion-wing.json";
 const POLL_MS = 15_000;
 const MAX_BACKOFF_MS = 60_000;
