@@ -32,7 +32,7 @@ test("signature rooms and elevated museum spaces receive distinct close-room art
 });
 
 test("Museum Master identity, six modes, Case Theater, and Collector Plaque are explicit", () => {
-  assert.match(app, /Museum Master 1\.1/);
+  assert.match(app, /Museum Master 1\.2/);
   for (const mode of ["gallery", "story", "replay", "command", "expansion", "watch"]) assert.match(app, new RegExp(`"${mode}"`));
   assert.match(app, /CASE THEATER \/ READ ONLY/);
   assert.match(app, /IIOS Living Wall — The Auction Edition/);

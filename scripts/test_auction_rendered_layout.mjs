@@ -87,7 +87,7 @@ return {
   factory: {...factoryRect, visible: visible(factory), hit: hit(factory)},
   building: {...rect(building), visible: visible(building), hit: hit(building), clipPath: getComputedStyle(building).clipPath, animationName: getComputedStyle(building).animationName},
   max: {...rect(max), visible: visible(max), hit: hit(max)},
-  rooms: rooms.map((room) => ({id: room.dataset.roomId, ...rect(room), visible: visible(room), hit: hit(room), state: room.querySelector('small')?.innerText})),
+  rooms: rooms.map((room) => ({id: room.dataset.roomId, ...rect(room), layoutWidth: room.offsetWidth, layoutHeight: room.offsetHeight, visible: visible(room), hit: hit(room), state: room.querySelector('small')?.innerText})),
   overlays: overlays.map((overlay) => ({testId: overlay.dataset.testid, ...rect(overlay), pointerEvents: getComputedStyle(overlay).pointerEvents, factoryCoverage: area(rect(overlay))/Math.max(1,area(factoryRect))})),
 };`;
 
@@ -99,10 +99,12 @@ function assertLayout(layout, label) {
   assert.doesNotMatch(layout.building.clipPath, /100%/, `${label}: architecture is not clipped closed`);
   assert.equal(layout.max.visible, true, `${label}: MAX has a visible rectangle`);
   assert.equal(layout.max.hit, true, `${label}: MAX is not fully occluded`);
+  assert.ok(layout.max.visibleWidth * layout.max.visibleHeight > layout.rooms[0].visibleWidth * layout.rooms[0].visibleHeight * 2, `${label}: MAX remains visually dominant`);
   assert.equal(layout.rooms.length, 18, `${label}: room registry is complete`);
   for (const room of layout.rooms) {
     assert.equal(room.visible, true, `${label}: ${room.id} has a visible rectangle`);
     assert.equal(room.hit, true, `${label}: ${room.id} is not fully occluded`);
+    assert.ok(room.layoutWidth > 0 && room.layoutHeight > 0, `${label}: ${room.id} retains semantic layout dimensions`);
     assert.match(room.state, /UNAVAILABLE|UNKNOWN|LOCKED|IDLE|ACTIVE|DEGRADED/, `${label}: ${room.id} retains an explicit truth state`);
   }
   for (const overlay of layout.overlays) {

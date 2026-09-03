@@ -1,22 +1,46 @@
 {
   "schema_version": "iios_auction_wall_display.v1",
-  "edition": "Museum Master 1.1",
+  "edition": "Museum Master 1.2 / 77-Inch Commissioning Edition",
   "display": {
+    "diagonal_inches": 77,
     "orientation": "landscape",
     "target_aspect_ratio": "16:9",
     "target_resolution": "3840x2160",
-    "minimum_brightness_nits": 500,
+    "ui_scaling_percent": 100,
+    "safe_zone_percent": 2,
+    "brightness_profile": "exhibition",
+    "brightness_profiles": {
+      "exhibition": 1.0,
+      "conservation": 0.82,
+      "evening": 0.68
+    },
     "reduced_motion": false,
     "scheduled_dim_start": "22:00",
-    "scheduled_wake_start": "07:00"
+    "scheduled_rest_start": "01:00",
+    "scheduled_wake_start": "07:00",
+    "unavailable_dim_after_minutes": 5,
+    "unavailable_rest_after_minutes": 30,
+    "pixel_drift_pixels": 1,
+    "panel_oled_protection_enabled": true
   },
   "browser": {
     "fullscreen_manual_confirmation": true,
     "startup_automation_enabled": false,
-    "preview_url": "https://replace-with-approved-preview.vercel.app/"
+    "startup_mode": "wall_art",
+    "preview_url": "https://replace-with-approved-preview.vercel.app/?wall=1",
+    "kiosk_exit_accessible": true
   },
   "recovery": {
     "local_server_restart": true,
-    "network_failure_mode": "fail_closed_quiet_composition"
+    "browser_reopen_manual": true,
+    "power_restore_order": ["network", "player", "display", "truth-check", "wall-art-mode", "fullscreen-confirmation"],
+    "network_failure_mode": "fail_closed_visible_architecture",
+    "clean_shutdown_required": true
+  },
+  "installation": {
+    "viewing_distance_feet": [8, 12],
+    "centerline_inches_aff": 57,
+    "mount": "hardware-neutral flush wall mount rated for display and wall assembly",
+    "service_access": "maintain manufacturer-required access and ventilation clearances"
   }
 }

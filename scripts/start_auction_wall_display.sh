@@ -3,7 +3,7 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime_root="${TMPDIR:-/tmp}/iios-auction-wall-display"
-display_url="${1:-http://127.0.0.1:5173/}"
+display_url="${1:-http://127.0.0.1:5173/?wall=1}"
 
 case "$display_url" in
   http://127.0.0.1:*|https://*.vercel.app/*|https://*.vercel.app) ;;
@@ -25,6 +25,12 @@ if [ "${display_url#http://127.0.0.1:}" != "$display_url" ]; then
       while :; do
         npm --prefix "$repo_root/FRONT END" run dev -- --host 127.0.0.1 &
         server_child=$!
+        health_attempt=0
+        while [ "$health_attempt" -lt 30 ]; do
+          if /usr/bin/curl --silent --fail --max-time 2 "${display_url%%\?*}" >/dev/null 2>&1; then break; fi
+          health_attempt=$((health_attempt + 1))
+          sleep 1
+        done
         wait "$server_child" || true
         server_child=""
         sleep 2
@@ -35,4 +41,5 @@ if [ "${display_url#http://127.0.0.1:}" != "$display_url" ]; then
 fi
 
 open -a Safari "$display_url"
-printf '%s\n' "Display opened. Enter Safari full screen manually after verifying the URL and artwork."
+printf '%s\n' "Display opened in Wall Art Mode. Verify truth health, then enter browser full screen manually."
+printf '%s\n' "Exit remains available through Reveal Controls and Exit Full Screen."
