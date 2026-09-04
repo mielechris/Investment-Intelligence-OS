@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "evidence_hash": "e5e4f7812edfacc1499881009579fcdcd6efbd2faf61853db32602df14cd52d4",
+  "expected_snapshot_count": 1,
+  "final_snapshot_at": "2026-09-04T20:00:00Z",
+  "market_timezone": "America/New_York",
+  "observed_snapshot_count": 1,
+  "provider_error_count": 0,
+  "session_date": "2026-09-04",
+  "universe_count": 519
+}
