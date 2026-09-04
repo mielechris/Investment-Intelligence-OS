@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-LAYERS = ("original", "notes", "claims", "browser")
+LAYERS = ("original", "notes", "claims", "transcripts", "browser")
 BROWSER_ALLOWLIST = {"schema_version", "generated_at", "truth_state", "real_source_count", "fixture_source_count",
     "rights_review_count", "approved_source_count", "claims_pending_review_count", "reason"}
 BROWSER_REASONS = {"NO_APPROVED_SOURCES", "SOURCE_REVIEW_PENDING", "ARCHIVE_UNAVAILABLE"}

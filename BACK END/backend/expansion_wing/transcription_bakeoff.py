@@ -45,3 +45,13 @@ def evaluate_fixture(adapter: TranscriptionAdapter, policy: CandidatePolicy, *, 
         "timestamps_present": bool(result.get("timestamps")), "latency_ms": result.get("latency_ms"),
         "projected_cost": policy.projected_cost, "local_offline": policy.local_offline,
         "provider_called": False}
+
+
+def recommendation_packet(results: list[dict]) -> dict:
+    eligible = [item for item in results if item.get("status") == "EVALUATED_FIXTURE" and
+        item.get("projected_cost") == 0 and isinstance(item.get("word_error_rate"), (int, float))]
+    ranked = sorted(eligible, key=lambda item: (item["word_error_rate"], not item.get("speaker_attribution_match"),
+        not item.get("timestamps_present")))
+    return {"status": "READY_FOR_HUMAN_REVIEW" if ranked else "INCOMPLETE",
+        "recommended_candidate": ranked[0]["candidate"] if ranked else None,
+        "provider_activation": False, "human_approval_required": True, "results": ranked}
