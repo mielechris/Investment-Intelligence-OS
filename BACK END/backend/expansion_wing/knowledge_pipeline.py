@@ -70,7 +70,9 @@ def room_projection(state: dict[str, Any] | None = None) -> dict[str, dict[str, 
                 "queued_test_count": 0, "completed_test_count": 0, "validated_pattern_count": 0,
                 "testing_engine": "AVAILABLE", "point_in_time_required": True}},
         }
-    allowed = {"upload_queue_count", "approved_transcript_count", "source_count", "approved_source_count",
+    allowed = {"upload_queue_count", "approved_transcript_count", "source_count", "real_source_count",
+        "fixture_source_count", "approved_source_count", "discovered_source_count", "rejected_source_count",
+        "normalized_source_count", "claims_pending_review_count",
         "rights_review_queue_count", "hypothesis_count", "validated_hypothesis_count", "reported_count",
         "provisional_count", "validated_count", "rejected_count", "retired_count", "queued_test_count",
         "completed_test_count", "validated_pattern_count"}
@@ -78,7 +80,9 @@ def room_projection(state: dict[str, Any] | None = None) -> dict[str, dict[str, 
         raise ValueError("UNSAFE_KNOWLEDGE_ROOM_STATE")
     base = room_projection()
     mapping = {"Interview Studio": ("upload_queue_count", "approved_transcript_count"),
-        "Investor Archive": ("source_count", "approved_source_count", "rights_review_queue_count"),
+        "Investor Archive": ("source_count", "real_source_count", "fixture_source_count", "approved_source_count",
+            "rights_review_queue_count", "discovered_source_count", "rejected_source_count",
+            "normalized_source_count", "claims_pending_review_count"),
         "Philosophy Arena": ("hypothesis_count", "validated_hypothesis_count"),
         "Judgment Foundry": ("reported_count", "provisional_count", "validated_count", "rejected_count", "retired_count"),
         "Pattern Laboratory": ("queued_test_count", "completed_test_count", "validated_pattern_count")}
