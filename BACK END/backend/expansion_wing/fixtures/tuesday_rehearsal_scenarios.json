@@ -1,0 +1,15 @@
+{
+  "schema_version": "iios-tuesday-rehearsal-scenarios-v1",
+  "fixture_label": "SYNTHETIC_FIXTURE_NON_LIVE",
+  "scenarios": [
+    "weekend_closed", "tuesday_pre_market", "regular_zero_candidates", "regular_immutable_candidates",
+    "mixed_lane_availability", "unverified_professional_observation", "professional_only_blocked", "stale_source",
+    "provider_failed_scanner_healthy", "provider_healthy_scanner_failed", "options_incomplete", "bond_incomplete",
+    "intraday_stale", "engine_disagreement", "research_sleeves_only", "complete_failure"
+  ],
+  "real_provider_bodies": false,
+  "credentials": false,
+  "private_9i_evidence": false,
+  "live_opportunities_claimed": false,
+  "historical_substitution": false
+}

@@ -120,7 +120,7 @@ LANES = (
     LaneDefinition("fx_proxies", "FX_PROXY", "Foreign-exchange proxies", False, "LIQUID_CURRENCY_ETF", True, ("proxy_basis", "session")),
     LaneDefinition("crypto_reference", "CRYPTO_REFERENCE", "Crypto reference assets", False, "REFERENCE_PRICE_ONLY", True, ("venue_set", "timestamp")),
     LaneDefinition("listed_options", "LISTED_OPTION", "Listed-options research", True, None, True, ("contract_id", "underlying", "expiration", "strike", "option_type", "multiplier", "bid", "ask", "implied_volatility", "greeks_state", "assignment_risk", "maximum_loss")),
-    LaneDefinition("intraday", "INTRADAY", "Intraday/day-trading research", True, None, True, ("market_session", "observed_at", "latency_ms", "spread", "liquidity", "market_hours_state")),
+    LaneDefinition("intraday", "INTRADAY", "Intraday/day-trading research", True, None, True, ("market_session", "observed_at", "price_timestamp", "latency_ms", "spread", "liquidity", "market_hours_state")),
     LaneDefinition("relative_value", "RELATIVE_VALUE", "Relative-value/cross-asset", False, "EXPLICIT_LEG_IDENTITIES", True, ("legs", "hedge_ratio", "correlation_window")),
 )
 
@@ -128,7 +128,8 @@ LANES = (
 def lane_registry() -> tuple[LaneDefinition, ...]: return LANES
 
 
-def classify_lane_proposal(lane_id: str, fields: dict[str, Any], *, market_open: bool = True) -> dict[str, Any]:
+def classify_lane_proposal(lane_id: str, fields: dict[str, Any], *, market_open: bool = True,
+                           now: datetime | None = None) -> dict[str, Any]:
     lane = next((item for item in LANES if item.lane_id == lane_id), None)
     if lane is None: return {"state": "FAILED_CLOSED", "reason": "UNSUPPORTED_ASSET_CLASS"}
     missing = tuple(key for key in lane.required_fields if fields.get(key) in (None, "", ()))
@@ -136,6 +137,18 @@ def classify_lane_proposal(lane_id: str, fields: dict[str, Any], *, market_open:
     if missing:
         reason = "RESEARCH_ONLY_UNPRICEABLE" if lane_id == "listed_options" else "REQUIRED_INSTRUMENT_FIELDS_MISSING"
         return {"state": "INCOMPLETE", "reason": reason, "missing_fields": missing}
+    if lane_id == "listed_options" and (fields.get("greeks_state") != "AVAILABLE" or
+            not isinstance(fields.get("bid"),(int,float)) or not isinstance(fields.get("ask"),(int,float)) or
+            fields["bid"] < 0 or fields["ask"] < fields["bid"] or
+            not isinstance(fields.get("maximum_loss"),(int,float)) or fields["maximum_loss"] < 0):
+        return {"state":"INCOMPLETE","reason":"RESEARCH_ONLY_UNPRICEABLE"}
+    if lane_id == "intraday":
+        latency=fields.get("latency_ms")
+        if not isinstance(latency,(int,float)) or isinstance(latency,bool) or latency<0 or latency>2_000:
+            return {"state":"INCOMPLETE","reason":"INTRADAY_LATENCY_EXCESSIVE"}
+        try: age=((now or datetime.now(timezone.utc)).astimezone(timezone.utc)-_time(str(fields["price_timestamp"]))).total_seconds()
+        except ValueError: return {"state":"INCOMPLETE","reason":"INTRADAY_PRICE_TIMESTAMP_INVALID"}
+        if age<0 or age>60: return {"state":"INCOMPLETE","reason":"INTRADAY_PRICE_STALE"}
     return {"state": "RESEARCH_ONLY" if lane.research_only else "PRIMARY_REVIEW_REQUIRED",
         "reason": "PROXY_NOT_UNDERLYING" if lane.proxy_basis else None, "proxy_basis": lane.proxy_basis}
 

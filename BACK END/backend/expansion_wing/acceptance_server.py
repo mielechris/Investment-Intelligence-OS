@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 from .candidate_enrichment_bridge import validate_browser_projection as validate_enrichment_projection
 from .knowledge_pipeline import room_projection
+from .multi_asset_projection import SCHEMA_VERSION as MULTI_ASSET_SCHEMA, validate_projection
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
@@ -330,31 +331,71 @@ class Compositor:
             try: multi_asset = self.multi_asset_reader()
             except Exception: multi_asset = None
             safe_states = {"AVAILABLE", "AVAILABLE_EMPTY", "STALE", "INCOMPLETE", "UNAVAILABLE", "FAILED_CLOSED"}
-            safe_authority = isinstance(multi_asset, dict) and isinstance(multi_asset.get("authority"), dict) and not any(multi_asset["authority"].values())
-            lanes = multi_asset.get("lane_states") if isinstance(multi_asset, dict) else None
-            scoreboard = _safe_scoreboard(multi_asset.get("scoreboard")) if isinstance(multi_asset, dict) else None
-            if (safe_authority and isinstance(lanes, dict) and len(lanes) == 10 and
-                    all(isinstance(k, str) and v in safe_states for k, v in lanes.items()) and
-                    multi_asset.get("consolidated_paper_nav") == 10_000 and scoreboard is not None):
-                sections["multi_asset_factory"] = _section(str(multi_asset.get("state") or "UNKNOWN"), {
+            if isinstance(multi_asset, dict) and multi_asset.get("schema_version") == MULTI_ASSET_SCHEMA:
+                try: validate_projection(multi_asset)
+                except ValueError: multi_asset = None
+                if multi_asset is not None:
+                    lanes = multi_asset["lane_states"]
+                    conveyor = multi_asset["candidate_conveyor"]
+                    sections["multi_asset_factory"] = _section(conveyor["state"], {
+                        "market_session_state": multi_asset["market_session_state"],
+                        "projection_freshness": multi_asset["evidence_freshness_state"],
+                        "source_cycle_id": multi_asset["source_cycle_id"], "lane_states": lanes,
+                        "candidates": conveyor["candidates"], "provider": multi_asset["provider"],
+                        "queue": multi_asset["queue"], "consolidated_paper_nav": multi_asset["consolidated_paper_nav"],
+                        "authority_locked": True})
+                    sections["candidate_conveyor"] = _section(conveyor["state"], {
+                        "route": ["9E", "PRIMARY REVIEW", "CASE DRAFT"],
+                        "candidates": conveyor["candidates"], "source_cycle_id": multi_asset["source_cycle_id"],
+                        "automatic_promotion": False, "paper_order": False, "broker": False,
+                        "live_execution": False})
+                    sections["provider_credit_meter"] = _section(
+                        multi_asset["provider"]["state"], multi_asset["provider"])
+                    sections["professional_strategy_observatory"] = _section(
+                        multi_asset["professional_observatory"]["state"], multi_asset["professional_observatory"])
+                    sections["method_manager_scoreboard"] = _section(
+                        multi_asset["scoreboard"]["state"], multi_asset["scoreboard"])
+                    sections["paper_research_sleeves"] = _section(
+                        multi_asset["paper_research_sleeves"]["state"], multi_asset["paper_research_sleeves"])
+                    sections["market_session"] = _section("AVAILABLE", {
+                        "state": multi_asset["market_session_state"], "source_generated_at": multi_asset["source_generated_at"],
+                        "projection_generated_at": multi_asset["projection_generated_at"]})
+                    sections["projection_freshness"] = _section(
+                        multi_asset["evidence_freshness_state"], {"last_trustworthy_hash": multi_asset["last_trustworthy_hash"]})
+                    sections["authority_lock"] = _section("AVAILABLE", {
+                        "locked": True, "provider": False, "credential": False, "paper_order": False,
+                        "ledger_write": False, "broker": False, "live_execution": False})
+            if all(key in sections for key in ("multi_asset_factory", "professional_strategy_observatory",
+                                                "method_manager_scoreboard", "paper_research_sleeves")):
+                multi_asset = None
+            if multi_asset is None and "multi_asset_factory" in sections:
+                pass
+            else:
+                safe_authority = isinstance(multi_asset, dict) and isinstance(multi_asset.get("authority"), dict) and not any(multi_asset["authority"].values())
+                lanes = multi_asset.get("lane_states") if isinstance(multi_asset, dict) else None
+                scoreboard = _safe_scoreboard(multi_asset.get("scoreboard")) if isinstance(multi_asset, dict) else None
+                if (safe_authority and isinstance(lanes, dict) and len(lanes) == 10 and
+                        all(isinstance(k, str) and v in safe_states for k, v in lanes.items()) and
+                        multi_asset.get("consolidated_paper_nav") == 10_000 and scoreboard is not None):
+                    sections["multi_asset_factory"] = _section(str(multi_asset.get("state") or "UNKNOWN"), {
                     "lane_states": lanes, "professional_observation_count": multi_asset.get("professional_observation_count", 0),
                     "paper_sleeve_count": multi_asset.get("paper_sleeve_count", 0),
                     "consolidated_paper_nav": 10_000, "provider_status": multi_asset.get("provider_status"),
                     "queue_depth": multi_asset.get("queue_depth", 0), "last_successful_cycle": multi_asset.get("last_successful_cycle"),
                     "failure_reasons": multi_asset.get("failure_reasons", []), "research_only": True})
-                sections["professional_strategy_observatory"] = _section(
+                    sections["professional_strategy_observatory"] = _section(
                     "AVAILABLE_EMPTY" if multi_asset.get("professional_observation_count", 0) == 0 else "CURRENT",
                     {"observation_count": multi_asset.get("professional_observation_count", 0),
                      "investment_endorsement": False, "automatic_promotion": False})
-                sections["method_manager_scoreboard"] = _section("INCOMPLETE", scoreboard)
-                sections["paper_research_sleeves"] = _section(
+                    sections["method_manager_scoreboard"] = _section("INCOMPLETE", scoreboard)
+                    sections["paper_research_sleeves"] = _section(
                     "AVAILABLE_EMPTY" if multi_asset.get("paper_sleeve_count", 0) == 0 else "CURRENT",
                     {"sleeve_count": multi_asset.get("paper_sleeve_count", 0), "consolidated_paper_nav": 10_000,
                      "paper_positions_inferred": False})
-            else:
-                for key in ("multi_asset_factory", "professional_strategy_observatory",
-                            "method_manager_scoreboard", "paper_research_sleeves"):
-                    sections[key] = _section("UNAVAILABLE", None)
+                else:
+                    for key in ("multi_asset_factory", "professional_strategy_observatory",
+                                "method_manager_scoreboard", "paper_research_sleeves"):
+                        sections[key] = _section("UNAVAILABLE", None)
         else:
             for key in ("multi_asset_factory", "professional_strategy_observatory",
                         "method_manager_scoreboard", "paper_research_sleeves"):

@@ -40,6 +40,8 @@
 .wing-conveyor > div { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; font-weight: 800; letter-spacing: .04em; }
 .wing-conveyor ul { list-style: none; padding: 0; margin: .75rem 0 0; display: grid; gap: .35rem; }
 .wing-conveyor li { display: flex; justify-content: space-between; gap: 1rem; }
+.wing-conveyor li div { display: grid; gap: .2rem; }
+.wing-conveyor li span,.wing-lanes small { color: #9fb0ba; font-size: 11px; }
 .wing-conveyor code { color: #c8d3dd; }
 .wing-state--failed_closed { color: #ff8c8c; font-weight: 900; border-bottom: 2px solid currentColor; }
 .wing-state--failed_closed::before { content: "!"; }
@@ -47,3 +49,9 @@
 .wing-lanes > p { color: #b6c3ce; }
 .wing-lanes > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: .5rem; }
 .wing-lanes article { display: flex; flex-direction: column; gap: .35rem; padding: .65rem; border: 1px solid #324554; border-radius: .5rem; text-transform: capitalize; }
+.wing-characters,.wing-observatory { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: .65rem; margin: 1rem 0; }
+.wing-characters article,.wing-observatory article { padding: .8rem; border: 1px solid #324554; border-radius: .65rem; background: #0b141b; }
+.wing-characters b { color: #f0c97a; letter-spacing: .12em; }
+.wing-characters p { color: #c6d1d8; margin-bottom: 0; }
+.wing-observatory pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #9fb0ba; font-size: 10px; }
+@media(max-width:600px){.wing-conveyor li{flex-direction:column}.wing-conveyor code{overflow-wrap:anywhere}.wing-characters,.wing-observatory{grid-template-columns:1fr}}
