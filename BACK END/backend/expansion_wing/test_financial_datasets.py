@@ -51,7 +51,9 @@ def policy(**changes):
 
 def adapter_for(capability, fixture_key, **policy_changes):
     spec = ENDPOINTS[capability]
-    transport = Transport(FIXTURE[fixture_key], final_url=f"{API_ORIGIN}{spec.path}")
+    payload = FIXTURE[fixture_key]
+    if capability is FDCapability.COMPANY_FACTS: payload = payload["MU"]
+    transport = Transport(payload, final_url=f"{API_ORIGIN}{spec.path}")
     return FinancialDatasetsAdapter(policy(**policy_changes), credentials=Credentials(), transport=transport,
         utcnow=lambda: NOW), transport
 
@@ -126,7 +128,7 @@ class IdentityCredentialTests(unittest.TestCase):
     def test_missing_ambiguous_inaccessible_context_are_sanitized(self):
         for category in ("KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY", "other"):
             adapter = FinancialDatasetsAdapter(policy(), credentials=Credentials(error=category), transport=Transport({}))
-            result = adapter.fetch(FDCapability.COMPANY_FACTS, ("MU", "AMD"))
+            result = adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",))
             expected = category if category in {"KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY"} else "KEYCHAIN_UNAVAILABLE"
             self.assertEqual(result.failure, expected)
 
@@ -164,7 +166,7 @@ class EndpointCapabilityTests(unittest.TestCase):
 class CreditTests(unittest.TestCase):
     def test_standard_premium_unknown_balance_and_unknown_cost(self):
         standard, _ = adapter_for(FDCapability.COMPANY_FACTS, "company_facts")
-        result = standard.fetch(FDCapability.COMPANY_FACTS, ("MU", "AMD"))
+        result = standard.fetch(FDCapability.COMPANY_FACTS, ("MU",))
         self.assertEqual((result.projected_credit_cost, result.consumed_credits, result.remaining_credits), (1, 1, 999))
         premium_payload = {"data":[{"ticker":"MU","report_period":"2026-Q2","updated_at":"2026-08-01T12:00:00Z","segments":[]} ]}
         premium = FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=Transport(premium_payload,
@@ -185,15 +187,15 @@ class CreditTests(unittest.TestCase):
     def test_cache_and_singleflight_consume_no_additional_credit(self):
         entered=threading.Event(); release=threading.Event()
         def block(): entered.set(); release.wait(2)
-        spec=ENDPOINTS[FDCapability.COMPANY_FACTS]; transport=Transport(FIXTURE["company_facts"],
+        spec=ENDPOINTS[FDCapability.COMPANY_FACTS]; transport=Transport(FIXTURE["company_facts"]["MU"],
             final_url=f"{API_ORIGIN}{spec.path}", block=block)
         adapter=FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=transport, utcnow=lambda: NOW)
         results=[]
-        first=threading.Thread(target=lambda: results.append(adapter.fetch(FDCapability.COMPANY_FACTS, ("MU","AMD"))))
-        second=threading.Thread(target=lambda: results.append(adapter.fetch(FDCapability.COMPANY_FACTS, ("MU","AMD"))))
+        first=threading.Thread(target=lambda: results.append(adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",))))
+        second=threading.Thread(target=lambda: results.append(adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",))))
         first.start(); entered.wait(1); second.start(); release.set(); first.join(); second.join()
         self.assertEqual((transport.calls, adapter.credits.consumed), (1,1)); self.assertEqual(sum(x.cache_hit for x in results),1)
-        cached=adapter.fetch(FDCapability.COMPANY_FACTS, ("MU","AMD"))
+        cached=adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",))
         self.assertTrue(cached.cache_hit); self.assertEqual(adapter.credits.consumed,1)
 
     def test_no_automatic_retry_and_terminal_response_is_charged_once(self):
@@ -279,9 +281,9 @@ class TransportLifecycleTests(unittest.TestCase):
     def test_metric_callback_failure_is_sanitized_without_unhandled_access(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         def broken(_record): raise RuntimeError("private callback detail")
-        transport=Transport(FIXTURE["company_facts"],final_url=f"{API_ORIGIN}{spec.path}")
+        transport=Transport(FIXTURE["company_facts"]["MU"],final_url=f"{API_ORIGIN}{spec.path}")
         adapter=self.make(transport,metric_recorder=broken)
-        result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD"))
+        result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
         self.assertEqual((result.failure,transport.calls,adapter.credits.confirmed_consumed),
             ("METRIC_CALLBACK_FAILED",1,1))
         self.assertEqual(result.attempts[0].terminal_status_category,"METRIC_CALLBACK_FAILED")
@@ -290,7 +292,7 @@ class TransportLifecycleTests(unittest.TestCase):
         adapter,transport=adapter_for(FDCapability.COMPANY_FACTS,"company_facts")
         adapter=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=transport,utcnow=lambda:NOW,
             prior_ambiguous_credits=1)
-        first=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD")); cached=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD"))
+        first=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",)); cached=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
         self.assertEqual((adapter.credits.confirmed_consumed,adapter.credits.ambiguous_reserved,
             adapter.credits.consumed,adapter._remaining()),(1,1,2,998))
         self.assertTrue(cached.cache_hit); self.assertEqual(cached.attempts[0].projected_credit_cost,0)
@@ -309,12 +311,17 @@ class TransportLifecycleTests(unittest.TestCase):
 
 class FixtureNormalizationTests(unittest.TestCase):
     def test_mu_amd_facts_schema_provenance_ignored_fields_and_secret_containment(self):
-        adapter, transport=adapter_for(FDCapability.COMPANY_FACTS,"company_facts")
-        result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD")); self.assertEqual(result.state,"AVAILABLE")
-        self.assertEqual({r.ticker for r in result.records},{"MU","AMD"}); self.assertEqual(result.ignored_field_count,1)
-        self.assertTrue(all(r.provider_id==PROVIDER_ID and r.schema_version and r.verification_state=="PRIMARY_SOURCE_REQUIRED" for r in result.records))
-        safe=json.dumps(result.safe_accounting(),sort_keys=True); self.assertNotIn(FIXTURE_CREDENTIAL.decode(),safe)
-        self.assertEqual(transport.header_names,[(AUTH_HEADER,)])
+        records=[]
+        for ticker in ("MU","AMD"):
+            spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
+            transport=Transport(FIXTURE["company_facts"][ticker],final_url=f"{API_ORIGIN}{spec.path}")
+            adapter=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=transport,utcnow=lambda:NOW)
+            result=adapter.fetch(FDCapability.COMPANY_FACTS,(ticker,)); self.assertEqual(result.state,"AVAILABLE")
+            records.extend(result.records)
+            self.assertTrue(all(kind in {"string","boolean"} for _,kind in result.schema_observation))
+            self.assertNotIn(FIXTURE_CREDENTIAL.decode(),json.dumps(result.safe_accounting(),sort_keys=True))
+            self.assertEqual(transport.header_names,[(AUTH_HEADER,)])
+        self.assertEqual({r.ticker for r in records},{"MU","AMD"})
 
     def test_statement_price_filing_and_earnings_classifications_remain_distinct(self):
         cases=((FDCapability.INCOME_STATEMENTS,"income_statements","PROVIDER_NORMALIZED_FACT"),
@@ -329,12 +336,9 @@ class FixtureNormalizationTests(unittest.TestCase):
     def test_stale_future_schema_oversize_timeout_and_redirect_fail_closed(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         stale=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=Transport(
-            FIXTURE["company_facts"],final_url=f"{API_ORIGIN}{spec.path}"),
+            FIXTURE["company_facts"]["MU"],final_url=f"{API_ORIGIN}{spec.path}"),
             utcnow=lambda:datetime(2026,8,4,tzinfo=timezone.utc))
-        self.assertTrue(all(r.freshness=="STALE" for r in stale.fetch(FDCapability.COMPANY_FACTS,("MU","AMD")).records))
-        future_body={"data":[{"ticker":"MU","name":"Synthetic","updated_at":"2026-08-03T12:00:00Z"}]}
-        future=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=Transport(future_body,final_url=f"{API_ORIGIN}{spec.path}"),utcnow=lambda:NOW)
-        self.assertEqual(future.fetch(FDCapability.COMPANY_FACTS,("MU",)).failure,"POINT_IN_TIME_REJECTED")
+        self.assertEqual(stale.fetch(FDCapability.COMPANY_FACTS,("MU",)).records[0].freshness,"UNKNOWN")
         malformed=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=Transport({"wrong":[]},final_url=f"{API_ORIGIN}{spec.path}"),utcnow=lambda:NOW)
         self.assertEqual(malformed.fetch(FDCapability.COMPANY_FACTS,("MU",)).failure,"SCHEMA_REJECTED")
         oversized=FinancialDatasetsAdapter(policy(response_size_limit=10),credentials=Credentials(),transport=Transport(b"x"*11,final_url=f"{API_ORIGIN}{spec.path}"))
@@ -347,7 +351,7 @@ class FixtureNormalizationTests(unittest.TestCase):
     def test_batch_limit_partial_outage_no_substitution_and_primary_gate(self):
         adapter,_=adapter_for(FDCapability.COMPANY_FACTS,"company_facts")
         self.assertEqual(adapter.fetch(FDCapability.COMPANY_FACTS,tuple(f"X{i}" for i in range(51))).failure,"BATCH_LIMIT")
-        packet=enrich_shortlist(adapter,(FDCapability.COMPANY_FACTS,FDCapability.COMPANY_NEWS_METADATA),("MU","AMD"))
+        packet=enrich_shortlist(adapter,(FDCapability.COMPANY_FACTS,FDCapability.COMPANY_NEWS_METADATA),("MU",))
         self.assertEqual(packet["state"],"PARTIAL"); self.assertTrue(packet["partial_outage_visible"])
         self.assertFalse(packet["cross_provider_substitution"]); self.assertTrue(all(v is False for v in packet["authority"].values()))
         blocked=primary_source_gate(packet["results"][0].records[0],primary_source_verified=False,human_approved=True)

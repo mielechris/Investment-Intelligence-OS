@@ -8,6 +8,7 @@ import socket
 import ssl
 import threading
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -29,6 +30,11 @@ CREDENTIAL_MIN_BYTES = 16
 CREDENTIAL_MAX_BYTES = 256
 _PLACEHOLDER_CREDENTIALS = frozenset({b"your_api_key_here", b"test", b"example", b"changeme", b"api-key"})
 SCHEMA_VERSION = "iios-financial-datasets-v1"
+COMPANY_FACTS_SCHEMA_VERSION = "iios-financial-datasets-company-facts-v2"
+COMPANY_FACTS_FIELDS = frozenset({"ticker", "name", "cik", "industry", "sector", "exchange",
+    "is_active", "location", "sec_filings_url", "sic_code", "sic_industry", "sic_sector"})
+COMPANY_FACTS_STRING_FIELDS = COMPANY_FACTS_FIELDS - {"is_active"}
+MAX_IGNORED_COMPANY_FACT_FIELDS = 32
 CAPABILITY_STATES = {"SUPPORTED", "PREMIUM_SUPPORTED", "CONTRACT_ONLY", "UNAVAILABLE", "LICENSE_REVIEW_REQUIRED"}
 LICENSE_STATES = {"REVIEWED_INTERNAL_USE", "LICENSE_REVIEW_REQUIRED", "REDISTRIBUTION_PROHIBITED",
     "TERMS_CHANGED", "ACCESS_TERMINATED"}
@@ -101,8 +107,7 @@ def _spec(capability: FDCapability, state: str, path: str | None, credit: str | 
 
 ENDPOINTS = {
     FDCapability.COMPANY_FACTS: _spec(FDCapability.COMPANY_FACTS, "SUPPORTED", "/company/facts", "STANDARD",
-        "PROVIDER_NORMALIZED_FACT", ("ticker", "name", "updated_at"),
-        ("ticker", "name", "cik", "industry", "sector", "market_cap", "updated_at")),
+        "PROVIDER_NORMALIZED_FACT", ("ticker",), tuple(sorted(COMPANY_FACTS_FIELDS))),
     FDCapability.INCOME_STATEMENTS: _spec(FDCapability.INCOME_STATEMENTS, "SUPPORTED", "/financials/income-statements/", "STANDARD",
         "PROVIDER_NORMALIZED_FACT", ("ticker", "report_period", "filing_date"),
         ("ticker", "report_period", "filing_date", "revenue", "net_income")),
@@ -335,6 +340,7 @@ class FDResult:
     projected_credit_cost: int = 0; consumed_credits: int = 0; remaining_credits: int | None = None
     cache_hit: bool = False; request_timestamp: str | None = None; response_status_category: str = "NOT_REQUESTED"
     ignored_field_count: int = 0
+    schema_observation: tuple[tuple[str, str], ...] = ()
     attempts: tuple[AttemptRecord, ...] = ()
 
     def safe_accounting(self) -> dict[str, Any]:
@@ -352,6 +358,16 @@ def _time(value: str) -> datetime:
     except (AttributeError, ValueError): raise ValueError("TIME_INVALID") from None
     if parsed.tzinfo is None: raise ValueError("TIME_INVALID")
     return parsed
+
+
+def _json_type(value: Any) -> str:
+    if value is None: return "null"
+    if isinstance(value, bool): return "boolean"
+    if isinstance(value, str): return "string"
+    if isinstance(value, (int, float)) and not isinstance(value, bool): return "number"
+    if isinstance(value, list): return "array"
+    if isinstance(value, dict): return "object"
+    return "unknown"
 
 
 class FinancialDatasetsAdapter:
@@ -380,7 +396,8 @@ class FinancialDatasetsAdapter:
         if not spec or spec.path is None: return self._fail(capability, "ENDPOINT_NOT_ALLOWED", cost)
         if cost is None: return self._fail(capability, "UNKNOWN_ENDPOINT_COST", cost)
         if (not tickers or len(tickers) > self.policy.batch_limit or len(set(tickers)) != len(tickers) or
-                any(not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", ticker) for ticker in tickers)):
+                any(not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", ticker) for ticker in tickers) or
+                (capability is FDCapability.COMPANY_FACTS and len(tickers) != 1)):
             return self._fail(capability, "BATCH_LIMIT", cost)
         if self.policy.provider_balance is None: return self._fail(capability, "BALANCE_UNKNOWN", cost)
         key = (capability.value, tickers)
@@ -392,7 +409,8 @@ class FinancialDatasetsAdapter:
                 return FDResult(prior.state, prior.capability, prior.records, projected_credit_cost=cost,
                     consumed_credits=self.credits.consumed, remaining_credits=self._remaining(), cache_hit=True,
                     request_timestamp=prior.request_timestamp, response_status_category="CACHE_HIT",
-                    ignored_field_count=prior.ignored_field_count, attempts=(attempt,))
+                    ignored_field_count=prior.ignored_field_count, schema_observation=prior.schema_observation,
+                    attempts=(attempt,))
             while key in self._inflight:
                 self._condition.wait(timeout=self.policy.response_timeout_seconds)
                 cached = self._cache.get(key)
@@ -402,7 +420,8 @@ class FinancialDatasetsAdapter:
                     return FDResult(prior.state, prior.capability, prior.records, projected_credit_cost=cost,
                         consumed_credits=self.credits.consumed, remaining_credits=self._remaining(), cache_hit=True,
                         request_timestamp=prior.request_timestamp, response_status_category="SINGLE_FLIGHT_CACHE",
-                        ignored_field_count=prior.ignored_field_count, attempts=(attempt,))
+                        ignored_field_count=prior.ignored_field_count, schema_observation=prior.schema_observation,
+                        attempts=(attempt,))
                 if key in self._inflight: return self._fail(capability, "TIMEOUT", cost)
             self._inflight.add(key)
         try:
@@ -529,6 +548,8 @@ class FinancialDatasetsAdapter:
                    accounting: dict[str, int], category: str) -> FDResult:
         try: payload = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError): return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+        if spec.capability is FDCapability.COMPANY_FACTS:
+            return self._normalize_company_facts(spec, tickers, payload, requested_at, accounting, category)
         rows = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(rows, list) or len(rows) > len(tickers) * 20:
             return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
@@ -557,6 +578,46 @@ class FinancialDatasetsAdapter:
         return FDResult("AVAILABLE", spec.capability.value, tuple(records), projected_credit_cost=spec.credit_cost or 0,
             consumed_credits=accounting["consumed"], remaining_credits=accounting["remaining"],
             request_timestamp=requested_at, response_status_category=category, ignored_field_count=ignored)
+
+    def _normalize_company_facts(self, spec: EndpointSpec, tickers: tuple[str, ...], payload: Any,
+                                 requested_at: str, accounting: dict[str, int], category: str) -> FDResult:
+        if len(tickers) != 1 or not isinstance(payload, dict) or set(payload) != {"company_facts"}:
+            return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+        row = payload.get("company_facts")
+        if not isinstance(row, dict) or len(row) > len(COMPANY_FACTS_FIELDS) + MAX_IGNORED_COMPANY_FACT_FIELDS:
+            return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+        if any(not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) for key in row):
+            return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+        if row.get("ticker") != tickers[0]:
+            return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+        clean: dict[str, Any] = {}
+        for key in sorted(set(row) & COMPANY_FACTS_FIELDS):
+            value = row[key]
+            if key in COMPANY_FACTS_STRING_FIELDS:
+                if (not isinstance(value, str) or not 1 <= len(value) <= 2_048 or
+                        any(unicodedata.category(ch).startswith("C") for ch in value)):
+                    return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+            elif key == "is_active" and not isinstance(value, bool):
+                return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+            clean[key] = value
+        if "sec_filings_url" in clean:
+            parsed = urlparse(clean["sec_filings_url"])
+            if (parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment or
+                    parsed.hostname not in {"sec.gov", "www.sec.gov"}):
+                return self._fail(spec.capability, "SCHEMA_REJECTED", spec.credit_cost, accounting, requested_at)
+        ignored = len(set(row) - COMPANY_FACTS_FIELDS)
+        normalized = json.dumps(clean, sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(normalized).hexdigest()
+        fields = tuple((key, value) for key, value in clean.items() if key != "ticker")
+        record = GovernedRecord(PROVIDER_ID, spec.capability.value, clean["ticker"], requested_at,
+            None, None, clean.get("sec_filings_url"), "UNKNOWN", digest, COMPANY_FACTS_SCHEMA_VERSION,
+            spec.data_classification, "PRIMARY_SOURCE_REQUIRED", spec.credit_cost or 0, "MISS", fields)
+        record.validate()
+        observation = tuple((key, _json_type(value)) for key, value in sorted(row.items()))
+        return FDResult("AVAILABLE", spec.capability.value, (record,), projected_credit_cost=spec.credit_cost or 0,
+            consumed_credits=accounting["consumed"], remaining_credits=accounting["remaining"],
+            request_timestamp=requested_at, response_status_category=category, ignored_field_count=ignored,
+            schema_observation=observation)
 
     def _remaining(self) -> int | None:
         if self.policy.provider_balance is None: return None

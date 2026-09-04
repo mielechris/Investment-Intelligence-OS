@@ -66,6 +66,20 @@ endpoint availability, returned schema, plan entitlement, and third-party restri
 official documentation before activation. Anything not assigned a reviewed path and known cost is rejected before a
 request. Unknown fields are counted and discarded; they never silently enter normalized evidence.
 
+### Company-facts schema reconciliation
+
+The canonical response is the provider-documented `CompanyFactsResponse`: an exact top-level `company_facts`
+object, not the earlier synthetic `data` array. The OpenAPI contract lists nested properties but marks none required
+and supplies no publication timestamp. IIOS requires an exact requested/returned ticker match and type-checks every
+documented property that is present. Missing provider time remains unavailable and freshness stays `UNKNOWN`; the
+request time is never relabeled as a provider publication time.
+
+Unexpected envelope fields, ticker mismatches, invalid documented types, unsafe SEC URLs, oversized objects, and
+multi-ticker company-facts calls fail closed. A bounded number of unknown nested properties may be observed by field
+name and primitive JSON type, then discarded. Their values never enter records, logs, browser projections, hashes,
+or evidence. The normalized hash covers only accepted fields, and all company facts still require primary-source
+verification before material reliance.
+
 ## Credit accounting and resource limits
 
 The purchased Credits-plan ceiling is 1,000. Auto-reload, purchase, refill, subscription upgrade, and overage are
@@ -75,8 +89,8 @@ attempt without a confirmed response remains conservatively charged as ambiguous
 exactly once. Cache hits and deduplicated single-flight waiters cost zero. There are no automatic retries. Accounting
 uses one lock across total, daily, and monthly counters.
 
-The next operational acceptance ledger starts at confirmed consumed `0`, prior ambiguous/reserved `1`, and maximum
-remaining authorized `999`. These are conservative IIOS values, not a claim about the provider-reported balance. An
+The next operational acceptance ledger starts at confirmed consumed `1`, prior ambiguous/reserved `2`, conservative
+total usage `3`, and maximum remaining authorized `997`. These are conservative IIOS values, not a claim about the provider-reported balance. An
 owner may inspect the provider dashboard manually without copying, displaying, or recording the API key; dashboard
 evidence remains separately attributed and never silently rewrites IIOS attempt history.
 
@@ -135,7 +149,8 @@ manifest. Do not install a source distribution, modify global Python, or modify 
 
 Activation sequence: verify the wheel and bundle hashes; verify permissions and expiry-review policy; run a
 credential-free TLS-only handshake with exact SNI/hostname; then obtain fresh authorization for MU-first acceptance.
-The bounded runner checks trust before Keychain access, starts with two prior ambiguous credits and 998 maximum
+The bounded runner checks trust before Keychain access and must start future acceptance with two prior ambiguous
+credits, one confirmed credit, and 997 maximum
 remaining authorization, performs no retries, and blocks AMD unless MU and its zero-cost cache repeat are fully valid.
 Provider dashboard balance remains distinct from conservative IIOS accounting.
 
@@ -180,7 +195,7 @@ zero provider or Keychain calls.
 4. Separately authorize provisioning through the binary-safe Security.framework ceremony using the exact selector.
 5. Verify fresh-process persistence without printing the credential.
 6. Reverify official endpoint documentation, license state, 1×/8× costs, balance, deletion duties, and schema.
-7. Initialize accounting with confirmed `0`, prior ambiguous `1`, and maximum remaining `999`.
+7. Initialize accounting with confirmed `1`, prior ambiguous `2`, and maximum remaining `997`.
 8. With fresh explicit authorization, run canonical `/company/facts` for `MU` first; stop before `AMD` on any failure.
 9. After each success, run one identical cache repeat, which must consume zero requests and credits.
 10. Report attempted, confirmed, and ambiguous requests plus latency, size, schema, freshness, and hashes without bodies.
