@@ -5,7 +5,7 @@ import secrets
 import unittest
 
 from expansion_wing.encrypted_archive import FixtureAuthenticatedCipher
-from expansion_wing.keychain_adapter import CommandResult, KeychainAdapter
+from expansion_wing.keychain_adapter import ERR_DUPLICATE_ITEM, ERR_ITEM_NOT_FOUND, KeychainAdapter
 from expansion_wing.operational_aead import (AES256_GCM_KAT, CryptographyAESGCMBackend, OperationalAEAD,
     dependency_status, known_answer_check, reject_fixture_cipher_for_operations)
 from expansion_wing.reviewer_auth import Authenticator, Reviewer, ReviewerRegistry, separated_duties
@@ -59,32 +59,38 @@ class AEADContractTests(unittest.TestCase):
 
 
 class KeychainTests(unittest.TestCase):
-    class Runner:
-        def __init__(self, results): self.results = iter(results); self.calls = []
-        def run(self, argv, *, stdin, environment):
-            self.calls.append((argv, stdin, environment)); return next(self.results)
+    class API:
+        def __init__(self): self.values = {}; self.calls = []
+        def add(self, service, account, secret):
+            self.calls.append(("add", service, account, secret))
+            if (service, account) in self.values: return ERR_DUPLICATE_ITEM
+            self.values[(service, account)] = secret; return 0
+        def find(self, service, account):
+            self.calls.append(("find", service, account, None))
+            value = self.values.get((service, account))
+            return (ERR_ITEM_NOT_FOUND, ()) if value is None else (0, (value,))
+        def delete(self, service, account):
+            self.calls.append(("delete", service, account, None))
+            return 0 if self.values.pop((service, account), None) is not None else ERR_ITEM_NOT_FOUND
 
     def test_mocked_create_retrieve_rotate_delete_never_puts_secret_in_args_or_env(self):
         secret = secrets.token_bytes(32); rotated_secret = secrets.token_bytes(32)
-        runner = self.Runner([CommandResult(0), CommandResult(0, secret),
-            CommandResult(0, secret), CommandResult(0), CommandResult(0)])
-        adapter = KeychainAdapter(runner, service="com.iios.fixture")
+        api = self.API(); adapter = KeychainAdapter(api, service="com.iios.fixture")
         self.assertEqual(adapter.create("k1", secret), "CREATED"); self.assertEqual(adapter.retrieve("k1"), secret)
         self.assertEqual(adapter.rotate("k1", "k2", rotated_secret, recovery_verified=True), "ROTATION_STAGED")
         self.assertEqual(adapter.delete("k1", human_authorized=True), "DELETED")
-        for argv, stdin, environment in runner.calls:
-            self.assertNotIn(secret, [item.encode() for item in argv]); self.assertEqual(environment, {})
-        self.assertEqual(runner.calls[0][1], secret)
+        self.assertNotIn(secret, [value for call in api.calls for value in call[1:3]])
 
     def test_duplicate_missing_ambiguous_lost_key_and_unauthorized_delete(self):
-        with self.assertRaisesRegex(RuntimeError, "DUPLICATE"):
-            KeychainAdapter(self.Runner([CommandResult(45)]), service="s").create("k", secrets.token_bytes(32))
-        with self.assertRaisesRegex(RuntimeError, "MISSING"):
-            KeychainAdapter(self.Runner([CommandResult(44)]), service="s").retrieve("k")
+        api = self.API(); adapter = KeychainAdapter(api, service="s"); adapter.create("k", secrets.token_bytes(32))
+        with self.assertRaisesRegex(RuntimeError, "DUPLICATE"): adapter.create("k", secrets.token_bytes(32))
+        with self.assertRaisesRegex(RuntimeError, "MISSING"): adapter.retrieve("missing")
+        class Ambiguous(self.API):
+            def find(self, service, account): return 0, (b"a" * 32, b"b" * 32)
         with self.assertRaisesRegex(RuntimeError, "AMBIGUOUS"):
-            KeychainAdapter(self.Runner([CommandResult(0, b"short")]), service="s").retrieve("k")
+            KeychainAdapter(Ambiguous(), service="s").retrieve("k")
         with self.assertRaises(PermissionError):
-            KeychainAdapter(self.Runner([]), service="s").delete("k", human_authorized=False)
+            adapter.delete("k", human_authorized=False)
 
 
 class AuthenticationServiceTests(unittest.TestCase):
