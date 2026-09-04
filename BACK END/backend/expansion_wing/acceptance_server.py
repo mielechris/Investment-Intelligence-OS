@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .knowledge_pipeline import room_projection
+
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
 SHADOW_SCHEMA = "batch9i-browser-shadow-strategy-v1"
@@ -209,15 +211,12 @@ class Compositor:
         for key in ("cases", "committee", "risk", "resources", "queue"):
             sections[key] = _section("UNAVAILABLE", None)
         validation_state = sections["benchmark_9h"]["state"]
-        room_states = {
-            "Interview Studio": {"state": "UNAVAILABLE", "presentation_status": "AVAILABLE_FOR_REVIEWED_UPLOAD", "data": {
-                "reviewed_upload_intake": "AVAILABLE_FOR_REVIEWED_UPLOAD", "transcription": "NOT_ACTIVATED",
-                "active_interviews_claimed": False, "consent_required": True, "human_approval_required": True}},
-            "Investor Archive": {"state": "UNAVAILABLE", "presentation_status": "NOT_ACTIVATED", "data": {
-                "durable_store": "NOT_ACTIVATED"}},
-            "Pattern Laboratory": {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
-                "testing_engine": "AVAILABLE", "experiment_count": 0, "validated_pattern_count": 0,
-                "point_in_time_required": True}},
+        room_states = room_projection()
+        room_states["Interview Studio"]["data"].update({
+                "reviewed_upload_intake": "AVAILABLE_FOR_REVIEWED_UPLOAD", "active_interviews_claimed": False,
+                "consent_required": True, "human_approval_required": True})
+        room_states["Investor Archive"]["data"]["durable_store"] = "NOT_ACTIVATED"
+        room_states.update({
             "Strictness Observatory": {"state": validation_state, "presentation_status": validation_state, "data": {
                 "policies": ["CURRENT", "BALANCED", "EXPLORATORY"], "simulation_only": True,
                 "performance_calculated": False, "evidence_state": validation_state}},
@@ -227,9 +226,8 @@ class Compositor:
                 "limits": {"max_cpu_pct": 60, "max_memory_mb": 2048, "max_concurrent_ai_tasks": 2,
                     "provider_requests_per_day": 100, "provider_cost_per_day": 10, "max_queue_depth": 200},
                 "usage_measured": False, "queue_count": None, "raw_tasks_exposed": False}},
-        }
-        section_rooms = {"Philosophy Arena": "outcomes_9j", "Judgment Foundry": "outcomes_9j",
-            "Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",
+        })
+        section_rooms = {"Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",
             "Strategic Book": "books", "Capital Allocation Room": "books", "Failure Museum": "benchmark_9h"}
         for room, key in section_rooms.items():
             room_states[room] = {"state": sections[key]["state"], "presentation_status": sections[key]["state"],

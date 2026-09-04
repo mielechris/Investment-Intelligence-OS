@@ -106,9 +106,14 @@ class PreviewServiceTests(unittest.TestCase):
 
 
 def source(source_id="s1", text="permitted note"):
-    return SourceRecord(source_id, "p1", "Title", "Publisher", "2025-01-01", "2026-09-03", "ARTICLE",
-        True, False, "PERMITTED", "PERMITTED", "PARAPHRASED", content_hash(text), "PUBLIC_ATTRIBUTABLE",
-        ("EQUITY",), ("EXPANSION",), "CURRENT", "PENDING")
+    return SourceRecord(source_id=source_id, professional_id="p1", title="Title", publisher="Publisher",
+        author="Fixture Author", investor="Fixture Investor", publication_date="2025-01-01",
+        retrieval_date="2026-09-03", source_type="ARTICLE", source_url=f"fixture://source/{source_id}",
+        source_domain="fixture", point_in_time_available_at="2025-01-01", public=True, user_provided=False,
+        permitted_use="PERMITTED", rights_review_status="PERMITTED", representation="PARAPHRASED",
+        content_hash=content_hash(text), provenance="SYNTHETIC_FIXTURE", applicable_assets=("EQUITY",),
+        applicable_regimes=("EXPANSION",), freshness="CURRENT", human_review_status="PENDING",
+        notes="Bounded synthetic fixture note.")
 
 
 class InvestorIntelligenceTests(unittest.TestCase):
@@ -137,8 +142,9 @@ class InvestorIntelligenceTests(unittest.TestCase):
 
     def test_claim_contradiction_review_and_handoffs(self):
         profile = ProfessionalProfile("p1", "Professional", "INVESTOR", ("VALUE_QUALITY",))
-        claims = [Claim("c1", "s1", "Debt is low", "SUPPORTS", "PARAPHRASED", "2025-01-01"),
-                  Claim("c2", "s2", "Debt is low", "CONTRADICTS", "DIRECT", "2025-01-02")]
+        common = {"attribution": "Fixture Investor", "evidence_location": "page 1", "timeframe": "2025"}
+        claims = [Claim("c1", "s1", "Debt is low", "SUPPORTS", "PARAPHRASED", "2025-01-01", **common),
+                  Claim("c2", "s2", "Debt is low", "CONTRADICTS", "DIRECT", "2025-01-02", **common)]
         self.assertEqual(len(contradictions(claims)), 1)
         packet = review_packet(profile, source(), claims); self.assertTrue(packet["human_approval_required"])
         self.assertEqual(judgment_handoff(packet, human_approved=False)["status"], "BLOCKED_HUMAN_APPROVAL")
@@ -151,7 +157,8 @@ class InvestorIntelligenceTests(unittest.TestCase):
         interview.consent = True; interview.permitted_uses = ("RESEARCH",); interview.confidential_exclusion = True
         interview.transcript = "corrected attributable transcript"; interview.speakers = ("Jesse",); interview.corrected = True
         self.assertEqual(interview.approval_status()["status"], "PENDING")
-        interview.professional_approved = True; self.assertEqual(interview.approval_status()["status"], "APPROVED")
+        interview.professional_approved = True; interview.speaker_attribution_status = "APPROVED"
+        interview.correction_status = "APPROVED"; self.assertEqual(interview.approval_status()["status"], "APPROVED")
         self.assertFalse(interview.approval_status()["judgment_bank_auto_write"])
         plan = interview_plan("Jesse"); self.assertEqual(plan["orchestrator"], "MAX")
         self.assertEqual(plan["theme_evidence_status"], "SOURCE_REVIEW_REQUIRED"); self.assertFalse(plan["statements_invented"])

@@ -8,6 +8,10 @@
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
+.wing-state--source_review_required {
+  color: #f0c97a;
+  border-bottom: 1px dashed currentColor;
+}
 .expansion-wing h2 {
   color: #f4f8fb;
   text-shadow: 0 1px 2px #000;
@@ -21,3 +25,4 @@
 .wing-state--available_empty::before { content: "∅"; }
 .wing-state--available_for_reviewed_upload::before { content: "↑"; }
 .wing-state--not_activated::before { content: "‖"; }
+.wing-state--source_review_required::before { content: "!"; }

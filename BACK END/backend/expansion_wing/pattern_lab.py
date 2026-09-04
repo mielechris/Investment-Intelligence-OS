@@ -17,11 +17,15 @@ class PointInTimeObservation:
 
 
 def walk_forward_test(observations: list[PointInTimeObservation], rule: Callable[[dict[str, float]], bool],
-                      *, minimum_train: int = 2) -> dict[str, Any]:
+                      *, minimum_train: int = 2, benchmark_returns: list[float] | None = None) -> dict[str, Any]:
     ordered = sorted(observations, key=lambda row: row.timestamp)
     if len(ordered) <= minimum_train:
         return {"status": "INCOMPLETE", "reason": "INSUFFICIENT_WALK_FORWARD_SAMPLE"}
-    outcomes: list[float] = []
+    if len({row.timestamp for row in ordered}) != len(ordered):
+        return {"status": "REJECTED", "reason": "DUPLICATE_POINT_IN_TIME", "point_in_time": False}
+    if benchmark_returns is not None and len(benchmark_returns) != len(ordered) - minimum_train:
+        return {"status": "REJECTED", "reason": "BENCHMARK_ALIGNMENT_REQUIRED", "point_in_time": False}
+    outcomes: list[float] = []; false_positives = 0
     equity = peak = 0.0
     max_drawdown = 0.0
     regimes: set[str] = set()
@@ -41,10 +45,15 @@ def walk_forward_test(observations: list[PointInTimeObservation], rule: Callable
             continue
         outcome = test.future_return - test.spread_cost - test.slippage_cost
         outcomes.append(outcome)
+        if outcome <= 0: false_positives += 1
         equity += outcome
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, peak - equity)
+    benchmark = round(sum(benchmark_returns or []), 6) if benchmark_returns is not None else None
     return {"status": "COMPLETE", "trades": len(outcomes), "net_return": round(sum(outcomes), 6),
+            "benchmark_return": benchmark, "false_positive_count": false_positives,
             "max_drawdown": round(max_drawdown, 6), "regimes": sorted(regimes),
             "point_in_time": True, "walk_forward": True, "transaction_costs_included": True,
-            "failures_included": any(value <= 0 for value in outcomes), "forward_paper_validation_required": True}
+            "failures_included": any(value <= 0 for value in outcomes), "out_of_sample": True,
+            "survivorship_risk_review_required": True, "regime_dependence_reported": True,
+            "causality_claimed": False, "profitability_claimed": False, "forward_paper_validation_required": True}
