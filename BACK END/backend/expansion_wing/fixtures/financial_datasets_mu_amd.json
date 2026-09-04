@@ -1,0 +1,24 @@
+{
+  "schema_version": "synthetic-financial-datasets-fixture-v1",
+  "fixture": true,
+  "company_facts": {"data":[
+    {"ticker":"MU","name":"Synthetic Memory Company","cik":"SYNTHETIC-0001","industry":"Synthetic Semiconductors","sector":"Synthetic Technology","market_cap":100,"updated_at":"2026-08-01T12:00:00Z","ignored_fixture_field":"ignored"},
+    {"ticker":"AMD","name":"Synthetic Compute Company","cik":"SYNTHETIC-0002","industry":"Synthetic Semiconductors","sector":"Synthetic Technology","market_cap":200,"updated_at":"2026-08-01T12:00:00Z"}
+  ]},
+  "income_statements": {"data":[
+    {"ticker":"MU","report_period":"2026-Q2","filing_date":"2026-07-01T12:00:00Z","revenue":10,"net_income":1},
+    {"ticker":"AMD","report_period":"2026-Q2","filing_date":"2026-07-02T12:00:00Z","revenue":20,"net_income":2}
+  ]},
+  "price_snapshot": {"data":[
+    {"ticker":"MU","time":"2026-08-01T12:00:00Z","price":10},
+    {"ticker":"AMD","time":"2026-08-01T12:00:00Z","price":20}
+  ]},
+  "filing_metadata": {"data":[
+    {"ticker":"MU","filing_date":"2026-07-01T12:00:00Z","report_period":"2026-Q2","filing_type":"10-Q","accession_number":"SYNTHETIC-MU-ACCESSION","source_url":"https://www.sec.gov/synthetic-mu"},
+    {"ticker":"AMD","filing_date":"2026-07-02T12:00:00Z","report_period":"2026-Q2","filing_type":"10-Q","accession_number":"SYNTHETIC-AMD-ACCESSION","source_url":"https://www.sec.gov/synthetic-amd"}
+  ]},
+  "earnings": {"data":[
+    {"ticker":"MU","report_period":"2026-Q3","updated_at":"2026-08-01T12:00:00Z","eps_estimate":1,"eps_actual":null},
+    {"ticker":"AMD","report_period":"2026-Q3","updated_at":"2026-08-01T12:00:00Z","eps_estimate":2,"eps_actual":null}
+  ]}
+}
