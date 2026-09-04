@@ -23,7 +23,9 @@ KEYCHAIN_SERVICE = "com.iios.expansion-wing.financial-datasets"
 KEYCHAIN_ACCOUNT = "financial-datasets-api-key"
 FMP_SERVICE = "com.iios.expansion-wing.fmp"
 FMP_ACCOUNT = "fmp-api-key"
-KEY_BYTES = 32
+CREDENTIAL_MIN_BYTES = 16
+CREDENTIAL_MAX_BYTES = 256
+_PLACEHOLDER_CREDENTIALS = frozenset({b"your_api_key_here", b"test", b"example", b"changeme", b"api-key"})
 SCHEMA_VERSION = "iios-financial-datasets-v1"
 CAPABILITY_STATES = {"SUPPORTED", "PREMIUM_SUPPORTED", "CONTRACT_ONLY", "UNAVAILABLE", "LICENSE_REVIEW_REQUIRED"}
 LICENSE_STATES = {"REVIEWED_INTERNAL_USE", "LICENSE_REVIEW_REQUIRED", "REDISTRIBUTION_PROHIBITED",
@@ -161,7 +163,9 @@ class SecurityFrameworkCredentialProvider:
         self.adapter = adapter
 
     def retrieve(self) -> bytes:
-        try: value = self.adapter.retrieve(KEYCHAIN_ACCOUNT)
+        try:
+            value = self.adapter.retrieve_opaque(KEYCHAIN_ACCOUNT, minimum_bytes=CREDENTIAL_MIN_BYTES,
+                maximum_bytes=CREDENTIAL_MAX_BYTES)
         except RuntimeError as exc:
             category = str(exc)
             if category in {"KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY"}:
@@ -170,10 +174,17 @@ class SecurityFrameworkCredentialProvider:
         return validate_credential(value)
 
 
-def validate_credential(value: bytes) -> bytes:
-    if not isinstance(value, bytes) or len(value) != KEY_BYTES or not re.fullmatch(rb"[A-Za-z0-9_-]{32}", value):
+def validate_credential(value: bytes | str) -> bytes:
+    if isinstance(value, str):
+        try: encoded = value.encode("ascii", errors="strict")
+        except UnicodeEncodeError: raise RuntimeError("CREDENTIAL_INVALID") from None
+    elif isinstance(value, bytes): encoded = value
+    else: raise RuntimeError("CREDENTIAL_INVALID")
+    if (not CREDENTIAL_MIN_BYTES <= len(encoded) <= CREDENTIAL_MAX_BYTES or
+            any(byte < 0x21 or byte > 0x7E for byte in encoded) or
+            encoded.lower() in _PLACEHOLDER_CREDENTIALS):
         raise RuntimeError("CREDENTIAL_INVALID")
-    return value
+    return encoded
 
 
 @dataclass(frozen=True)

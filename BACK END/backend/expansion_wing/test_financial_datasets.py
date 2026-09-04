@@ -8,16 +8,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from expansion_wing.financial_datasets import (
-    API_HOST, API_ORIGIN, AUTH_HEADER, AUTHORITY, ENDPOINTS, FMP_ACCOUNT, FMP_SERVICE, KEYCHAIN_ACCOUNT,
-    KEYCHAIN_SERVICE, PROVIDER_ID, PROVIDER_NAME, CreditLedger, FDCapability, FDPolicy, FDResponse,
+    API_HOST, API_ORIGIN, AUTH_HEADER, AUTHORITY, CREDENTIAL_MAX_BYTES, CREDENTIAL_MIN_BYTES, ENDPOINTS,
+    FMP_ACCOUNT, FMP_SERVICE, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE, PROVIDER_ID, PROVIDER_NAME, CreditLedger,
+    FDCapability, FDPolicy, FDResponse,
     FinancialDatasetsAdapter, SecurityFrameworkCredentialProvider, browser_readiness, enrich_shortlist,
     primary_source_gate, validate_credential, validate_origin,
 )
+from expansion_wing.keychain_adapter import KeychainAdapter
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FIXTURE = json.loads((FIXTURES / "financial_datasets_mu_amd.json").read_text())
 NOW = datetime(2026, 8, 2, tzinfo=timezone.utc)
-FIXTURE_CREDENTIAL = bytes([65]) * 32
+FIXTURE_CREDENTIAL = b"synthetic_A1-key!opaque"
 
 
 class Credentials:
@@ -62,13 +64,61 @@ class IdentityCredentialTests(unittest.TestCase):
     def test_security_framework_provider_exact_selector_and_failures(self):
         class Adapter:
             service = KEYCHAIN_SERVICE.encode()
-            def retrieve(self, account): self.account=account; return FIXTURE_CREDENTIAL
+            def retrieve_opaque(self, account, **bounds):
+                self.account=account; self.bounds=bounds; return FIXTURE_CREDENTIAL
         source = Adapter(); self.assertEqual(SecurityFrameworkCredentialProvider(source).retrieve(), FIXTURE_CREDENTIAL)
         self.assertEqual(source.account, KEYCHAIN_ACCOUNT)
+        self.assertEqual(source.bounds, {"minimum_bytes": CREDENTIAL_MIN_BYTES,
+            "maximum_bytes": CREDENTIAL_MAX_BYTES})
         source.service = FMP_SERVICE.encode()
         with self.assertRaises(ValueError): SecurityFrameworkCredentialProvider(source)
-        for value in (b"", b"x" * 31, b"x" * 33, b"!" * 32):
-            with self.subTest(length=len(value)), self.assertRaises(RuntimeError): validate_credential(value)
+
+    def test_bounded_opaque_header_credential_acceptance(self):
+        accepted = (b"A" * 16, b"Z" * 256, b"opaque-A1_key!shorter", b"opaque-A1_key!longer-than-thirty-two-bytes",
+            b"AZaz09_-!#$%&'()*+,./:;<=>?@[\\]^`{|}~")
+        for value in accepted:
+            with self.subTest(length=len(value)):
+                self.assertEqual(validate_credential(value), value)
+                self.assertEqual(validate_credential(value.decode("ascii")), value)
+
+    def test_bounded_opaque_header_credential_rejection(self):
+        rejected = (b"A" * 15, b"A" * 257, b" leading-visible-key", b"trailing-visible-key ",
+            b"embedded space key", b"tab\tvalue-is-long", b"carriage\rreturn-key", b"line\nfeed-key-value",
+            b"crlf\r\nheader-value", b"nul\x00credential-value", b"del\x7fcredential-value",
+            b"nonascii-credential-\xff", b"one-line-value\nsecond-line", b"value\r\nX-Evil: injected")
+        rejected += tuple(value.encode() for value in ("your_api_key_here", "test", "example", "changeme", "api-key"))
+        for value in rejected:
+            with self.subTest(case=len(value)), self.assertRaisesRegex(RuntimeError, "^CREDENTIAL_INVALID$") as raised:
+                validate_credential(value)
+            self.assertNotIn(value.decode("ascii", errors="ignore"), str(raised.exception))
+        with self.assertRaisesRegex(RuntimeError, "^CREDENTIAL_INVALID$"):
+            validate_credential("non-ascii-credential-é")
+
+    def test_opaque_keychain_path_preserves_exact_bytes_and_archive_key_path_stays_32(self):
+        class API:
+            def __init__(self): self.values={}
+            def add(self, service, account, secret):
+                if (service, account) in self.values: return -25299
+                self.values[(service, account)] = secret; return 0
+            def find(self, service, account):
+                value=self.values.get((service, account)); return (-25300, ()) if value is None else (0, (value,))
+            def delete(self, service, account): return -25300
+        api=API(); adapter=KeychainAdapter(api, service=KEYCHAIN_SERVICE)
+        original=b"opaque_A1-key!punctuation#longer-than-32"
+        self.assertEqual(adapter.create_opaque(KEYCHAIN_ACCOUNT, original,
+            minimum_bytes=CREDENTIAL_MIN_BYTES, maximum_bytes=CREDENTIAL_MAX_BYTES), "CREATED")
+        restored=adapter.retrieve_opaque(KEYCHAIN_ACCOUNT, minimum_bytes=CREDENTIAL_MIN_BYTES,
+            maximum_bytes=CREDENTIAL_MAX_BYTES)
+        self.assertEqual(restored, original); self.assertIsNot(restored, b"")
+        with self.assertRaises(ValueError): adapter.create("archive-key", b"short")
+
+    def test_secret_does_not_enter_failures_diagnostics_or_browser_projection(self):
+        secret=b"opaque_A1-key!never-report-this-value"
+        with self.assertRaisesRegex(RuntimeError, "^CREDENTIAL_INVALID$") as raised:
+            validate_credential(secret + b"\n")
+        outputs=(str(raised.exception), repr(raised.exception), json.dumps(browser_readiness(), sort_keys=True),
+            repr(SecurityFrameworkCredentialProvider))
+        self.assertTrue(all(secret.decode() not in output for output in outputs))
 
     def test_missing_ambiguous_inaccessible_context_are_sanitized(self):
         for category in ("KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY", "other"):

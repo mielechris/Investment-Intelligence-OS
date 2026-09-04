@@ -14,14 +14,18 @@ credit consumption, persistent service, market ingestion, or preview integration
 
 Financial Datasets is separate from Financial Modeling Prep. Its code never reuses the FMP provider ID, service
 `com.iios.expansion-wing.fmp`, account `fmp-api-key`, schemas, endpoint registry, cache, accounting, or normalized
-evidence. The existing reviewed binary-safe Security.framework adapter is the only permitted credential source. The
-credential is required to be exactly 32 ASCII URL-safe bytes; a real key that does not satisfy that reviewed contract
-must stop activation and trigger source review, not coercion or truncation.
+evidence. The existing reviewed binary-safe Security.framework adapter is the only permitted credential source.
+Financial Datasets publicly documents the credential as a string supplied in the `X-API-KEY` header; it does not
+publicly document a fixed provider length or alphabet. IIOS therefore treats it as opaque and applies a defensive
+application boundary: 16--256 bytes of visible ASCII (`0x21`--`0x7e`), exactly one header value, no spaces, control
+bytes, non-ASCII data, or known placeholders. This is not a claim about the provider's secret-generation format.
+IIOS does not parse, normalize, trim, change case, pad, decode, or otherwise transform accepted credential bytes.
 
 Credential creation, retrieval, deletion, revocation, and rotation are separately authorized operational actions.
 The key may never appear in URLs, source, fixtures, argv, environment variables, logs, diagnostics, errors, browser
 projections, screenshots, or test output. Missing, duplicate/ambiguous, malformed, inaccessible, wrong-context, or
-wrong-length results fail closed using fixed categories.
+out-of-bounds results fail closed using fixed categories. The general archive-key methods remain fixed at 32 bytes;
+the explicitly bounded opaque-secret methods preserve the original Financial Datasets bytes exactly.
 
 ## Endpoint and capability registry
 

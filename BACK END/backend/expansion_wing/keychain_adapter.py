@@ -131,18 +131,29 @@ class KeychainAdapter:
 
     def create(self, key_id: str, key: bytes) -> str:
         if len(key) != 32: raise ValueError("KEY_SIZE_INVALID")
-        status = self.api.add(self.service, self._account(key_id), key)
+        return self.create_opaque(key_id, key, minimum_bytes=32, maximum_bytes=32)
+
+    def create_opaque(self, key_id: str, secret: bytes, *, minimum_bytes: int, maximum_bytes: int) -> str:
+        if (not isinstance(secret, bytes) or not 1 <= minimum_bytes <= maximum_bytes or
+                not minimum_bytes <= len(secret) <= maximum_bytes):
+            raise ValueError("KEY_SIZE_INVALID")
+        status = self.api.add(self.service, self._account(key_id), secret)
         if status == ERR_DUPLICATE_ITEM: raise RuntimeError("KEY_RECORD_DUPLICATE")
         if status == ERR_PARAM: raise RuntimeError("INVALID_KEYCHAIN_QUERY")
         if status != 0: raise RuntimeError("KEYCHAIN_UNAVAILABLE")
         return "CREATED"
 
     def retrieve(self, key_id: str) -> bytes:
+        return self.retrieve_opaque(key_id, minimum_bytes=32, maximum_bytes=32)
+
+    def retrieve_opaque(self, key_id: str, *, minimum_bytes: int, maximum_bytes: int) -> bytes:
+        if not 1 <= minimum_bytes <= maximum_bytes: raise ValueError("KEY_SIZE_INVALID")
         status, matches = self.api.find(self.service, self._account(key_id))
         if status == ERR_ITEM_NOT_FOUND: raise RuntimeError("KEY_RECORD_MISSING")
         if status == ERR_PARAM: raise RuntimeError("INVALID_KEYCHAIN_QUERY")
         if status != 0: raise RuntimeError("KEYCHAIN_UNAVAILABLE")
-        if len(matches) != 1 or len(matches[0]) != 32:
+        if (len(matches) != 1 or not isinstance(matches[0], bytes) or
+                not minimum_bytes <= len(matches[0]) <= maximum_bytes):
             raise RuntimeError("KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS")
         return matches[0]
 
