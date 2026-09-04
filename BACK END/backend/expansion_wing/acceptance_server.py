@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.request import Request, urlopen
 
 from .knowledge_pipeline import room_projection
@@ -20,7 +20,7 @@ ROOMS = [
     "Interview Studio", "Investor Archive", "Philosophy Arena", "Judgment Foundry",
     "Pattern Laboratory", "Strictness Observatory", "Cross-Asset Observatory", "Regime Chamber",
     "Tactical Book", "Strategic Book", "Capital Allocation Room", "Failure Museum",
-    "Strategy Incubator", "Learning Theater",
+    "Resource Governor", "Learning Theater",
 ]
 
 
@@ -113,13 +113,15 @@ def _passports(telemetry: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class Compositor:
-    def __init__(self, telemetry: Path, validation: Path, shadow: Path, outcome: Path, backend: str) -> None:
+    def __init__(self, telemetry: Path, validation: Path, shadow: Path, outcome: Path, backend: str,
+                 knowledge_reader: Callable[[], dict[str, Any]] | None = None) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
         self.snapshot_requests = 0
         self.backend_requests = 0
         self.backend_latencies_ms: list[float] = []
         self.backend_errors: dict[str, int] = {}
+        self.knowledge_reader = knowledge_reader
 
     def _reachability(self) -> str:
         self.backend_requests += 1
@@ -226,7 +228,40 @@ class Compositor:
                 "limits": {"max_cpu_pct": 60, "max_memory_mb": 2048, "max_concurrent_ai_tasks": 2,
                     "provider_requests_per_day": 100, "provider_cost_per_day": 10, "max_queue_depth": 200},
                 "usage_measured": False, "queue_count": None, "raw_tasks_exposed": False}},
+            "Resource Governor": {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                "acquisition_scheduled": False, "network_enabled": False, "provider_enabled": False,
+                "cost_usd": 0, "authority_granted": False}},
         })
+        if self.knowledge_reader is not None:
+            try: knowledge = self.knowledge_reader()
+            except Exception: knowledge = None
+            if isinstance(knowledge, dict):
+                sections["knowledge_operations"] = _section("CURRENT", knowledge)
+                counts = {key: knowledge.get(key, 0) for key in ("source_count", "note_count", "claim_count",
+                    "rights_review_queue_count", "transcript_review_queue_count", "contradiction_queue_count",
+                    "judgment_queue_count", "pattern_queue_count")}
+                room_states["Interview Studio"] = {"state": "CURRENT", "presentation_status": "NOT_ACTIVATED", "data": {
+                    "transcription": knowledge.get("transcription"), "review_service": knowledge.get("review_service"),
+                    "transcript_review_queue_count": counts["transcript_review_queue_count"]}}
+                room_states["Investor Archive"] = {"state": "CURRENT", "presentation_status": knowledge.get("archive"), "data": {
+                    "source_count": counts["source_count"], "note_count": counts["note_count"],
+                    "claim_count": counts["claim_count"], "rights_review_queue_count": counts["rights_review_queue_count"],
+                    "public_source_intake": knowledge.get("public_source_intake")}}
+                room_states["Philosophy Arena"] = {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                    "contradiction_queue_count": counts["contradiction_queue_count"], "completed_intelligence_claimed": False}}
+                room_states["Judgment Foundry"] = {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                    "judgment_queue_count": counts["judgment_queue_count"], "validated_judgment_count": 0}}
+                room_states["Pattern Laboratory"] = {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                    "pattern_queue_count": counts["pattern_queue_count"], "validated_pattern_count": 0}}
+                room_states["Learning Theater"] = {"state": "CURRENT", "presentation_status": "READY", "data": {
+                    "operational_encryption": knowledge.get("operational_encryption"), "keychain": knowledge.get("keychain"),
+                    "backup_recovery": knowledge.get("backup_recovery"), "owner_reviewer": knowledge.get("owner_reviewer"),
+                    "review_service": knowledge.get("review_service"), "private_data_exposed": False}}
+                room_states["Resource Governor"] = {"state": "CURRENT", "presentation_status": "AVAILABLE_EMPTY", "data": {
+                    "acquisition_scheduled": False, "network_enabled": False, "provider_enabled": False,
+                    "cost_usd": 0, "authority_granted": False}}
+            else:
+                sections["knowledge_operations"] = _section("UNAVAILABLE", None)
         section_rooms = {"Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",
             "Strategic Book": "books", "Capital Allocation Room": "books", "Failure Museum": "benchmark_9h"}
         for room, key in section_rooms.items():

@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from .acceptance_server import Compositor
+from .knowledge_operations import knowledge_operations_projection
 
 HOST = "127.0.0.1"
 SERVICE_SCHEMA = "expansion-wing-preview-health-v1"
@@ -114,12 +115,18 @@ def main() -> None:
     parser.add_argument("--shadow", required=True, type=Path)
     parser.add_argument("--outcome", required=True, type=Path)
     parser.add_argument("--backend", default="http://127.0.0.1:8002/system/status")
+    parser.add_argument("--security-root", type=Path)
+    parser.add_argument("--archive-root", type=Path)
     args = parser.parse_args()
     args.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True); args.state_dir.chmod(0o700)
     lock_file = (args.state_dir / "preview.lock").open("w")
     try: fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError: raise SystemExit("DUPLICATE_INSTANCE") from None
-    compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend)
+    knowledge_reader = None
+    if args.security_root is not None or args.archive_root is not None:
+        if args.security_root is None or args.archive_root is None: raise SystemExit("KNOWLEDGE_ROOT_PAIR_REQUIRED")
+        knowledge_reader = lambda: knowledge_operations_projection(args.security_root, args.archive_root)
+    compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend, knowledge_reader)
     app = PreviewApplication(args.static_root, compositor)
     server = ThreadingHTTPServer((HOST, args.port), handler_for(app))
     server.daemon_threads = True
