@@ -32,5 +32,27 @@ The repository contains the listed Jesse themes as requested design leads, but t
 | Fixed-income specialists | duration, credit, curve and liquidity | public letters, research, lectures | NOT_ACTIVATED |
 | IPO specialists | issuance, lockups and seasoning | filings, prospectuses, academic research | NOT_ACTIVATED |
 | Failure cases | survivorship, leverage, liquidity and thesis invalidation | attributable postmortems and primary records | NOT_ACTIVATED |
+| John T. Barone / Market Vision Inc. | physical-commodity supply, demand, weather, policy, inventory, trade-flow and technical hypotheses | paid `mktvsn.com` newsletters only after subscription-rights and quotation review | RIGHTS_REVIEW_REQUIRED / NOT_ACTIVATED |
 
 Fame never confers validation. Every profile claim remains a hypothesis until source, point-in-time, contradiction, and human-review gates pass.
+
+## Market Vision physical-commodity practitioner plan
+
+Market Vision Inc. and analyst John T. Barone are the principal proposed physical-commodity practitioner source,
+closing the earlier gap between academic/systematic commodity research and practitioner observations of agriculture,
+food, energy, biofuels, weather, crops, inventories, trade flows, government policy, inflation/input costs, technical
+levels, and near-term catalysts. The known publication families are `The Commodity Update` and `The Weekly Summary`.
+An emailed report remains `UNKNOWN_PUBLICATION_VARIANT` until its exact subject or footer title is human-verified.
+
+The source is a `PAID_SUBSCRIPTION_COMMODITY_RESEARCH` source with trust class `SECONDARY_DOMAIN_EXPERT`. Its
+initial lifecycle is `DISCOVERED / RIGHTS_REVIEW_REQUIRED`; claim state is `REPORTED`. Public-domain ownership,
+subscription retention, quotation, forwarding, and derivative-note rights are not inferred. No complete newsletter
+may be retained. Email acquisition is disabled. Market Vision will not be contacted in this batch.
+
+After future rights approval, bounded attributed claim candidates may be reviewed for the Cross-Asset Observatory,
+Regime Chamber, Tactical Book, Strategic Book, Pattern Laboratory, Judgment Foundry, Failure Museum, and Investment
+Committee evidence packets. DULCE is only a possible downstream consumer; IIOS owns the registration. Every forecast
+observation must carry publication time, commodity, horizon, direction, catalysts, invalidation, supporting primary
+sources, subsequent outcome, and an accuracy class. Primary-source corroboration and human review are mandatory.
+Incorrect forecasts remain eligible for the Failure Museum. Automatic promotion, recommendations, trades, broker
+access, ledger writes, and live execution are always false.

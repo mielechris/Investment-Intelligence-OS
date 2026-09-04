@@ -29,6 +29,9 @@ _LIBRARY = (
     ("cliff_asness", "Cliff Asness", ("ACADEMIC_FACTORS",), ("QUANT_FACTOR",), ("ACADEMIC_RESEARCH", "ARTICLE")),
     ("jim_rogers", "Jim Rogers", ("COMMODITY_CYCLES",), ("COMMODITY", "FUTURES"), ("PUBLIC_INTERVIEW", "ARTICLE")),
     ("jay_ritter", "Jay Ritter", ("IPO_EMPIRICS",), ("IPO",), ("ACADEMIC_RESEARCH", "UNIVERSITY_LECTURE")),
+    ("john_t_barone", "John T. Barone", ("PHYSICAL_COMMODITY_DOMAIN_RESEARCH",),
+        ("COMMODITY", "FUTURES", "AGRICULTURE", "ENERGY"),
+        ("PAID_SUBSCRIPTION_COMMODITY_RESEARCH",)),
 )
 
 
