@@ -1,0 +1,11 @@
+{
+  "schema_version": "iios-sanitized-scanner-batch-v1",
+  "batch_id": "batch_0000000000000014",
+  "generated_at": "2026-09-04T18:00:00Z",
+  "originating_scanner": "EXISTING_IIOS_519_SYMBOL_SCANNER",
+  "candidates": [
+    {"candidate_id":"candidate_0000000000000014","ticker":"MU","discovered_at":"2026-09-04T17:55:00Z","missing_fields":["company_profile","identifiers"]},
+    {"candidate_id":"candidate_0000000000000015","ticker":"AMD","discovered_at":"2026-09-04T17:56:00Z","missing_fields":["company_profile"]},
+    {"candidate_id":"candidate_0000000000000016","ticker":"MU","discovered_at":"2026-09-04T17:57:00Z","missing_fields":["identifiers"]}
+  ]
+}
