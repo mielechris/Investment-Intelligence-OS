@@ -11,6 +11,7 @@ SECURITY = "/usr/bin/security"
 FRAMEWORK = "/System/Library/Frameworks/Security.framework/Security"
 ERR_DUPLICATE_ITEM = -25299
 ERR_ITEM_NOT_FOUND = -25300
+ERR_PARAM = -50
 _CANONICAL_32 = re.compile(rb"[A-Za-z0-9+/]{43}=")
 
 
@@ -132,12 +133,14 @@ class KeychainAdapter:
         if len(key) != 32: raise ValueError("KEY_SIZE_INVALID")
         status = self.api.add(self.service, self._account(key_id), key)
         if status == ERR_DUPLICATE_ITEM: raise RuntimeError("KEY_RECORD_DUPLICATE")
+        if status == ERR_PARAM: raise RuntimeError("INVALID_KEYCHAIN_QUERY")
         if status != 0: raise RuntimeError("KEYCHAIN_UNAVAILABLE")
         return "CREATED"
 
     def retrieve(self, key_id: str) -> bytes:
         status, matches = self.api.find(self.service, self._account(key_id))
         if status == ERR_ITEM_NOT_FOUND: raise RuntimeError("KEY_RECORD_MISSING")
+        if status == ERR_PARAM: raise RuntimeError("INVALID_KEYCHAIN_QUERY")
         if status != 0: raise RuntimeError("KEYCHAIN_UNAVAILABLE")
         if len(matches) != 1 or len(matches[0]) != 32:
             raise RuntimeError("KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS")
@@ -147,6 +150,7 @@ class KeychainAdapter:
         if not human_authorized: raise PermissionError("KEY_DELETION_AUTHORIZATION_REQUIRED")
         status = self.api.delete(self.service, self._account(key_id))
         if status == ERR_ITEM_NOT_FOUND: return "ALREADY_ABSENT"
+        if status == ERR_PARAM: raise RuntimeError("INVALID_KEYCHAIN_QUERY")
         if status != 0: raise RuntimeError("KEYCHAIN_UNAVAILABLE")
         return "DELETED"
 
