@@ -20,8 +20,9 @@ const ROOMS: Room[] = [
   { title: "Resource Governor", section: "knowledge_operations", description: "Disabled acquisition, cost, queue, and authority boundaries." },
   { title: "Learning Theater", section: "resources", description: "Owner reports, maturity, and approval inbox." },
 ];
-const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",candidate_conveyor:"Candidate conveyor",post_close_control:"Post-close control",governed_cases:"Governed cases",primary_source_review_queue:"Primary-source review",provider_credit_meter:"Provider / credit meter",cases:"Case system",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I shadow",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue",knowledge_operations:"Knowledge security",candidate_enrichment:"Candidate enrichment"};
+const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",candidate_conveyor:"Candidate conveyor",multi_asset_factory:"Multi-asset factory",professional_strategy_observatory:"Professional strategy observatory",method_manager_scoreboard:"Manager / method scoreboard",paper_research_sleeves:"Paper research sleeves",post_close_control:"Post-close control",governed_cases:"Governed cases",primary_source_review_queue:"Primary-source review",provider_credit_meter:"Provider / credit meter",cases:"Case system",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I shadow",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue",knowledge_operations:"Knowledge security",candidate_enrichment:"Candidate enrichment"};
 const compactStatus: Record<string, string> = { AVAILABLE_FOR_REVIEWED_UPLOAD: "UPLOAD READY" };
+const MULTI_ASSET_LANES = ["us_equities","equity_etfs","treasury_rates","bond_proxies","commodity_proxies","fx_proxies","crypto_reference","listed_options","intraday","relative_value"];
 
 export default function ExpansionWing() {
   const { snapshot: status, connection, fixtureMode: FIXTURE_MODE, snapshotAgeSeconds } = useExpansionWingSnapshot();
@@ -52,6 +53,11 @@ export default function ExpansionWing() {
       <div><span>9E</span><b aria-hidden="true">→</b><span>PRIMARY REVIEW</span><b aria-hidden="true">→</b><span>CASE DRAFT</span></div>
       <strong className={`wing-state wing-state--${(status?.sections.candidate_conveyor?.state??"UNAVAILABLE").toLowerCase()}`}>{status?.sections.candidate_conveyor?.state??"UNAVAILABLE"}</strong>
       {Array.isArray((status?.sections.candidate_conveyor?.data as {candidates?: unknown[]}|undefined)?.candidates) ? <ul>{((status?.sections.candidate_conveyor?.data as {candidates: Array<{candidate_id:string;ticker:string}>}).candidates).slice(0,5).map((row)=><li key={row.candidate_id}><b>{row.ticker}</b><code>{row.candidate_id}</code></li>)}</ul> : null}
+    </section>
+    <section className="wing-lanes" aria-label="Multi-asset research lanes">
+      <h3>Multi-Asset Research Factory</h3>
+      <p>Independent research lanes · proxies remain explicitly distinct from underlying instruments</p>
+      <div>{MULTI_ASSET_LANES.map((lane)=>{const state=((status?.sections.multi_asset_factory?.data as {lane_states?:Record<string,string>}|undefined)?.lane_states?.[lane])??"UNAVAILABLE";return <article key={lane}><span>{lane.replaceAll("_"," ")}</span><strong className={`wing-state wing-state--${state.toLowerCase()}`}>{state}</strong></article>;})}</div>
     </section>
     <div className="wing-truth-grid" aria-label="Expansion Wing truth states">{Object.entries(labels).map(([key,label]) => { const state=status?.sections[key]?.state??"UNAVAILABLE"; return <article key={key}><span>{label}</span><strong className={`wing-state wing-state--${state.toLowerCase()}`}>{state}</strong></article>; })}</div>
     <div className="wing-rooms" aria-label="Expansion Wing room registry">{ROOMS.map((room) => { const core=status?.room_states?.[room.title]?.state??status?.sections[room.section]?.state??"UNAVAILABLE"; const state=status?.room_states?.[room.title]?.presentation_status??core; return <button type="button" key={room.title} onClick={(event)=>{openerRef.current=event.currentTarget;setSelected(room);}} aria-label={`Open ${room.title}, ${state}`}><span className={`wing-state wing-state--${state.toLowerCase()}`} aria-hidden="true">{compactStatus[state]??state}</span><h3>{room.title}</h3><p>{room.description}</p></button>; })}</div>

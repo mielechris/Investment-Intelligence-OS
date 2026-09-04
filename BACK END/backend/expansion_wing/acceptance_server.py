@@ -60,6 +60,18 @@ def _section(state: str, data: dict[str, Any] | None) -> dict[str, Any]:
     return {"state": state, "data": data}
 
 
+def _safe_scoreboard(value: Any) -> dict[str, Any] | None:
+    fields = {"observations_evaluated", "unresolved_observations", "hit_rate", "return_distribution",
+        "drawdown_distribution", "calibration", "average_disclosure_delay_seconds", "evidence_completeness",
+        "regime_dependence", "sample_size_warning", "survivorship_bias_warning", "look_ahead_permitted",
+        "investment_endorsement"}
+    if not isinstance(value, dict) or set(value) != fields or any(isinstance(item, (dict, list)) for item in value.values()):
+        return None
+    if value.get("investment_endorsement") is not False or value.get("look_ahead_permitted") is not False:
+        return None
+    return {key: value[key] for key in sorted(fields)}
+
+
 def _safe_authority(payload: dict[str, Any], *, telemetry: bool = False) -> bool:
     safety = payload.get("safety")
     if not isinstance(safety, dict):
@@ -116,7 +128,8 @@ def _passports(telemetry: dict[str, Any]) -> list[dict[str, Any]]:
 class Compositor:
     def __init__(self, telemetry: Path, validation: Path, shadow: Path, outcome: Path, backend: str,
                  knowledge_reader: Callable[[], dict[str, Any]] | None = None,
-                 enrichment_reader: Callable[[], dict[str, Any]] | None = None) -> None:
+                 enrichment_reader: Callable[[], dict[str, Any]] | None = None,
+                 multi_asset_reader: Callable[[], dict[str, Any]] | None = None) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
         self.snapshot_requests = 0
@@ -125,6 +138,7 @@ class Compositor:
         self.backend_errors: dict[str, int] = {}
         self.knowledge_reader = knowledge_reader
         self.enrichment_reader = enrichment_reader
+        self.multi_asset_reader = multi_asset_reader
 
     def _reachability(self) -> str:
         self.backend_requests += 1
@@ -312,6 +326,39 @@ class Compositor:
                         "new_conservative_credits": enrichment["new_conservative_credits"],
                         "primary_review_queue_count": enrichment["primary_review_queue_count"],
                         "network_enabled": False, "provider_enabled": False, "authority_granted": False}}
+        if self.multi_asset_reader is not None:
+            try: multi_asset = self.multi_asset_reader()
+            except Exception: multi_asset = None
+            safe_states = {"AVAILABLE", "AVAILABLE_EMPTY", "STALE", "INCOMPLETE", "UNAVAILABLE", "FAILED_CLOSED"}
+            safe_authority = isinstance(multi_asset, dict) and isinstance(multi_asset.get("authority"), dict) and not any(multi_asset["authority"].values())
+            lanes = multi_asset.get("lane_states") if isinstance(multi_asset, dict) else None
+            scoreboard = _safe_scoreboard(multi_asset.get("scoreboard")) if isinstance(multi_asset, dict) else None
+            if (safe_authority and isinstance(lanes, dict) and len(lanes) == 10 and
+                    all(isinstance(k, str) and v in safe_states for k, v in lanes.items()) and
+                    multi_asset.get("consolidated_paper_nav") == 10_000 and scoreboard is not None):
+                sections["multi_asset_factory"] = _section(str(multi_asset.get("state") or "UNKNOWN"), {
+                    "lane_states": lanes, "professional_observation_count": multi_asset.get("professional_observation_count", 0),
+                    "paper_sleeve_count": multi_asset.get("paper_sleeve_count", 0),
+                    "consolidated_paper_nav": 10_000, "provider_status": multi_asset.get("provider_status"),
+                    "queue_depth": multi_asset.get("queue_depth", 0), "last_successful_cycle": multi_asset.get("last_successful_cycle"),
+                    "failure_reasons": multi_asset.get("failure_reasons", []), "research_only": True})
+                sections["professional_strategy_observatory"] = _section(
+                    "AVAILABLE_EMPTY" if multi_asset.get("professional_observation_count", 0) == 0 else "CURRENT",
+                    {"observation_count": multi_asset.get("professional_observation_count", 0),
+                     "investment_endorsement": False, "automatic_promotion": False})
+                sections["method_manager_scoreboard"] = _section("INCOMPLETE", scoreboard)
+                sections["paper_research_sleeves"] = _section(
+                    "AVAILABLE_EMPTY" if multi_asset.get("paper_sleeve_count", 0) == 0 else "CURRENT",
+                    {"sleeve_count": multi_asset.get("paper_sleeve_count", 0), "consolidated_paper_nav": 10_000,
+                     "paper_positions_inferred": False})
+            else:
+                for key in ("multi_asset_factory", "professional_strategy_observatory",
+                            "method_manager_scoreboard", "paper_research_sleeves"):
+                    sections[key] = _section("UNAVAILABLE", None)
+        else:
+            for key in ("multi_asset_factory", "professional_strategy_observatory",
+                        "method_manager_scoreboard", "paper_research_sleeves"):
+                sections[key] = _section("UNAVAILABLE", None)
         section_rooms = {"Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",
             "Strategic Book": "books", "Capital Allocation Room": "books", "Failure Museum": "benchmark_9h"}
         for room, key in section_rooms.items():

@@ -1,0 +1,20 @@
+{
+  "schema_version": "iios-multi-asset-research-fixture-v1",
+  "fixture_label": "SYNTHETIC_FIXTURE_NON_LIVE",
+  "lane_states": {
+    "us_equities": "AVAILABLE_EMPTY",
+    "equity_etfs": "AVAILABLE_EMPTY",
+    "treasury_rates": "INCOMPLETE",
+    "bond_proxies": "INCOMPLETE",
+    "commodity_proxies": "INCOMPLETE",
+    "fx_proxies": "INCOMPLETE",
+    "crypto_reference": "INCOMPLETE",
+    "listed_options": "INCOMPLETE",
+    "intraday": "UNAVAILABLE",
+    "relative_value": "INCOMPLETE"
+  },
+  "professional_observation_count": 0,
+  "paper_sleeve_count": 0,
+  "consolidated_paper_nav": 10000,
+  "provider_status": "NOT_ACTIVATED"
+}
