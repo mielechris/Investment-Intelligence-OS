@@ -33,6 +33,11 @@ The adapter accepts no caller-supplied URL or authentication header. A capabilit
 Every request and redirect must remain HTTPS on exact host `api.financialdatasets.ai`, with no embedded credentials,
 alternate port, IP literal, lookalike subdomain, query secret, or fragment.
 
+Company facts uses the exact canonical path `/company/facts`, with no trailing slash. Authorization occurs against
+that path before the deterministic `ticker=<approved identifier>` query is constructed separately. Duplicate slashes,
+dot segments, percent-encoded substitutions, alternate paths, and path-correcting redirects fail closed. No path
+normalization occurs after authorization, and redirects are never followed automatically.
+
 | Capability | Classification | Credit class |
 |---|---|---|
 | Company facts and identifiers | SUPPORTED | STANDARD / 1 |
@@ -63,11 +68,17 @@ request. Unknown fields are counted and discarded; they never silently enter nor
 
 ## Credit accounting and resource limits
 
-The purchased Credits-plan balance is 1,000. Auto-reload, purchase, refill, subscription upgrade, and overage are
-prohibited. Standard attempts authorize 1 credit; Premium attempts authorize 8 credits. Unknown cost or balance,
-insufficient provider balance, or insufficient internal allowance stops before transport. Each retry is a distinct
-credit authorization; cache hits and deduplicated single-flight waiters cost zero. Accounting uses one lock across
-total, daily, and monthly counters.
+The purchased Credits-plan ceiling is 1,000. Auto-reload, purchase, refill, subscription upgrade, and overage are
+prohibited. Standard attempts reserve 1 credit; Premium attempts reserve 8 credits. Unknown cost or balance,
+insufficient allowance, or a pre-transport failure releases or prevents the reservation. Once transport begins, an
+attempt without a confirmed response remains conservatively charged as ambiguous; a confirmed response is charged
+exactly once. Cache hits and deduplicated single-flight waiters cost zero. There are no automatic retries. Accounting
+uses one lock across total, daily, and monthly counters.
+
+The next operational acceptance ledger starts at confirmed consumed `0`, prior ambiguous/reserved `1`, and maximum
+remaining authorized `999`. These are conservative IIOS values, not a claim about the provider-reported balance. An
+owner may inspect the provider dashboard manually without copying, displaying, or recording the API key; dashboard
+evidence remains separately attributed and never silently rewrites IIOS attempt history.
 
 Initial limits are 10 requests/minute, 100 credits/day, 1,000 credits/month, and 1,000 total. Internal daily/monthly
 ceilings may be lowered but never exceed the provider balance or total ceiling. Batch size is at most 50 shortlisted
@@ -77,6 +88,12 @@ scanner remains discovery owner.
 The browser/accounting boundary exposes only provider state, capability, Standard/Premium class, projected cost,
 consumed and remaining authorized credits, cache Boolean, request timestamp, response status category, and fixed
 failure category. It excludes credentials, parameterized URLs, response bodies, company values, text, and evidence.
+
+Before transport, IIOS creates a scalar-only attempt record in `AUTHORIZED`, then moves to `REQUEST_STARTING`. Every
+branch terminates as `RESPONSE_OBSERVED`, `TRANSPORT_FAILED`, `REDIRECT_REJECTED`, `TIMEOUT`, `TLS_FAILED`,
+`DNS_FAILED`, or `ACCOUNTING_UNCERTAIN`. Records contain only fixed identifiers, an approved symbol, projected cost,
+sequence, request/response Booleans, fixed status, bounded metrics, cache/retry state, and accounting category.
+Missing metrics and callback failures remain explicit; code never indexes an assumed metric.
 
 ## Cache, classification, provenance, and verification
 
@@ -126,12 +143,13 @@ zero provider or Keychain calls.
 4. Separately authorize provisioning through the binary-safe Security.framework ceremony using the exact selector.
 5. Verify fresh-process persistence without printing the credential.
 6. Reverify official endpoint documentation, license state, 1×/8× costs, balance, deletion duties, and schema.
-7. In an isolated no-reload process, run one bounded live company-facts request for `MU` and `AMD` only.
-8. Run one identical cache-repeat check, which must consume zero additional credits.
-9. Report exact attempted requests, consumed/remaining credits, latency, schema, freshness, and hashes without bodies.
-10. Retain only approved normalized governed evidence and sanitized coverage metadata.
-11. Remove only temporary runtime material and stop before continuous scanning or preview integration.
-12. Require separate approval for scheduled ingestion, persistent service changes, or further endpoints.
+7. Initialize accounting with confirmed `0`, prior ambiguous `1`, and maximum remaining `999`.
+8. With fresh explicit authorization, run canonical `/company/facts` for `MU` first; stop before `AMD` on any failure.
+9. After each success, run one identical cache repeat, which must consume zero requests and credits.
+10. Report attempted, confirmed, and ambiguous requests plus latency, size, schema, freshness, and hashes without bodies.
+11. Retain only approved normalized governed evidence and sanitized coverage metadata.
+12. Remove only temporary runtime material and stop before continuous scanning or preview integration.
+13. Require separate approval for scheduled ingestion, persistent service changes, or further endpoints.
 
 Any credential, licensing, authentication, schema, accounting, host, or Keychain failure stops without retrying a
 terminal failure or weakening a gate.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import ssl
 import threading
 import unittest
 from dataclasses import replace
@@ -10,9 +12,9 @@ from pathlib import Path
 from expansion_wing.financial_datasets import (
     API_HOST, API_ORIGIN, AUTH_HEADER, AUTHORITY, CREDENTIAL_MAX_BYTES, CREDENTIAL_MIN_BYTES, ENDPOINTS,
     FMP_ACCOUNT, FMP_SERVICE, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE, PROVIDER_ID, PROVIDER_NAME, CreditLedger,
-    FDCapability, FDPolicy, FDResponse,
-    FinancialDatasetsAdapter, SecurityFrameworkCredentialProvider, browser_readiness, enrich_shortlist,
-    primary_source_gate, validate_credential, validate_origin,
+    AttemptRecord, BoundedLiveAcceptanceRunner, FDCapability, FDPolicy, FDResponse,
+    FinancialDatasetsAdapter, SecurityFrameworkCredentialProvider, browser_readiness, canonical_request_target,
+    enrich_shortlist, primary_source_gate, validate_credential, validate_origin,
 )
 from expansion_wing.keychain_adapter import KeychainAdapter
 
@@ -136,12 +138,18 @@ class EndpointCapabilityTests(unittest.TestCase):
         self.assertTrue(all(spec.state in {"SUPPORTED", "PREMIUM_SUPPORTED", "CONTRACT_ONLY", "UNAVAILABLE", "LICENSE_REVIEW_REQUIRED"} for spec in ENDPOINTS.values()))
 
     def test_exact_https_origin_and_no_arbitrary_paths(self):
-        self.assertEqual(validate_origin(f"{API_ORIGIN}/company/facts/"), "/company/facts/")
-        rejected = ("http://api.financialdatasets.ai/company/facts/", "https://evil.api.financialdatasets.ai/company/facts/",
-            "https://api.financialdatasets.ai:444/company/facts/", "https://user:pass@api.financialdatasets.ai/company/facts/",
-            "https://127.0.0.1/company/facts/", "https://api.financialdatasets.ai/company/facts/?key=x")
+        self.assertEqual(validate_origin(f"{API_ORIGIN}/company/facts", expected_path="/company/facts"), "/company/facts")
+        self.assertEqual(canonical_request_target(FDCapability.COMPANY_FACTS,"MU"),
+            "https://api.financialdatasets.ai/company/facts?ticker=MU")
+        rejected = ("http://api.financialdatasets.ai/company/facts", "https://evil.api.financialdatasets.ai/company/facts",
+            "https://api.financialdatasets.ai:444/company/facts", "https://user:pass@api.financialdatasets.ai/company/facts",
+            "https://127.0.0.1/company/facts", "https://api.financialdatasets.ai/company/facts?key=x",
+            "https://api.financialdatasets.ai/company/facts/", "https://api.financialdatasets.ai/company//facts",
+            "https://api.financialdatasets.ai/company/./facts", "https://api.financialdatasets.ai/company/%66acts",
+            "https://api.financialdatasets.ai/company/facts#fragment")
         for url in rejected:
-            with self.subTest(url=url), self.assertRaises(ValueError): validate_origin(url)
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                validate_origin(url,expected_path="/company/facts")
         blocked = FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=Transport({})).fetch(
             FDCapability.SEC_FILING_ITEM_METADATA, ("MU",))
         self.assertEqual(blocked.failure, "ENDPOINT_NOT_ALLOWED")
@@ -187,15 +195,115 @@ class CreditTests(unittest.TestCase):
         cached=adapter.fetch(FDCapability.COMPANY_FACTS, ("MU","AMD"))
         self.assertTrue(cached.cache_hit); self.assertEqual(adapter.credits.consumed,1)
 
-    def test_retry_attempts_each_consume_credit_but_terminal_does_not_retry(self):
+    def test_no_automatic_retry_and_terminal_response_is_charged_once(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         transient=Transport({}, status=500, final_url=f"{API_ORIGIN}{spec.path}")
-        adapter=FinancialDatasetsAdapter(policy(retry_limit=1), credentials=Credentials(), transport=transient)
-        adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",)); self.assertEqual((transient.calls, adapter.credits.consumed),(2,2))
+        adapter=FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=transient)
+        adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",)); self.assertEqual((transient.calls, adapter.credits.consumed),(1,1))
+        with self.assertRaises(ValueError): policy(retry_limit=1).validate()
         auth=Transport({}, status=401, final_url=f"{API_ORIGIN}{spec.path}")
-        adapter=FinancialDatasetsAdapter(policy(retry_limit=1), credentials=Credentials(), transport=auth)
+        adapter=FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=auth)
         self.assertEqual(adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",)).failure,"AUTHENTICATION_FAILED")
         self.assertEqual((auth.calls, adapter.credits.consumed),(1,1))
+
+
+class TransportLifecycleTests(unittest.TestCase):
+    def make(self, transport, **kwargs):
+        return FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=transport,
+            utcnow=lambda:NOW,**kwargs)
+
+    def assert_sanitized_complete(self, result, *, started, observed, lifecycle, accounting):
+        self.assertEqual(len(result.attempts),1); record=result.attempts[0]
+        self.assertIsInstance(record,AttemptRecord); self.assertEqual(record.request_started,started)
+        self.assertEqual(record.response_observed,observed); self.assertEqual(record.lifecycle_state,lifecycle)
+        self.assertEqual(record.accounting_state,accounting)
+        safe=json.dumps(result.safe_accounting(),sort_keys=True)
+        for prohibited in (FIXTURE_CREDENTIAL.decode(),API_ORIGIN,"company/facts?",'"body"','exception'):
+            self.assertNotIn(prohibited,safe)
+        self.assertEqual(set(record.sanitized()),{"provider_id","capability","canonical_endpoint_id","symbol",
+            "projected_credit_cost","attempt_sequence_number","request_started","response_observed",
+            "terminal_status_category","latency_ms","response_size_bytes","cache_state","retry_count",
+            "accounting_state","lifecycle_state"})
+
+    def test_failure_before_transport_releases_reservation(self):
+        transport=Transport({}); adapter=FinancialDatasetsAdapter(policy(),credentials=Credentials(error="KEY_RECORD_MISSING"),transport=transport)
+        result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
+        self.assertEqual((transport.calls,adapter.credits.consumed),(0,0))
+        self.assert_sanitized_complete(result,started=False,observed=False,lifecycle="TRANSPORT_FAILED",
+            accounting="RELEASED_BEFORE_TRANSPORT")
+
+    def test_invoked_failures_remain_ambiguously_charged(self):
+        cases=((RuntimeError("private transport detail"),"ACCOUNTING_UNCERTAIN","TRANSPORT_FAILED"),
+            (socket.gaierror("private dns detail"),"DNS_FAILED","DNS_FAILED"),
+            (ssl.SSLError("private tls detail"),"TLS_FAILED","TLS_FAILED"),
+            (TimeoutError("private timeout detail"),"TIMEOUT","TIMEOUT"))
+        for error,category,lifecycle in cases:
+            with self.subTest(category=category):
+                transport=Transport({},error=error); adapter=self.make(transport)
+                result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
+                self.assertEqual((result.failure,transport.calls,adapter.credits.ambiguous_reserved),(category,1,1))
+                self.assert_sanitized_complete(result,started=True,observed=False,lifecycle=lifecycle,
+                    accounting="AMBIGUOUS_RESERVED")
+        class NoResponse:
+            calls=0
+            def __call__(self,*_args): self.calls+=1; return None
+        transport=NoResponse(); adapter=self.make(transport)
+        result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
+        self.assertEqual((result.failure,transport.calls,adapter.credits.ambiguous_reserved),
+            ("ACCOUNTING_UNCERTAIN",1,1))
+        self.assert_sanitized_complete(result,started=True,observed=False,lifecycle="TRANSPORT_FAILED",
+            accounting="AMBIGUOUS_RESERVED")
+
+    def test_confirmed_terminal_responses_charge_once(self):
+        spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
+        cases=((b"",200,"EMPTY_RESPONSE"),(b"{}",401,"AUTHENTICATION_FAILED"),
+            (b"{}",403,"ENTITLEMENT_FAILED"),(b'{"wrong":[]}',200,"SCHEMA_REJECTED"))
+        for body,status,failure in cases:
+            with self.subTest(failure=failure):
+                transport=Transport(body,status=status,final_url=f"{API_ORIGIN}{spec.path}")
+                adapter=self.make(transport); result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
+                self.assertEqual((result.failure,adapter.credits.confirmed_consumed,adapter.credits.consumed),(failure,1,1))
+                self.assert_sanitized_complete(result,started=True,observed=True,lifecycle="RESPONSE_OBSERVED",
+                    accounting="CONFIRMED_CONSUMED")
+
+    def test_redirect_is_not_followed_or_used_to_correct_path(self):
+        spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
+        transport=Transport(b"{}",status=301,final_url=f"{API_ORIGIN}{spec.path}/",
+            redirects=(f"{API_ORIGIN}{spec.path}/",))
+        adapter=self.make(transport); result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
+        self.assertEqual((result.failure,transport.calls),("REDIRECT_REJECTED",1))
+        self.assert_sanitized_complete(result,started=True,observed=True,lifecycle="REDIRECT_REJECTED",
+            accounting="CONFIRMED_CONSUMED")
+
+    def test_metric_callback_failure_is_sanitized_without_unhandled_access(self):
+        spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
+        def broken(_record): raise RuntimeError("private callback detail")
+        transport=Transport(FIXTURE["company_facts"],final_url=f"{API_ORIGIN}{spec.path}")
+        adapter=self.make(transport,metric_recorder=broken)
+        result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD"))
+        self.assertEqual((result.failure,transport.calls,adapter.credits.confirmed_consumed),
+            ("METRIC_CALLBACK_FAILED",1,1))
+        self.assertEqual(result.attempts[0].terminal_status_category,"METRIC_CALLBACK_FAILED")
+
+    def test_prior_ambiguous_credit_and_cache_zero_cost(self):
+        adapter,transport=adapter_for(FDCapability.COMPANY_FACTS,"company_facts")
+        adapter=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=transport,utcnow=lambda:NOW,
+            prior_ambiguous_credits=1)
+        first=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD")); cached=adapter.fetch(FDCapability.COMPANY_FACTS,("MU","AMD"))
+        self.assertEqual((adapter.credits.confirmed_consumed,adapter.credits.ambiguous_reserved,
+            adapter.credits.consumed,adapter._remaining()),(1,1,2,998))
+        self.assertTrue(cached.cache_hit); self.assertEqual(cached.attempts[0].projected_credit_cost,0)
+        self.assertEqual(cached.attempts[0].accounting_state,"ZERO_CREDIT")
+
+    def test_runner_defaults_disabled_and_mu_failure_stops_amd(self):
+        disabled=FinancialDatasetsAdapter(credentials=Credentials(),transport=Transport({}))
+        self.assertEqual(BoundedLiveAcceptanceRunner(disabled).run()["status"],"NOT_AUTHORIZED")
+        failing=Transport({},error=RuntimeError("private")); adapter=self.make(failing,prior_ambiguous_credits=1)
+        report=BoundedLiveAcceptanceRunner(adapter,explicitly_authorized=True).run()
+        self.assertEqual((report["status"],failing.calls,report["attempted_requests"],
+            report["confirmed_requests"],report["ambiguous_requests"]),("STOPPED_FAIL_CLOSED",1,1,0,1))
+        self.assertEqual(report["accounting"],{"consumed":2,"confirmed":0,"ambiguous":2,"remaining":998})
+        self.assertTrue(all(value is False for value in report["authority"].values()))
 
 
 class FixtureNormalizationTests(unittest.TestCase):

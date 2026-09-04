@@ -4,13 +4,15 @@ import hashlib
 import ipaddress
 import json
 import re
+import socket
+import ssl
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 from .keychain_adapter import KeychainAdapter
 
@@ -34,7 +36,8 @@ DATA_CLASSES = {"PRIMARY_SOURCE_FACT", "PROVIDER_NORMALIZED_FACT", "DERIVED_METR
     "COMPANY_GUIDANCE", "NEWS_METADATA", "PRESS_RELEASE_METADATA", "INSIDER_DISCLOSURE",
     "INSTITUTIONAL_HOLDING", "TECHNICAL_OBSERVATION", "UNVERIFIED_PROVIDER_VALUE"}
 TERMINAL_STATUS = {"AUTHENTICATION_FAILED", "CREDIT_REJECTED", "LICENSE_REJECTED", "SCHEMA_REJECTED",
-    "REDIRECT_REJECTED", "RESPONSE_TOO_LARGE"}
+    "ENTITLEMENT_FAILED", "REDIRECT_REJECTED", "RESPONSE_TOO_LARGE", "EMPTY_RESPONSE",
+    "METRIC_CALLBACK_FAILED", "TLS_FAILED", "DNS_FAILED", "ACCOUNTING_UNCERTAIN"}
 FIXED_FAILURES = TERMINAL_STATUS | {"DISABLED", "CREDENTIAL_NOT_PROVISIONED", "CREDENTIAL_INVALID",
     "KEYCHAIN_UNAVAILABLE", "KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY",
     "ENDPOINT_NOT_ALLOWED", "BATCH_LIMIT", "UNKNOWN_ENDPOINT_COST", "BALANCE_UNKNOWN",
@@ -91,7 +94,7 @@ def _spec(capability: FDCapability, state: str, path: str | None, credit: str | 
 
 
 ENDPOINTS = {
-    FDCapability.COMPANY_FACTS: _spec(FDCapability.COMPANY_FACTS, "SUPPORTED", "/company/facts/", "STANDARD",
+    FDCapability.COMPANY_FACTS: _spec(FDCapability.COMPANY_FACTS, "SUPPORTED", "/company/facts", "STANDARD",
         "PROVIDER_NORMALIZED_FACT", ("ticker", "name", "updated_at"),
         ("ticker", "name", "cik", "industry", "sector", "market_cap", "updated_at")),
     FDCapability.INCOME_STATEMENTS: _spec(FDCapability.INCOME_STATEMENTS, "SUPPORTED", "/financials/income-statements/", "STANDARD",
@@ -141,15 +144,28 @@ ENDPOINTS = {
 }
 
 
-def validate_origin(url: str) -> str:
+def validate_origin(url: str, *, expected_path: str | None = None) -> str:
     parsed = urlparse(url)
     try: ipaddress.ip_address(parsed.hostname or "")
     except ValueError: pass
     else: raise ValueError("ENDPOINT_NOT_ALLOWED")
+    path = parsed.path
+    segments = path.split("/")
     if (parsed.scheme != "https" or parsed.hostname != API_HOST or parsed.port not in (None, 443) or
-            parsed.username or parsed.password or parsed.query or parsed.fragment):
+            parsed.username or parsed.password or parsed.query or parsed.fragment or "%" in path or
+            "//" in path or any(segment in {".", ".."} for segment in segments) or
+            (expected_path is not None and path != expected_path)):
         raise ValueError("ENDPOINT_NOT_ALLOWED")
-    return parsed.path
+    return path
+
+
+def canonical_request_target(capability: FDCapability, ticker: str) -> str:
+    spec = ENDPOINTS.get(capability)
+    if (not spec or not spec.path or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", ticker)):
+        raise ValueError("ENDPOINT_NOT_ALLOWED")
+    validate_origin(f"{API_ORIGIN}{spec.path}", expected_path=spec.path)
+    query = urlencode((("ticker", ticker),), quote_via=quote, safe="")
+    return f"{API_ORIGIN}{spec.path}?{query}"
 
 
 class CredentialProvider(Protocol):
@@ -201,7 +217,7 @@ class FDPolicy:
     response_timeout_seconds: float = 10.0
     response_size_limit: int = 2_000_000
     redirect_limit: int = 1
-    retry_limit: int = 1
+    retry_limit: int = 0
     cache_seconds: int = 300
     auto_reload: bool = False
 
@@ -213,24 +229,56 @@ class FDPolicy:
                 self.monthly_ceiling > self.total_ceiling or not 1 <= self.requests_per_minute <= 10 or
                 not 1 <= self.batch_limit <= 50 or not 0 < self.timeout_seconds <= 10 or
                 not 0 < self.response_timeout_seconds <= 20 or not 0 < self.response_size_limit <= 2_000_000 or
-                not 0 <= self.redirect_limit <= 1 or not 0 <= self.retry_limit <= 1 or not 1 <= self.cache_seconds <= 300):
+                not 0 <= self.redirect_limit <= 1 or self.retry_limit != 0 or not 1 <= self.cache_seconds <= 300):
             raise ValueError("POLICY_INVALID")
 
 
 class CreditLedger:
-    def __init__(self, policy: FDPolicy) -> None:
-        policy.validate(); self.policy = policy; self._lock = threading.Lock(); self.consumed = 0
+    def __init__(self, policy: FDPolicy, *, prior_ambiguous_credits: int = 0) -> None:
+        policy.validate()
+        if not 0 <= prior_ambiguous_credits <= policy.total_ceiling: raise ValueError("ACCOUNTING_INVALID")
+        self.policy = policy; self._lock = threading.Lock(); self.confirmed_consumed = 0
+        self.ambiguous_reserved = prior_ambiguous_credits; self._pending: dict[int, int] = {}; self._sequence = 0
         self.daily = 0; self.monthly = 0
 
-    def authorize_attempt(self, cost: int | None) -> dict[str, int]:
+    @property
+    def consumed(self) -> int:
+        return self.confirmed_consumed + self.ambiguous_reserved + sum(self._pending.values())
+
+    def reserve(self, cost: int | None) -> tuple[int, dict[str, int]]:
         with self._lock:
             if cost not in {1, 8}: raise RuntimeError("UNKNOWN_ENDPOINT_COST")
             if self.policy.provider_balance is None: raise RuntimeError("BALANCE_UNKNOWN")
             remaining = min(self.policy.provider_balance, self.policy.total_ceiling) - self.consumed
             if cost > remaining or self.daily + cost > self.policy.daily_ceiling or self.monthly + cost > self.policy.monthly_ceiling:
                 raise RuntimeError("CREDIT_EXHAUSTED")
-            self.consumed += cost; self.daily += cost; self.monthly += cost
-            return {"consumed": self.consumed, "remaining": remaining - cost}
+            self._sequence += 1; token = self._sequence; self._pending[token] = cost
+            self.daily += cost; self.monthly += cost
+            return token, self.snapshot()
+
+    def release_before_transport(self, token: int) -> dict[str, int]:
+        with self._lock:
+            cost = self._pending.pop(token); self.daily -= cost; self.monthly -= cost
+            return self.snapshot()
+
+    def confirm_response(self, token: int) -> dict[str, int]:
+        with self._lock:
+            self.confirmed_consumed += self._pending.pop(token)
+            return self.snapshot()
+
+    def mark_ambiguous(self, token: int) -> dict[str, int]:
+        with self._lock:
+            self.ambiguous_reserved += self._pending.pop(token)
+            return self.snapshot()
+
+    def snapshot(self) -> dict[str, int]:
+        used = self.confirmed_consumed + self.ambiguous_reserved + sum(self._pending.values())
+        return {"consumed": used, "confirmed": self.confirmed_consumed, "ambiguous": self.ambiguous_reserved,
+            "remaining": min(self.policy.provider_balance or 0, self.policy.total_ceiling) - used}
+
+    def authorize_attempt(self, cost: int | None) -> dict[str, int]:
+        token, _ = self.reserve(cost)
+        return self.confirm_response(token)
 
 
 @dataclass(frozen=True)
@@ -239,6 +287,18 @@ class FDResponse:
     final_url: str
     redirects: tuple[str, ...]
     body: bytes
+    latency_ms: float | None = None
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    provider_id: str; capability: str; canonical_endpoint_id: str; symbol: str
+    projected_credit_cost: int; attempt_sequence_number: int; request_started: bool
+    response_observed: bool; terminal_status_category: str; latency_ms: float | None
+    response_size_bytes: int | None; cache_state: str; retry_count: int; accounting_state: str
+    lifecycle_state: str
+
+    def sanitized(self) -> dict[str, Any]: return asdict(self)
 
 
 Transport = Callable[[str, dict[str, bytes], tuple[str, ...], float, float], FDResponse]
@@ -269,6 +329,7 @@ class FDResult:
     projected_credit_cost: int = 0; consumed_credits: int = 0; remaining_credits: int | None = None
     cache_hit: bool = False; request_timestamp: str | None = None; response_status_category: str = "NOT_REQUESTED"
     ignored_field_count: int = 0
+    attempts: tuple[AttemptRecord, ...] = ()
 
     def safe_accounting(self) -> dict[str, Any]:
         return {"provider_state": self.state, "capability_requested": self.capability,
@@ -276,7 +337,8 @@ class FDResult:
             "projected_credit_cost": self.projected_credit_cost, "consumed_credit_count": self.consumed_credits,
             "remaining_authorized_credit_count": self.remaining_credits, "cache_hit": self.cache_hit,
             "request_timestamp": self.request_timestamp, "response_status_category": self.response_status_category,
-            "failure_category": self.failure, "authority": AUTHORITY.copy()}
+            "failure_category": self.failure, "attempts": tuple(item.sanitized() for item in self.attempts),
+            "authority": AUTHORITY.copy()}
 
 
 def _time(value: str) -> datetime:
@@ -291,9 +353,13 @@ class FinancialDatasetsAdapter:
 
     def __init__(self, policy: FDPolicy = FDPolicy(), *, credentials: CredentialProvider | None = None,
                  transport: Transport | None = None, clock: Callable[[], float] = time.monotonic,
-                 utcnow: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
+                 utcnow: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                 prior_ambiguous_credits: int = 0,
+                 metric_recorder: Callable[[AttemptRecord], None] | None = None) -> None:
         policy.validate(); self.policy = policy; self.credentials = credentials; self.transport = transport
-        self.clock = clock; self.utcnow = utcnow; self.credits = CreditLedger(policy)
+        self.clock = clock; self.utcnow = utcnow
+        self.credits = CreditLedger(policy, prior_ambiguous_credits=prior_ambiguous_credits)
+        self.metric_recorder = metric_recorder; self.attempt_records: list[AttemptRecord] = []
         self._cache: dict[tuple[str, tuple[str, ...]], tuple[float, FDResult]] = {}
         self._condition = threading.Condition(); self._inflight: set[tuple[str, tuple[str, ...]]] = set()
         self._request_times: list[float] = []; self.transport_calls = 0
@@ -316,19 +382,21 @@ class FinancialDatasetsAdapter:
             cached = self._cache.get(key)
             if cached and self.clock() - cached[0] <= self.policy.cache_seconds:
                 prior = cached[1]
+                attempt = self._cache_attempt(capability, tickers, "HIT")
                 return FDResult(prior.state, prior.capability, prior.records, projected_credit_cost=cost,
                     consumed_credits=self.credits.consumed, remaining_credits=self._remaining(), cache_hit=True,
                     request_timestamp=prior.request_timestamp, response_status_category="CACHE_HIT",
-                    ignored_field_count=prior.ignored_field_count)
+                    ignored_field_count=prior.ignored_field_count, attempts=(attempt,))
             while key in self._inflight:
                 self._condition.wait(timeout=self.policy.response_timeout_seconds)
                 cached = self._cache.get(key)
                 if cached:
                     prior = cached[1]
+                    attempt = self._cache_attempt(capability, tickers, "SINGLE_FLIGHT")
                     return FDResult(prior.state, prior.capability, prior.records, projected_credit_cost=cost,
                         consumed_credits=self.credits.consumed, remaining_credits=self._remaining(), cache_hit=True,
                         request_timestamp=prior.request_timestamp, response_status_category="SINGLE_FLIGHT_CACHE",
-                        ignored_field_count=prior.ignored_field_count)
+                        ignored_field_count=prior.ignored_field_count, attempts=(attempt,))
                 if key in self._inflight: return self._fail(capability, "TIMEOUT", cost)
             self._inflight.add(key)
         try:
@@ -340,43 +408,97 @@ class FinancialDatasetsAdapter:
             with self._condition: self._inflight.discard(key); self._condition.notify_all()
 
     def _request(self, spec: EndpointSpec, tickers: tuple[str, ...]) -> FDResult:
-        if self.credentials is None or self.transport is None: return self._fail(spec.capability, "CREDENTIAL_NOT_PROVISIONED", spec.credit_cost)
-        try: secret = validate_credential(self.credentials.retrieve())
-        except RuntimeError as exc:
-            category = str(exc) if str(exc) in FIXED_FAILURES else "KEYCHAIN_UNAVAILABLE"
-            return self._fail(spec.capability, category, spec.credit_cost)
         now = self.clock(); self._request_times = [value for value in self._request_times if now - value < 60]
         if len(self._request_times) >= self.policy.requests_per_minute: return self._fail(spec.capability, "RATE_LIMITED", spec.credit_cost)
-        url = f"{API_ORIGIN}{spec.path}"; validate_origin(url)
-        attempts = self.policy.retry_limit + 1
-        for attempt in range(attempts):
-            try: accounting = self.credits.authorize_attempt(spec.credit_cost)
-            except RuntimeError as exc: return self._fail(spec.capability, str(exc), spec.credit_cost)
-            requested_at = self.utcnow().isoformat(); self._request_times.append(self.clock()); self.transport_calls += 1
-            try: response = self.transport(url, {AUTH_HEADER: secret}, tickers, self.policy.timeout_seconds, self.policy.response_timeout_seconds)
-            except TimeoutError:
-                if attempt + 1 < attempts: continue
-                return self._fail(spec.capability, "TIMEOUT", spec.credit_cost, accounting, requested_at)
+        try: token, accounting = self.credits.reserve(spec.credit_cost)
+        except RuntimeError as exc: return self._fail(spec.capability, str(exc), spec.credit_cost)
+        requested_at = self.utcnow().isoformat(); symbol = "|".join(tickers)
+        attempt = AttemptRecord(PROVIDER_ID, spec.capability.value, spec.capability.value, symbol,
+            spec.credit_cost or 0, token, False, False, "PENDING", None, None, "MISS", 0, "RESERVED", "AUTHORIZED")
+        try:
+            if self.credentials is None or self.transport is None: raise RuntimeError("CREDENTIAL_NOT_PROVISIONED")
+            secret = validate_credential(self.credentials.retrieve())
+            url = f"{API_ORIGIN}{spec.path}"; validate_origin(url, expected_path=spec.path)
+        except RuntimeError as exc:
+            accounting = self.credits.release_before_transport(token)
+            category = str(exc) if str(exc) in FIXED_FAILURES else "KEYCHAIN_UNAVAILABLE"
+            attempt = replace(attempt, terminal_status_category=category,
+                accounting_state="RELEASED_BEFORE_TRANSPORT", lifecycle_state="TRANSPORT_FAILED")
+            return self._with_attempt(self._fail(spec.capability, category, spec.credit_cost, accounting, requested_at), attempt)
+        except Exception:
+            accounting = self.credits.release_before_transport(token)
+            attempt = replace(attempt, terminal_status_category="PROVIDER_UNAVAILABLE",
+                accounting_state="RELEASED_BEFORE_TRANSPORT", lifecycle_state="TRANSPORT_FAILED")
+            return self._with_attempt(self._fail(spec.capability, "PROVIDER_UNAVAILABLE", spec.credit_cost, accounting, requested_at), attempt)
+        started = self.clock(); self._request_times.append(started); self.transport_calls += 1
+        attempt = replace(attempt, request_started=True, lifecycle_state="REQUEST_STARTING")
+        try:
+            response = self.transport(url, {AUTH_HEADER: secret}, tickers,
+                self.policy.timeout_seconds, self.policy.response_timeout_seconds)
+        except TimeoutError:
+            return self._ambiguous_failure(spec, attempt, token, requested_at, "TIMEOUT", "TIMEOUT", started)
+        except socket.gaierror:
+            return self._ambiguous_failure(spec, attempt, token, requested_at, "DNS_FAILED", "DNS_FAILED", started)
+        except ssl.SSLError:
+            return self._ambiguous_failure(spec, attempt, token, requested_at, "TLS_FAILED", "TLS_FAILED", started)
+        except Exception:
+            return self._ambiguous_failure(spec, attempt, token, requested_at,
+                "ACCOUNTING_UNCERTAIN", "TRANSPORT_FAILED", started)
+        if not isinstance(response, FDResponse):
+            return self._ambiguous_failure(spec, attempt, token, requested_at,
+                "ACCOUNTING_UNCERTAIN", "TRANSPORT_FAILED", started)
+        accounting = self.credits.confirm_response(token)
+        latency = response.latency_ms if response.latency_ms is not None else max(0.0, (self.clock() - started) * 1000)
+        size = len(response.body) if isinstance(response.body, bytes) else None
+        attempt = replace(attempt, response_observed=True, latency_ms=latency, response_size_bytes=size,
+            accounting_state="CONFIRMED_CONSUMED", lifecycle_state="RESPONSE_OBSERVED")
+        if not isinstance(response.body, bytes) or not response.body:
+            return self._terminal_response(spec, attempt, requested_at, accounting, "EMPTY_RESPONSE")
+        if len(response.body) > self.policy.response_size_limit:
+            return self._terminal_response(spec, attempt, requested_at, accounting, "RESPONSE_TOO_LARGE")
+        try:
+            if response.redirects or validate_origin(response.final_url, expected_path=spec.path) != spec.path:
+                raise ValueError
+        except ValueError:
+            attempt = replace(attempt, lifecycle_state="REDIRECT_REJECTED")
+            return self._terminal_response(spec, attempt, requested_at, accounting, "REDIRECT_REJECTED")
+        if response.status == 401: return self._terminal_response(spec, attempt, requested_at, accounting, "AUTHENTICATION_FAILED")
+        if response.status == 403: return self._terminal_response(spec, attempt, requested_at, accounting, "ENTITLEMENT_FAILED")
+        if response.status == 429: return self._terminal_response(spec, attempt, requested_at, accounting, "RATE_LIMITED")
+        if response.status != 200: return self._terminal_response(spec, attempt, requested_at, accounting, "PROVIDER_UNAVAILABLE")
+        result = self._normalize(spec, tickers, response.body, requested_at, accounting, self._status(response.status))
+        attempt = replace(attempt, terminal_status_category=result.failure or "SUCCESS")
+        return self._with_attempt(result, attempt)
+
+    def _ambiguous_failure(self, spec: EndpointSpec, attempt: AttemptRecord, token: int,
+                           requested_at: str, category: str, lifecycle: str, started: float) -> FDResult:
+        accounting = self.credits.mark_ambiguous(token)
+        complete = replace(attempt, terminal_status_category=category,
+            latency_ms=max(0.0, (self.clock() - started) * 1000), accounting_state="AMBIGUOUS_RESERVED",
+            lifecycle_state=lifecycle)
+        return self._with_attempt(self._fail(spec.capability, category, spec.credit_cost, accounting, requested_at), complete)
+
+    def _terminal_response(self, spec: EndpointSpec, attempt: AttemptRecord, requested_at: str,
+                           accounting: dict[str, int], category: str) -> FDResult:
+        complete = replace(attempt, terminal_status_category=category)
+        return self._with_attempt(self._fail(spec.capability, category, spec.credit_cost, accounting, requested_at), complete)
+
+    def _with_attempt(self, result: FDResult, attempt: AttemptRecord) -> FDResult:
+        self.attempt_records.append(attempt)
+        if self.metric_recorder is not None:
+            try: self.metric_recorder(attempt)
             except Exception:
-                if attempt + 1 < attempts: continue
-                return self._fail(spec.capability, "RETRY_EXHAUSTED", spec.credit_cost, accounting, requested_at)
-            category = self._status(response.status)
-            if len(response.body) > self.policy.response_size_limit:
-                return self._fail(spec.capability, "RESPONSE_TOO_LARGE", spec.credit_cost, accounting, requested_at)
-            try:
-                validate_origin(response.final_url)
-                if len(response.redirects) > self.policy.redirect_limit or any(validate_origin(item) != spec.path for item in response.redirects):
-                    raise ValueError
-                if validate_origin(response.final_url) != spec.path: raise ValueError
-            except ValueError:
-                return self._fail(spec.capability, "REDIRECT_REJECTED", spec.credit_cost, accounting, requested_at)
-            if response.status in {401, 403}: return self._fail(spec.capability, "AUTHENTICATION_FAILED", spec.credit_cost, accounting, requested_at)
-            if response.status == 429: return self._fail(spec.capability, "RATE_LIMITED", spec.credit_cost, accounting, requested_at)
-            if response.status != 200:
-                if 500 <= response.status < 600 and attempt + 1 < attempts: continue
-                return self._fail(spec.capability, "PROVIDER_UNAVAILABLE", spec.credit_cost, accounting, requested_at)
-            return self._normalize(spec, tickers, response.body, requested_at, accounting, category)
-        return self._fail(spec.capability, "RETRY_EXHAUSTED", spec.credit_cost)
+                failed = replace(attempt, terminal_status_category="METRIC_CALLBACK_FAILED")
+                self.attempt_records[-1] = failed
+                return replace(result, state="UNAVAILABLE", records=(), failure="METRIC_CALLBACK_FAILED",
+                    attempts=(failed,))
+        return replace(result, attempts=(attempt,))
+
+    def _cache_attempt(self, capability: FDCapability, tickers: tuple[str, ...], state: str) -> AttemptRecord:
+        attempt = AttemptRecord(PROVIDER_ID, capability.value, capability.value, "|".join(tickers), 0, 0,
+            False, False, "CACHE_HIT", None, None, state, 0, "ZERO_CREDIT", "RESPONSE_OBSERVED")
+        self.attempt_records.append(attempt)
+        return attempt
 
     def _normalize(self, spec: EndpointSpec, tickers: tuple[str, ...], body: bytes, requested_at: str,
                    accounting: dict[str, int], category: str) -> FDResult:
@@ -431,6 +553,32 @@ class FinancialDatasetsAdapter:
         if 400 <= status < 500: return "CLIENT_ERROR"
         if 500 <= status < 600: return "SERVER_ERROR"
         return "UNAVAILABLE"
+
+
+class BoundedLiveAcceptanceRunner:
+    """No-network-by-default orchestration; a caller must inject an enabled adapter and authorize once."""
+
+    def __init__(self, adapter: FinancialDatasetsAdapter, *, explicitly_authorized: bool = False) -> None:
+        self.adapter = adapter; self.explicitly_authorized = explicitly_authorized
+
+    def run(self) -> dict[str, Any]:
+        if not self.explicitly_authorized or not self.adapter.policy.enabled:
+            return {"status": "NOT_AUTHORIZED", "attempted_requests": 0, "confirmed_requests": 0,
+                "ambiguous_requests": 0, "results": (), "authority": AUTHORITY.copy()}
+        results: list[dict[str, Any]] = []
+        for symbol in ("MU", "AMD"):
+            result = self.adapter.fetch(FDCapability.COMPANY_FACTS, (symbol,))
+            results.append(result.safe_accounting())
+            if result.state != "AVAILABLE": break
+            repeat = self.adapter.fetch(FDCapability.COMPANY_FACTS, (symbol,))
+            results.append(repeat.safe_accounting())
+        attempts = tuple(item for item in self.adapter.attempt_records if item.projected_credit_cost > 0)
+        return {"status": "COMPLETE" if len(results) == 4 else "STOPPED_FAIL_CLOSED",
+            "attempted_requests": sum(item.request_started for item in attempts),
+            "confirmed_requests": sum(item.response_observed for item in attempts),
+            "ambiguous_requests": sum(item.accounting_state == "AMBIGUOUS_RESERVED" for item in attempts),
+            "results": tuple(results), "accounting": self.adapter.credits.snapshot(),
+            "authority": AUTHORITY.copy()}
 
 
 def primary_source_gate(record: GovernedRecord, *, primary_source_verified: bool, human_approved: bool) -> dict[str, Any]:
