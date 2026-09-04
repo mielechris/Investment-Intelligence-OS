@@ -20,7 +20,7 @@ const ROOMS: Room[] = [
   { title: "Resource Governor", section: "knowledge_operations", description: "Disabled acquisition, cost, queue, and authority boundaries." },
   { title: "Learning Theater", section: "resources", description: "Owner reports, maturity, and approval inbox." },
 ];
-const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",cases:"Governed cases",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I shadow",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue",knowledge_operations:"Knowledge security"};
+const labels: Record<string, string> = {service_health:"Service health",last_cycle:"Last cycle",radar:"Radar flow",cases:"Governed cases",committee:"Committee",risk:"Risk",books:"Dual books",benchmark_9h:"9H benchmark",shadow_9i:"9I shadow",outcomes_9j:"9J outcomes",resources:"Resources",queue:"Queue",knowledge_operations:"Knowledge security",candidate_enrichment:"Candidate enrichment"};
 const compactStatus: Record<string, string> = { AVAILABLE_FOR_REVIEWED_UPLOAD: "UPLOAD READY" };
 
 export default function ExpansionWing() {

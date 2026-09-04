@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
+from .candidate_enrichment_bridge import validate_browser_projection as validate_enrichment_projection
 from .knowledge_pipeline import room_projection
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
@@ -114,7 +115,8 @@ def _passports(telemetry: dict[str, Any]) -> list[dict[str, Any]]:
 
 class Compositor:
     def __init__(self, telemetry: Path, validation: Path, shadow: Path, outcome: Path, backend: str,
-                 knowledge_reader: Callable[[], dict[str, Any]] | None = None) -> None:
+                 knowledge_reader: Callable[[], dict[str, Any]] | None = None,
+                 enrichment_reader: Callable[[], dict[str, Any]] | None = None) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
         self.snapshot_requests = 0
@@ -122,6 +124,7 @@ class Compositor:
         self.backend_latencies_ms: list[float] = []
         self.backend_errors: dict[str, int] = {}
         self.knowledge_reader = knowledge_reader
+        self.enrichment_reader = enrichment_reader
 
     def _reachability(self) -> str:
         self.backend_requests += 1
@@ -262,6 +265,25 @@ class Compositor:
                     "cost_usd": 0, "authority_granted": False}}
             else:
                 sections["knowledge_operations"] = _section("UNAVAILABLE", None)
+        if self.enrichment_reader is not None:
+            try:
+                enrichment = self.enrichment_reader()
+                validate_enrichment_projection(enrichment)
+            except Exception:
+                enrichment = None
+            if enrichment is None:
+                sections["candidate_enrichment"] = _section("UNAVAILABLE", None)
+            else:
+                sections["candidate_enrichment"] = _section("CURRENT", enrichment)
+                room_states["Resource Governor"] = {"state": "CURRENT",
+                    "presentation_status": "READY" if enrichment["candidate_count"] else "AVAILABLE_EMPTY",
+                    "data": {"candidate_count": enrichment["candidate_count"],
+                        "unique_ticker_count": enrichment["unique_ticker_count"],
+                        "provider_request_count": enrichment["provider_request_count"],
+                        "cache_hit_count": enrichment["cache_hit_count"],
+                        "new_conservative_credits": enrichment["new_conservative_credits"],
+                        "primary_review_queue_count": enrichment["primary_review_queue_count"],
+                        "network_enabled": False, "provider_enabled": False, "authority_granted": False}}
         section_rooms = {"Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",
             "Strategic Book": "books", "Capital Allocation Room": "books", "Failure Museum": "benchmark_9h"}
         for room, key in section_rooms.items():

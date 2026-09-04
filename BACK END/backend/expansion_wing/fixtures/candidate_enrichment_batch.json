@@ -1,0 +1,9 @@
+{
+  "schema_version": "iios-candidate-enrichment-fixture-v1",
+  "originating_scanner": "EXISTING_IIOS_519_SYMBOL_SCANNER",
+  "candidates": [
+    {"candidate_id":"candidate_0000000000000001","ticker":"MU","discovered_at":"2026-09-04T16:00:00Z","missing_fields":["company_profile","identifiers"]},
+    {"candidate_id":"candidate_0000000000000002","ticker":"AMD","discovered_at":"2026-09-04T16:01:00Z","missing_fields":["company_profile"]},
+    {"candidate_id":"candidate_0000000000000003","ticker":"MU","discovered_at":"2026-09-04T16:02:00Z","missing_fields":["identifiers"]}
+  ]
+}

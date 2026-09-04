@@ -245,10 +245,14 @@ class FDPolicy:
 
 
 class CreditLedger:
-    def __init__(self, policy: FDPolicy, *, prior_ambiguous_credits: int = 0) -> None:
+    def __init__(self, policy: FDPolicy, *, prior_confirmed_credits: int = 0,
+                 prior_ambiguous_credits: int = 0) -> None:
         policy.validate()
-        if not 0 <= prior_ambiguous_credits <= policy.total_ceiling: raise ValueError("ACCOUNTING_INVALID")
-        self.policy = policy; self._lock = threading.Lock(); self.confirmed_consumed = 0
+        if (not 0 <= prior_confirmed_credits <= policy.total_ceiling or
+                not 0 <= prior_ambiguous_credits <= policy.total_ceiling or
+                prior_confirmed_credits + prior_ambiguous_credits > policy.total_ceiling):
+            raise ValueError("ACCOUNTING_INVALID")
+        self.policy = policy; self._lock = threading.Lock(); self.confirmed_consumed = prior_confirmed_credits
         self.ambiguous_reserved = prior_ambiguous_credits; self._pending: dict[int, int] = {}; self._sequence = 0
         self.daily = 0; self.monthly = 0
 
@@ -376,11 +380,13 @@ class FinancialDatasetsAdapter:
     def __init__(self, policy: FDPolicy = FDPolicy(), *, credentials: CredentialProvider | None = None,
                  transport: Transport | None = None, clock: Callable[[], float] = time.monotonic,
                  utcnow: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                 prior_confirmed_credits: int = 0,
                  prior_ambiguous_credits: int = 0,
                  metric_recorder: Callable[[AttemptRecord], None] | None = None) -> None:
         policy.validate(); self.policy = policy; self.credentials = credentials; self.transport = transport
         self.clock = clock; self.utcnow = utcnow
-        self.credits = CreditLedger(policy, prior_ambiguous_credits=prior_ambiguous_credits)
+        self.credits = CreditLedger(policy, prior_confirmed_credits=prior_confirmed_credits,
+            prior_ambiguous_credits=prior_ambiguous_credits)
         self.metric_recorder = metric_recorder; self.attempt_records: list[AttemptRecord] = []
         self._cache: dict[tuple[str, tuple[str, ...]], tuple[float, FDResult]] = {}
         self._condition = threading.Condition(); self._inflight: set[tuple[str, tuple[str, ...]]] = set()
