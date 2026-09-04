@@ -18,6 +18,9 @@ from .candidate_enrichment_bridge import (
 SCHEMA_VERSION = "iios-candidate-flow-acceptance-v1"
 CHECKPOINT_SCHEMA = "iios-provider-credit-checkpoint-v1"
 FIXTURE_BATCH_SCHEMA = "iios-sanitized-scanner-batch-v1"
+ACCEPTED_BASELINE = (3, 2, 1_000)
+BASELINE_ATTESTATION = "IIOS_FINANCIAL_DATASETS_ACCEPTED_BASELINE_3_2_1000"
+BASELINE_ATTESTATION_HASH = hashlib.sha256(BASELINE_ATTESTATION.encode("ascii")).hexdigest()
 
 
 def _canonical(value: Any) -> bytes:
@@ -121,6 +124,22 @@ class CreditCheckpointStore:
             raise RuntimeError("CREDIT_CHECKPOINT_CONFLICT")
         self._write(checkpoint)
 
+    def initialize_accepted_baseline(self, *, explicitly_authorized: bool,
+                                     attestation_hash: str, reviewed_at: str,
+                                     confirmed: int = 3, ambiguous: int = 2,
+                                     ceiling: int = 1_000) -> CreditCheckpoint:
+        if not explicitly_authorized:
+            raise RuntimeError("CREDIT_INITIALIZATION_UNAUTHORIZED")
+        try: reviewed = _time(reviewed_at)
+        except ValueError: raise RuntimeError("CREDIT_ATTESTATION_INVALID") from None
+        if (attestation_hash != BASELINE_ATTESTATION_HASH or
+                (confirmed, ambiguous, ceiling) != ACCEPTED_BASELINE or
+                reviewed > datetime.now(reviewed.tzinfo)):
+            raise RuntimeError("CREDIT_ATTESTATION_INVALID")
+        checkpoint = genesis_checkpoint(confirmed=confirmed, ambiguous=ambiguous)
+        self.initialize(checkpoint)
+        return checkpoint
+
     def _write(self, checkpoint: CreditCheckpoint) -> None:
         descriptor, name = tempfile.mkstemp(prefix=".credit-", dir=self.root)
         temporary = Path(name)
@@ -176,7 +195,7 @@ def parse_sanitized_batch(value: dict[str, Any]) -> tuple[str, tuple[ScannerCand
         raise ValueError("SCANNER_BATCH_INVALID")
     generated = _time(value["generated_at"])
     rows = value.get("candidates")
-    if not isinstance(rows, list) or not 1 <= len(rows) <= 5: raise ValueError("SCANNER_BATCH_INVALID")
+    if not isinstance(rows, list) or not 0 <= len(rows) <= 5: raise ValueError("SCANNER_BATCH_INVALID")
     candidates = []
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"candidate_id", "ticker", "discovered_at", "missing_fields"}:
@@ -213,6 +232,15 @@ class CandidateFlowAcceptance:
         if snapshot["confirmed"] != checkpoint.confirmed or snapshot["ambiguous"] != checkpoint.ambiguous:
             return AcceptanceResult("REJECTED", batch_id, (), len(candidates), len({x.ticker for x in candidates}),
                 0, 0, checkpoint.consumed, checkpoint.consumed, "CREDIT_CHECKPOINT_MISMATCH")
+        if not candidates:
+            updated = next_checkpoint(checkpoint, confirmed=checkpoint.confirmed,
+                ambiguous=checkpoint.ambiguous, batch_id=batch_id)
+            try: self.store.save(updated, expected_previous_hash=checkpoint.event_hash)
+            except RuntimeError as exc:
+                return AcceptanceResult("STOPPED_FAIL_CLOSED", batch_id, (), 0, 0, 0, 0,
+                    checkpoint.consumed, checkpoint.consumed, str(exc))
+            return AcceptanceResult("AVAILABLE_EMPTY", batch_id, (), 0, 0, 0, 0,
+                checkpoint.consumed, checkpoint.consumed, None)
         bridge_result = self.bridge.run(candidates, explicitly_authorized=True)
         final = self.bridge.provider.credits.snapshot()
         updated = next_checkpoint(checkpoint, confirmed=final["confirmed"], ambiguous=final["ambiguous"],

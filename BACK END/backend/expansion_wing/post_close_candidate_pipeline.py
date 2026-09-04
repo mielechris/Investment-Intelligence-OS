@@ -135,6 +135,8 @@ def finalize_post_close(
     except ValueError:
         return PostCloseResult("STOPPED_FAIL_CLOSED", closing.session_date, 0, 0, 0,
                                "CLOSING_SESSION_INCOMPLETE")
+    if acceptance.state == "AVAILABLE_EMPTY" and acceptance.candidate_count == 0 and not acceptance.review_items:
+        return PostCloseResult("AVAILABLE_EMPTY", closing.session_date, 0, 0, 0, None)
     if acceptance.state != "COMPLETE" or not 1 <= len(acceptance.review_items) <= 5:
         return PostCloseResult("STOPPED_FAIL_CLOSED", closing.session_date, 0, 0, 0,
                                "CANDIDATE_ACCEPTANCE_REQUIRED")

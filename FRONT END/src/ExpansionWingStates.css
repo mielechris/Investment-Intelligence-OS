@@ -32,3 +32,12 @@
 .wing-state--ready::before { content: "✓"; }
 .wing-state--disabled::before { content: "■"; }
 .wing-state--awaiting_approved_source::before { content: "…"; }
+.wing-state--waiting,
+.wing-state--awaiting { color: #f0c97a; border-bottom: 1px dashed currentColor; }
+.wing-state--waiting::before,
+.wing-state--awaiting::before { content: "…"; }
+.wing-conveyor { margin: 1rem 0; padding: 1rem; border: 1px solid #445566; border-radius: .75rem; background: #101820; }
+.wing-conveyor > div { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; font-weight: 800; letter-spacing: .04em; }
+.wing-conveyor ul { list-style: none; padding: 0; margin: .75rem 0 0; display: grid; gap: .35rem; }
+.wing-conveyor li { display: flex; justify-content: space-between; gap: 1rem; }
+.wing-conveyor code { color: #c8d3dd; }

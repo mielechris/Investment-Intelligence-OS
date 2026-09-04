@@ -35,7 +35,7 @@ class PostCloseProjection:
     authority_granted: bool = False
 
     def validate(self) -> None:
-        states = {"NOT_ACTIVATED", "WAITING_FOR_CLOSE", "AWAITING_PRIMARY_SOURCES",
+        states = {"NOT_ACTIVATED", "WAITING_FOR_CLOSE", "AVAILABLE_EMPTY", "AWAITING_PRIMARY_SOURCES",
                   "READY_FOR_GOVERNED_CASE_DRAFT", "STOPPED_FAIL_CLOSED"}
         counts = (self.candidate_count, self.provider_request_count, self.new_credits,
                   self.primary_review_queue_count, self.verified_candidate_count,

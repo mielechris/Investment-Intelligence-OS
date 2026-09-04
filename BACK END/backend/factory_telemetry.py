@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from radar_candidate_projection import project_candidate_lineage
+
 SCHEMA_VERSION = "batch9f-factory-telemetry-v1"
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "iios_ledger.db"
@@ -614,6 +616,8 @@ def build_factory_telemetry(
             RADAR_STATE_TYPE,
             case_id=RADAR_CASE_ID,
         )
+        radar_cycle = _get_object(connection, radar.get("last_cycle_id"))
+        candidate_lineage = project_candidate_lineage(radar, radar_cycle, now=now)
         observation = _latest(
             connection,
             OBSERVATION_STATE_TYPE,
@@ -713,9 +717,12 @@ def build_factory_telemetry(
                     "gemini_candidate_count"
                 )
                 or radar.get("kimi_candidate_count"),
-                "promotion_candidate_count": radar.get(
-                    "promotion_candidate_count"
-                ),
+                "promotion_candidate_count": candidate_lineage["promotion_candidate_count"],
+                "candidate_lineage_state": candidate_lineage["state"],
+                "candidate_lineage_reason": candidate_lineage["reason"],
+                "candidate_source_cycle_id": candidate_lineage["source_cycle_id"],
+                "candidate_source_artifact_hash": candidate_lineage["source_artifact_hash"],
+                "candidate_batch": candidate_lineage["candidate_batch"],
                 "promoted_case_count": radar.get(
                     "promoted_case_count"
                 ),

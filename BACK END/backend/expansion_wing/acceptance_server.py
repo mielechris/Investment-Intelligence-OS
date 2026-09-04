@@ -166,7 +166,33 @@ class Compositor:
                 "governed_universe_count": radar.get("governed_universe_count"),
                 "screener_hit_count": radar.get("screener_hit_count"),
                 "promotion_candidate_count": radar.get("promotion_candidate_count"),
-                "promoted_case_count": radar.get("promoted_case_count")})
+                "promoted_case_count": radar.get("promoted_case_count"),
+                "candidate_lineage_state": radar.get("candidate_lineage_state") or "UNAVAILABLE",
+                "candidate_lineage_reason": radar.get("candidate_lineage_reason"),
+                "candidate_source_cycle_id": radar.get("candidate_source_cycle_id"),
+                "candidate_source_artifact_hash": radar.get("candidate_source_artifact_hash")})
+            candidate_batch = radar.get("candidate_batch") if isinstance(radar.get("candidate_batch"), dict) else None
+            candidate_rows = candidate_batch.get("candidates") if candidate_batch else None
+            lineage_state = str(radar.get("candidate_lineage_state") or "UNAVAILABLE")
+            if not isinstance(candidate_rows, list) or len(candidate_rows) > 5:
+                candidate_rows = []
+                if lineage_state != "AVAILABLE_EMPTY": lineage_state = "UNAVAILABLE"
+            safe_rows = []
+            for row in candidate_rows:
+                if not isinstance(row, dict) or set(row) != {"candidate_id", "ticker", "discovered_at", "missing_fields"}:
+                    lineage_state = "UNAVAILABLE"; safe_rows = []; break
+                safe_rows.append({key: row[key] for key in ("candidate_id", "ticker", "discovered_at", "missing_fields")})
+            sections["candidate_conveyor"] = _section(lineage_state, {
+                "route": ["9E", "PRIMARY REVIEW", "CASE DRAFT"], "candidates": safe_rows,
+                "candidate_count": len(safe_rows), "automatic_promotion": False,
+                "paper_order": False, "broker": False, "live_execution": False})
+            sections["post_close_control"] = _section("WAITING", {"automatic_schedule": False})
+            sections["governed_cases"] = _section("AWAITING", {"case_draft_count": 0, "automatic_promotion": False})
+            sections["primary_source_review_queue"] = _section(
+                "AWAITING" if safe_rows else ("AVAILABLE_EMPTY" if lineage_state == "AVAILABLE_EMPTY" else "UNAVAILABLE"),
+                {"queue_count": len(safe_rows), "human_review_required": True})
+            sections["provider_credit_meter"] = _section("UNAVAILABLE", {
+                "provider_enabled": False, "credits_consumed_by_preview": 0})
             passports = _passports(telemetry)
             sections["radar"]["data"]["opportunity_passports"] = passports
             sections["radar"]["data"]["passport_status"] = "CURRENT" if passports else "AVAILABLE_EMPTY"
@@ -181,7 +207,9 @@ class Compositor:
                 "strategic": {"allocation_capacity": 5000, "invested_capital_claimed": False},
                 "reserve": {"allocation_capacity": 2000, "invested_capital_claimed": False}})
         else:
-            for key in ("service_health", "last_cycle", "radar", "books"):
+            for key in ("service_health", "last_cycle", "radar", "books", "candidate_conveyor",
+                        "post_close_control", "governed_cases", "primary_source_review_queue",
+                        "provider_credit_meter"):
                 sections[key] = _section("UNAVAILABLE", None)
         if validation:
             complete = validation.get("benchmark_complete") is True

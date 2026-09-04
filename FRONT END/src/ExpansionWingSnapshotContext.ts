@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-export type TruthState = "AVAILABLE" | "CURRENT" | "STALE" | "INCOMPLETE" | "UNAVAILABLE" | "UNKNOWN";
+export type TruthState = "AVAILABLE" | "CURRENT" | "STALE" | "INCOMPLETE" | "UNAVAILABLE" | "UNKNOWN" | "WAITING" | "AWAITING";
 export type PresentationStatus = TruthState | "READY" | "DISABLED" | "AWAITING_APPROVED_SOURCE" | "NOT_ACTIVATED" | "AVAILABLE_EMPTY" | "AVAILABLE_FOR_REVIEWED_UPLOAD" | "SOURCE_REVIEW_REQUIRED";
 export type SnapshotSection = { state: TruthState; data: unknown };
 export type RoomState = { state: TruthState; presentation_status: PresentationStatus; data: unknown };
