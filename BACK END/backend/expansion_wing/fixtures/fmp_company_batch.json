@@ -1,0 +1,21 @@
+[
+  {
+    "symbol": "MU",
+    "companyName": "Synthetic MU Fixture",
+    "cik": "fixture-cik-mu",
+    "exchange": "FIXTURE",
+    "industry": "Synthetic Semiconductors",
+    "sector": "Synthetic Technology",
+    "timestamp": "2026-08-01T12:00:00Z",
+    "ignoredFixtureField": "must-not-project"
+  },
+  {
+    "symbol": "AMD",
+    "companyName": "Synthetic AMD Fixture",
+    "cik": "fixture-cik-amd",
+    "exchange": "FIXTURE",
+    "industry": "Synthetic Semiconductors",
+    "sector": "Synthetic Technology",
+    "timestamp": "2026-08-01T12:00:00Z"
+  }
+]
