@@ -8,7 +8,8 @@ from expansion_wing.encrypted_archive import FixtureAuthenticatedCipher
 from expansion_wing.keychain_adapter import ERR_DUPLICATE_ITEM, ERR_ITEM_NOT_FOUND, KeychainAdapter
 from expansion_wing.operational_aead import (AES256_GCM_KAT, CryptographyAESGCMBackend, OperationalAEAD,
     dependency_status, known_answer_check, reject_fixture_cipher_for_operations)
-from expansion_wing.reviewer_auth import Authenticator, Reviewer, ReviewerRegistry, separated_duties
+from expansion_wing.reviewer_auth import (GENESIS_HASH, Authenticator, LocalOwnerCeremony, Reviewer,
+    ReviewerRegistry, separated_duties)
 from expansion_wing.review_service import ReviewServiceContract
 from expansion_wing.scanner_adapters import ScannerResult, accept_scan
 from expansion_wing.sec_compliance import MockableSECThrottle, SECContactConfig
@@ -94,38 +95,64 @@ class KeychainTests(unittest.TestCase):
 
 
 class AuthenticationServiceTests(unittest.TestCase):
+    @staticmethod
+    def registry():
+        registry = ReviewerRegistry(); nonce = "n" * 32
+        registry.bootstrap(LocalOwnerCeremony("501", "501", True, nonce, nonce), reviewer_id="owner")
+        return registry
+
+    @staticmethod
+    def decision(previous_hash=GENESIS_HASH, **values):
+        return dict(reason="fixture review", timestamp="2026-09-03T00:00:00Z",
+            previous_hash=previous_hash, **values)
+
     def setup_auth(self, now=100.0):
-        registry = ReviewerRegistry("owner"); registry.add("owner", Reviewer("rights", frozenset({"RIGHTS_REVIEWER"})))
-        return registry, Authenticator(secrets.token_bytes(32), clock=lambda: now, ttl_seconds=10)
+        registry = self.registry(); auth = Authenticator(secrets.token_bytes(32), clock=lambda: now, ttl_seconds=10)
+        auth.administer_reviewers(registry, auth.session("owner"), operation="ADD", reviewer_id="rights",
+            roles=frozenset({"RIGHTS_REVIEWER"}), csrf="setup-csrf" * 4,
+            idempotency_key="setup-request-0001", **self.decision())
+        return registry, auth
 
     def test_authenticated_identity_authorization_csrf_replay_and_role(self):
         registry, auth = self.setup_auth(); token = auth.session("rights")
         self.assertEqual(auth.authorize(registry, token, action="RIGHTS", csrf="c" * 32,
-            idempotency_key="i" * 16, request_size=100), "rights")
+            idempotency_key="i" * 16, request_size=100,
+            **self.decision(auth.audit_events[-1]["event_hash"]))["reviewer_id"], "rights")
         with self.assertRaises(PermissionError): auth.authorize(registry, token, action="RIGHTS", csrf="c" * 32,
-            idempotency_key="j" * 16, request_size=100)
+            idempotency_key="j" * 16, request_size=100,
+            **self.decision(auth.audit_events[-1]["event_hash"]))
         with self.assertRaises(PermissionError): auth.authorize(registry, token, action="CLAIM", csrf="d" * 32,
-            idempotency_key="k" * 16, request_size=100)
+            idempotency_key="k" * 16, request_size=100,
+            **self.decision(auth.audit_events[-1]["event_hash"]))
         with self.assertRaises(ValueError): auth.authorize(registry, token, action="RIGHTS", csrf="e" * 32,
-            idempotency_key="l" * 16, request_size=64_001)
+            idempotency_key="l" * 16, request_size=64_001,
+            **self.decision(auth.audit_events[-1]["event_hash"]))
 
     def test_expiry_idempotency_rate_limit_and_separated_duties(self):
-        registry = ReviewerRegistry("owner"); registry.add("owner", Reviewer("r", frozenset({"RIGHTS_REVIEWER"})))
-        current = [100.0]; auth = Authenticator(secrets.token_bytes(32), clock=lambda: current[0], ttl_seconds=10); token = auth.session("r")
+        registry = self.registry(); current = [100.0]
+        auth = Authenticator(secrets.token_bytes(32), clock=lambda: current[0], ttl_seconds=10)
+        auth.administer_reviewers(registry, auth.session("owner"), operation="ADD", reviewer_id="r",
+            roles=frozenset({"RIGHTS_REVIEWER"}), csrf="setup-csrf" * 4,
+            idempotency_key="setup-request-0001", **self.decision())
+        token = auth.session("r")
         current[0] = 110.0
         with self.assertRaisesRegex(PermissionError, "EXPIRED"): auth.authenticate(token)
         with self.assertRaises(PermissionError): separated_duties("same", "same")
         current[0] = 200.0; live = Authenticator(secrets.token_bytes(32), clock=lambda: current[0], ttl_seconds=60); token = live.session("r")
-        live.authorize(registry, token, action="RIGHTS", csrf="a" * 32, idempotency_key="same-key-1234567", request_size=1)
+        first = live.authorize(registry, token, action="RIGHTS", csrf="a" * 32,
+            idempotency_key="same-key-1234567", request_size=1, **self.decision())
         with self.assertRaisesRegex(PermissionError, "IDEMPOTENCY"):
-            live.authorize(registry, token, action="RIGHTS", csrf="b" * 32, idempotency_key="same-key-1234567", request_size=1)
+            live.authorize(registry, token, action="RIGHTS", csrf="b" * 32,
+                idempotency_key="same-key-1234567", request_size=1, **self.decision(first["event_hash"]))
         limited = Authenticator(secrets.token_bytes(32), clock=lambda: 300.0, ttl_seconds=60); limited_token = limited.session("r")
         for index in range(10):
-            limited.authorize(registry, limited_token, action="RIGHTS", csrf=f"{index:032d}",
-                idempotency_key=f"request-{index:016d}", request_size=1)
+            event = limited.authorize(registry, limited_token, action="RIGHTS", csrf=f"{index:032d}",
+                idempotency_key=f"request-{index:016d}", request_size=1,
+                **self.decision(limited.audit_events[-1]["event_hash"] if limited.audit_events else GENESIS_HASH))
         with self.assertRaisesRegex(RuntimeError, "RATE_LIMITED"):
             limited.authorize(registry, limited_token, action="RIGHTS", csrf="z" * 32,
-                idempotency_key="final-request-0000", request_size=1)
+                idempotency_key="final-request-0000", request_size=1,
+                **self.decision(event["event_hash"]))
 
     def test_review_service_disabled_loopback_schema_methods_and_no_trade_routes(self):
         disabled = ReviewServiceContract()
