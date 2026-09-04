@@ -42,7 +42,13 @@ FIXED_FAILURES = TERMINAL_STATUS | {"DISABLED", "CREDENTIAL_NOT_PROVISIONED", "C
     "KEYCHAIN_UNAVAILABLE", "KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY",
     "ENDPOINT_NOT_ALLOWED", "BATCH_LIMIT", "UNKNOWN_ENDPOINT_COST", "BALANCE_UNKNOWN",
     "CREDIT_EXHAUSTED", "RATE_LIMITED", "TIMEOUT", "RETRY_EXHAUSTED", "PROVIDER_UNAVAILABLE",
-    "POINT_IN_TIME_REJECTED", "PARTIAL_OUTAGE"}
+    "POINT_IN_TIME_REJECTED", "PARTIAL_OUTAGE", "TCP_FAILED", "TLS_TRUST_NOT_CONFIGURED",
+    "TLS_TRUST_UNSAFE", "TLS_TRUST_HASH_MISMATCH", "TLS_CERTIFICATE_VERIFICATION_FAILED",
+    "TLS_PROTOCOL_FAILED", "TLS_HOSTNAME_FAILED", "TLS_TIMEOUT", "PROXY_CONTEXT_REJECTED"}
+TRUST_FAILURES = {"NOT_CONFIGURED": "TLS_TRUST_NOT_CONFIGURED", "BUNDLE_MISSING": "TLS_TRUST_NOT_CONFIGURED",
+    "BUNDLE_UNSAFE": "TLS_TRUST_UNSAFE", "BUNDLE_HASH_MISMATCH": "TLS_TRUST_HASH_MISMATCH",
+    "BUNDLE_INVALID": "TLS_TRUST_UNSAFE", "TLS_VERIFICATION_FAILED": "TLS_CERTIFICATE_VERIFICATION_FAILED",
+    "CONTEXT_RESTRICTED": "PROXY_CONTEXT_REJECTED"}
 AUTHORITY = {"broker": False, "order": False, "position": False, "fill": False, "ledger_write": False,
     "paper_position_proposal": False, "threshold_change": False, "credential_management": False,
     "service_control": False, "deployment": False, "live_execution": False, "provider_activation": False}
@@ -408,6 +414,12 @@ class FinancialDatasetsAdapter:
             with self._condition: self._inflight.discard(key); self._condition.notify_all()
 
     def _request(self, spec: EndpointSpec, tickers: tuple[str, ...]) -> FDResult:
+        readiness = getattr(self.transport, "trust_readiness", None)
+        if callable(readiness):
+            try: trust_state = readiness()
+            except Exception: return self._fail(spec.capability, "TLS_TRUST_UNSAFE", spec.credit_cost)
+            if trust_state != "READY":
+                return self._fail(spec.capability, TRUST_FAILURES.get(trust_state, "TLS_TRUST_UNSAFE"), spec.credit_cost)
         now = self.clock(); self._request_times = [value for value in self._request_times if now - value < 60]
         if len(self._request_times) >= self.policy.requests_per_minute: return self._fail(spec.capability, "RATE_LIMITED", spec.credit_cost)
         try: token, accounting = self.credits.reserve(spec.credit_cost)
@@ -435,13 +447,26 @@ class FinancialDatasetsAdapter:
         try:
             response = self.transport(url, {AUTH_HEADER: secret}, tickers,
                 self.policy.timeout_seconds, self.policy.response_timeout_seconds)
-        except TimeoutError:
-            return self._ambiguous_failure(spec, attempt, token, requested_at, "TIMEOUT", "TIMEOUT", started)
-        except socket.gaierror:
-            return self._ambiguous_failure(spec, attempt, token, requested_at, "DNS_FAILED", "DNS_FAILED", started)
-        except ssl.SSLError:
-            return self._ambiguous_failure(spec, attempt, token, requested_at, "TLS_FAILED", "TLS_FAILED", started)
-        except Exception:
+        except Exception as exc:
+            transport_category = getattr(exc, "category", None)
+            if transport_category in FIXED_FAILURES:
+                if not getattr(exc, "request_started", True):
+                    accounting = self.credits.release_before_transport(token)
+                    complete = replace(attempt, request_started=False, terminal_status_category=transport_category,
+                        accounting_state="RELEASED_BEFORE_TRANSPORT", lifecycle_state="TRANSPORT_FAILED")
+                    return self._with_attempt(self._fail(spec.capability, transport_category, spec.credit_cost,
+                        accounting, requested_at), complete)
+                lifecycle = {"DNS_FAILED": "DNS_FAILED", "TLS_TIMEOUT": "TIMEOUT",
+                    "TLS_CERTIFICATE_VERIFICATION_FAILED": "TLS_FAILED", "TLS_HOSTNAME_FAILED": "TLS_FAILED",
+                    "TLS_PROTOCOL_FAILED": "TLS_FAILED"}.get(transport_category, "TRANSPORT_FAILED")
+                return self._ambiguous_failure(spec, attempt, token, requested_at,
+                    transport_category, lifecycle, started)
+            if isinstance(exc, TimeoutError):
+                return self._ambiguous_failure(spec, attempt, token, requested_at, "TIMEOUT", "TIMEOUT", started)
+            if isinstance(exc, socket.gaierror):
+                return self._ambiguous_failure(spec, attempt, token, requested_at, "DNS_FAILED", "DNS_FAILED", started)
+            if isinstance(exc, ssl.SSLError):
+                return self._ambiguous_failure(spec, attempt, token, requested_at, "TLS_FAILED", "TLS_FAILED", started)
             return self._ambiguous_failure(spec, attempt, token, requested_at,
                 "ACCOUNTING_UNCERTAIN", "TRANSPORT_FAILED", started)
         if not isinstance(response, FDResponse):
@@ -565,6 +590,11 @@ class BoundedLiveAcceptanceRunner:
         if not self.explicitly_authorized or not self.adapter.policy.enabled:
             return {"status": "NOT_AUTHORIZED", "attempted_requests": 0, "confirmed_requests": 0,
                 "ambiguous_requests": 0, "results": (), "authority": AUTHORITY.copy()}
+        readiness = getattr(self.adapter.transport, "trust_readiness", None)
+        if not callable(readiness) or readiness() != "READY":
+            return {"status": "TRUST_NOT_READY", "attempted_requests": 0, "confirmed_requests": 0,
+                "ambiguous_requests": 0, "results": (), "accounting": self.adapter.credits.snapshot(),
+                "authority": AUTHORITY.copy()}
         results: list[dict[str, Any]] = []
         for symbol in ("MU", "AMD"):
             result = self.adapter.fetch(FDCapability.COMPANY_FACTS, (symbol,))

@@ -42,6 +42,7 @@ class Transport:
         if self.block: self.block()
         if self.error: raise self.error
         return FDResponse(self.status, self.final_url or url, self.redirects, self.body)
+    def trust_readiness(self): return "READY"
 
 
 def policy(**changes):

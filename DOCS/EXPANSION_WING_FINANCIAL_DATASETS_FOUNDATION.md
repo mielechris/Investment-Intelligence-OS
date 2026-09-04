@@ -106,6 +106,43 @@ filing/report period, accession or official-source URL when supplied, freshness,
 classification, verification state, credit cost, and cache state. Future evidence and timezone-ambiguous timestamps
 are rejected.
 
+## Verified TLS transport and isolated trust bundle
+
+Framework Python 3.14.7 linked to OpenSSL 3.5.7 had no configured default CA file or directory. DNS and TCP succeeded,
+and the system trust client verified the server chain, while Python failed with issuer-chain verification code 20.
+IIOS therefore rejects global certificate installation, changes to the preview environment, verification bypass,
+trust-on-first-use, and leaf-certificate pinning as remedies. CA-bundle verification establishes a reviewed set of
+certificate authorities while retaining normal chain and hostname verification; it is not certificate pinning.
+
+The dedicated Financial Datasets transport uses `PROTOCOL_TLS_CLIENT`, `CERT_REQUIRED`, hostname checking, TLS 1.2 or
+newer, and exact host/SNI `api.financialdatasets.ai` on port 443. It has no insecure or framework-default fallback.
+Network remains disabled by default. A caller must supply a regular, owner-readable, nonsymlink CA bundle that is not
+group/world writable, is nonempty and bounded, contains PEM certificates, and exactly matches a separately reviewed
+SHA-256. Bundle paths and certificate material never enter errors, reports, audit records, or browser projections.
+Trust is revalidated on process startup and before transport construction.
+
+Trust states are `NOT_CONFIGURED`, `BUNDLE_MISSING`, `BUNDLE_UNSAFE`, `BUNDLE_HASH_MISMATCH`, `BUNDLE_INVALID`,
+`READY`, `TLS_VERIFICATION_FAILED`, and `CONTEXT_RESTRICTED`. Only `READY` constructs an operational context. Fixed
+failures distinguish missing/unsafe/mismatched trust, certificate-chain and hostname failures, TLS protocol failure,
+timeout, DNS, TCP, proxy/context rejection, and residual accounting uncertainty. HTTP 401/403 require an observed HTTP
+response and remain authentication/entitlement failures rather than TLS failures.
+
+The initial proposed trust source is a pinned `certifi` wheel installed only in a dedicated Financial Datasets
+environment. Activation must first retrieve official PyPI metadata in a separately authorized batch, establish the
+exact version, binary wheel filename, wheel SHA-256, and embedded metadata, then install binary-only with complete hash
+locking. No version or hash is assumed here. After installation, hash the resulting `cacert.pem` into a sanitized trust
+manifest. Do not install a source distribution, modify global Python, or modify the preview environment.
+
+Activation sequence: verify the wheel and bundle hashes; verify permissions and expiry-review policy; run a
+credential-free TLS-only handshake with exact SNI/hostname; then obtain fresh authorization for MU-first acceptance.
+The bounded runner checks trust before Keychain access, starts with two prior ambiguous credits and 998 maximum
+remaining authorization, performs no retries, and blocks AMD unless MU and its zero-cost cache repeat are fully valid.
+Provider dashboard balance remains distinct from conservative IIOS accounting.
+
+Rollback removes only the dedicated environment and reviewed trust manifest after stopping its isolated process. It
+does not alter global trust, the preview runtime, or the Keychain credential. Trust-bundle updates require a new
+official wheel/hash review, TLS-only acceptance, expiration review, and separate activation approval.
+
 Classes remain distinct: `PRIMARY_SOURCE_FACT`, `PROVIDER_NORMALIZED_FACT`, `DERIVED_METRIC`, `ANALYST_ESTIMATE`,
 `COMPANY_GUIDANCE`, `NEWS_METADATA`, `PRESS_RELEASE_METADATA`, `INSIDER_DISCLOSURE`, `INSTITUTIONAL_HOLDING`,
 `TECHNICAL_OBSERVATION`, and `UNVERIFIED_PROVIDER_VALUE`. Provider output is informational. Material claims require
