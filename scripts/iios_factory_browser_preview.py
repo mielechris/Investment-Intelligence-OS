@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import copy
 import json
 import mimetypes
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -42,8 +44,9 @@ BACKEND_EXACT_PATHS = {
     "/intelligence/dislocation/status",
     "/system/status",
 }
-LIVING_CACHE_TTL_SECONDS = 5.0
+LIVING_CACHE_TTL_SECONDS = 15.0
 LIVING_CACHE_STALE_SECONDS = 30.0
+LIVING_CACHE_COLD_WAIT_SECONDS = 0.5
 EXPANSION_CACHE_SECONDS = 15.0
 
 
@@ -52,6 +55,21 @@ def _living_snapshot_healthy(snapshot: dict[str, Any]) -> bool:
         isinstance(snapshot.get(name), dict)
         and snapshot[name].get("availability") == "AVAILABLE"
         for name in ("factory", "jesse_dislocation")
+    )
+
+
+def _living_snapshot_valid(snapshot: dict[str, Any]) -> bool:
+    """Validate the bounded browser contract without claiming sources are healthy."""
+    safety = snapshot.get("safety")
+    return (
+        snapshot.get("schema_version") == LIVING_SCHEMA_VERSION
+        and isinstance(snapshot.get("generated_at"), str)
+        and _parse_time(snapshot.get("generated_at")) is not None
+        and all(isinstance(snapshot.get(name), dict) for name in ("factory", "jesse_dislocation"))
+        and isinstance(safety, dict)
+        and safety.get("backend_write_permission") is False
+        and safety.get("trade_execution_permission") is False
+        and safety.get("live_execution") is False
     )
 
 
@@ -90,17 +108,19 @@ def _sanitize_living_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 class LivingOverviewCache:
-    """Single-entry, process-local cache with one coalesced refresh."""
+    """Validated single-entry stale-while-revalidate cache with one worker."""
 
     def __init__(
         self,
         *,
         ttl_seconds: float = LIVING_CACHE_TTL_SECONDS,
         stale_seconds: float = LIVING_CACHE_STALE_SECONDS,
+        cold_wait_seconds: float = LIVING_CACHE_COLD_WAIT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ttl_seconds = ttl_seconds
         self.stale_seconds = stale_seconds
+        self.cold_wait_seconds = cold_wait_seconds
         self.clock = clock
         self._condition = threading.Condition()
         self._identity: Hashable | None = None
@@ -110,6 +130,13 @@ class LivingOverviewCache:
         self._last_good_at = 0.0
         self._refreshing = False
         self._refresh_count = 0
+        self._refresh_generation = 0
+        self._last_failure_category: str | None = None
+        self._last_lock_wait_ms = 0.0
+        self._last_refresh_duration_ms: float | None = None
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="living-overview-refresh")
+        self._future: Future[None] | None = None
+        self._closed = False
 
     def _decorate(
         self,
@@ -119,102 +146,180 @@ class LivingOverviewCache:
         age_seconds: float | None,
     ) -> dict[str, Any]:
         result = copy.deepcopy(snapshot)
+        served_at = datetime.now(timezone.utc).isoformat()
+        freshness = (
+            "UNAVAILABLE" if age_seconds is None
+            else "CURRENT" if age_seconds <= self.stale_seconds
+            else "STALE"
+        )
         result["cache"] = {
             "state": state,
             "age_seconds": None if age_seconds is None else round(max(0.0, age_seconds), 3),
+            "freshness_state": freshness,
+            "evidence_current": freshness == "CURRENT",
+            "served_at": served_at,
             "ttl_seconds": self.ttl_seconds,
             "stale_after_seconds": self.stale_seconds,
             "refresh_in_flight": self._refreshing,
             "backend_refresh_count": self._refresh_count,
+            "refresh_generation": self._refresh_generation,
+            "last_failure_category": self._last_failure_category,
+            "cache_lock_wait_ms": round(self._last_lock_wait_ms, 3),
+            "last_refresh_duration_ms": (
+                None
+                if self._last_refresh_duration_ms is None
+                else round(self._last_refresh_duration_ms, 3)
+            ),
             "bounded_entries": 1,
+            "refresh_workers": 1,
         }
         return result
+
+    def _unavailable(self) -> dict[str, Any]:
+        unavailable = _degraded_living_snapshot()
+        unavailable["status"] = "FACTORY_SOURCE_UNAVAILABLE"
+        return self._decorate(unavailable, state="DEGRADED_NO_SNAPSHOT", age_seconds=None)
+
+    def _run_refresh(
+        self,
+        identity: Hashable,
+        loader: Callable[[], dict[str, Any]],
+    ) -> None:
+        refresh_started = time.monotonic()
+        failure: str | None = None
+        try:
+            value = loader()
+            if not isinstance(value, dict):
+                failure = "FACTORY_SOURCE_INVALID"
+                value = None
+            else:
+                value = _sanitize_living_snapshot(value)
+                if not _living_snapshot_valid(value):
+                    failure = "FACTORY_SOURCE_INVALID"
+                    value = None
+        except Exception:  # noqa: BLE001 - fixed category only
+            failure = "FACTORY_SOURCE_UNAVAILABLE"
+            value = None
+
+        completed_at = self.clock()
+        with self._condition:
+            if identity == self._identity and not self._closed:
+                self._refresh_count += 1
+                if value is not None:
+                    self._snapshot = copy.deepcopy(value)
+                    self._snapshot_at = completed_at
+                    self._last_good = copy.deepcopy(value)
+                    self._last_good_at = completed_at
+                    self._refresh_generation += 1
+                    self._last_failure_category = None
+                else:
+                    self._last_failure_category = failure or "FACTORY_SOURCE_UNAVAILABLE"
+                self._last_refresh_duration_ms = (time.monotonic() - refresh_started) * 1000.0
+            self._refreshing = False
+            self._future = None
+            self._condition.notify_all()
+
+    def _start_refresh_locked(
+        self,
+        identity: Hashable,
+        loader: Callable[[], dict[str, Any]],
+    ) -> Future[None]:
+        self._refreshing = True
+        self._future = self._executor.submit(self._run_refresh, identity, loader)
+        return self._future
 
     def get(
         self,
         identity: Hashable,
         loader: Callable[[], dict[str, Any]],
     ) -> dict[str, Any]:
-        while True:
-            now = self.clock()
-            with self._condition:
-                if identity != self._identity:
-                    if self._refreshing:
-                        self._condition.wait(timeout=self.ttl_seconds)
-                        if self._refreshing:
-                            return self._decorate(
-                                _degraded_living_snapshot(),
-                                state="DEGRADED_NO_SNAPSHOT",
-                                age_seconds=None,
-                            )
-                        continue
-                    self._identity = identity
-                    self._snapshot = None
-                    self._last_good = None
-                    self._snapshot_at = self._last_good_at = 0.0
-
-                if self._snapshot is not None:
-                    age = now - self._snapshot_at
-                    if age < self.ttl_seconds:
-                        state = "FRESH" if _living_snapshot_healthy(self._snapshot) else "DEGRADED"
-                        return self._decorate(self._snapshot, state=state, age_seconds=age)
-
-                if self._refreshing:
-                    if self._last_good is not None:
-                        age = now - self._last_good_at
-                        state = "STALE_REFRESHING" if age <= self.stale_seconds else "DEGRADED_STALE"
-                        return self._decorate(self._last_good, state=state, age_seconds=age)
-                    self._condition.wait(timeout=self.ttl_seconds)
-                    if self._refreshing:
-                        return self._decorate(
-                            _degraded_living_snapshot(),
-                            state="DEGRADED_NO_SNAPSHOT",
-                            age_seconds=None,
-                        )
-                    continue
-
-                self._refreshing = True
-                break
-
-        try:
-            refreshed = loader()
-            if not isinstance(refreshed, dict):
-                refreshed = _degraded_living_snapshot()
-        except Exception:  # noqa: BLE001 - never expose raw backend evidence
-            refreshed = _degraded_living_snapshot()
-        refreshed = _sanitize_living_snapshot(refreshed)
-
+        future: Future[None] | None = None
         now = self.clock()
+        lock_started = time.monotonic()
         with self._condition:
-            self._refresh_count += 1
-            healthy = _living_snapshot_healthy(refreshed)
-            if healthy:
-                self._last_good = copy.deepcopy(refreshed)
-                self._last_good_at = now
-                self._snapshot = copy.deepcopy(refreshed)
-            elif self._last_good is not None:
-                self._snapshot = copy.deepcopy(self._last_good)
-                self._snapshot["status"] = "BACKEND_DEGRADED"
+            self._last_lock_wait_ms = (time.monotonic() - lock_started) * 1000.0
+            if self._closed:
+                return self._unavailable()
+            if identity != self._identity:
+                if self._refreshing:
+                    return self._unavailable()
+                self._identity = identity
+                self._snapshot = self._last_good = None
+                self._snapshot_at = self._last_good_at = 0.0
+
+            if self._snapshot is not None and not _living_snapshot_valid(self._snapshot):
+                self._snapshot = None
+                self._snapshot_at = 0.0
+                self._last_failure_category = "FACTORY_CACHE_INVALID"
+
+            if self._snapshot is not None:
+                age = now - self._snapshot_at
+                if age < self.ttl_seconds:
+                    state = "FRESH" if _living_snapshot_healthy(self._snapshot) else "DEGRADED"
+                    return self._decorate(self._snapshot, state=state, age_seconds=age)
+                if not self._refreshing:
+                    self._start_refresh_locked(identity, loader)
+                state = "STALE_REFRESHING" if age <= self.stale_seconds else "DEGRADED_STALE"
+                return self._decorate(self._snapshot, state=state, age_seconds=age)
+
+            if not self._refreshing:
+                future = self._start_refresh_locked(identity, loader)
             else:
-                self._snapshot = copy.deepcopy(refreshed)
-                self._snapshot["status"] = "BACKEND_DEGRADED"
-            self._snapshot_at = now
-            self._refreshing = False
-            self._condition.notify_all()
-            state = "FRESH" if healthy else "DEGRADED"
-            return self._decorate(self._snapshot, state=state, age_seconds=0.0)
+                future = self._future
+
+        if future is not None:
+            try:
+                future.result(timeout=self.cold_wait_seconds)
+            except FutureTimeoutError:
+                pass
+        with self._condition:
+            if identity == self._identity and self._snapshot is not None:
+                age = self.clock() - self._snapshot_at
+                state = "FRESH" if _living_snapshot_healthy(self._snapshot) else "DEGRADED"
+                return self._decorate(self._snapshot, state=state, age_seconds=age)
+            return self._unavailable()
+
+    def close(self) -> None:
+        with self._condition:
+            if self._closed:
+                return
+            self._closed = True
+        self._executor.shutdown(wait=True, cancel_futures=False)
 
 
 _living_overview_cache = LivingOverviewCache()
+atexit.register(_living_overview_cache.close)
 
 
-def _read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists() or not path.is_file():
-        return None
+def _add_timing(timings: dict[str, float] | None, category: str, started: float) -> None:
+    if timings is not None:
+        timings[category] = timings.get(category, 0.0) + ((time.monotonic() - started) * 1000.0)
+
+
+def _read_json(path: Path, *, timings: dict[str, float] | None = None) -> dict[str, Any] | None:
+    started = time.monotonic()
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        metadata = path.stat()
+    except OSError:
+        _add_timing(timings, "source_stat_ms", started)
         return None
+    _add_timing(timings, "source_stat_ms", started)
+    if not stat.S_ISREG(metadata.st_mode):
+        return None
+    started = time.monotonic()
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        _add_timing(timings, "source_read_ms", started)
+        return None
+    _add_timing(timings, "source_read_ms", started)
+    started = time.monotonic()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _add_timing(timings, "json_parse_ms", started)
+        return None
+    _add_timing(timings, "json_parse_ms", started)
     return value if isinstance(value, dict) else None
 
 
@@ -243,8 +348,14 @@ def _age_seconds(payload: dict[str, Any] | None, path: Path) -> int | None:
     return max(0, int((datetime.now(timezone.utc) - observed).total_seconds()))
 
 
-def _layer(name: str, path: Path, *, fresh_seconds: int | None = None) -> dict[str, Any]:
-    payload = _read_json(path)
+def _layer(
+    name: str,
+    path: Path,
+    *,
+    fresh_seconds: int | None = None,
+    timings: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    payload = _read_json(path, timings=timings)
     if payload is None:
         return {
             "name": name,
@@ -286,7 +397,11 @@ def _normalize_outcome_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _outcome_learning_layer(state_dir: Path) -> dict[str, Any]:
+def _outcome_learning_layer(
+    state_dir: Path,
+    *,
+    timings: dict[str, float] | None = None,
+) -> dict[str, Any]:
     full_path = state_dir / "latest_outcome_learning.json"
     compact_path = state_dir / "browser" / "outcome_learning.json"
     path = full_path if full_path.exists() else compact_path
@@ -294,6 +409,7 @@ def _outcome_learning_layer(state_dir: Path) -> dict[str, Any]:
         "BATCH_9J_OUTCOME_LEARNING",
         path,
         fresh_seconds=2 * 60 * 60,
+        timings=timings,
     )
     payload = layer.get("payload")
     if isinstance(payload, dict):
@@ -312,22 +428,26 @@ def build_validation_stack(
     *,
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
     state_dir: Path = DEFAULT_STATE_DIR,
+    timings: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     layers = {
         "factory_telemetry": _layer(
             "BATCH_9G_FACTORY_TELEMETRY",
             telemetry_dir / "latest.json",
             fresh_seconds=10 * 60,
+            timings=timings,
         ),
         "market_validation": _layer(
             "BATCH_9H_MARKET_VALIDATION",
             state_dir / "latest_market_validation.json",
+            timings=timings,
         ),
         "shadow_strategy": _layer(
             "BATCH_9I_SHADOW_STRATEGY",
             state_dir / "browser" / "shadow_strategy.json",
+            timings=timings,
         ),
-        "outcome_learning": _outcome_learning_layer(state_dir),
+        "outcome_learning": _outcome_learning_layer(state_dir, timings=timings),
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -393,10 +513,18 @@ def _backend_get_json(path: str, *, timeout_seconds: float = 3.0) -> dict[str, A
     return value
 
 
-def _backend_layer(name: str, path: str) -> dict[str, Any]:
+def _backend_layer(
+    name: str,
+    path: str,
+    *,
+    timings: dict[str, float] | None = None,
+    timing_category: str = "backend_read_ms",
+) -> dict[str, Any]:
+    started = time.monotonic()
     try:
         payload = _backend_get_json(path)
     except Exception as exc:  # noqa: BLE001 - fail closed into explicit waiting
+        _add_timing(timings, timing_category, started)
         return {
             "name": name,
             "availability": "WAITING",
@@ -404,6 +532,7 @@ def _backend_layer(name: str, path: str) -> dict[str, Any]:
             "error": str(exc)[:800],
             "payload": None,
         }
+    _add_timing(timings, timing_category, started)
     return {
         "name": name,
         "availability": "AVAILABLE",
@@ -495,10 +624,21 @@ def build_living_factory_snapshot(
     telemetry_dir: Path = DEFAULT_TELEMETRY_DIR,
     state_dir: Path = DEFAULT_STATE_DIR,
 ) -> dict[str, Any]:
+    total_started = time.monotonic()
+    timings: dict[str, float] = {
+        "source_stat_ms": 0.0,
+        "source_read_ms": 0.0,
+        "json_parse_ms": 0.0,
+        "backend_factory_read_ms": 0.0,
+        "backend_dislocation_read_ms": 0.0,
+    }
+    assembly_started = time.monotonic()
     validation = build_validation_stack(
         telemetry_dir=telemetry_dir,
         state_dir=state_dir,
+        timings=timings,
     )
+    _add_timing(timings, "telemetry_assembly_ms", assembly_started)
 
     # The browser refreshes every five seconds. These two independent,
     # read-only Backend 8002 lookups each have a three-second fail-closed
@@ -511,14 +651,29 @@ def build_living_factory_snapshot(
             _backend_layer,
             "BACKEND_8002_FACTORY_INTELLIGENCE_READ_ONLY",
             "/experience/factory-intelligence/overview",
+            timings=timings,
+            timing_category="backend_factory_read_ms",
         )
         jesse_future = pool.submit(
             _backend_layer,
             "JESSE_DISLOCATION_PERSISTED_STATUS",
             "/intelligence/dislocation/status",
+            timings=timings,
+            timing_category="backend_dislocation_read_ms",
         )
         factory = factory_future.result()
         jesse_dislocation = jesse_future.result()
+
+    # SQLite and story construction are owned by the Backend endpoint and are
+    # intentionally not inferred by this read-only sidecar.
+    timings["sqlite_connect_query_ms"] = None  # type: ignore[assignment]
+    timings["ledger_reconstruction_ms"] = None  # type: ignore[assignment]
+    timings["character_story_assembly_ms"] = None  # type: ignore[assignment]
+    timings["total_refresh_ms"] = (time.monotonic() - total_started) * 1000.0
+    sanitized_timings = {
+        key: None if value is None else round(value, 3)
+        for key, value in timings.items()
+    }
 
     return {
         "schema_version": LIVING_SCHEMA_VERSION,
@@ -526,6 +681,11 @@ def build_living_factory_snapshot(
         "validation": validation,
         "factory": factory,
         "jesse_dislocation": jesse_dislocation,
+        "diagnostics": {
+            "schema_version": "living-overview-timing-v1",
+            "categories_ms": sanitized_timings,
+            "backend_internal_sqlite_timing": "UNAVAILABLE_AT_READ_ONLY_BOUNDARY",
+        },
         "safety": {
             "preview_only": True,
             "localhost_only": True,
@@ -540,6 +700,61 @@ def build_living_factory_snapshot(
             "threshold_change_authority": False,
             "committee_gate_change_authority": False,
             "risk_gate_change_authority": False,
+            "capital_authority": False,
+            "trade_execution_permission": False,
+            "live_execution": False,
+        },
+    }
+
+
+def build_isolated_living_factory_snapshot(
+    *,
+    telemetry_dir: Path,
+    state_dir: Path,
+) -> dict[str, Any]:
+    """Build fixture acceptance truth without contacting Backend 8002."""
+    total_started = time.monotonic()
+    timings: dict[str, float] = {}
+    assembly_started = time.monotonic()
+    validation = build_validation_stack(
+        telemetry_dir=telemetry_dir,
+        state_dir=state_dir,
+        timings=timings,
+    )
+    _add_timing(timings, "telemetry_assembly_ms", assembly_started)
+    timings["total_refresh_ms"] = (time.monotonic() - total_started) * 1000.0
+    return {
+        "schema_version": LIVING_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status": "FACTORY_SOURCE_UNAVAILABLE",
+        "fixture_only": True,
+        "validation": validation,
+        "factory": {
+            "availability": "WAITING",
+            "payload": None,
+            "failure_category": "FIXTURE_SOURCE_UNAVAILABLE",
+        },
+        "jesse_dislocation": {
+            "availability": "WAITING",
+            "payload": None,
+            "failure_category": "FIXTURE_SOURCE_UNAVAILABLE",
+        },
+        "diagnostics": {
+            "schema_version": "living-overview-timing-v1",
+            "categories_ms": {
+                **{key: round(value, 3) for key, value in timings.items()},
+                "sqlite_connect_query_ms": None,
+                "ledger_reconstruction_ms": None,
+                "character_story_assembly_ms": None,
+            },
+            "backend_internal_sqlite_timing": "NOT_ACCESSED_FIXTURE_ISOLATION",
+        },
+        "safety": {
+            "preview_only": True,
+            "localhost_only": True,
+            "direct_ledger_access": False,
+            "backend_access": "NONE",
+            "backend_write_permission": False,
             "capital_authority": False,
             "trade_execution_permission": False,
             "live_execution": False,
@@ -570,7 +785,12 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                # A cancelled browser request must not affect cache ownership or
+                # trigger an unbounded retry. No request/body data is logged.
+                return
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -632,13 +852,20 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                 str(self.preview_server.telemetry_dir.resolve()),
                 str(self.preview_server.state_dir.resolve()),
             )
+            if self.preview_server.fixture_isolated:
+                loader = lambda: build_isolated_living_factory_snapshot(
+                    telemetry_dir=self.preview_server.telemetry_dir,
+                    state_dir=self.preview_server.state_dir,
+                )
+            else:
+                loader = lambda: build_living_factory_snapshot(
+                    telemetry_dir=self.preview_server.telemetry_dir,
+                    state_dir=self.preview_server.state_dir,
+                )
             payload = copy.deepcopy(
                 _living_overview_cache.get(
                     identity,
-                    lambda: build_living_factory_snapshot(
-                        telemetry_dir=self.preview_server.telemetry_dir,
-                        state_dir=self.preview_server.state_dir,
-                    ),
+                    loader,
                 )
             )
             # Runtime capabilities are deliberately attached after the evidence
@@ -753,8 +980,16 @@ class PreviewServer(ThreadingHTTPServer):
             state_dir / "latest_market_validation.json",
             state_dir / "browser" / "shadow_strategy.json",
             state_dir / "browser" / "outcome_learning.json",
-            DEFAULT_BACKEND + "/system/status",
-            multi_asset_reader=FixedProjectionReader(enabled=expansion_enabled).read,
+            (
+                "http://127.0.0.1:1/system/status"
+                if fixture_isolated
+                else DEFAULT_BACKEND + "/system/status"
+            ),
+            multi_asset_reader=(
+                None
+                if fixture_isolated
+                else FixedProjectionReader(enabled=expansion_enabled).read
+            ),
         )
 
         def handler(*args, **kwargs):
