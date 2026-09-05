@@ -60,3 +60,12 @@ the concrete plist, and prove no publisher label/PID/lock exists. Bootstrap once
 Rollback boots out only this label, waits for label/PID/lock absence, removes only files identified by its rollback
 manifest, and retains the last authentic projection without decreasing sequence. Existing 5177 continues reading that
 projection and has no route back to the publisher.
+
+## Timestamp-safe semantic comparison
+
+Publisher evaluation keeps observation time, comparison-validation time, source-generation time, evidence-effective
+time, stored projection time, publication time, and freshness-evaluation time separate. The temporary comparison time
+is the latest of the bounded observation, accepted source/effective timestamps, and prior stored projection time. It
+exists only in memory. Identical semantic input leaves the stored projection timestamp, bytes, manifest, hash, and
+sequence untouched. A genuine change publishes once using the bounded observation time, which validation has already
+proved is no earlier than every accepted source timestamp. Future-dated required or optional sources still fail closed.

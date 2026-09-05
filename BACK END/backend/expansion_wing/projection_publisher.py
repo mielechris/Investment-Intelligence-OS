@@ -10,7 +10,7 @@ from typing import Any, Callable
 from .multi_asset_projection import AUTHORITY, LANES, build_projection
 from .projection_cadence import OBSERVATION_CADENCE_SECONDS, PublicationDecision, publication_decision
 from .projection_runtime import ROLLBACK_NAME, ProjectionStore
-from .projection_source_registry import SourceContract, content_hash, source_registry, validate_envelope
+from .projection_source_registry import SourceContract, content_hash, source_registry, timestamp, validate_envelope
 
 PUBLISHER_LABEL = "com.iios.expansion-wing-projection-publisher"
 PUBLISHER_SCHEMA = "iios-governed-projection-publisher-v1"
@@ -74,6 +74,28 @@ class EvaluationResult:
                 "market_session_date": self.market_session_date,
                 "provider_requests": 0, "keychain_access": False, "broker_access": False, "ledger_writes": 0,
                 "paper_orders": 0, "authority": AUTHORITY.copy()}
+
+
+@dataclass(frozen=True)
+class EvaluationTimes:
+    """Separates in-memory validation clocks from the timestamp persisted on publication."""
+    observation_time: datetime
+    prior_projection_generated_at: datetime | None
+    newest_source_generated_at: datetime
+    newest_evidence_effective_at: datetime
+    comparison_projection_generated_at: datetime
+    publication_projection_generated_at: datetime
+    freshness_evaluated_at: datetime
+
+    @classmethod
+    def resolve(cls, receipts: dict[str, dict[str, Any]], *, observation_time: datetime,
+                prior_projection_generated_at: str | None) -> "EvaluationTimes":
+        observation = observation_time.astimezone(timezone.utc)
+        source = max(receipt["generated_at"] for receipt in receipts.values())
+        effective = max(receipt["effective_at"] for receipt in receipts.values())
+        prior = timestamp(prior_projection_generated_at) if prior_projection_generated_at is not None else None
+        comparison = max(value for value in (observation, source, effective, prior) if value is not None)
+        return cls(observation, prior, source, effective, comparison, observation, observation)
 
 
 class GovernedProjectionPublisher:
@@ -183,8 +205,10 @@ class GovernedProjectionPublisher:
                 names = {item.name for item in self.store.root.iterdir()} if self.store.root.exists() else set()
                 if names != {ROLLBACK_NAME}:
                     raise
-            prior_time = existing["projection_generated_at"] if existing else now.isoformat()
-            proposed_for_compare = self._projection(receipts, now=now, generated_at=prior_time)
+            times = EvaluationTimes.resolve(receipts, observation_time=now,
+                prior_projection_generated_at=existing["projection_generated_at"] if existing else None)
+            proposed_for_compare = self._projection(receipts, now=times.freshness_evaluated_at,
+                generated_at=times.comparison_projection_generated_at.isoformat())
             semantic = proposed_for_compare["last_trustworthy_hash"]
             prior_semantic = existing.get("last_trustworthy_hash") if existing else None
             decision: PublicationDecision = publication_decision(previous_semantic_hash=prior_semantic,
@@ -196,17 +220,16 @@ class GovernedProjectionPublisher:
             if not decision.publish:
                 return EvaluationResult("UNCHANGED", decision.category, False, manifest["sequence"],
                     manifest["projection_sha256"], semantic, now.isoformat(),
-                    max(receipt["generated_at"] for receipt in receipts.values()).isoformat(),
-                    max(receipt["effective_at"] for receipt in receipts.values()).isoformat(),
+                    times.newest_source_generated_at.isoformat(), times.newest_evidence_effective_at.isoformat(),
                     receipts["market_session"]["payload"]["session_date"])
-            projection = self._projection(receipts, now=now, generated_at=now.astimezone(timezone.utc).isoformat())
+            projection = self._projection(receipts, now=times.freshness_evaluated_at,
+                generated_at=times.publication_projection_generated_at.isoformat())
             if self.before_commit:
                 self.before_commit()
             published = self.store.publish(projection, now=now)
             return EvaluationResult("PUBLISHED", decision.category, published.changed, published.sequence,
                 published.projection_sha256, semantic, now.isoformat(),
-                max(receipt["generated_at"] for receipt in receipts.values()).isoformat(),
-                max(receipt["effective_at"] for receipt in receipts.values()).isoformat(),
+                times.newest_source_generated_at.isoformat(), times.newest_evidence_effective_at.isoformat(),
                 receipts["market_session"]["payload"]["session_date"])
         except (ValueError, RuntimeError):
             return EvaluationResult("FAILED_CLOSED", "SANITIZED_SOURCE_REJECTION", False, None, None, None)
