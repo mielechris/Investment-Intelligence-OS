@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import stat
@@ -39,6 +40,20 @@ def sanitized_snapshot(*, lineage="UNAVAILABLE", candidates=None):
             "candidate_conveyor": {"state": lineage, "data": {"candidates": candidates}},
         }, "authority": {"credential_access": False, "ledger_write_authority": False,
             "broker_connectivity": False, "live_execution_authority": False}}
+
+
+def rewrite_projection(root: Path, mutate) -> None:
+    value = json.loads((root / PROJECTION_NAME).read_bytes()); mutate(value)
+    unhashed = {key: item for key, item in value.items() if key != "projection_hash"}
+    value["projection_hash"] = hashlib.sha256(json.dumps(unhashed, sort_keys=True,
+        separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    manifest = json.loads((root / MANIFEST_NAME).read_bytes())
+    manifest["projection_sha256"] = hashlib.sha256(encoded).hexdigest()
+    manifest["projection_size_bytes"] = len(encoded)
+    (root / PROJECTION_NAME).write_bytes(encoded); (root / PROJECTION_NAME).chmod(0o600)
+    (root / MANIFEST_NAME).write_bytes(json.dumps(manifest, sort_keys=True,
+        separators=(",", ":"), ensure_ascii=True).encode("ascii")); (root / MANIFEST_NAME).chmod(0o600)
 
 
 class ProjectionStoreTests(unittest.TestCase):
@@ -95,10 +110,60 @@ class ProjectionStoreTests(unittest.TestCase):
         self.assertEqual(disabled.status()["reader_state"], "DISABLED")
         enabled = FixedProjectionReader(root=self.root, enabled=True, validation_clock=NOW)
         self.assertEqual(enabled.status()["hash_validation"], "VALID")
+        self.assertEqual(enabled.status()["reader_state"], "ACTIVE")
+        self.assertEqual(enabled.status()["integrity_state"], "VALID")
+        self.assertTrue(enabled.status()["evidence_current"])
         encoded = json.dumps(enabled.status())
         self.assertNotIn(str(self.root), encoded); self.assertNotIn("credential", encoded.lower())
         stale = FixedProjectionReader(root=self.root, enabled=True, validation_clock=NOW + timedelta(seconds=901))
-        with self.assertRaisesRegex(RuntimeError, "STALE"): stale.read()
+        before = {name: (self.root / name).read_bytes() for name in INVENTORY}
+        stale_value = stale.read(); stale_status = stale.status()
+        self.assertEqual((stale_status["reader_state"], stale_status["integrity_state"]), ("ACTIVE", "VALID"))
+        self.assertEqual((stale_status["hash_validation"], stale_status["freshness_state"]), ("VALID", "STALE"))
+        self.assertEqual(stale_status["publisher_state"], "UNAVAILABLE")
+        self.assertFalse(stale_status["evidence_current"])
+        self.assertEqual(stale_value["candidate_conveyor"], {"state": "UNAVAILABLE", "candidates": []})
+        self.assertTrue(all(lane["state"] == "STALE" and lane["freshness"] == "STALE" and
+            lane["candidate_count"] is None and not lane["research_eligible"] and not lane["paper_eligible"]
+            for lane in stale_value["lane_states"].values()))
+        self.assertEqual(stale_value["professional_observatory"]["state"], "UNAVAILABLE")
+        self.assertIsNone(stale_value["professional_observatory"]["observation_count"])
+        self.assertFalse(any(stale_value["authority"].values()))
+        self.assertEqual(before, {name: (self.root / name).read_bytes() for name in INVENTORY})
+
+    def test_projection_age_boundary_and_immediately_stale(self):
+        self.store.publish(projection(), now=NOW)
+        boundary = FixedProjectionReader(root=self.root, enabled=True,
+            validation_clock=NOW + timedelta(seconds=900))
+        self.assertEqual(boundary.status()["freshness_state"], "CURRENT")
+        self.assertTrue(boundary.status()["evidence_current"])
+        above = FixedProjectionReader(root=self.root, enabled=True,
+            validation_clock=NOW + timedelta(seconds=900, microseconds=1))
+        self.assertEqual(above.status()["freshness_state"], "STALE")
+        self.assertFalse(above.status()["evidence_current"])
+
+    def test_invalid_integrity_remains_failed_closed(self):
+        self.store.publish(projection(), now=NOW)
+        raw = bytearray((self.root / PROJECTION_NAME).read_bytes()); raw[-2] ^= 1
+        (self.root / PROJECTION_NAME).write_bytes(raw); (self.root / PROJECTION_NAME).chmod(0o600)
+        reader = FixedProjectionReader(root=self.root, enabled=True, validation_clock=NOW)
+        self.assertEqual(reader.status()["reader_state"], "FAILED_CLOSED")
+        self.assertEqual(reader.status()["integrity_state"], "INVALID")
+        with self.assertRaises(RuntimeError): reader.read()
+
+    def test_future_invalid_schema_and_missing_timestamp_remain_failed_closed(self):
+        mutations = (
+            lambda value: value.update(projection_generated_at=(NOW + timedelta(seconds=1)).isoformat()),
+            lambda value: value.update(schema_version="unknown-projection-v0"),
+            lambda value: value.pop("projection_generated_at"),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                self.tearDown(); self.setUp(); self.store.publish(projection(), now=NOW)
+                rewrite_projection(self.root, mutate)
+                reader = FixedProjectionReader(root=self.root, enabled=True, validation_clock=NOW)
+                self.assertEqual(reader.status()["reader_state"], "FAILED_CLOSED")
+                self.assertEqual(reader.status()["integrity_state"], "INVALID")
 
     def test_rollback_manifest_precedes_projection_and_unknown_root_is_preserved(self):
         other = self.parent / "other"; other.mkdir(mode=0o700); (other / "unknown").write_text("keep")
@@ -160,6 +225,30 @@ class PublisherAndIntegrationTests(unittest.TestCase):
             status = snapshot["sections"]["projection_activation"]
             self.assertEqual((status["state"], status["data"]["hash_validation"]), ("AVAILABLE", "VALID"))
             self.assertNotIn(str(root), json.dumps(status))
+
+    def test_compositor_exposes_authenticated_stale_state_without_advancement(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); root.chmod(0o700); store_root = root / "projection"
+            clock = datetime.now(UTC) - timedelta(seconds=901)
+            store = ProjectionStore(store_root); store.create_with_rollback(generated_at=clock.isoformat())
+            store.publish(projection(clock), now=clock)
+            reader = FixedProjectionReader(root=store_root, enabled=True,
+                validation_clock=clock + timedelta(seconds=901))
+            missing = [root / f"missing-{i}" for i in range(4)]
+            compositor = Compositor(*missing, "http://127.0.0.1:1", multi_asset_reader=reader.read)
+            compositor._reachability = lambda: "UNAVAILABLE"
+            snapshot = compositor.snapshot(); sections = snapshot["sections"]
+            status = sections["projection_activation"]
+            self.assertEqual(status["state"], "STALE")
+            self.assertEqual(status["data"]["reader_state"], "ACTIVE")
+            self.assertEqual(status["data"]["integrity_state"], "VALID")
+            self.assertEqual(status["data"]["freshness_state"], "STALE")
+            self.assertEqual(status["data"]["publisher_state"], "UNAVAILABLE")
+            self.assertFalse(status["data"]["evidence_current"])
+            self.assertEqual(sections["candidate_conveyor"]["data"]["candidates"], [])
+            self.assertEqual(sections["professional_strategy_observatory"]["state"], "UNAVAILABLE")
+            self.assertTrue(all(not lane["research_eligible"] and not lane["paper_eligible"]
+                for lane in sections["multi_asset_factory"]["data"]["lane_states"].values()))
 
     def test_no_provider_keychain_broker_ledger_or_runtime_control(self):
         source = Path(__file__).with_name("projection_runtime.py").read_text()

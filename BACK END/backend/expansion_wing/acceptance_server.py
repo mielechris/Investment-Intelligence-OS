@@ -368,12 +368,14 @@ class Compositor:
                     owner = getattr(self.multi_asset_reader, "__self__", None)
                     status_reader = getattr(owner, "status", None)
                     projection_status = status_reader() if callable(status_reader) else {
-                        "publisher_state": "READY", "reader_state": "READY", "hash_validation": "VALID",
-                        "freshness": multi_asset["evidence_freshness_state"],
+                        "publisher_state": "UNAVAILABLE", "reader_state": "ACTIVE", "integrity_state": "VALID",
+                        "hash_validation": "VALID", "freshness": multi_asset["evidence_freshness_state"],
+                        "freshness_state": multi_asset["evidence_freshness_state"], "evidence_current": True,
                         "last_publication_time": multi_asset["projection_generated_at"],
                         "source_cycle_id": multi_asset["source_cycle_id"], "sequence": None,
                         "root_identifier": "SERVER_CONFIGURED_PROJECTION"}
-                    sections["projection_activation"] = _section("AVAILABLE", projection_status)
+                    activation_state = "STALE" if projection_status.get("freshness_state") == "STALE" else "AVAILABLE"
+                    sections["projection_activation"] = _section(activation_state, projection_status)
             if all(key in sections for key in ("multi_asset_factory", "professional_strategy_observatory",
                                                 "method_manager_scoreboard", "paper_research_sleeves")):
                 multi_asset = None
@@ -406,8 +408,9 @@ class Compositor:
                                 "method_manager_scoreboard", "paper_research_sleeves"):
                         sections[key] = _section("UNAVAILABLE", None)
                     sections["projection_activation"] = _section("UNAVAILABLE", {
-                        "publisher_state": "UNAVAILABLE", "reader_state": "FAILED_CLOSED",
-                        "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE",
+                        "publisher_state": "UNAVAILABLE", "reader_state": "FAILED_CLOSED", "integrity_state": "INVALID",
+                        "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE", "freshness_state": "UNAVAILABLE",
+                        "evidence_current": False,
                         "last_publication_time": None, "source_cycle_id": None, "sequence": None,
                         "root_identifier": "EXPANSION_WING_MULTI_ASSET_PROJECTION"})
         else:
@@ -415,8 +418,9 @@ class Compositor:
                         "method_manager_scoreboard", "paper_research_sleeves"):
                 sections[key] = _section("UNAVAILABLE", None)
             sections["projection_activation"] = _section("UNAVAILABLE", {
-                "publisher_state": "UNAVAILABLE", "reader_state": "DISABLED",
-                "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE",
+                "publisher_state": "UNAVAILABLE", "reader_state": "DISABLED", "integrity_state": "UNAVAILABLE",
+                "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE", "freshness_state": "UNAVAILABLE",
+                "evidence_current": False,
                 "last_publication_time": None, "source_cycle_id": None, "sequence": None,
                 "root_identifier": "EXPANSION_WING_MULTI_ASSET_PROJECTION"})
         section_rooms = {"Cross-Asset Observatory": "radar", "Regime Chamber": "last_cycle", "Tactical Book": "books",

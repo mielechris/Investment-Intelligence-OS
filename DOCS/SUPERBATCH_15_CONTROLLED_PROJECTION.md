@@ -18,6 +18,14 @@ the exact inventory is `rollback-manifest.json`, `multi-asset-projection.json`, 
 size, malformed JSON, unknown fields, future timestamps, stale projections, source-cycle mismatch, and either hash
 mismatch fail closed.
 
+Freshness is evaluated only after those integrity gates pass. An authentic artifact older than 900 seconds remains
+readable through a derived browser-safe `STALE` view: the reader is `ACTIVE`, integrity and hash validation are `VALID`,
+the publisher remains `UNAVAILABLE`, and evidence is explicitly not current. The derived view is never persisted. It
+clears Candidate Conveyor identities, blocks every lane's research and paper eligibility, suppresses professional
+observations, and grants no committee, risk, paper, provider, broker, ledger, or execution authority. Exactly 900
+seconds is current; any greater age is stale. Invalid, future-dated, malformed, unsafe, or hash-mismatched artifacts
+remain `FAILED_CLOSED`.
+
 Publication uses canonical ASCII JSON, SHA-256, same-directory temporary files, `fsync`, atomic replacement, and a
 monotonic sequence. Identical input is idempotent and does not rewrite either artifact. The rollback manifest records
 the prior absence before the first projection write. The publisher will not initialize, infer, or reset durable provider

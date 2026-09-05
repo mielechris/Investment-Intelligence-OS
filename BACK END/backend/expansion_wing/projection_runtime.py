@@ -228,31 +228,68 @@ class FixedProjectionReader:
         self.validation_clock = validation_clock
         self.maximum_age_seconds = maximum_age_seconds
 
-    def read(self) -> dict[str, Any]:
+    def _validated(self) -> tuple[dict[str, Any], dict[str, Any], bool]:
         if not self.enabled:
             raise RuntimeError("PROJECTION_READER_DISABLED")
-        projection, _ = ProjectionStore(self.root, expected_uid=self.expected_uid).read(now=self.validation_clock)
+        projection, manifest = ProjectionStore(self.root, expected_uid=self.expected_uid).read(now=self.validation_clock)
         clock = (self.validation_clock or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        if (clock - _timestamp(projection["projection_generated_at"])).total_seconds() > self.maximum_age_seconds:
-            raise RuntimeError("PROJECTION_STALE")
-        return projection
+        stale = (clock - _timestamp(projection["projection_generated_at"])).total_seconds() > self.maximum_age_seconds
+        return projection, manifest, stale
+
+    def read(self) -> dict[str, Any]:
+        projection, _, stale = self._validated()
+        return _stale_browser_projection(projection, validation_clock=self.validation_clock) if stale else projection
 
     def status(self) -> dict[str, Any]:
         if not self.enabled:
-            return {"publisher_state": "UNAVAILABLE", "reader_state": "DISABLED",
-                    "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE", "last_publication_time": None,
+            return {"publisher_state": "UNAVAILABLE", "reader_state": "DISABLED", "integrity_state": "UNAVAILABLE",
+                    "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE", "freshness_state": "UNAVAILABLE",
+                    "evidence_current": False, "last_publication_time": None,
                     "source_cycle_id": None, "sequence": None, "root_identifier": ROOT_IDENTIFIER}
         try:
-            projection = self.read()
-            _, manifest = ProjectionStore(self.root, expected_uid=self.expected_uid).read(now=self.validation_clock)
+            projection, manifest, stale = self._validated()
         except RuntimeError:
-            return {"publisher_state": "UNAVAILABLE", "reader_state": "FAILED_CLOSED",
-                    "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE", "last_publication_time": None,
+            return {"publisher_state": "UNAVAILABLE", "reader_state": "FAILED_CLOSED", "integrity_state": "INVALID",
+                    "hash_validation": "UNAVAILABLE", "freshness": "UNAVAILABLE", "freshness_state": "UNAVAILABLE",
+                    "evidence_current": False, "last_publication_time": None,
                     "source_cycle_id": None, "sequence": None, "root_identifier": ROOT_IDENTIFIER}
-        return {"publisher_state": "READY", "reader_state": "READY", "hash_validation": "VALID",
-                "freshness": projection["evidence_freshness_state"],
+        freshness = "STALE" if stale else "CURRENT"
+        return {"publisher_state": "UNAVAILABLE", "reader_state": "ACTIVE", "integrity_state": "VALID",
+                "hash_validation": "VALID", "freshness": freshness, "freshness_state": freshness,
+                "evidence_current": not stale,
                 "last_publication_time": manifest["generated_at"], "source_cycle_id": manifest["source_cycle_id"],
                 "sequence": manifest["sequence"], "root_identifier": ROOT_IDENTIFIER}
+
+
+def _stale_browser_projection(projection: dict[str, Any], *,
+                              validation_clock: datetime | None = None) -> dict[str, Any]:
+    """Return a derived, non-persistent view that cannot advance stale evidence."""
+    lanes = {name: {"state": "STALE", "freshness": "STALE", "candidate_count": None,
+        "research_eligible": False, "paper_eligible": False,
+        "missing_evidence": "STALE_EVIDENCE_NOT_CURRENT", "instrument_basis": lane["instrument_basis"]}
+        for name, lane in projection["lane_states"].items()}
+    paper = projection["paper_research_sleeves"]
+    return build_projection(source_generated_at=projection["source_generated_at"],
+        source_cycle_id=projection["source_cycle_id"],
+        projection_generated_at=projection["projection_generated_at"], evidence_freshness_state="STALE",
+        market_session_state=projection["market_session_state"], lane_states=lanes,
+        candidate_conveyor={"state": "UNAVAILABLE", "candidates": []},
+        professional_observatory={"state": "UNAVAILABLE", "observation_count": None,
+            "primary_verification_state": "UNAVAILABLE", "agreement_state": "UNAVAILABLE",
+            "sample_warning": True, "endorsement": False},
+        scoreboard={"state": "UNAVAILABLE", "sample_size": None, "unresolved_observations": None,
+            "hit_rate": None, "calibration": None, "return_distribution_state": "UNAVAILABLE",
+            "drawdown_distribution_state": "UNAVAILABLE", "sample_warning": True,
+            "survivorship_warning": True},
+        paper_research_sleeves={"state": "STALE", "sleeve_count": None,
+            "operational_position_count": 0, "authoritative_cash": paper["authoritative_cash"],
+            "paper_authority": False, "broker_authority": False},
+        provider={"state": "UNAVAILABLE", "confirmed_credits": None, "ambiguous_credits": None,
+            "remaining_ceiling": None, "outbound_requests": 0},
+        queue={"state": "UNAVAILABLE", "depth": None},
+        authoritative_paper_nav=projection["consolidated_paper_nav"],
+        last_trustworthy_hash=projection["last_trustworthy_hash"], enabled=True,
+        validation_clock=validation_clock or datetime.now(timezone.utc))
 
 
 def compose_from_sanitized_snapshot(snapshot: dict[str, Any], *, generated_at: str,
