@@ -31,13 +31,15 @@ def lane(name: str, *, state: str = "AVAILABLE", freshness: str = "CURRENT") -> 
 
 def payloads() -> dict[str, dict]:
     return {
-        "factory_health": {"state": "AVAILABLE"},
+        "factory_health": {"state": "AVAILABLE", "components": [
+            {"component": "RADAR", "state": "AVAILABLE", "last_completed_at": (NOW-timedelta(minutes=1)).isoformat()}]},
         "market_session": {"state": "REGULAR_SESSION", "session_date": "2026-09-08", "calendar_approved": True},
         "radar_cycle": {"state": "AVAILABLE_EMPTY", "cycle_id": "cycle_17_1", "cycle_complete": True,
                         "source_artifact_hash": "a" * 64},
         "candidate_lineage": {"state": "AVAILABLE_EMPTY", "cycle_id": "cycle_17_1",
                               "source_artifact_hash": "a" * 64, "candidates": []},
-        "benchmark_9h": {"state": "INCOMPLETE", "session_date": "2026-09-08", "full_session_complete": False},
+        "benchmark_9h": {"state": "INCOMPLETE", "session_date": "2026-09-08", "full_session_complete": False,
+                         "expected_snapshots":78,"observed_snapshots":20,"coverage_pct":25.6,"error_count":0},
         "shadow_9i": {"state": "UNAVAILABLE", "source_session": "2026-09-08",
                       "consumed_naturally": False, "observational_only": True},
         "outcomes_9j": {"state": "AVAILABLE_EMPTY", "source_session": "2026-09-08", "advanced": False},
@@ -63,6 +65,8 @@ def envelopes(values: dict[str, dict] | None = None, *, moment: datetime = NOW) 
         when = moment - timedelta(minutes=1)
         result[name] = {"schema_version": SOURCE_ENVELOPE_SCHEMA, "source_identifier": name,
             "source_schema": contract.source_schema, "artifact_identity": contract.artifact_identity,
+            "adapter_identity": "SYNTHETIC_FIXTURE_ADAPTER", "adapter_version": "v1",
+            "source_content_hash": content_hash(value),
             "generated_at": when.isoformat(), "effective_at": when.isoformat(),
             "immutable_hash": content_hash(value), "payload": value}
     return result
@@ -174,7 +178,8 @@ class PublisherCase(unittest.TestCase):
 
     def test_benchmark_shadow_outcomes_are_semantic_only(self) -> None:
         first = self.publish(); values = payloads()
-        values["benchmark_9h"] = {"state": "AVAILABLE", "session_date": "2026-09-08", "full_session_complete": True}
+        values["benchmark_9h"] = {"state": "AVAILABLE", "session_date": "2026-09-08", "full_session_complete": True,
+                                  "expected_snapshots":78,"observed_snapshots":78,"coverage_pct":100.0,"error_count":0}
         second = self.publish(values); values["shadow_9i"]["state"] = "AVAILABLE"
         values["shadow_9i"]["consumed_naturally"] = True
         third = self.publish(values); values["outcomes_9j"]["advanced"] = True
@@ -209,7 +214,7 @@ class SourceContractCase(unittest.TestCase):
 
     def test_envelope_rejections(self) -> None:
         contract = source_registry()["factory_health"]
-        value = envelopes({"factory_health": {"state": "AVAILABLE"}})["factory_health"]
+        value = envelopes({"factory_health": {"state": "AVAILABLE", "components": []}})["factory_health"]
         self.assertTrue(validate_envelope(value, contract, now=NOW)["fresh"])
         for mutation in ("unknown", "future", "hash", "private"):
             bad = json.loads(json.dumps(value))
@@ -222,7 +227,7 @@ class SourceContractCase(unittest.TestCase):
     def test_reader_exact_path_modes_and_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); root.chmod(0o700)
-            value = envelopes({"factory_health": {"state": "AVAILABLE"}})["factory_health"]
+            value = envelopes({"factory_health": {"state": "AVAILABLE", "components": []}})["factory_health"]
             path = root / "factory.json"; path.write_bytes(canonical(value)); path.chmod(0o600)
             reader = RegisteredSourceReader(root, {"factory_health": "factory.json"})
             self.assertEqual(reader.read("factory_health"), value)

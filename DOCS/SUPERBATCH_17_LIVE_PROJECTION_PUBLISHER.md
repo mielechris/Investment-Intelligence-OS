@@ -1,6 +1,8 @@
 # Superbatch 17 governed live projection publisher
 
-Status: source and fixture contracts implemented; persistent publisher not installed or activated.
+Status: source, fixed binding, adapter, snapshot, and runnable command contracts implemented; persistent publisher not installed or activated.
+
+The operational binding and service package is specified in `SUPERBATCH_17_OPERATIONAL_BINDINGS.md`.
 
 ## Boundary
 

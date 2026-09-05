@@ -13,6 +13,7 @@ from typing import Any
 SOURCE_ENVELOPE_SCHEMA = "iios-projection-source-envelope-v1"
 MAX_SOURCE_BYTES = 262_144
 _ENVELOPE_FIELDS = {"schema_version", "source_identifier", "source_schema", "artifact_identity",
+                    "adapter_identity", "adapter_version", "source_content_hash",
                     "generated_at", "effective_at", "immutable_hash", "payload"}
 _PROHIBITED_KEYS = {"credential", "credential_value", "api_key", "authorization", "headers", "provider_body",
                     "raw_log", "raw_error", "private_9i", "session_results", "prompt", "model_response",
@@ -51,7 +52,7 @@ class SourceContract:
 
 def source_registry() -> dict[str, SourceContract]:
     definitions = (
-        ("factory_health", "iios-factory-health-v1", "FACTORY_HEALTH", 120, True, {"state"}),
+        ("factory_health", "iios-factory-health-v1", "FACTORY_HEALTH", 120, True, {"state", "components"}),
         ("market_session", "iios-market-session-v1", "MARKET_SESSION", 120, True,
          {"state", "session_date", "calendar_approved"}),
         ("radar_cycle", "iios-radar-cycle-v1", "RADAR_CYCLE", 900, True,
@@ -59,7 +60,8 @@ def source_registry() -> dict[str, SourceContract]:
         ("candidate_lineage", "iios-candidate-lineage-v1", "CANDIDATE_LINEAGE", 900, False,
          {"state", "cycle_id", "source_artifact_hash", "candidates"}),
         ("benchmark_9h", "batch9h-validation-browser-v1", "BENCHMARK_9H", 86_400, False,
-         {"state", "session_date", "full_session_complete"}),
+         {"state", "session_date", "full_session_complete", "expected_snapshots", "observed_snapshots",
+          "coverage_pct", "error_count"}),
         ("shadow_9i", "batch9i-browser-shadow-strategy-v1", "SHADOW_9I", 86_400, False,
          {"state", "source_session", "consumed_naturally", "observational_only"}),
         ("outcomes_9j", "batch9j-browser-outcome-learning-v1", "OUTCOMES_9J", 86_400, False,
@@ -102,6 +104,10 @@ def validate_envelope(value: Any, contract: SourceContract, *, now: datetime) ->
     if (not isinstance(payload, dict) or set(payload) != contract.allowed_projected_fields or _private(payload) or
             len(canonical(value)) > MAX_SOURCE_BYTES):
         raise ValueError("SOURCE_PAYLOAD_INVALID")
+    if (not re.fullmatch(r"[A-Z0-9_]{3,80}", str(value["adapter_identity"])) or
+            not re.fullmatch(r"v[1-9][0-9]*", str(value["adapter_version"])) or
+            not re.fullmatch(r"[0-9a-f]{64}", str(value["source_content_hash"]))):
+        raise ValueError("SOURCE_ADAPTER_IDENTITY_INVALID")
     generated, effective = timestamp(value["generated_at"]), timestamp(value["effective_at"])
     clock = now.astimezone(timezone.utc)
     if generated > clock or effective > clock or effective > generated:
@@ -111,7 +117,9 @@ def validate_envelope(value: Any, contract: SourceContract, *, now: datetime) ->
     return {"source_identifier": contract.source_identifier, "generated_at": generated,
             "effective_at": effective, "age_seconds": (clock - effective).total_seconds(),
             "fresh": (clock - effective).total_seconds() <= contract.freshness_seconds,
-            "immutable_hash": value["immutable_hash"], "payload": payload}
+            "immutable_hash": value["immutable_hash"], "source_content_hash": value["source_content_hash"],
+            "adapter_identity": value["adapter_identity"], "adapter_version": value["adapter_version"],
+            "payload": payload}
 
 
 class RegisteredSourceReader:

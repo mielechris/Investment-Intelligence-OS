@@ -36,6 +36,8 @@ def _freshness(receipts: dict[str, dict[str, Any]], session: str) -> str:
         return "UNAVAILABLE"
     if session in {"MARKET_CLOSED_WEEKEND", "MARKET_CLOSED_HOLIDAY", "PRE_MARKET"}:
         return "STALE"
+    if session == "UNKNOWN":
+        return "UNAVAILABLE"
     return "CURRENT" if all(receipts[name]["fresh"] for name, contract in required.items() if contract.required) else "STALE"
 
 
@@ -212,3 +214,8 @@ class GovernedProjectionPublisher:
 
 def publisher_health(result: EvaluationResult) -> dict[str, Any]:
     return result.browser_safe()
+
+
+if __name__ == "__main__":
+    from .projection_publisher_service import main
+    raise SystemExit(main())

@@ -1,0 +1,19 @@
+{
+  "schema_version": "iios-publisher-binding-rehearsal-v1",
+  "fixture_label": "SYNTHETIC_FIXTURE_NON_LIVE",
+  "provider_requests": 0,
+  "provider_credits": 0,
+  "keychain_access": false,
+  "broker_access": false,
+  "ledger_writes": 0,
+  "paper_orders": 0,
+  "scenarios": [
+    "each_adapter", "thirteen_envelope_inventory", "optional_unavailable", "required_source_failure",
+    "schema_mismatch", "unsafe_permissions", "symlink_rejection", "oversized_source", "future_timestamp",
+    "stale_evidence", "aggregate_without_lineage", "valid_candidate_lineage", "ten_unavailable_lanes",
+    "authoritative_empty_sleeves", "missing_sleeves", "consistent_paper_fund", "paper_fund_mismatch",
+    "authority_true", "provider_accounting_unavailable", "identical_no_rewrite", "semantic_single_update",
+    "validate_bindings", "once", "two_loop_observations", "lock_contention", "graceful_stop",
+    "restart_sequence_recovery", "browser_polling_isolation", "atomic_interruption", "end_to_end_publication"
+  ]
+}
