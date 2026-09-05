@@ -581,7 +581,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                     "host": self.preview_server.server_address[0],
                     "port": self.preview_server.server_address[1],
                     "ledger_access": "NONE",
-                    "backend_access": "READ_ONLY_GET_ONLY",
+                    "backend_access": "NONE" if self.preview_server.fixture_isolated else "READ_ONLY_GET_ONLY",
                     "backend_write_permission": False,
                     "live_execution": False,
                 }
@@ -602,6 +602,11 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             )
             return
         if parsed.path == "/truth/factory":
+            if self.preview_server.fixture_isolated:
+                self._send_json({"status": "FIXTURE_SOURCE_UNAVAILABLE", "fixture_only": True,
+                    "ledger_access": "NONE", "backend_access": "NONE", "live_execution": False},
+                    status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             self._send_json(
                 build_factory_truth(
                     self.preview_server.ledger_path,
@@ -637,6 +642,10 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             )
             return
         if parsed.path.startswith("/living/case/"):
+            if self.preview_server.fixture_isolated:
+                self._send_json({"status": "FIXTURE_SOURCE_UNAVAILABLE", "fixture_only": True,
+                    "backend_access": "NONE", "live_execution": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             case_id = unquote(parsed.path.removeprefix("/living/case/"))
             if not CASE_ID_PATTERN.fullmatch(case_id):
                 self._send_json(
@@ -722,12 +731,14 @@ class PreviewServer(ThreadingHTTPServer):
         ledger_path: Path,
         expansion_enabled: bool = False,
         expansion_compositor: Any | None = None,
+        fixture_isolated: bool = False,
     ) -> None:
         self.static_root = static_root
         self.telemetry_dir = telemetry_dir
         self.state_dir = state_dir
         self.ledger_path = ledger_path.resolve()
         self.expansion_enabled = expansion_enabled
+        self.fixture_isolated = fixture_isolated
         self._expansion_lock = threading.Lock()
         self._expansion_cached: dict[str, Any] | None = None
         self._expansion_cached_at = 0.0
@@ -770,6 +781,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--telemetry-dir", default=str(DEFAULT_TELEMETRY_DIR))
     parser.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
     parser.add_argument("--enable-expansion-wing", action="store_true")
+    parser.add_argument("--fixture-isolated", action="store_true",
+        help="Disable every backend-dependent route for synthetic fixture review")
     parser.add_argument(
         "--ledger-path",
         default=str(BACKEND_ROOT / "iios_ledger.db"),
@@ -797,6 +810,7 @@ def main() -> int:
         state_dir,
         ledger_path,
         expansion_enabled=args.enable_expansion_wing,
+        fixture_isolated=args.fixture_isolated,
     )
     print(
         json.dumps(
@@ -805,7 +819,7 @@ def main() -> int:
                 "url": f"http://{host}:{int(args.port)}",
                 "static_root": str(static_root),
                 "ledger_access": "NONE",
-                "backend_access": "READ_ONLY_GET_ONLY",
+                "backend_access": "NONE" if args.fixture_isolated else "READ_ONLY_GET_ONLY",
                 "backend_write_permission": False,
                 "live_execution": False,
             },

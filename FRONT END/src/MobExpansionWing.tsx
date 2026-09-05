@@ -5,10 +5,11 @@ import { useExpansionWingSnapshot, type ExpansionSnapshot, type TruthState } fro
 import "./MobExpansionWing.css";
 
 type RecordValue = Record<string, unknown>;
-type DepartmentKey = "overview" | "trading" | "conveyor" | "observatory" | "laboratory" | "committee" | "risk" | "portfolio" | "learning" | "evidence" | "control";
+type DepartmentKey = "overview" | "products" | "trading" | "conveyor" | "observatory" | "laboratory" | "committee" | "risk" | "portfolio" | "learning" | "evidence" | "control";
 
 export const UNIFIED_DEPARTMENTS: ReadonlyArray<{ key: DepartmentKey; label: string; code: string }> = [
   { key: "overview", label: "Expansion Wing", code: "EW" },
+  { key: "products", label: "Multi-Product Research Floor", code: "24D" },
   { key: "trading", label: "Multi-Asset Trading Floor", code: "10D" },
   { key: "conveyor", label: "Candidate Conveyor", code: "9E+" },
   { key: "observatory", label: "Professional Strategy Observatory", code: "PRO" },
@@ -20,6 +21,48 @@ export const UNIFIED_DEPARTMENTS: ReadonlyArray<{ key: DepartmentKey; label: str
   { key: "evidence", label: "Evidence Warehouse", code: "E" },
   { key: "control", label: "Control Room", code: "CTRL" },
 ];
+
+export const MULTI_PRODUCT_ROOMS = [
+  "Multi-Product Trading Floor", "Rates and Credit Vault", "Options Strategy Room",
+  "Commodities and Currency Dock", "Digital Assets Night Desk", "Real Assets and Income Office",
+  "Intraday Operations Desk", "Relative-Value Workshop", "Professional Strategy Observatory",
+  "Parallel Paper Laboratory", "Cross-Asset Committee Chamber", "Multi-Product Risk Inspection",
+] as const;
+
+export const PRODUCT_DESKS = [
+  ["Multi-Product Trading Floor", "U.S. Large-Cap Equities", "DIRECT"],
+  ["Multi-Product Trading Floor", "U.S. Mid-Cap Equities", "DIRECT"],
+  ["Multi-Product Trading Floor", "U.S. Small-Cap Equities", "DIRECT"],
+  ["Multi-Product Trading Floor", "International Developed Equities", "DIRECT"],
+  ["Multi-Product Trading Floor", "Emerging-Market Equities", "DIRECT"],
+  ["Multi-Product Trading Floor", "Sector and Thematic ETFs", "DIRECT"],
+  ["Multi-Product Trading Floor", "Broad-Market and Factor ETFs", "DIRECT"],
+  ["Rates and Credit Vault", "U.S. Treasury Bills and Cash Equivalents", "DIRECT"],
+  ["Rates and Credit Vault", "U.S. Treasury Notes and Bonds", "DIRECT"],
+  ["Rates and Credit Vault", "Treasury ETFs and Duration Proxies", "PROXY"],
+  ["Rates and Credit Vault", "Investment-Grade Corporate Bonds", "DIRECT"],
+  ["Rates and Credit Vault", "High-Yield Corporate Bonds", "DIRECT"],
+  ["Rates and Credit Vault", "Municipal Bonds and Municipal ETFs", "DIRECT OR PROXY"],
+  ["Options Strategy Room", "Listed Equity and ETF Options", "DERIVATIVE"],
+  ["Options Strategy Room", "Index Options", "DERIVATIVE"],
+  ["Commodities and Currency Dock", "Commodity ETFs and ETC Proxies", "PROXY"],
+  ["Commodities and Currency Dock", "Commodity Futures References", "REFERENCE"],
+  ["Commodities and Currency Dock", "Foreign-Exchange Spot References", "REFERENCE"],
+  ["Commodities and Currency Dock", "Currency ETFs and FX Proxies", "PROXY"],
+  ["Digital Assets Night Desk", "Crypto Spot References", "REFERENCE"],
+  ["Digital Assets Night Desk", "Crypto ETFs and Listed Proxies", "PROXY"],
+  ["Real Assets and Income Office", "REITs and Listed Real-Estate Securities", "DIRECT"],
+  ["Real Assets and Income Office", "Preferred Stock and Income Securities", "DIRECT"],
+  ["Real Assets and Income Office", "Money-Market and Ultra-Short-Duration Products", "DIRECT OR PROXY"],
+] as const;
+
+export const METHOD_DESKS = [
+  "Intraday Momentum", "Opening-Range/Breakout Research", "Mean Reversion", "Event-Driven",
+  "Catalyst/News Reaction", "Trend Following", "Relative Value", "Pairs Trading",
+  "Yield-Curve and Duration", "Credit Spread", "Volatility and Options Structure",
+  "Income/Cash Management", "Tactical Asset Allocation", "Long-Horizon Fundamental",
+  "Policy/Macro Regime", "Professional-Method Replication Research",
+] as const;
 
 export const MULTI_ASSET_LANES = [
   ["us_equities", "U.S. Equities", "DIRECT"], ["equity_etfs", "Equity ETFs", "DIRECT"],
@@ -65,6 +108,7 @@ export function characterDialogue(snapshot: ExpansionSnapshot | null) {
     { key: "skeptic", name: "Skeptic / Red Team", role: "Falsification", line: candidates.length ? "Show the invalidation case before this crate moves." : "Lineage is unavailable. Conveyor stopped—correctly." },
     { key: "portfolio", name: "Risk Keeper", role: "Capital protection", line: "Research eligibility is false. Paper and execution authority remain locked." },
     { key: "max", name: "Portfolio Office", role: "Paper truth", line: `NAV ${books.nav == null ? "unavailable" : `$${Number(books.nav).toLocaleString()}`}; cash ${books.cash == null ? "unavailable" : `$${Number(books.cash).toLocaleString()}`}; positions ${books.positions == null ? "unavailable" : books.positions}.` },
+    { key: "market_structure", name: "Learning Theater", role: "Outcome calibration", line: "No resolved research outcome means no score, no lesson, and no profitability claim." },
   ] as const;
 }
 
@@ -92,6 +136,28 @@ function TradingFloor({ snapshot }: { snapshot: ExpansionSnapshot | null }) {
   const factory = record(section(snapshot, "multi_asset_factory")?.data);
   const laneStates = record(factory.lane_states);
   return <Panel id="multi-asset-floor" eyebrow="TEN GOVERNED DESKS" title="Multi-Asset Trading Floor" state={section(snapshot, "multi_asset_factory")?.state} className="mew-wide"><div className="mew-lanes">{MULTI_ASSET_LANES.map(([key, label, basis]) => { const lane = record(laneStates[key]); return <article key={key}><div className="mew-lane-light" aria-hidden="true" /><header><h4>{label}</h4><Status state={lane.state} /></header><MetricGrid values={[["Freshness", lane.freshness], ["Basis", lane.instrument_basis ?? basis], ["Candidates", lane.candidate_count], ["Research eligible", lane.research_eligible], ["Paper eligible", lane.paper_eligible], ["Blocker", lane.missing_evidence]]} /></article>; })}</div></Panel>;
+}
+
+function MultiProductFloor({ fixtureMode }: { fixtureMode: boolean }) {
+  const [room, setRoom] = useState<(typeof MULTI_PRODUCT_ROOMS)[number]>(MULTI_PRODUCT_ROOMS[0]);
+  const products = PRODUCT_DESKS.filter(([department]) => department === room);
+  const methods = room === "Intraday Operations Desk" ? METHOD_DESKS.slice(0, 2)
+    : room === "Relative-Value Workshop" ? METHOD_DESKS.slice(6, 8)
+      : room === "Professional Strategy Observatory" ? METHOD_DESKS.slice(15)
+        : room === "Parallel Paper Laboratory" ? METHOD_DESKS
+          : room === "Cross-Asset Committee Chamber" ? METHOD_DESKS.slice(12, 15)
+            : [];
+  return <Panel id="multi-product-floor" eyebrow="24 PRODUCTS · 16 METHODS" title="Tuesday Multi-Product Research Floor" state="NOT_ACTIVATED" className="mew-wide">
+    <p className="mew-fixture-banner">{fixtureMode ? "FIXTURE / NON-LIVE / RESEARCH ONLY" : "REGISTRY ONLY · OPERATIONAL SOURCES NOT ACTIVATED"}</p>
+    <p>Every desk has a product-specific evidence contract. Registration is not availability, a proxy is not its underlying, and a research sleeve is not an operational position.</p>
+    <nav className="mew-product-room-nav" aria-label="Multi-product factory rooms">{MULTI_PRODUCT_ROOMS.map((name, index) => <button key={name} type="button" aria-pressed={room === name} onClick={() => setRoom(name)}><b>{String(index + 1).padStart(2, "0")}</b><span>{name}</span></button>)}</nav>
+    <section className="mew-product-room" aria-live="polite" aria-labelledby="mew-product-room-title"><header><div><span>SELECTED FACTORY ROOM</span><h3 id="mew-product-room-title">{room}</h3></div><Status state="NOT_ACTIVATED" /></header>
+      {products.length ? <div className="mew-product-desks">{products.map(([, name, classification]) => <article key={name}><strong>{name}</strong><Status state="UNAVAILABLE" label={`${name} evidence`} /><dl><div><dt>Exposure</dt><dd>{classification}</dd></div><div><dt>Evidence</dt><dd>NOT ACTIVATED</dd></div><div><dt>Research</dt><dd>BLOCKED UNTIL COMPLETE</dd></div><div><dt>Paper</dt><dd>FALSE</dd></div></dl></article>)}</div> : null}
+      {methods.length ? <div className="mew-method-desks">{methods.map((name) => <article key={name}><strong>{name}</strong><span>POINT-IN-TIME · COSTS · OUT-OF-SAMPLE · HUMAN REVIEW</span><Status state="NOT_ACTIVATED" /></article>)}</div> : null}
+      {!products.length && !methods.length ? <div className="mew-machine-stop"><strong>ROOM READY · EVIDENCE UNAVAILABLE</strong><p>MAX: The room contract exists. No current market development, candidate, or recommendation is implied.</p></div> : null}
+    </section>
+    <div className="mew-grid mew-product-briefs"><article><strong>Macro Analyst</strong><p>Yield-curve movement remains unavailable until synchronized Treasury evidence supplies price, yield convention, duration and effective time.</p></article><article><strong>Sector Analyst</strong><p>Equity and ETF effects remain hypotheses; proxy performance cannot become underlying performance.</p></article><article><strong>Options Desk</strong><p>Missing Greeks or unsynchronized quotes return RESEARCH ONLY UNPRICEABLE.</p></article><article><strong>Skeptic / Red Team</strong><p>A professional-only thesis cannot promote a candidate.</p></article><article><strong>Risk Keeper</strong><p>A bond without duration or callable terms cannot pass inspection.</p></article><article><strong>Portfolio Office</strong><p>Synthetic $10,000 sleeves compare methods without touching operational cash.</p></article></div>
+  </Panel>;
 }
 
 function Conveyor({ snapshot }: { snapshot: ExpansionSnapshot | null }) {
@@ -134,6 +200,6 @@ function ControlRoom({ snapshot, connection, snapshotAgeSeconds }: { snapshot: E
 export default function MobExpansionWing() {
   const { snapshot, connection, fixtureMode, snapshotAgeSeconds } = useExpansionWingSnapshot();
   const [department, setDepartment] = useState<DepartmentKey>("overview");
-  const content = department === "overview" ? <Overview snapshot={snapshot} /> : department === "trading" ? <TradingFloor snapshot={snapshot} /> : department === "conveyor" ? <Conveyor snapshot={snapshot} /> : department === "observatory" ? <ScalarRoom id="professional-observatory" eyebrow="ATTRIBUTED OBSERVATION ONLY" title="Professional Strategy Observatory" source="professional_strategy_observatory" snapshot={snapshot} copy="Professional evidence remains separate from IIOS conclusions and cannot promote a candidate." /> : department === "laboratory" ? <div className="mew-grid"><ScalarRoom id="research-lab" eyebrow="HYPOTHESES · NOT POSITIONS" title="Research Laboratory" source="paper_research_sleeves" snapshot={snapshot} copy="Modeled sleeves cannot spend operational paper cash or create orders." /><ScalarRoom id="pattern-lab" eyebrow="POINT-IN-TIME TESTING" title="Pattern Laboratory" source="outcomes_9j" snapshot={snapshot} copy="Correlation is not causality or proof of profitability." /></div> : department === "committee" ? <ScalarRoom id="committee-room" eyebrow="HUMAN-GATED DECISION" title="Committee Room" source="committee" snapshot={snapshot} copy="No evidence advances automatically and no decision grants execution authority." /> : department === "risk" ? <ScalarRoom id="risk-inspection" eyebrow="CAPITAL PROTECTION" title="Risk Inspection" source="risk" snapshot={snapshot} copy="Missing evidence, invalidation and authority locks remain binding." /> : department === "portfolio" ? <Overview snapshot={snapshot} /> : department === "learning" ? <div className="mew-grid"><ScalarRoom id="learning-theater" eyebrow="OUTCOMES · CALIBRATION" title="Outcome Learning Theater" source="outcomes_9j" snapshot={snapshot} copy="No new outcome means no fabricated lesson." /><ScalarRoom id="failure-museum" eyebrow="FAILED HYPOTHESES RETAINED" title="Failure Museum" source="benchmark_9h" snapshot={snapshot} copy="Failures remain evidence; they do not become recommendations." /></div> : department === "evidence" ? <div className="mew-grid"><ScalarRoom id="evidence-warehouse" eyebrow="PROVENANCE FIRST" title="Evidence Warehouse" source="knowledge_operations" snapshot={snapshot} copy="Browser output contains counts and fixed states, never source text or private paths." /><ScalarRoom id="interview-studio" eyebrow="CONSENT REQUIRED" title="Interview Studio" source="cases" snapshot={snapshot} copy="No transcript or claim enters review without consent and professional approval." /></div> : <ControlRoom snapshot={snapshot} connection={connection} snapshotAgeSeconds={snapshotAgeSeconds} />;
-  return <main className="mew-shell" aria-labelledby="mew-title"><header className="mew-masthead"><div><span>INTELLIGENCE IIOS FACTORY · EAST WORKS</span><h1 id="mew-title">THE EXPANSION WING</h1><p>One factory. Ten governed desks. Evidence moves; authority does not.</p></div><div><Status state={connection} label="Projection connection" /><strong>{fixtureMode ? "FIXTURE / NON-LIVE" : "LIVE READ-ONLY"}</strong><small>{snapshotAgeSeconds == null ? "Snapshot age unavailable" : `Snapshot age ${snapshotAgeSeconds}s`}</small></div></header><nav className="mew-departments" aria-label="Expansion Wing departments">{UNIFIED_DEPARTMENTS.map((item) => <button key={item.key} type="button" aria-pressed={department === item.key} onClick={() => setDepartment(item.key)}><b>{item.code}</b><span>{item.label}</span></button>)}</nav><CharacterBriefing snapshot={snapshot} /><Feed snapshot={snapshot} />{content}<footer className="mew-footer">FAMILY RULES · SOURCE BEFORE STORY · STALE IS NOT INVALID · UNKNOWN IS NOT ZERO · NO BROKER · NO LIVE EXECUTION</footer></main>;
+  const content = department === "overview" ? <Overview snapshot={snapshot} /> : department === "products" ? <MultiProductFloor fixtureMode={fixtureMode} /> : department === "trading" ? <TradingFloor snapshot={snapshot} /> : department === "conveyor" ? <Conveyor snapshot={snapshot} /> : department === "observatory" ? <ScalarRoom id="professional-observatory" eyebrow="ATTRIBUTED OBSERVATION ONLY" title="Professional Strategy Observatory" source="professional_strategy_observatory" snapshot={snapshot} copy="Professional evidence remains separate from IIOS conclusions and cannot promote a candidate." /> : department === "laboratory" ? <div className="mew-grid"><ScalarRoom id="research-lab" eyebrow="HYPOTHESES · NOT POSITIONS" title="Parallel Paper Laboratory" source="paper_research_sleeves" snapshot={snapshot} copy="Modeled sleeves cannot spend operational paper cash or create orders." /><ScalarRoom id="pattern-lab" eyebrow="POINT-IN-TIME TESTING" title="Pattern Laboratory" source="outcomes_9j" snapshot={snapshot} copy="Correlation is not causality or proof of profitability." /></div> : department === "committee" ? <ScalarRoom id="committee-room" eyebrow="HUMAN-GATED DECISION" title="Cross-Asset Committee Chamber" source="committee" snapshot={snapshot} copy="No evidence advances automatically and no decision grants execution authority." /> : department === "risk" ? <ScalarRoom id="risk-inspection" eyebrow="CAPITAL PROTECTION" title="Multi-Product Risk Inspection" source="risk" snapshot={snapshot} copy="Missing product evidence, invalidation and authority locks remain binding." /> : department === "portfolio" ? <Overview snapshot={snapshot} /> : department === "learning" ? <div className="mew-grid"><ScalarRoom id="learning-theater" eyebrow="OUTCOMES · CALIBRATION" title="Outcome Learning Theater" source="outcomes_9j" snapshot={snapshot} copy="No new outcome means no fabricated lesson." /><ScalarRoom id="failure-museum" eyebrow="FAILED HYPOTHESES RETAINED" title="Failure Museum" source="benchmark_9h" snapshot={snapshot} copy="Failures remain evidence; they do not become recommendations." /></div> : department === "evidence" ? <div className="mew-grid"><ScalarRoom id="evidence-warehouse" eyebrow="PROVENANCE FIRST" title="Evidence Warehouse" source="knowledge_operations" snapshot={snapshot} copy="Browser output contains counts and fixed states, never source text or private paths." /><ScalarRoom id="interview-studio" eyebrow="CONSENT REQUIRED" title="Interview Studio" source="cases" snapshot={snapshot} copy="No transcript or claim enters review without consent and professional approval." /></div> : <ControlRoom snapshot={snapshot} connection={connection} snapshotAgeSeconds={snapshotAgeSeconds} />;
+  return <main className="mew-shell" aria-labelledby="mew-title"><header className="mew-masthead"><div><span>INTELLIGENCE IIOS FACTORY · EAST WORKS</span><h1 id="mew-title">THE EXPANSION WING</h1><p>One factory. Twenty-four product desks. Sixteen governed methods. Evidence moves; authority does not.</p></div><div><Status state={connection} label="Projection connection" /><strong>{fixtureMode ? "FIXTURE / NON-LIVE / RESEARCH ONLY" : "LIVE READ-ONLY"}</strong><small>{snapshotAgeSeconds == null ? "Snapshot age unavailable" : `Snapshot age ${snapshotAgeSeconds}s`}</small></div></header><nav className="mew-departments" aria-label="Expansion Wing departments">{UNIFIED_DEPARTMENTS.map((item) => <button key={item.key} type="button" aria-pressed={department === item.key} onClick={() => setDepartment(item.key)}><b>{item.code}</b><span>{item.label}</span></button>)}</nav><CharacterBriefing snapshot={snapshot} /><Feed snapshot={snapshot} />{content}<footer className="mew-footer">FAMILY RULES · SOURCE BEFORE STORY · STALE IS NOT INVALID · UNKNOWN IS NOT ZERO · NO BROKER · NO LIVE EXECUTION</footer></main>;
 }
