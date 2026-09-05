@@ -36,22 +36,41 @@
 .wing-state--awaiting { color: #f0c97a; border-bottom: 1px dashed currentColor; }
 .wing-state--waiting::before,
 .wing-state--awaiting::before { content: "…"; }
+.expansion-wing { box-sizing: border-box; max-width: 100%; min-width: 0; overflow-x: clip; }
+.expansion-wing *, .expansion-wing *::before, .expansion-wing *::after { box-sizing: border-box; }
+.expansion-wing header, .expansion-wing section, .expansion-wing article, .expansion-wing div,
+.expansion-wing button, .expansion-wing dl, .expansion-wing pre { min-width: 0; }
 .wing-conveyor { margin: 1rem 0; padding: 1rem; border: 1px solid #445566; border-radius: .75rem; background: #101820; }
 .wing-conveyor > div { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; font-weight: 800; letter-spacing: .04em; }
 .wing-conveyor ul { list-style: none; padding: 0; margin: .75rem 0 0; display: grid; gap: .35rem; }
 .wing-conveyor li { display: flex; justify-content: space-between; gap: 1rem; }
 .wing-conveyor li div { display: grid; gap: .2rem; }
 .wing-conveyor li span,.wing-lanes small { color: #9fb0ba; font-size: 11px; }
-.wing-conveyor code { color: #c8d3dd; }
+.wing-conveyor code { color: #c8d3dd; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .wing-state--failed_closed { color: #ff8c8c; font-weight: 900; border-bottom: 2px solid currentColor; }
 .wing-state--failed_closed::before { content: "!"; }
 .wing-lanes { margin: 1rem 0; padding: 1rem; border: 1px solid #3c5162; border-radius: .75rem; background: #0d161e; }
 .wing-lanes > p { color: #b6c3ce; }
-.wing-lanes > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: .5rem; }
-.wing-lanes article { display: flex; flex-direction: column; gap: .35rem; padding: .65rem; border: 1px solid #324554; border-radius: .5rem; text-transform: capitalize; }
+.wing-lanes > div { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: .65rem; }
+.wing-lanes article { display: flex; flex-direction: column; gap: .35rem; min-width: 0; padding: .65rem; border: 1px solid #324554; border-radius: .5rem; text-transform: capitalize; overflow: hidden; }
+.wing-lanes article > span, .wing-lanes small, .wing-reason-summary { overflow-wrap: anywhere; word-break: break-word; }
+.wing-machine-detail { margin-top: .35rem; text-transform: none; }
+.wing-machine-detail summary, .wing-technical summary { color: #b8cad4; cursor: pointer; font-size: 11px; font-weight: 700; }
+.wing-machine-detail code { display: block; max-width: 100%; margin-top: .3rem; color: #9fb0ba; overflow-wrap: anywhere; white-space: normal; word-break: break-word; }
 .wing-characters,.wing-observatory { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: .65rem; margin: 1rem 0; }
-.wing-characters article,.wing-observatory article { padding: .8rem; border: 1px solid #324554; border-radius: .65rem; background: #0b141b; }
+.wing-characters article,.wing-observatory article { min-width: 0; padding: .8rem; border: 1px solid #324554; border-radius: .65rem; background: #0b141b; overflow: hidden; }
 .wing-characters b { color: #f0c97a; letter-spacing: .12em; }
 .wing-characters p { color: #c6d1d8; margin-bottom: 0; }
-.wing-observatory pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #9fb0ba; font-size: 10px; }
-@media(max-width:600px){.wing-conveyor li{flex-direction:column}.wing-conveyor code{overflow-wrap:anywhere}.wing-characters,.wing-observatory{grid-template-columns:1fr}}
+.wing-summary { display: grid; gap: .35rem; margin: .75rem 0; }
+.wing-summary div { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: .75rem; padding-bottom: .35rem; border-bottom: 1px solid #263947; }
+.wing-summary dt { color: #9fb0ba; font-size: 11px; overflow-wrap: anywhere; }
+.wing-summary dd { margin: 0; color: #dbe7ef; font: 700 11px/1.35 ui-monospace,monospace; text-align: right; overflow-wrap: anywhere; word-break: break-word; }
+.wing-empty-summary { color: #9fb0ba; font-size: 12px; }
+.wing-technical { margin-top: .75rem; }
+.wing-technical pre { max-width: 100%; max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; color: #9fb0ba; font-size: 10px; }
+.wing-truth-grid article { min-width: 0; flex-wrap: wrap; align-items: flex-start; }
+.wing-truth-grid article > span { flex: 1 1 7rem; overflow-wrap: anywhere; }
+.wing-truth-grid .wing-state { flex: 0 1 auto; max-width: 100%; text-align: right; overflow-wrap: anywhere; word-break: break-word; }
+.wing-rooms button, .wing-modal, .wing-modal pre { overflow-wrap: anywhere; word-break: break-word; }
+@media(max-width:1100px){.wing-lanes > div{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.wing-lanes > div{grid-template-columns:minmax(0,1fr)}.wing-conveyor li{flex-direction:column}.wing-conveyor code{overflow-wrap:anywhere}.wing-characters,.wing-observatory{grid-template-columns:1fr}.wing-summary div{grid-template-columns:minmax(0,1fr)}.wing-summary dd{text-align:left}}
