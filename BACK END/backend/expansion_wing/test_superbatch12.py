@@ -120,12 +120,12 @@ class IntegrationTruthTests(unittest.TestCase):
 
     def test_frontend_one_polling_owner_and_status_accessibility(self):
         root=Path(__file__).parents[3]/"FRONT END/src"
-        provider=(root/"ExpansionWingSnapshotProvider.tsx").read_text(); ui=(root/"ExpansionWing.tsx").read_text(); css=(root/"ExpansionWingStates.css").read_text()
+        provider=(root/"ExpansionWingSnapshotProvider.tsx").read_text(); ui=(root/"ExpansionWingFactory.tsx").read_text(); css=(root/"ExpansionWingStates.css").read_text()
         self.assertEqual(provider.count("fetch("),1); self.assertEqual(provider.count("setTimeout("),1)
         for path in root.glob("ExpansionWing*.tsx"):
             if path.name!="ExpansionWingSnapshotProvider.tsx": self.assertNotIn("fetch(",path.read_text())
         for value in ("READY","DISABLED","AWAITING_APPROVED_SOURCE"): self.assertIn(value,(root/"ExpansionWingSnapshotContext.ts").read_text())
-        self.assertIn('title: "Resource Governor"',ui)
+        self.assertIn('title:"Resource Governor"',ui)
         for selector in ("wing-state--ready","wing-state--disabled","wing-state--awaiting_approved_source"): self.assertIn(selector,css)
 
 

@@ -142,9 +142,9 @@ class EndToEndFixtureTests(unittest.TestCase):
         self.assertNotIn("access_token", projection["sections"]["cases"]["data"]["nested"])
 
     def test_frontend_registry_fixture_label_dialog_and_keyboard_contract(self):
-        text = (ROOT / "FRONT END/src/ExpansionWing.tsx").read_text()
-        self.assertEqual(text.count('title: "'), 14)
-        for marker in ("FIXTURE / NON-LIVE", 'role="dialog"', 'event.key === "Escape"', "aria-label"):
+        text = (ROOT / "FRONT END/src/ExpansionWingFactory.tsx").read_text()
+        self.assertEqual(text.count('title:"'), 14)
+        for marker in ("FIXTURE / NON-LIVE", 'role="dialog"', 'event.key==="Escape"', "aria-label"):
             self.assertIn(marker, text)
         main = (ROOT / "FRONT END/src/main.tsx").read_text()
         self.assertIn("VITE_EXPANSION_WING_APP", main)

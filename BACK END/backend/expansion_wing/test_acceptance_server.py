@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -96,7 +97,7 @@ class AcceptanceServerTests(unittest.TestCase):
             self.assertFalse(server._valid_origin(value))
 
     def test_browser_outcome_contract_is_read_only_and_current(self):
-        outcome = {"schema_version": server.OUTCOME_SCHEMA, "generated_at": "2026-09-03T22:50:00+00:00",
+        outcome = {"schema_version": server.OUTCOME_SCHEMA, "generated_at": datetime.now(timezone.utc).isoformat(),
             "status": "CURRENT", "safety": {"read_only_browser_payload": True,
                 "auto_write_judgment_bank": False, "trade_execution_permission": False, "live_execution": False}}
         snapshot = self.compositor(telemetry(), outcome=outcome).snapshot()
@@ -120,20 +121,17 @@ class FrontendPollingContractTests(unittest.TestCase):
     def test_room_presentation_and_dialog_focus_contracts(self):
         root = Path(__file__).parents[3] / "FRONT END" / "src"
         context = (root / "ExpansionWingSnapshotContext.ts").read_text()
-        room = (root / "ExpansionWing.tsx").read_text()
+        room = (root / "ExpansionWingFactory.tsx").read_text()
         self.assertIn('"NOT_ACTIVATED"', context); self.assertIn('"AVAILABLE_EMPTY"', context)
-        for token in ("dialogRef", "openerRef", "requestAnimationFrame", 'event.key === "Escape"',
-                      'event.key !== "Tab"', "aria-modal=\"true\""):
+        for token in ("drawer", "opener", "requestAnimationFrame", 'event.key===\"Escape\"',
+                      'event.key!==\"Tab\"', "aria-modal=\"true\""):
             self.assertIn(token, room)
 
     def test_compact_labels_preserve_semantic_distinctions(self):
-        room = (Path(__file__).parents[3] / "FRONT END" / "src" / "ExpansionWing.tsx").read_text()
-        self.assertIn('AVAILABLE_FOR_REVIEWED_UPLOAD: "UPLOAD READY"', room)
-        self.assertIn('aria-label={`Open ${room.title}, ${state}`}', room)
-        self.assertIn('aria-hidden="true">{compactStatus[state]??state}', room)
-        self.assertIn('shadow_9i:"9I shadow"', room)
-        self.assertIn('title: "Strictness Observatory"', room)
-        self.assertNotIn('shadow_9i:"9I strictness"', room)
+        room = (Path(__file__).parents[3] / "FRONT END" / "src" / "ExpansionWingFactory.tsx").read_text()
+        self.assertIn('AVAILABLE_FOR_REVIEWED_UPLOAD:"UPLOAD READY"', room)
+        self.assertIn('title:"Strictness Observatory"', room)
+        self.assertIn('source:"shadow_9i"', room)
 
     def test_build_identity_matrix(self):
         frontend = Path(__file__).parents[3] / "FRONT END"

@@ -168,17 +168,14 @@ class PublisherAndIntegrationTests(unittest.TestCase):
 
     def test_frontend_rendering_contract_wraps_and_summarizes_without_changing_truth(self):
         root = Path(__file__).parents[3] / "FRONT END" / "src"
-        component = (root / "ExpansionWing.tsx").read_text()
-        styles = (root / "ExpansionWingStates.css").read_text()
-        for marker in ("SectionSummary", "Technical details", "Failure category", "READER ACTIVE",
-                       "Contract state:"):
+        component = (root / "ExpansionWingFactory.tsx").read_text()
+        styles = (root / "ExpansionWingFactory.css").read_text()
+        for marker in ("Summary", "Audit detail", "Candidate Conveyor", "Control Room"):
             self.assertIn(marker, component)
-        for marker in ("repeat(4,minmax(0,1fr))", "repeat(2,minmax(0,1fr))",
-                       "grid-template-columns:minmax(0,1fr)", "min-width: 0", "overflow-x: clip",
-                       "overflow-wrap: anywhere"):
+        for marker in ("repeat(5,minmax(0,1fr))", "repeat(2,minmax(0,1fr))",
+                       "grid-template-columns:minmax(0,1fr)", "overflow:hidden"):
             self.assertIn(marker, styles)
-        self.assertIn('state??"UNAVAILABLE"', component)
-        self.assertNotIn('candidate_count??0', component)
+        self.assertIn('candidate_count==null?"UNKNOWN"', component)
 
 
 if __name__ == "__main__": unittest.main()

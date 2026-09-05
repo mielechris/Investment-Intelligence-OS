@@ -168,11 +168,11 @@ class LibraryPresentationTests(unittest.TestCase):
         repo = Path(__file__).parents[3]
         context = (repo / "FRONT END/src/ExpansionWingSnapshotContext.ts").read_text()
         styles = (repo / "FRONT END/src/ExpansionWingStates.css").read_text()
-        ui = (repo / "FRONT END/src/ExpansionWing.tsx").read_text()
+        ui = (repo / "FRONT END/src/ExpansionWingFactory.tsx").read_text()
         server = (Path(__file__).parent / "preview_server.py").read_text()
         self.assertIn('"SOURCE_REVIEW_REQUIRED"', context)
         self.assertIn("wing-state--source_review_required", styles)
-        self.assertIn('AVAILABLE_FOR_REVIEWED_UPLOAD: "UPLOAD READY"', ui)
+        self.assertIn('AVAILABLE_FOR_REVIEWED_UPLOAD:"UPLOAD READY"', ui)
         self.assertIn('"GET", "HEAD"', server)
         self.assertIn('name.startswith("do_")', server)
         self.assertIn("METHOD_NOT_ALLOWED", server)
