@@ -1,0 +1,321 @@
+.spatial-shell {
+  --v21-cyan: #67e8f9;
+  --v21-green: #5ee3b5;
+  --v21-amber: #d8b15b;
+  --v21-deep: #03090d;
+}
+
+/* V2.1 makes the existing truth-driven scene read like an actual production floor.
+   These are presentation-only layers; no state or packet stage is inferred here. */
+
+.spatial-factory {
+  min-height: 980px;
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse at 47% 44%, rgba(54, 181, 198, .045), transparent 28%),
+    radial-gradient(ellipse at 15% 68%, rgba(67, 210, 185, .035), transparent 22%),
+    linear-gradient(rgba(4, 12, 17, .76), rgba(3, 9, 13, .98)),
+    repeating-linear-gradient(90deg, transparent 0 74px, rgba(86, 198, 217, .035) 75px 76px),
+    repeating-linear-gradient(0deg, transparent 0 74px, rgba(86, 198, 217, .025) 75px 76px);
+}
+
+.spatial-factory::after {
+  content: "9E  →  R  →  8A  →  IC  →  RK  →  P  →  M  →  9J";
+  position: absolute;
+  left: 6%;
+  right: 5%;
+  top: 46%;
+  padding-top: 10px;
+  border-top: 1px solid rgba(103, 232, 249, .13);
+  color: rgba(103, 232, 249, .27);
+  font-size: 8px;
+  letter-spacing: .26em;
+  text-align: center;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Main illuminated material-flow corridors. */
+.spatial-corridors {
+  inset: 20px;
+  z-index: 1;
+}
+
+.spatial-corridors::before {
+  content: "INTELLIGENCE FLOW";
+  position: absolute;
+  left: 4%;
+  top: 39%;
+  color: rgba(94, 227, 181, .26);
+  font-size: 7px;
+  letter-spacing: .28em;
+  transform: rotate(-90deg) translateX(-100%);
+  transform-origin: left top;
+}
+
+.spatial-corridors::after {
+  content: "";
+  position: absolute;
+  left: 7%;
+  right: 5%;
+  top: 42%;
+  height: 5px;
+  border-top: 1px solid rgba(94, 227, 181, .17);
+  border-bottom: 1px solid rgba(103, 232, 249, .07);
+  background: repeating-linear-gradient(90deg, rgba(94, 227, 181, .30) 0 9px, transparent 9px 20px);
+  box-shadow: 0 0 20px rgba(94, 227, 181, .05);
+  opacity: .72;
+  animation: v21CorridorFlow 4s linear infinite;
+}
+
+@keyframes v21CorridorFlow {
+  from { background-position-x: 0; }
+  to { background-position-x: 80px; }
+}
+
+.spatial-corridors i {
+  opacity: .85;
+  filter: drop-shadow(0 0 5px rgba(94, 227, 181, .16));
+}
+
+.spatial-corridors i:nth-child(1) {
+  left: 8%;
+  right: 7%;
+  top: 26%;
+  height: 3px;
+  background: repeating-linear-gradient(90deg, rgba(103,232,249,.28) 0 11px, transparent 11px 24px);
+  animation: v21CorridorFlow 5.5s linear infinite;
+}
+
+.spatial-corridors i:nth-child(2) {
+  left: 8%;
+  right: 7%;
+  top: 69%;
+  height: 3px;
+  background: repeating-linear-gradient(90deg, rgba(94,227,181,.23) 0 11px, transparent 11px 24px);
+  animation: v21CorridorFlow 6.5s linear infinite reverse;
+}
+
+.spatial-corridors i:nth-child(3) {
+  top: 25%;
+  bottom: 18%;
+  left: 34%;
+  width: 3px;
+  background: repeating-linear-gradient(0deg, rgba(103,232,249,.20) 0 10px, transparent 10px 22px);
+  animation: v21VerticalFlow 5s linear infinite;
+}
+
+.spatial-corridors i:nth-child(4) {
+  top: 25%;
+  bottom: 14%;
+  left: 78%;
+  width: 3px;
+  background: repeating-linear-gradient(0deg, rgba(94,227,181,.21) 0 10px, transparent 10px 22px);
+  animation: v21VerticalFlow 5.8s linear infinite reverse;
+}
+
+@keyframes v21VerticalFlow {
+  from { background-position-y: 0; }
+  to { background-position-y: 72px; }
+}
+
+/* Rooms become stations connected to the lit plant floor. */
+.spatial-room,
+.spatial-bullpen {
+  backdrop-filter: blur(4px);
+}
+
+.spatial-room::after,
+.spatial-bullpen::after {
+  pointer-events: none;
+}
+
+.spatial-room > header::after {
+  content: "STATION";
+  margin-left: auto;
+  margin-right: 8px;
+  font-size: 6px;
+  letter-spacing: .22em;
+  color: rgba(103, 232, 249, .22);
+}
+
+.spatial-room.is-event > header::after {
+  content: "LIVE EVENT";
+  color: rgba(94, 227, 181, .68);
+}
+
+/* Committee queue: gives persisted IC lineage an intentional physical home. */
+.spatial-packets {
+  z-index: 6;
+}
+
+.spatial-packets::before {
+  content: "COMMITTEE QUEUE  ·  PERSISTED LINEAGE";
+  position: absolute;
+  left: 67.4%;
+  top: 30.4%;
+  width: 13.2%;
+  height: 402px;
+  padding: 12px 10px;
+  box-sizing: border-box;
+  border: 1px solid rgba(103, 232, 249, .14);
+  border-radius: 14px;
+  background:
+    linear-gradient(rgba(4, 15, 20, .76), rgba(3, 11, 15, .90)),
+    repeating-linear-gradient(0deg, transparent 0 36px, rgba(103,232,249,.035) 37px 38px);
+  box-shadow: inset 0 0 34px rgba(103,232,249,.025), 0 12px 34px rgba(0,0,0,.20);
+  color: rgba(103, 232, 249, .35);
+  font-size: 6px;
+  letter-spacing: .19em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.spatial-packets::after {
+  content: "QUEUE ≠ ACTIVE CASE";
+  position: absolute;
+  left: 68.6%;
+  top: calc(30.4% + 374px);
+  width: 10.8%;
+  color: rgba(216, 177, 91, .42);
+  font-size: 6px;
+  letter-spacing: .16em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.spatial-packet.packet-committee {
+  left: 68.5%;
+  top: 34%;
+  min-width: 112px;
+  width: 10.8%;
+  max-width: 144px;
+  box-sizing: border-box;
+  grid-template-columns: auto 1fr auto;
+  background: rgba(4, 16, 21, .97);
+  box-shadow: 0 8px 22px rgba(0,0,0,.28), inset 0 0 14px rgba(103,232,249,.025);
+}
+
+.spatial-packets .packet-committee:nth-child(2) { margin-top: 34px; }
+.spatial-packets .packet-committee:nth-child(3) { margin-top: 68px; }
+.spatial-packets .packet-committee:nth-child(4) { margin-top: 102px; }
+.spatial-packets .packet-committee:nth-child(5) { margin-top: 136px; }
+.spatial-packets .packet-committee:nth-child(6) { margin-top: 170px; }
+.spatial-packets .packet-committee:nth-child(7) { margin-top: 204px; }
+.spatial-packets .packet-committee:nth-child(8) { margin-top: 238px; }
+.spatial-packets .packet-committee:nth-child(9) { margin-top: 272px; }
+.spatial-packets .packet-committee:nth-child(10) { margin-top: 306px; }
+
+.spatial-packet.packet-committee.is-lineage {
+  border-color: rgba(103,232,249,.42);
+}
+
+/* MAX is now an elevated command bridge rather than another room. */
+.spatial-max-platform {
+  grid-column: 1 / 5;
+  grid-row: 5 / 8;
+  margin: 22px 8px 8px 6px;
+  border-color: rgba(103, 232, 249, .36);
+  border-radius: 20px 20px 8px 8px;
+  background:
+    radial-gradient(circle at 17% 44%, rgba(79, 216, 232, .12), transparent 35%),
+    linear-gradient(160deg, rgba(8, 28, 36, .98), rgba(4, 12, 17, .98));
+  transform: perspective(900px) rotateX(1.5deg) translateY(-8px);
+  box-shadow:
+    0 18px 0 -10px rgba(5, 17, 23, .95),
+    0 26px 42px rgba(0,0,0,.38),
+    0 0 46px rgba(76,205,221,.06),
+    inset 0 0 38px rgba(76,205,221,.04);
+  overflow: visible;
+}
+
+.spatial-max-platform::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  bottom: -15px;
+  height: 18px;
+  border: 1px solid rgba(103,232,249,.18);
+  border-top: 3px solid rgba(103,232,249,.22);
+  background: repeating-linear-gradient(90deg, rgba(103,232,249,.07) 0 24px, transparent 24px 48px);
+  box-shadow: 0 6px 15px rgba(0,0,0,.25);
+  transform: perspective(300px) rotateX(-32deg);
+  transform-origin: top;
+}
+
+.spatial-max-platform::after {
+  content: "FOREMAN COMMAND OVERLOOK  ·  READ-ONLY";
+  right: 18px;
+  top: 14px;
+  color: rgba(103,232,249,.55);
+}
+
+.spatial-max-avatar > strong {
+  box-shadow: 0 0 46px rgba(81,218,232,.16), inset 0 0 28px rgba(81,218,232,.10);
+}
+
+.spatial-max-platform h2 {
+  text-shadow: 0 0 22px rgba(103,232,249,.12);
+}
+
+/* Bullpen visually anchors the center of the floor. */
+.spatial-bullpen {
+  box-shadow: 0 18px 60px rgba(0,0,0,.25), inset 0 0 42px rgba(69,185,201,.025);
+}
+
+.spatial-bullpen-heading::after {
+  content: "CENTRAL ANALYST FLOOR";
+  font-size: 7px;
+  letter-spacing: .22em;
+  color: rgba(103,232,249,.24);
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.spatial-desk {
+  background:
+    linear-gradient(rgba(7,20,26,.95), rgba(4,13,18,.96)),
+    repeating-linear-gradient(90deg, transparent 0 34px, rgba(103,232,249,.025) 35px 36px);
+}
+
+/* Decision-side rooms read as a gated sequence. */
+.room-committee,
+.room-risk,
+.room-paper,
+.room-monitoring,
+.room-learning {
+  box-shadow: inset 0 0 30px rgba(94,227,181,.018), 0 12px 28px rgba(0,0,0,.18);
+}
+
+.room-committee::before { background: linear-gradient(135deg, rgba(103,232,249,.055), transparent 48%); }
+.room-risk::before { background: linear-gradient(135deg, rgba(94,227,181,.055), transparent 48%); }
+.room-paper::before { background: linear-gradient(135deg, rgba(216,177,91,.035), transparent 48%); }
+
+/* Give the radio/legend area a clear lower-level operations hierarchy. */
+.spatial-bottom {
+  border-top: 1px solid rgba(103,232,249,.08);
+  padding-top: 14px;
+}
+
+.spatial-radio {
+  box-shadow: 0 18px 48px rgba(0,0,0,.18);
+}
+
+@media (max-width: 1250px) {
+  .spatial-factory::after,
+  .spatial-corridors::before,
+  .spatial-corridors::after,
+  .spatial-packets::before,
+  .spatial-packets::after { display: none; }
+
+  .spatial-max-platform {
+    transform: none;
+    margin: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spatial-corridors::after,
+  .spatial-corridors i { animation: none !important; }
+}

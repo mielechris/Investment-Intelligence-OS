@@ -1,0 +1,240 @@
+/*
+ * V6 cinematic portrait treatment for the recurring cast.
+ * SVG geometry is unchanged; this layer replaces the technical neon look with
+ * warm illustrated skin/suit/material values while state remains expressed by
+ * badges, borders and reaction glow.
+ */
+
+.cinematic-v6 .living-avatar {
+  --portrait-skin: #b78361;
+  --portrait-skin-shadow: #6e4632;
+  --portrait-suit: #171716;
+  --portrait-shirt: #b9aa91;
+  --portrait-hair: #171411;
+  --portrait-line: rgba(220, 170, 100, .62);
+  --portrait-accent: #b9752d;
+  color: var(--portrait-accent);
+  filter:
+    drop-shadow(0 14px 18px rgba(0,0,0,.48))
+    sepia(.08)
+    saturate(.94);
+}
+
+.cinematic-v6 .living-avatar svg {
+  overflow: visible;
+}
+
+.cinematic-v6 .living-avatar__halo {
+  fill: rgba(203, 133, 46, .045);
+  stroke: rgba(211, 144, 57, .12);
+  filter: drop-shadow(0 0 14px rgba(205,130,42,.06));
+}
+
+.cinematic-v6 .living-avatar__head,
+.cinematic-v6 .living-avatar__neck {
+  fill: var(--portrait-skin);
+  stroke: var(--portrait-line);
+  stroke-width: 1.15;
+  filter: drop-shadow(0 3px 2px rgba(0,0,0,.28));
+}
+
+.cinematic-v6 .living-avatar__body {
+  fill: var(--portrait-suit) !important;
+  stroke: rgba(213, 157, 87, .42);
+  stroke-width: 1.3;
+}
+
+.cinematic-v6 .living-avatar__hair {
+  fill: var(--portrait-hair);
+  stroke: rgba(204,153,93,.32);
+}
+
+.cinematic-v6 .living-avatar__eyes ellipse {
+  fill: #d7c6a6;
+  filter: drop-shadow(0 0 2px rgba(232,190,121,.22));
+}
+
+.cinematic-v6 .living-avatar__nose,
+.cinematic-v6 .living-avatar__mouth {
+  stroke: rgba(76, 42, 28, .88);
+  stroke-width: 1.3;
+}
+
+.cinematic-v6 .living-avatar__lapel {
+  stroke: rgba(224, 190, 137, .38);
+  stroke-width: 1.2;
+}
+
+.cinematic-v6 .living-avatar__accessory * {
+  stroke: var(--portrait-accent);
+  stroke-width: 1.3;
+  opacity: .82;
+}
+
+.cinematic-v6 .living-avatar__badge {
+  right: 2px;
+  bottom: 4px;
+  border-color: rgba(211,139,47,.50);
+  border-radius: 2px;
+  background: linear-gradient(180deg, rgba(35,19,9,.98), rgba(7,5,3,.99));
+  box-shadow: 0 8px 18px rgba(0,0,0,.46), inset 0 0 10px rgba(193,110,26,.04);
+}
+
+.cinematic-v6 .living-avatar__badge span {
+  color: #e3b866;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 800;
+}
+
+.cinematic-v6 .living-avatar__badge i {
+  background: rgba(208,142,54,.42);
+}
+
+/* Frankie Fine Print — old-school Washington fixer. */
+.cinematic-v6 .living-avatar--policy {
+  --portrait-skin: #b98561;
+  --portrait-suit: #181817;
+  --portrait-hair: #18120e;
+  --portrait-accent: #c18a47;
+}
+.cinematic-v6 .living-avatar--policy .living-avatar__accessory path:first-child {
+  stroke-width: 2.1;
+}
+
+/* Benny Basis Points — cool, controlled, dark suit / green terminal tint. */
+.cinematic-v6 .living-avatar--macro {
+  --portrait-skin: #a97858;
+  --portrait-suit: #151918;
+  --portrait-hair: #242019;
+  --portrait-accent: #8e9d6c;
+}
+
+/* Vinny EBITDA — pale accountant / steel charcoal. */
+.cinematic-v6 .living-avatar--fundamentals {
+  --portrait-skin: #b98b6d;
+  --portrait-suit: #1b1b1a;
+  --portrait-hair: #32271e;
+  --portrait-accent: #b68a50;
+}
+.cinematic-v6 .living-avatar--fundamentals .living-avatar__accessory rect {
+  stroke: #d0b47a;
+}
+
+/* Mikey Tape — street operator, slightly colder blue-black suit. */
+.cinematic-v6 .living-avatar--market_structure {
+  --portrait-skin: #a97859;
+  --portrait-suit: #111718;
+  --portrait-hair: #151311;
+  --portrait-accent: #72968d;
+}
+
+/* Tony Tanker — physical-markets guy, workwear brown/olive. */
+.cinematic-v6 .living-avatar--commodities {
+  --portrait-skin: #b7815c;
+  --portrait-suit: #242016;
+  --portrait-hair: #2b2117;
+  --portrait-accent: #a78346;
+}
+
+/* Stormy Sal — crisis-room slate / radar green. */
+.cinematic-v6 .living-avatar--geo_weather {
+  --portrait-skin: #a9785c;
+  --portrait-suit: #151b1b;
+  --portrait-hair: #201913;
+  --portrait-accent: #668f82;
+}
+
+/* Johnny No — the Red Team consigliere. */
+.cinematic-v6 .living-avatar--skeptic {
+  --portrait-skin: #a26c55;
+  --portrait-suit: #1c1011;
+  --portrait-hair: #15100e;
+  --portrait-accent: #9f4038;
+  color: #9f4038;
+  filter: drop-shadow(0 14px 20px rgba(0,0,0,.52)) sepia(.10) saturate(.9);
+}
+.cinematic-v6 .living-avatar--skeptic .living-avatar__halo {
+  fill: rgba(137, 37, 30, .055);
+  stroke: rgba(191, 70, 60, .18);
+}
+.cinematic-v6 .living-avatar--skeptic .living-avatar__eyes ellipse { fill: #d4b19c; }
+.cinematic-v6 .living-avatar--skeptic .living-avatar__badge { border-color: rgba(176,65,55,.56); }
+.cinematic-v6 .living-avatar--skeptic .living-avatar__badge span { color: #d68b7d; }
+
+/* Paulie Positions — portfolio boss, dark navy-black suit / brass tie. */
+.cinematic-v6 .living-avatar--portfolio {
+  --portrait-skin: #ad7b5b;
+  --portrait-suit: #121619;
+  --portrait-hair: #1c1712;
+  --portrait-accent: #a88b55;
+}
+
+/* State is expressed through a restrained desk-light glow, not neon skin. */
+.cinematic-v6 .living-avatar.is-active {
+  filter:
+    drop-shadow(0 14px 18px rgba(0,0,0,.48))
+    drop-shadow(0 0 8px rgba(114,212,94,.10))
+    sepia(.08) saturate(.96);
+}
+.cinematic-v6 .living-avatar.is-active .living-avatar__badge {
+  border-color: rgba(114,212,94,.58);
+  box-shadow: 0 0 15px rgba(114,212,94,.08), 0 8px 18px rgba(0,0,0,.46);
+}
+.cinematic-v6 .living-avatar.is-active .living-avatar__badge span { color: #9bd17c; }
+.cinematic-v6 .living-avatar.is-active .living-avatar__badge i { background: #72d45e; box-shadow: 0 0 7px rgba(114,212,94,.42); }
+.cinematic-v6 .living-avatar.is-active .living-avatar__eyes ellipse { fill: #d9d0ae; filter: drop-shadow(0 0 3px rgba(114,212,94,.16)); }
+
+/* MAX — illustrated brown bulldog in a black suit / brass collar. */
+.cinematic-v6 .living-avatar--max {
+  color: #a56a2d;
+  filter: drop-shadow(0 18px 22px rgba(0,0,0,.56)) sepia(.10) saturate(.92);
+}
+
+.cinematic-v6 .living-avatar--max .living-avatar__halo {
+  fill: rgba(218, 139, 45, .055);
+  stroke: rgba(221, 147, 57, .16);
+}
+
+.cinematic-v6 .max-avatar__ear,
+.cinematic-v6 .max-avatar__head {
+  fill: #8a5b36;
+  stroke: rgba(224,170,104,.62);
+}
+
+.cinematic-v6 .max-avatar__muzzle {
+  fill: #c39a72;
+  stroke: rgba(232,190,135,.60);
+}
+
+.cinematic-v6 .max-avatar__body {
+  fill: #141414;
+  stroke: rgba(213,155,82,.42);
+}
+
+.cinematic-v6 .max-avatar__collar {
+  fill: #5a1c16;
+  stroke: rgba(219,147,58,.64);
+}
+
+.cinematic-v6 .max-avatar__tag {
+  fill: #9c641f;
+  stroke: #e4b25b;
+}
+
+.cinematic-v6 .max-avatar__tag-text { fill: #f6d58a; }
+.cinematic-v6 .max-avatar__eyes ellipse { fill: #1e1711; filter: drop-shadow(0 0 2px rgba(234,190,121,.10)); }
+.cinematic-v6 .max-avatar__brow path { stroke: #3c2416; stroke-width: 2.1; }
+.cinematic-v6 .max-avatar__nose { fill: #2a1810; stroke: #3c2416; }
+.cinematic-v6 .max-avatar__mouth { stroke: #3c2416; stroke-width: 1.8; }
+
+.cinematic-v6 .living-avatar--max.is-active .max-avatar__ear,
+.cinematic-v6 .living-avatar--max.is-active .max-avatar__head,
+.cinematic-v6 .living-avatar--max.is-active .max-avatar__muzzle,
+.cinematic-v6 .living-avatar--max.is-active .max-avatar__body {
+  stroke: rgba(222,171,103,.72);
+}
+.cinematic-v6 .living-avatar--max.is-active .max-avatar__eyes ellipse { fill: #20170f; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cinematic-v6 .living-avatar { animation: none !important; }
+}

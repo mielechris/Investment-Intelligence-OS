@@ -1,0 +1,311 @@
+/*
+ * 9L V2.4 — Living Characters + Event Reactions
+ * Presentation-only. Ambient character motion is cosmetic.
+ * Strong reaction states require persisted event/agent evidence from LivingFactorySpatialFloor.
+ */
+
+.spatial-shell {
+  --v24-green: #5ee3b5;
+  --v24-cyan: #67e8f9;
+  --v24-amber: #d8b15b;
+  --v24-red: #ff7d7d;
+}
+
+/* --- Ambient life: deliberately subtle and cosmetic --- */
+.spatial-desk {
+  animation: v24DeskBreathe 7.5s ease-in-out infinite;
+  animation-delay: var(--desk-delay, 0s);
+}
+
+@keyframes v24DeskBreathe {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+
+.spatial-chair {
+  transform-origin: 50% 80%;
+  animation: v24CharacterIdle 6.8s ease-in-out infinite;
+  animation-delay: var(--desk-delay, 0s);
+}
+
+@keyframes v24CharacterIdle {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  42% { transform: translateY(-1px) rotate(.25deg); }
+  52% { transform: translateY(-1px) rotate(-.2deg); }
+}
+
+/* Eye blink is ambient only; it is not an agent activity signal. */
+.spatial-chair > i:first-child {
+  transform-origin: center;
+  animation: v24Blink 5.2s steps(1, end) infinite;
+  animation-delay: calc(var(--desk-delay, 0s) + .7s);
+}
+
+@keyframes v24Blink {
+  0%, 91%, 94%, 100% { transform: scaleY(1); opacity: 1; }
+  92%, 93% { transform: scaleY(.18); opacity: .55; }
+}
+
+/* Workstation terminals breathe quietly even while waiting. */
+.spatial-monitor::after {
+  box-shadow: 0 0 8px rgba(103,232,249,.05);
+}
+
+.spatial-monitor > span {
+  position: relative;
+  z-index: 2;
+}
+
+.spatial-monitor > span::after {
+  content: "";
+  position: absolute;
+  left: -12px;
+  right: -12px;
+  top: 50%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(103,232,249,.12), transparent);
+  opacity: .35;
+}
+
+/* Persisted engagement wakes the workstation. */
+.spatial-desk.is-on .spatial-monitor {
+  position: relative;
+  overflow: hidden;
+}
+
+.spatial-desk.is-on .spatial-monitor::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: -8px;
+  height: 8px;
+  background: linear-gradient(transparent, rgba(94,227,181,.18));
+  animation: v24MonitorScan 2.8s linear infinite;
+}
+
+@keyframes v24MonitorScan {
+  from { transform: translateY(0); }
+  to { transform: translateY(54px); }
+}
+
+.spatial-desk.is-on .spatial-chair {
+  animation: v24CharacterWorking 3.8s ease-in-out infinite;
+}
+
+@keyframes v24CharacterWorking {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  35% { transform: translateY(-2px) rotate(.45deg); }
+  70% { transform: translateY(-1px) rotate(-.35deg); }
+}
+
+/* Explicit agent-stage reaction: only added when event payload names that agent. */
+.spatial-desk.is-reacting {
+  border-color: rgba(94,227,181,.72) !important;
+  box-shadow:
+    0 0 34px rgba(94,227,181,.11),
+    inset 0 0 34px rgba(94,227,181,.035),
+    0 14px 34px rgba(0,0,0,.25) !important;
+}
+
+.spatial-desk.is-reacting .spatial-chair {
+  animation: v24LookUp 1.45s ease-in-out infinite;
+}
+
+@keyframes v24LookUp {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  48% { transform: translateY(-4px) rotate(-1.2deg); }
+}
+
+.spatial-desk.is-reacting .spatial-monitor {
+  box-shadow: 0 0 24px rgba(94,227,181,.18), inset 0 0 22px rgba(94,227,181,.08);
+}
+
+/* --- Narrative reaction badges --- */
+.spatial-desk-reaction {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: -42px;
+  min-height: 31px;
+  padding: 7px 9px;
+  border: 1px solid rgba(94,227,181,.36);
+  border-radius: 10px 10px 10px 3px;
+  background: rgba(4,16,19,.97);
+  box-shadow: 0 10px 24px rgba(0,0,0,.28), 0 0 22px rgba(94,227,181,.06);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: center;
+  z-index: 8;
+  animation: v24BubbleIn .35s ease both;
+}
+
+@keyframes v24BubbleIn {
+  from { opacity: 0; transform: translateY(6px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.spatial-desk-reaction > span {
+  grid-row: 1 / span 2;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  padding-right: 8px;
+  border-right: 1px solid rgba(94,227,181,.14);
+  color: var(--v24-green);
+  font-size: 5px;
+  letter-spacing: .18em;
+  writing-mode: vertical-rl;
+  text-transform: uppercase;
+}
+
+.spatial-desk-reaction > strong {
+  color: #e9faf6;
+  font-size: 8px;
+  line-height: 1.25;
+}
+
+.spatial-desk-reaction > em {
+  font-style: normal;
+  color: rgba(162,204,196,.45);
+  font-size: 5px;
+  letter-spacing: .08em;
+}
+
+/* --- MAX becomes the living foreman / narrative anchor --- */
+.spatial-max-platform {
+  overflow: visible;
+}
+
+.spatial-max-avatar {
+  animation: v24MaxIdle 5.8s ease-in-out infinite;
+  transform-origin: 50% 80%;
+}
+
+@keyframes v24MaxIdle {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  46% { transform: translateY(-2px) rotate(.6deg); }
+  54% { transform: translateY(-2px) rotate(-.45deg); }
+}
+
+.spatial-max-avatar::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(103,232,249,.45);
+  box-shadow: -10px 0 0 rgba(103,232,249,.28), 10px 0 0 rgba(103,232,249,.28);
+  transform: translateX(-50%);
+}
+
+.spatial-max-narrative {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: -72px;
+  min-height: 56px;
+  padding: 11px 13px;
+  border: 1px solid rgba(216,177,91,.30);
+  border-radius: 5px 13px 13px 13px;
+  background:
+    linear-gradient(120deg, rgba(28,22,8,.86), rgba(5,15,19,.98) 45%),
+    rgba(4,14,18,.98);
+  box-shadow: 0 14px 32px rgba(0,0,0,.30), 0 0 26px rgba(216,177,91,.035);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 10px;
+  z-index: 9;
+  animation: v24BubbleIn .4s ease both;
+}
+
+.spatial-max-narrative > span {
+  grid-row: 1 / span 2;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  padding-right: 10px;
+  border-right: 1px solid rgba(216,177,91,.18);
+  color: var(--v24-amber);
+  font-size: 6px;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+}
+
+.spatial-max-narrative > strong {
+  color: #f4f0de;
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.spatial-max-narrative > em {
+  font-style: normal;
+  color: rgba(209,195,148,.47);
+  font-size: 6px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+/* --- More obvious workstation personality props --- */
+.spatial-desk:nth-child(1) { --v24-prop: "DC / EO / TARIFF"; }
+.spatial-desk:nth-child(2) { --v24-prop: "2Y  10Y  FED"; }
+.spatial-desk:nth-child(3) { --v24-prop: "10-K  FCF  EV"; }
+.spatial-desk:nth-child(4) { --v24-prop: "TAPE  FLOW  VOL"; }
+.spatial-desk:nth-child(5) { --v24-prop: "WTI  FREIGHT  INV"; }
+.spatial-desk:nth-child(6) { --v24-prop: "WX  GEO  ROUTES"; }
+.spatial-desk:nth-child(7) { --v24-prop: "KILL  THESIS  FIRST"; }
+.spatial-desk:nth-child(8) { --v24-prop: "BETA  CORR  DD"; }
+
+.spatial-desk .spatial-monitor::marker { content: ""; }
+
+.spatial-desk .spatial-desk-copy::after {
+  content: var(--v24-prop);
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid rgba(103,232,249,.07);
+  color: rgba(103,232,249,.22);
+  font-size: 5px;
+  letter-spacing: .13em;
+}
+
+.spatial-desk:nth-child(7) .spatial-desk-copy::after {
+  color: rgba(255,125,125,.28);
+  border-top-color: rgba(255,125,125,.08);
+}
+
+/* Keep layout stable while MAX narrative extends below the platform. */
+.spatial-factory {
+  padding-bottom: 54px;
+}
+
+@media (max-width: 1250px) {
+  .spatial-max-narrative {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    grid-column: 1 / -1;
+    margin-top: 12px;
+  }
+  .spatial-desk-reaction { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spatial-desk,
+  .spatial-chair,
+  .spatial-chair > i:first-child,
+  .spatial-desk.is-on .spatial-monitor::before,
+  .spatial-desk.is-on .spatial-chair,
+  .spatial-desk.is-reacting .spatial-chair,
+  .spatial-max-avatar,
+  .spatial-max-narrative,
+  .spatial-desk-reaction {
+    animation: none !important;
+    transition: none !important;
+  }
+}

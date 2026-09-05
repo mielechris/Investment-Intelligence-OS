@@ -1,0 +1,165 @@
+/* Integration geometry for the illustrated V6 art engine. */
+
+/* Command deck boss office becomes a proper framed portrait. */
+.cinematic-v6 .cfd-boss-office {
+  min-height: 430px;
+  grid-template-rows: minmax(275px,1fr) auto;
+  overflow: hidden;
+}
+.cinematic-v6 .cfd-boss-portrait {
+  min-height: 275px;
+  overflow: visible;
+  align-content: end;
+  background:
+    radial-gradient(ellipse at 50% 12%,rgba(226,151,57,.15),transparent 47%),
+    repeating-linear-gradient(90deg,transparent 0 42px,rgba(199,121,35,.04) 43px 44px),
+    linear-gradient(180deg,rgba(40,21,10,.62),rgba(5,4,3,.92));
+}
+.cinematic-v6 .cfd-boss-portrait .ccp-portrait--boss {
+  width: min(100%,245px);
+  transform: translateY(18px);
+}
+.cinematic-v6 .cfd-boss-copy {
+  position:relative;
+  z-index:7;
+  padding-top:14px;
+  background:linear-gradient(180deg,rgba(8,5,3,.86),rgba(4,3,2,.98));
+}
+
+/* Eight-agent command roster: illustrated dossier cards, still compact enough for one row. */
+.cinematic-v6 .cfd-cast-grid > article {
+  min-height: 318px;
+  grid-template-rows:auto minmax(176px,1fr) auto auto;
+  align-content:start;
+  overflow:hidden;
+}
+.cinematic-v6 .cfd-cast-avatar {
+  min-height:178px;
+  display:grid;
+  place-items:end center;
+  overflow:hidden;
+}
+.cinematic-v6 .cfd-cast-avatar .ccp-portrait--card {
+  width:min(100%,132px);
+  transform:translateY(8px);
+}
+.cinematic-v6 .cfd-cast-copy {
+  position:relative;
+  z-index:4;
+  padding-top:8px;
+  background:linear-gradient(180deg,rgba(8,5,3,.10),rgba(5,4,3,.86) 36%);
+}
+.cinematic-v6 .cfd-cast-copy strong { font-size:12px; line-height:1.05; }
+.cinematic-v6 .cfd-cast-copy em { font-size:5px; }
+.cinematic-v6 .cfd-cast-copy small { font-size:6px; line-height:1.45; }
+
+/* Spatial factory departments now contain visible physical rooms. */
+.cinematic-v6 .spatial-room {
+  min-height:262px;
+  padding:13px 14px 14px;
+}
+.cinematic-v6 .spatial-room > .crs-room {
+  flex:0 0 auto;
+}
+.cinematic-v6 .spatial-room > strong {
+  position:relative;
+  z-index:5;
+  font-size:17px;
+}
+.cinematic-v6 .spatial-room > p,
+.cinematic-v6 .spatial-room footer,
+.cinematic-v6 .spatial-room-meter {
+  position:relative;
+  z-index:5;
+}
+
+/* Painted MAX on the real spatial floor. */
+.cinematic-v6 .spatial-max-platform.v25-max-platform {
+  min-height:405px;
+  grid-template-columns:minmax(180px,42%) 1fr;
+  align-items:end;
+  overflow:hidden;
+}
+.cinematic-v6 .spatial-max-platform .ccp-portrait--boss {
+  width:min(100%,255px);
+  align-self:end;
+  transform:translateY(16px);
+}
+.cinematic-v6 .spatial-max-platform .v25-max-copy {
+  align-self:center;
+  padding:14px 4px 38px 0;
+}
+.cinematic-v6 .spatial-max-platform .v25-max-copy h2 { font-size:54px; }
+.cinematic-v6 .spatial-max-narrative { z-index:9; }
+
+/* Painted specialist portraits at their actual governed desks. */
+.cinematic-v6 .spatial-agent-desks.v25-agent-desks {
+  gap:10px;
+}
+.cinematic-v6 .spatial-desk.v25-desk {
+  min-height:278px;
+  grid-template-columns:112px minmax(0,1fr);
+  align-items:center;
+  overflow:hidden;
+}
+.cinematic-v6 .spatial-desk > .ccp-portrait--desk {
+  width:112px;
+  align-self:end;
+  transform:translate(-5px,8px);
+}
+.cinematic-v6 .spatial-desk .v25-desk-copy {
+  position:relative;
+  z-index:6;
+  padding:10px 8px 10px 0;
+}
+.cinematic-v6 .spatial-desk .v25-desk-copy > strong {
+  font-size:16px;
+  line-height:1.03;
+}
+.cinematic-v6 .spatial-desk .v25-workstation-props,
+.cinematic-v6 .spatial-desk .v25-persona {
+  font-size:6px;
+  line-height:1.4;
+}
+
+/* Give the actual rooms a heavier architectural hierarchy. */
+.cinematic-v6 .room-radar,
+.cinematic-v6 .room-research,
+.cinematic-v6 .room-committee,
+.cinematic-v6 .room-risk,
+.cinematic-v6 .room-paper,
+.cinematic-v6 .room-monitoring,
+.cinematic-v6 .room-learning {
+  background:
+    radial-gradient(circle at 50% 20%,rgba(190,104,25,.09),transparent 42%),
+    linear-gradient(155deg,rgba(27,14,7,.98),rgba(4,3,2,.995));
+}
+.cinematic-v6 .room-radar.is-event,
+.cinematic-v6 .room-risk.is-event,
+.cinematic-v6 .room-monitoring.is-event {
+  background:
+    radial-gradient(circle at 50% 20%,rgba(95,158,72,.09),transparent 42%),
+    linear-gradient(155deg,rgba(21,20,10,.98),rgba(4,3,2,.995));
+}
+
+@media (max-width:1400px) {
+  .cinematic-v6 .cfd-boss-office { min-height:382px; grid-template-rows:minmax(236px,1fr) auto; }
+  .cinematic-v6 .cfd-boss-portrait { min-height:236px; }
+  .cinematic-v6 .cfd-boss-portrait .ccp-portrait--boss { width:205px; }
+  .cinematic-v6 .cfd-cast-grid > article { min-height:285px; grid-template-rows:auto minmax(146px,1fr) auto auto; }
+  .cinematic-v6 .cfd-cast-avatar { min-height:148px; }
+  .cinematic-v6 .cfd-cast-avatar .ccp-portrait--card { width:112px; }
+}
+
+@media (max-width:1100px) {
+  .cinematic-v6 .cfd-cast-grid > article { min-height:310px; }
+  .cinematic-v6 .spatial-desk.v25-desk { grid-template-columns:100px minmax(0,1fr); }
+  .cinematic-v6 .spatial-desk > .ccp-portrait--desk { width:100px; }
+}
+
+@media (max-width:760px) {
+  .cinematic-v6 .spatial-max-platform.v25-max-platform { grid-template-columns:1fr; min-height:620px; }
+  .cinematic-v6 .spatial-max-platform .ccp-portrait--boss { justify-self:center; }
+  .cinematic-v6 .spatial-desk.v25-desk { grid-template-columns:1fr; min-height:430px; }
+  .cinematic-v6 .spatial-desk > .ccp-portrait--desk { width:160px; justify-self:center; transform:translateY(8px); }
+}

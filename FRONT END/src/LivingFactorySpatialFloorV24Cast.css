@@ -1,0 +1,117 @@
+/*
+ * 9L V2.4 — recurring cast names.
+ * Display names are presentation-only aliases. Backend agent keys and governed roles remain unchanged.
+ */
+
+/* Hide the plain role-name string visually, then render the recurring character name + governed role. */
+.spatial-desk-copy > strong {
+  font-size: 0;
+  line-height: 1.15;
+}
+
+.spatial-desk-copy > strong::before {
+  display: block;
+  color: #f0fbfd;
+  font-size: 12px;
+  font-weight: 820;
+  letter-spacing: -.01em;
+}
+
+.spatial-desk-copy > strong::after {
+  display: block;
+  margin-top: 4px;
+  color: rgba(103,232,249,.34);
+  font-size: 5px;
+  font-weight: 760;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.spatial-desk:nth-child(1) .spatial-desk-copy > strong::before { content: "Frankie Fine Print"; }
+.spatial-desk:nth-child(1) .spatial-desk-copy > strong::after { content: "Policy Analyst"; }
+
+.spatial-desk:nth-child(2) .spatial-desk-copy > strong::before { content: "Benny Basis Points"; }
+.spatial-desk:nth-child(2) .spatial-desk-copy > strong::after { content: "Macro & Rates Analyst"; }
+
+.spatial-desk:nth-child(3) .spatial-desk-copy > strong::before { content: "Vinny EBITDA"; }
+.spatial-desk:nth-child(3) .spatial-desk-copy > strong::after { content: "Fundamentals Analyst"; }
+
+.spatial-desk:nth-child(4) .spatial-desk-copy > strong::before { content: "Mikey Tape"; }
+.spatial-desk:nth-child(4) .spatial-desk-copy > strong::after { content: "Market Structure Analyst"; }
+
+.spatial-desk:nth-child(5) .spatial-desk-copy > strong::before { content: "Tony Tanker"; }
+.spatial-desk:nth-child(5) .spatial-desk-copy > strong::after { content: "Commodities & Supply Chain"; }
+
+.spatial-desk:nth-child(6) .spatial-desk-copy > strong::before { content: "Stormy Sal"; }
+.spatial-desk:nth-child(6) .spatial-desk-copy > strong::after { content: "Geopolitics & Weather"; }
+
+.spatial-desk:nth-child(7) .spatial-desk-copy > strong::before { content: "Johnny No"; color: #f1c0c0; }
+.spatial-desk:nth-child(7) .spatial-desk-copy > strong::after { content: "Skeptic / Red Team"; color: rgba(255,125,125,.42); }
+
+.spatial-desk:nth-child(8) .spatial-desk-copy > strong::before { content: "Paulie Positions"; }
+.spatial-desk:nth-child(8) .spatial-desk-copy > strong::after { content: "Portfolio Context Analyst"; }
+
+/* Recurring persona line. Clearly labeled narrative; never raw model output. */
+.spatial-desk-copy > small::after {
+  display: block;
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(103,232,249,.06);
+  color: rgba(177,206,212,.28);
+  font-size: 5px;
+  line-height: 1.45;
+  letter-spacing: .04em;
+  transition: color .2s ease, opacity .2s ease, text-shadow .2s ease;
+  opacity: .68;
+}
+
+.spatial-desk:nth-child(1) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Fine print's where the bodies are buried."; }
+.spatial-desk:nth-child(2) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Everybody's a genius until rates change the rules."; }
+.spatial-desk:nth-child(3) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Nice story. Show me the cash flow."; }
+.spatial-desk:nth-child(4) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Somebody's trapped. I just wanna know who."; }
+.spatial-desk:nth-child(5) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Spreadsheet says plenty. Warehouse says otherwise."; }
+.spatial-desk:nth-child(6) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Headline's loud. Evidence better be louder."; }
+.spatial-desk:nth-child(7) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Cute thesis. Now tell me how it dies."; color: rgba(255,125,125,.34); }
+.spatial-desk:nth-child(8) .spatial-desk-copy > small::after { content: "NARRATIVE PERSONA · Good idea isn't the same thing as a good position."; }
+
+/* Persisted engagement makes the character's persona card wake up. */
+.spatial-desk.is-on .spatial-desk-copy > small::after {
+  color: rgba(94,227,181,.62);
+  opacity: 1;
+  text-shadow: 0 0 10px rgba(94,227,181,.08);
+}
+
+.spatial-desk:nth-child(7).is-on .spatial-desk-copy > small::after {
+  color: rgba(255,150,150,.66);
+  text-shadow: 0 0 10px rgba(255,100,100,.08);
+}
+
+/* MAX narrative anchor. The real latest event remains the text immediately above this line. */
+.spatial-max-platform > div:last-child::after {
+  content: "NARRATIVE · MAX — Latest event's on the board. Read the evidence before somebody does something stupid.";
+  display: block;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(216,177,91,.24);
+  border-left: 3px solid rgba(216,177,91,.48);
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(31,24,8,.56), rgba(5,15,19,.70));
+  color: rgba(235,221,172,.72);
+  font-size: 7px;
+  line-height: 1.45;
+  letter-spacing: .035em;
+  box-shadow: 0 8px 22px rgba(0,0,0,.18), inset 0 0 18px rgba(216,177,91,.025);
+}
+
+/* Slightly stronger living-cast hierarchy. */
+.spatial-bullpen-heading > div::after {
+  content: "  ·  FRANKIE · BENNY · VINNY · MIKEY · TONY · SAL · JOHNNY · PAULIE";
+  color: rgba(94,227,181,.34);
+  font-size: 6px;
+  letter-spacing: .10em;
+}
+
+@media (max-width: 1250px) {
+  .spatial-desk-copy > small::after { display: none; }
+  .spatial-max-platform > div:last-child::after { font-size: 6px; }
+}

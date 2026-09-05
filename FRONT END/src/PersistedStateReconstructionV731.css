@@ -1,0 +1,303 @@
+.psr731-shell {
+  position: relative;
+  margin: 18px 16px 24px;
+  border: 1px solid rgba(164, 91, 38, 0.52);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(101, 46, 20, 0.22), transparent 34%),
+    linear-gradient(180deg, rgba(18, 10, 7, 0.995), rgba(4, 6, 5, 0.995));
+  color: #d8b36b;
+  box-shadow: inset 0 0 78px rgba(0, 0, 0, 0.68), 0 20px 65px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+
+.psr731-header,
+.psr731-truth,
+.psr731-controls,
+.psr731-stage,
+.psr731-empty,
+.psr731-error {
+  position: relative;
+  z-index: 1;
+}
+
+.psr731-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 24px;
+  align-items: center;
+  padding: 24px 25px 19px;
+  border-bottom: 1px solid rgba(178, 111, 34, 0.3);
+  background: linear-gradient(90deg, rgba(46, 18, 9, 0.94), rgba(10, 8, 6, 0.56));
+}
+
+.psr731-header > div:first-child > span,
+.psr731-receipt > span,
+.psr731-family > header span {
+  display: block;
+  margin-bottom: 7px;
+  color: #c78a42;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.psr731-header h2 {
+  margin: 0;
+  color: #e2b76b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(24px, 2.3vw, 38px);
+  line-height: 1.03;
+  font-weight: 600;
+}
+
+.psr731-header p {
+  max-width: 920px;
+  margin: 10px 0 0;
+  color: rgba(212, 194, 164, 0.66);
+  font-size: 12px;
+  line-height: 1.64;
+}
+
+.psr731-stamp {
+  min-height: 92px;
+  display: grid;
+  place-content: center;
+  padding: 14px;
+  border: 1px solid rgba(190, 121, 45, 0.42);
+  background: rgba(8, 7, 6, 0.77);
+  text-align: center;
+  transform: rotate(-1deg);
+}
+
+.psr731-stamp strong {
+  color: #dc9a4b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+  letter-spacing: 0.07em;
+}
+
+.psr731-stamp span {
+  margin-top: 7px;
+  color: rgba(111, 211, 145, 0.78);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.psr731-truth {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: 1px solid rgba(178, 111, 34, 0.24);
+  background: rgba(3, 13, 9, 0.84);
+}
+
+.psr731-truth span {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  padding: 7px 10px;
+  border-right: 1px solid rgba(72, 138, 94, 0.2);
+  color: #72c991;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-align: center;
+}
+
+.psr731-controls {
+  display: grid;
+  grid-template-columns: 150px minmax(300px, 1fr) 210px 150px;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(178, 111, 34, 0.24);
+  background: rgba(8, 7, 6, 0.88);
+}
+
+.psr731-controls button {
+  border: 1px solid rgba(184, 121, 40, 0.44);
+  background: linear-gradient(180deg, rgba(39, 21, 9, 0.9), rgba(10, 8, 6, 0.96));
+  color: #d9ad62;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.psr731-controls button:disabled { opacity: 0.34; cursor: default; }
+
+.psr731-controls > div {
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(178, 111, 34, 0.22);
+  background: rgba(3, 5, 4, 0.72);
+}
+
+.psr731-controls span,
+.psr731-controls small {
+  display: block;
+  color: rgba(202, 174, 123, 0.58);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.psr731-controls strong {
+  display: block;
+  margin: 5px 0;
+  color: #d8b26b;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.psr731-stage {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 14px;
+  margin: 16px 18px 18px;
+}
+
+.psr731-receipt,
+.psr731-family {
+  border: 1px solid rgba(178, 111, 34, 0.3);
+  background: rgba(7, 7, 6, 0.9);
+}
+
+.psr731-receipt { padding: 17px; }
+.psr731-receipt > strong {
+  display: block;
+  color: #dfb66a;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+  line-height: 1.16;
+}
+.psr731-receipt dl { margin: 14px 0 0; }
+.psr731-receipt dl div {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 8px;
+  padding: 9px 0;
+  border-top: 1px solid rgba(178, 112, 34, 0.15);
+}
+.psr731-receipt dt { color: rgba(198, 139, 59, 0.62); font-size: 7px; letter-spacing: 0.1em; }
+.psr731-receipt dd { margin: 0; color: rgba(222, 204, 172, 0.72); font-size: 9px; overflow-wrap: anywhere; }
+.psr731-receipt footer {
+  margin-top: 14px;
+  color: #71bd88;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+
+.psr731-family { min-width: 0; }
+.psr731-family > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(178, 111, 34, 0.22);
+}
+.psr731-family > header span { margin: 0; }
+.psr731-family > header strong { color: #73c990; font-size: 8px; letter-spacing: 0.1em; }
+
+.psr731-cast {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+
+.psr731-cast article {
+  min-height: 270px;
+  padding: 10px;
+  border: 1px solid rgba(171, 110, 39, 0.28);
+  background: linear-gradient(180deg, rgba(28, 14, 8, 0.87), rgba(5, 7, 6, 0.96));
+  text-align: center;
+  transition: opacity 180ms ease, transform 180ms ease, filter 180ms ease;
+}
+
+.psr731-cast article.is-reacting { opacity: 0.52; filter: saturate(0.65); transform: scale(0.96); }
+.psr731-cast article.is-speaking {
+  opacity: 1;
+  transform: scale(1.035);
+  border-color: rgba(224, 154, 60, 0.72);
+  box-shadow: inset 0 0 34px rgba(198, 114, 34, 0.08), 0 0 24px rgba(198, 114, 34, 0.08);
+}
+.psr731-cast article.is-red.is-speaking { border-color: rgba(188, 69, 52, 0.72); }
+
+.psr731-avatar {
+  width: 96px;
+  height: 116px;
+  margin: 0 auto 8px;
+  overflow: hidden;
+  border: 1px solid rgba(184, 122, 42, 0.4);
+  background: rgba(0, 0, 0, 0.38);
+}
+.psr731-avatar > * { width: 100%; height: 100%; }
+/* MAX uses the large boss variant elsewhere; inside reconstruction cards it must fit the same evidence-card frame as the rest of the cast. */
+.psr731-avatar > .ccp-portrait.ccp-portrait--boss,
+.psr731-avatar > .ccp-portrait.ccp-portrait--max.ccp-portrait--boss {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+}
+.psr731-cast article > strong {
+  display: block;
+  color: #d9b36b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+}
+.psr731-cast article > span {
+  display: block;
+  margin-top: 2px;
+  color: rgba(112, 200, 142, 0.62);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.psr731-cast blockquote {
+  margin: 12px 0 0;
+  color: rgba(231, 216, 188, 0.86);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.psr731-cast small {
+  display: block;
+  margin-top: 14px;
+  color: rgba(191, 166, 121, 0.48);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+.psr731-family > footer {
+  padding: 10px 14px 12px;
+  border-top: 1px solid rgba(178, 111, 34, 0.18);
+  color: #70bd89;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.psr731-stage.is-commission .psr731-family { box-shadow: inset 0 0 48px rgba(143, 76, 27, 0.08); }
+.psr731-stage.is-risk .psr731-family { box-shadow: inset 0 0 48px rgba(61, 116, 83, 0.09); }
+.psr731-stage.is-paper .psr731-family { box-shadow: inset 0 0 48px rgba(102, 86, 48, 0.08); }
+.psr731-stage.is-monitoring .psr731-family { box-shadow: inset 0 0 48px rgba(45, 109, 112, 0.08); }
+.psr731-stage.is-learning .psr731-family { box-shadow: inset 0 0 48px rgba(133, 53, 43, 0.09); }
+
+.psr731-empty,
+.psr731-error {
+  margin: 16px 18px 18px;
+  padding: 18px;
+  border: 1px solid rgba(178, 111, 34, 0.25);
+  background: rgba(8, 7, 6, 0.82);
+}
+.psr731-empty strong { display: block; color: #d9ad62; }
+.psr731-empty span { display: block; margin-top: 6px; color: rgba(210, 194, 165, 0.62); font-size: 10px; }
+.psr731-error { color: #df7155; font-size: 9px; font-weight: 800; }
+
+@media (max-width: 1050px) {
+  .psr731-stage { grid-template-columns: 1fr; }
+  .psr731-controls { grid-template-columns: 1fr 1fr; }
+  .psr731-header { grid-template-columns: 1fr; }
+  .psr731-truth { grid-template-columns: 1fr 1fr; }
+}

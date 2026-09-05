@@ -1,0 +1,327 @@
+/*
+ * High-fidelity illustrated portrait system for the V6 headquarters.
+ * Presentation only: active/reacting classes are supplied by the existing
+ * persisted-state model; the artwork never creates agent or market activity.
+ */
+
+.ccp-portrait {
+  --ccp-brass: #c18437;
+  --ccp-brass-soft: rgba(193,132,55,.38);
+  --ccp-green: #72d45e;
+  --ccp-red: #b7483e;
+  position: relative;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  min-width: 0;
+  isolation: isolate;
+  transform-origin: 50% 88%;
+}
+
+.ccp-portrait__art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 280 / 340;
+  overflow: hidden;
+  border: 1px solid rgba(196,126,43,.48);
+  border-radius: 2px;
+  background: #050302;
+  box-shadow:
+    0 18px 34px rgba(0,0,0,.62),
+    inset 0 0 0 2px rgba(2,2,2,.86),
+    inset 0 0 35px rgba(135,55,8,.10);
+}
+
+.ccp-portrait__art::before,
+.ccp-portrait__art::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.ccp-portrait__art::before {
+  inset: 4px;
+  border: 1px solid rgba(226,163,72,.16);
+  box-shadow: inset 0 0 28px rgba(0,0,0,.42);
+}
+
+.ccp-portrait__art::after {
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.025), transparent 12%, transparent 88%, rgba(0,0,0,.28)),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.012) 4px),
+    radial-gradient(circle at 50% 42%, transparent 0 54%, rgba(0,0,0,.42) 100%);
+  mix-blend-mode: soft-light;
+}
+
+.ccp-portrait svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ccp-portrait--card { width: min(100%, 158px); }
+.ccp-portrait--desk { width: 126px; }
+.ccp-portrait--scene { width: clamp(122px, 11vw, 184px); }
+.ccp-portrait--boss { width: clamp(190px, 18vw, 274px); }
+.ccp-portrait--max.ccp-portrait--boss { width: clamp(220px, 20vw, 300px); }
+
+.ccp-portrait figcaption {
+  width: calc(100% - 14px);
+  margin-top: -2px;
+  padding: 8px 8px 7px;
+  border: 1px solid rgba(191,121,38,.42);
+  border-top: 0;
+  background: linear-gradient(180deg, rgba(30,15,7,.98), rgba(5,4,3,.99));
+  text-align: center;
+  box-shadow: 0 10px 22px rgba(0,0,0,.42), inset 0 0 12px rgba(175,87,14,.035);
+}
+
+.ccp-portrait figcaption span,
+.ccp-portrait figcaption em {
+  display: block;
+  color: rgba(211,159,83,.52);
+  font-size: 6px;
+  font-style: normal;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.ccp-portrait figcaption strong {
+  display: block;
+  margin: 3px 0;
+  color: #e7c27e;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  line-height: 1.05;
+  letter-spacing: .035em;
+}
+
+.ccp-frame-bg,
+.ccp-frame-light { stroke: rgba(216,145,55,.26); stroke-width: 1; }
+.ccp-wood path { fill: none; stroke: rgba(221,151,65,.22); stroke-width: 1; }
+.ccp-smoke path { fill: none; stroke: #d7c7ad; stroke-width: 2; stroke-linecap: round; filter: blur(.5px); }
+
+.ccp-shoulders,
+.ccp-shirt,
+.ccp-neck,
+.ccp-ear,
+.ccp-face,
+.ccp-hair,
+.ccp-tie,
+.ccp-beard {
+  stroke: rgba(221,172,111,.34);
+  stroke-width: 1.1;
+  stroke-linejoin: round;
+}
+
+.ccp-shirt { stroke: rgba(231,216,189,.36); }
+.ccp-lapel,
+.ccp-brow,
+.ccp-nose,
+.ccp-mouth,
+.ccp-cheek,
+.ccp-glasses,
+.ccp-glasses *,
+.ccp-cap *,
+.ccp-cigar *,
+.ccp-prop,
+.ccp-prop * {
+  fill: none;
+  stroke: rgba(225,190,139,.56);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ccp-face-shadow { fill: rgba(20,8,4,.24); stroke: none; mix-blend-mode: multiply; }
+.ccp-hair { filter: drop-shadow(0 3px 2px rgba(0,0,0,.34)); }
+.ccp-hair--bald { opacity: .78; }
+.ccp-brow { stroke: rgba(50,26,17,.82); stroke-width: 2; }
+.ccp-eyes ellipse { fill: #e4d5b8; stroke: rgba(48,28,20,.76); stroke-width: 1; }
+.ccp-eyes circle { fill: #17100c; }
+.ccp-nose,
+.ccp-mouth,
+.ccp-cheek { stroke: rgba(69,36,25,.78); }
+.ccp-cheek { opacity: .55; }
+.ccp-glasses rect { fill: rgba(5,8,8,.34); stroke: rgba(197,177,139,.68); }
+.ccp-glasses path { stroke: rgba(197,177,139,.68); }
+.ccp-beard { opacity: .82; }
+.ccp-cap path { stroke-width: 1.3; }
+.ccp-prop { opacity: .84; }
+.ccp-prop--red { opacity: .92; }
+.ccp-cigar path:first-child,
+.ccp-cigar path:nth-child(2) { stroke: #8e5931; stroke-width: 4; }
+.ccp-cigar circle { fill: #e55732; stroke: #ff9f4a; filter: drop-shadow(0 0 5px rgba(232,80,42,.58)); }
+.ccp-cigar path:last-child { stroke: rgba(222,211,191,.52); stroke-width: 2; }
+.ccp-grain { fill: rgba(255,255,255,.01); pointer-events: none; }
+
+/* MAX's portrait has his own heavier material language. */
+.ccp-max-suit { fill: #111213; stroke: rgba(213,155,82,.42); stroke-width: 1.4; }
+.ccp-max-shirt { fill: #c6b797; stroke: rgba(231,211,172,.38); }
+.ccp-max-lapel { fill: none; stroke: rgba(225,192,142,.42); stroke-width: 1.5; }
+.ccp-max-tie { fill: #651f19; stroke: rgba(214,142,62,.52); }
+.ccp-max-ear,
+.ccp-max-head { stroke-width: 1.4; filter: drop-shadow(0 5px 4px rgba(0,0,0,.32)); }
+.ccp-max-shadow { fill: rgba(32,14,6,.26); stroke: none; mix-blend-mode: multiply; }
+.ccp-max-wrinkle,
+.ccp-max-brow,
+.ccp-max-mouth,
+.ccp-max-cigar,
+.ccp-max-cigar-smoke {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ccp-max-wrinkle { stroke: rgba(65,37,23,.52); stroke-width: 1.5; }
+.ccp-max-brow { stroke: #3e2416; stroke-width: 3; }
+.ccp-max-eyes ellipse { fill: #d5bd94; stroke: #3b2418; stroke-width: 1.2; }
+.ccp-max-eyes circle { fill: #17100b; }
+.ccp-max-muzzle { fill: #c49a70; stroke: rgba(231,192,139,.62); stroke-width: 1.4; }
+.ccp-max-nose { fill: #28170f; stroke: #3b2215; stroke-width: 1.6; }
+.ccp-max-mouth { stroke: #3b2215; stroke-width: 2; }
+.ccp-max-cigar { stroke: #8d552b; stroke-width: 6; }
+.ccp-max-ember { fill: #e6522e; stroke: #ffad51; filter: drop-shadow(0 0 7px rgba(230,76,39,.65)); }
+.ccp-max-cigar-smoke { stroke: rgba(222,211,191,.55); stroke-width: 2.2; filter: blur(.4px); }
+.ccp-max-collar { fill: #5c1b16; stroke: rgba(221,151,59,.62); stroke-width: 1.4; }
+.ccp-max-tag { fill: #9b641f; stroke: #e4b45f; stroke-width: 1.4; }
+.ccp-max-tag-text { fill: #f4d38a; font-family: Georgia, "Times New Roman", serif; font-size: 14px; font-weight: 900; }
+
+.ccp-portrait.is-active .ccp-portrait__art {
+  border-color: rgba(114,212,94,.62);
+  box-shadow:
+    0 18px 34px rgba(0,0,0,.62),
+    0 0 22px rgba(114,212,94,.08),
+    inset 0 0 0 2px rgba(2,2,2,.86),
+    inset 0 0 36px rgba(114,212,94,.035);
+}
+
+.ccp-portrait.is-active figcaption { border-color: rgba(114,212,94,.48); }
+.ccp-portrait.is-active figcaption strong { color: #d7d793; }
+
+.ccp-portrait--skeptic .ccp-portrait__art {
+  border-color: rgba(170,58,48,.52);
+  box-shadow: 0 18px 34px rgba(0,0,0,.64), inset 0 0 34px rgba(121,23,18,.11);
+}
+.ccp-portrait--skeptic figcaption { border-color: rgba(166,55,47,.48); }
+.ccp-portrait--skeptic figcaption strong { color: #d79a87; }
+
+.ccp-portrait.is-reacting {
+  animation: ccp-react 1.65s ease-in-out infinite;
+}
+.ccp-portrait.is-reacting .ccp-portrait__art::before {
+  box-shadow: inset 0 0 32px rgba(114,212,94,.08), 0 0 18px rgba(114,212,94,.07);
+}
+
+@keyframes ccp-react {
+  0%,100% { transform: translateY(0) scale(1); }
+  48% { transform: translateY(-3px) scale(1.012); }
+}
+
+@media (max-width: 1250px) {
+  .ccp-portrait--card { width: min(100%, 142px); }
+  .ccp-portrait--desk { width: 112px; }
+  .ccp-portrait--scene { width: 128px; }
+}
+
+@media (max-width: 760px) {
+  .ccp-portrait--boss { width: 210px; }
+  .ccp-portrait--max.ccp-portrait--boss { width: 232px; }
+  .ccp-portrait--scene { width: 116px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccp-portrait,
+  .ccp-portrait.is-reacting { animation: none !important; }
+}
+
+/* V7.5.1 FINAL AVATAR INSTALL — final art overlays the preserved SVG fallback. */
+.ccp-portrait__fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.ccp-portrait__final-art {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 48%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.ccp-portrait.is-active .ccp-portrait__final-art {
+  filter: brightness(1.035) contrast(1.02);
+}
+
+.ccp-portrait.is-reacting .ccp-portrait__final-art {
+  filter: brightness(1.045) contrast(1.025);
+}
+
+/* V7.5.2 AVATAR INTEGRATION POLISH — per-character focal control. */
+.ccp-portrait--max .ccp-portrait__final-art { object-position: 50% 44%; }
+.ccp-portrait--policy .ccp-portrait__final-art { object-position: 50% 45%; }
+.ccp-portrait--macro .ccp-portrait__final-art { object-position: 50% 44%; }
+.ccp-portrait--fundamentals .ccp-portrait__final-art { object-position: 49% 44%; }
+.ccp-portrait--market_structure .ccp-portrait__final-art { object-position: 51% 44%; }
+.ccp-portrait--commodities .ccp-portrait__final-art { object-position: 50% 44%; }
+.ccp-portrait--geo_weather .ccp-portrait__final-art { object-position: 50% 43%; }
+.ccp-portrait--skeptic .ccp-portrait__final-art { object-position: 50% 43%; }
+.ccp-portrait--portfolio .ccp-portrait__final-art { object-position: 50% 43%; }
+
+.ccp-portrait--max.ccp-portrait--boss .ccp-portrait__final-art {
+  object-position: 50% 42%;
+  transform: scale(1.018);
+}
+
+.ccp-portrait--scene .ccp-portrait__final-art,
+.ccp-portrait--boss .ccp-portrait__final-art {
+  border-radius: 1px;
+}
+
+/* V7.5.2.1 MAX FRAMING FIX
+   MAX gets a dedicated face/jowls/cigar crop.
+   Other eight approved portraits remain untouched. */
+.ccp-portrait--max .ccp-portrait__final-art {
+  object-position: 50% 50% !important;
+  transform: none !important;
+}
+
+.ccp-portrait--max.ccp-portrait--boss .ccp-portrait__final-art {
+  object-position: 50% 48% !important;
+  transform: none !important;
+}
+
+/* V7.5.2.2 — MAX SMALL-SCENE SLOT FIX
+   V7.3 character stages are 76x92. Override the global MAX boss width
+   only when MAX is inside that stage. MAX's Office / large boss art
+   remains unchanged. */
+.v73-character-avatar > .ccp-portrait--max.ccp-portrait--boss {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+}
+
+.v73-character-avatar
+  > .ccp-portrait--max.ccp-portrait--boss
+  .ccp-portrait__art {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+.v73-character-avatar
+  > .ccp-portrait--max.ccp-portrait--boss
+  .ccp-portrait__final-art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 48% !important;
+  transform: none !important;
+}

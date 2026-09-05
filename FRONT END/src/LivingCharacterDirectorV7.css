@@ -1,0 +1,475 @@
+.lcd7-shell {
+  position: relative;
+  margin: 14px 16px 18px;
+  border: 1px solid rgba(179, 116, 35, 0.48);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(139, 74, 22, 0.18), transparent 38%),
+    linear-gradient(180deg, rgba(28, 14, 7, 0.98), rgba(7, 7, 6, 0.99));
+  color: #d9b46c;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 189, 84, 0.035),
+    0 18px 55px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.lcd7-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.2;
+  background-image:
+    linear-gradient(rgba(212, 151, 61, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(212, 151, 61, 0.018) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+.lcd7-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.72);
+}
+
+.lcd7-header,
+.lcd7-truth-rail,
+.lcd7-route,
+.lcd7-scene,
+.lcd7-empty,
+.lcd7-warning {
+  position: relative;
+  z-index: 1;
+}
+
+.lcd7-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 24px;
+  align-items: center;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid rgba(179, 116, 35, 0.3);
+  background: linear-gradient(90deg, rgba(42, 20, 9, 0.9), rgba(12, 9, 7, 0.48));
+}
+
+.lcd7-header > div:first-child > span,
+.lcd7-stage-head > span,
+.lcd7-event-card > span,
+.lcd7-empty span {
+  display: block;
+  margin-bottom: 7px;
+  color: #c88f43;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.lcd7-header h2 {
+  margin: 0;
+  color: #e0b86b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(20px, 2vw, 31px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.lcd7-header p {
+  max-width: 900px;
+  margin: 8px 0 0;
+  color: rgba(199, 183, 155, 0.66);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.lcd7-state {
+  min-height: 88px;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  grid-template-rows: auto auto;
+  gap: 4px 10px;
+  align-content: center;
+  padding: 14px 16px;
+  border: 1px solid rgba(179, 116, 35, 0.34);
+  background: rgba(8, 8, 7, 0.72);
+}
+
+.lcd7-state i {
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7d663d;
+  box-shadow: 0 0 0 4px rgba(125, 102, 61, 0.08);
+}
+
+.lcd7-state.is-live i {
+  background: #65db9b;
+  box-shadow: 0 0 10px rgba(101, 219, 155, 0.68), 0 0 0 4px rgba(101, 219, 155, 0.08);
+}
+
+.lcd7-state strong {
+  color: #d7b16b;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+.lcd7-state span {
+  color: rgba(191, 172, 139, 0.56);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.lcd7-truth-rail {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: 1px solid rgba(179, 116, 35, 0.25);
+  background: rgba(2, 11, 8, 0.78);
+}
+
+.lcd7-truth-rail span {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  padding: 6px 10px;
+  border-right: 1px solid rgba(72, 134, 93, 0.24);
+  color: #72c68d;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-align: center;
+}
+
+.lcd7-truth-rail span:last-child {
+  border-right: 0;
+}
+
+.lcd7-route {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  padding: 15px 18px;
+  border-bottom: 1px solid rgba(179, 116, 35, 0.28);
+  background: rgba(10, 8, 6, 0.82);
+}
+
+.lcd7-route-node {
+  position: relative;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  grid-template-rows: 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(143, 104, 48, 0.24);
+  background: rgba(8, 10, 9, 0.72);
+  opacity: 0.56;
+  transition: opacity 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.lcd7-route-node > span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(183, 126, 48, 0.42);
+  border-radius: 50%;
+  color: #c79346;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.lcd7-route-node > strong {
+  color: rgba(219, 193, 144, 0.72);
+  font-size: 9px;
+  letter-spacing: 0.09em;
+}
+
+.lcd7-route-node > i {
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  width: 6px;
+  height: 1px;
+  background: rgba(182, 133, 61, 0.32);
+}
+
+.lcd7-route-node:last-child > i {
+  display: none;
+}
+
+.lcd7-route-node.is-active {
+  opacity: 1;
+  border-color: rgba(87, 204, 130, 0.66);
+  background: linear-gradient(180deg, rgba(18, 48, 31, 0.72), rgba(6, 17, 12, 0.86));
+  box-shadow: inset 0 0 28px rgba(63, 190, 108, 0.08), 0 0 16px rgba(63, 190, 108, 0.06);
+}
+
+.lcd7-route-node.is-active > span,
+.lcd7-route-node.is-active > strong {
+  color: #79df9d;
+  border-color: rgba(91, 219, 141, 0.62);
+}
+
+.lcd7-scene {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 16px;
+  padding: 18px;
+}
+
+.lcd7-event-card {
+  min-height: 350px;
+  padding: 18px;
+  border: 1px solid rgba(180, 120, 38, 0.36);
+  background:
+    linear-gradient(180deg, rgba(36, 18, 8, 0.9), rgba(9, 8, 7, 0.94));
+}
+
+.lcd7-event-card > strong {
+  display: block;
+  min-height: 50px;
+  color: #d9b46c;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.lcd7-event-meta {
+  margin-top: 18px;
+  border-top: 1px solid rgba(179, 116, 35, 0.22);
+}
+
+.lcd7-event-meta p {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(179, 116, 35, 0.13);
+}
+
+.lcd7-event-meta b {
+  color: rgba(199, 145, 66, 0.66);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.lcd7-event-meta span {
+  overflow-wrap: anywhere;
+  color: rgba(219, 205, 180, 0.7);
+  font-size: 9px;
+}
+
+.lcd7-event-card > footer {
+  margin-top: 16px;
+  color: #71bc8a;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+}
+
+.lcd7-stage {
+  min-width: 0;
+  border: 1px solid rgba(179, 116, 35, 0.28);
+  background:
+    radial-gradient(circle at 50% 20%, rgba(123, 68, 25, 0.17), transparent 48%),
+    rgba(7, 7, 6, 0.88);
+}
+
+.lcd7-stage-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 15px;
+  border-bottom: 1px solid rgba(179, 116, 35, 0.22);
+}
+
+.lcd7-stage-head > span {
+  margin: 0;
+}
+
+.lcd7-stage-head > strong {
+  color: #d4ad66;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.lcd7-stage-head > em {
+  color: rgba(112, 195, 142, 0.72);
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: 0.11em;
+}
+
+.lcd7-cast {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+
+.lcd7-character {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  padding: 11px;
+  border: 1px solid rgba(166, 112, 42, 0.3);
+  background: linear-gradient(135deg, rgba(29, 16, 8, 0.92), rgba(6, 8, 7, 0.94));
+}
+
+.lcd7-character.is-red {
+  border-color: rgba(152, 55, 45, 0.5);
+  background: linear-gradient(135deg, rgba(47, 15, 13, 0.8), rgba(9, 7, 7, 0.96));
+}
+
+.lcd7-portrait {
+  min-height: 170px;
+  overflow: hidden;
+  border: 1px solid rgba(188, 127, 46, 0.26);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.lcd7-portrait > * {
+  width: 100%;
+  height: 100%;
+}
+
+.lcd7-dialogue {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lcd7-dialogue header {
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(179, 116, 35, 0.18);
+}
+
+.lcd7-dialogue header strong {
+  display: block;
+  color: #dfb86d;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 17px;
+}
+
+.lcd7-dialogue header span {
+  display: block;
+  margin-top: 3px;
+  color: rgba(118, 194, 144, 0.68);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.lcd7-dialogue blockquote {
+  flex: 1;
+  margin: 13px 0 10px;
+  color: rgba(225, 212, 187, 0.83);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+.lcd7-dialogue footer {
+  color: rgba(168, 137, 88, 0.55);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  line-height: 1.45;
+}
+
+.lcd7-empty {
+  min-height: 300px;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 26px;
+  align-items: center;
+  padding: 24px;
+}
+
+.lcd7-empty > :first-child {
+  max-height: 260px;
+}
+
+.lcd7-empty strong {
+  display: block;
+  color: #d9b46c;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 30px;
+}
+
+.lcd7-empty p {
+  max-width: 650px;
+  color: rgba(202, 188, 163, 0.66);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.lcd7-warning {
+  padding: 9px 14px;
+  border-top: 1px solid rgba(182, 69, 47, 0.4);
+  color: #d27b63;
+  background: rgba(58, 14, 9, 0.36);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.lcd7-shell.is-live .lcd7-character {
+  animation: lcd7-scene-arrive 460ms ease both;
+}
+
+.lcd7-shell.is-live .lcd7-character:nth-child(2) { animation-delay: 80ms; }
+.lcd7-shell.is-live .lcd7-character:nth-child(3) { animation-delay: 160ms; }
+.lcd7-shell.is-live .lcd7-character:nth-child(4) { animation-delay: 240ms; }
+
+.lcd7-shell.is-live .lcd7-state i {
+  animation: lcd7-live-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes lcd7-scene-arrive {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes lcd7-live-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@media (max-width: 1180px) {
+  .lcd7-header { grid-template-columns: 1fr; }
+  .lcd7-state { grid-template-columns: 14px 1fr; min-height: 64px; }
+  .lcd7-truth-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lcd7-route { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .lcd7-scene { grid-template-columns: 1fr; }
+  .lcd7-event-card { min-height: auto; }
+}
+
+@media (max-width: 760px) {
+  .lcd7-shell { margin-inline: 8px; }
+  .lcd7-header { padding: 18px 14px; }
+  .lcd7-truth-rail { grid-template-columns: 1fr; }
+  .lcd7-route { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 10px; }
+  .lcd7-scene { padding: 10px; }
+  .lcd7-character { grid-template-columns: 92px minmax(0, 1fr); }
+  .lcd7-portrait { min-height: 145px; }
+  .lcd7-empty { grid-template-columns: 1fr; }
+  .lcd7-empty > :first-child { max-width: 180px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lcd7-shell *,
+  .lcd7-shell *::before,
+  .lcd7-shell *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -4,13 +4,16 @@ import react from '@vitejs/plugin-react'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
   const app = env.VITE_EXPANSION_WING_APP === '1'
+  const unified = env.VITE_UNIFIED_LIVING_FACTORY === '1'
   const fixture = env.VITE_EXPANSION_WING_FIXTURE === '1'
   const live = env.VITE_EXPANSION_WING_LIVE_READONLY === '1'
   const recovered = env.VITE_BACKEND_RECOVERY_GREEN === '1'
   const livePair = live && recovered
-  const invalid = (app && fixture === livePair) || (!app && (fixture || live || recovered)) || (live !== recovered)
+  const invalid = (app && fixture === livePair) || (!app && (fixture || live || recovered || unified)) || (live !== recovered)
+    || (unified && !app)
   if (invalid) throw new Error('INVALID_EXPANSION_WING_BUILD_GATES')
-  if (livePair && !/^(\/snapshot|http:\/\/127\.0\.0\.1:\d+\/snapshot)$/.test(env.VITE_EXPANSION_WING_READONLY_ENDPOINT || '/snapshot')) {
+  const defaultEndpoint = unified ? '/expansion-wing/snapshot' : '/snapshot'
+  if (livePair && !/^(\/snapshot|\/expansion-wing\/snapshot|http:\/\/127\.0\.0\.1:\d+\/snapshot)$/.test(env.VITE_EXPANSION_WING_READONLY_ENDPOINT || defaultEndpoint)) {
     throw new Error('INVALID_EXPANSION_WING_READONLY_ENDPOINT')
   }
   return {

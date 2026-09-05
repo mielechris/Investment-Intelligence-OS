@@ -1,0 +1,283 @@
+.spatial-shell {
+  --v22-lane: #5ee3b5;
+  --v22-lane-cyan: #67e8f9;
+  --v22-queue: rgba(7, 22, 28, .97);
+}
+
+/* V2.2 is presentation only. It re-routes the visual plant floor without
+   changing any persisted state, packet stage, or execution authority. */
+
+.spatial-factory {
+  min-height: 1000px;
+}
+
+/* Turn the middle plant line into a deliberate routed lane with station stops. */
+.spatial-corridors::after {
+  left: 6.5%;
+  right: 5.2%;
+  top: 43.1%;
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg,
+      transparent 0 1%,
+      rgba(94,227,181,.38) 1% 11%,
+      transparent 11% 12%,
+      rgba(103,232,249,.28) 12% 27%,
+      transparent 27% 29%,
+      rgba(94,227,181,.38) 29% 47%,
+      transparent 47% 50%,
+      rgba(103,232,249,.26) 50% 67%,
+      transparent 67% 70%,
+      rgba(94,227,181,.34) 70% 83%,
+      transparent 83% 85%,
+      rgba(103,232,249,.24) 85% 100%);
+  box-shadow:
+    0 0 18px rgba(94,227,181,.07),
+    inset 0 1px 0 rgba(255,255,255,.035),
+    inset 0 -1px 0 rgba(0,0,0,.5);
+  opacity: .70;
+  animation: none;
+}
+
+/* Reuse the four corridor elements as dedicated feeder / exit lanes. */
+.spatial-corridors i:nth-child(1) {
+  left: 7.2%;
+  right: 54%;
+  top: 27.2%;
+  height: 4px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(90deg, rgba(103,232,249,.34) 0 12px, transparent 12px 25px);
+  animation: v22LaneRight 5s linear infinite;
+}
+
+.spatial-corridors i:nth-child(2) {
+  left: 52%;
+  right: 6%;
+  top: 68.8%;
+  height: 4px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(90deg, rgba(94,227,181,.30) 0 12px, transparent 12px 25px);
+  animation: v22LaneRight 6s linear infinite;
+}
+
+.spatial-corridors i:nth-child(3) {
+  top: 27.2%;
+  bottom: 55%;
+  left: 34.2%;
+  width: 4px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(0deg, rgba(103,232,249,.28) 0 11px, transparent 11px 24px);
+  animation: v22LaneDown 5.5s linear infinite;
+}
+
+.spatial-corridors i:nth-child(4) {
+  top: 27.2%;
+  bottom: 14%;
+  left: 78.4%;
+  width: 4px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(0deg, rgba(94,227,181,.28) 0 11px, transparent 11px 24px);
+  animation: v22LaneDown 6.2s linear infinite;
+}
+
+@keyframes v22LaneRight {
+  from { background-position-x: 0; }
+  to { background-position-x: 100px; }
+}
+
+@keyframes v22LaneDown {
+  from { background-position-y: 0; }
+  to { background-position-y: 96px; }
+}
+
+/* Station port treatment: lanes now visibly terminate at room edges. */
+.spatial-room,
+.spatial-bullpen {
+  --v22-port: rgba(103,232,249,.28);
+}
+
+.spatial-room.is-event,
+.spatial-bullpen.is-event {
+  --v22-port: rgba(94,227,181,.78);
+}
+
+.room-radar,
+.room-research,
+.room-committee,
+.room-risk,
+.room-paper,
+.room-monitoring,
+.room-learning,
+.spatial-bullpen {
+  outline: 1px solid rgba(255,255,255,.008);
+}
+
+.room-radar { box-shadow: inset -5px 0 0 -3px var(--v22-port), 0 12px 28px rgba(0,0,0,.18); }
+.room-research { box-shadow: inset 5px 0 0 -3px var(--v22-port), inset -5px 0 0 -3px var(--v22-port), 0 12px 28px rgba(0,0,0,.18); }
+.spatial-bullpen { box-shadow: inset 5px 0 0 -3px var(--v22-port), inset -5px 0 0 -3px var(--v22-port), 0 18px 60px rgba(0,0,0,.25); }
+.room-committee { box-shadow: inset 5px 0 0 -3px var(--v22-port), inset 0 -5px 0 -3px rgba(103,232,249,.24), 0 12px 28px rgba(0,0,0,.18); }
+.room-risk { box-shadow: inset 5px 0 0 -3px var(--v22-port), 0 12px 28px rgba(0,0,0,.18); }
+.room-paper { box-shadow: inset 0 5px 0 -3px rgba(216,177,91,.25), inset -5px 0 0 -3px var(--v22-port), 0 12px 28px rgba(0,0,0,.18); }
+.room-monitoring { box-shadow: inset 5px 0 0 -3px var(--v22-port), inset 0 -5px 0 -3px var(--v22-port), 0 12px 28px rgba(0,0,0,.18); }
+.room-learning { box-shadow: inset 0 5px 0 -3px var(--v22-port), 0 12px 28px rgba(0,0,0,.18); }
+
+/* Small luminous docking bars inside each station edge. */
+.room-radar > header,
+.room-research > header,
+.room-committee > header,
+.room-risk > header,
+.room-paper > header,
+.room-monitoring > header,
+.room-learning > header {
+  position: relative;
+}
+
+.room-radar > header::before,
+.room-research > header::before,
+.room-committee > header::before,
+.room-risk > header::before,
+.room-paper > header::before,
+.room-monitoring > header::before,
+.room-learning > header::before {
+  content: "";
+  position: absolute;
+  top: 26px;
+  width: 4px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--v22-port);
+  box-shadow: 0 0 12px var(--v22-port);
+  opacity: .72;
+}
+
+.room-radar > header::before { right: -17px; }
+.room-research > header::before { right: -17px; }
+.room-committee > header::before { left: -17px; }
+.room-risk > header::before { left: -17px; }
+.room-paper > header::before { right: -17px; }
+.room-monitoring > header::before { left: -17px; }
+.room-learning > header::before { left: -17px; }
+
+/* Committee Queue V2.2: compact 3-column dock under IC, clear of Paper. */
+.spatial-packets::before {
+  left: 65.6%;
+  top: 32.7%;
+  width: 19.6%;
+  height: 176px;
+  padding: 10px 12px;
+  border-color: rgba(103,232,249,.20);
+  border-top: 3px solid rgba(103,232,249,.25);
+  border-radius: 10px 10px 16px 16px;
+  background:
+    linear-gradient(180deg, rgba(7,22,28,.98), rgba(4,14,19,.97)),
+    repeating-linear-gradient(90deg, transparent 0 32%, rgba(103,232,249,.035) 32% 33%, transparent 33% 65%, rgba(103,232,249,.035) 65% 66%, transparent 66% 100%);
+  box-shadow:
+    0 14px 34px rgba(0,0,0,.30),
+    inset 0 0 32px rgba(103,232,249,.035);
+  content: "IC OUTPUT DOCK  ·  COMMITTEE QUEUE  ·  PERSISTED LINEAGE";
+  color: rgba(103,232,249,.48);
+}
+
+.spatial-packets::after {
+  left: 67.2%;
+  top: calc(32.7% + 153px);
+  width: 16.4%;
+  content: "QUEUE ≠ ACTIVE CASE  ·  PAPER LANE REMAINS SEPARATE";
+  color: rgba(216,177,91,.45);
+}
+
+.spatial-packet.packet-committee {
+  min-width: 0;
+  width: 5.45%;
+  max-width: none;
+  padding: 6px 7px;
+  gap: 4px;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  border-radius: 7px;
+  top: 36.3%;
+  margin-top: 0 !important;
+  background: rgba(4,16,21,.985);
+  overflow: hidden;
+}
+
+.spatial-packet.packet-committee span { font-size: 5px; }
+.spatial-packet.packet-committee strong { font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spatial-packet.packet-committee em { font-size: 7px; }
+
+/* 3-column x 4-row queue. The first 10 persisted packets occupy real dock slots. */
+.spatial-packets .packet-committee:nth-child(1)  { left: 66.35%; top: 36.4%; }
+.spatial-packets .packet-committee:nth-child(2)  { left: 72.30%; top: 36.4%; }
+.spatial-packets .packet-committee:nth-child(3)  { left: 78.25%; top: 36.4%; }
+.spatial-packets .packet-committee:nth-child(4)  { left: 66.35%; top: 40.8%; }
+.spatial-packets .packet-committee:nth-child(5)  { left: 72.30%; top: 40.8%; }
+.spatial-packets .packet-committee:nth-child(6)  { left: 78.25%; top: 40.8%; }
+.spatial-packets .packet-committee:nth-child(7)  { left: 66.35%; top: 45.2%; }
+.spatial-packets .packet-committee:nth-child(8)  { left: 72.30%; top: 45.2%; }
+.spatial-packets .packet-committee:nth-child(9)  { left: 78.25%; top: 45.2%; }
+.spatial-packets .packet-committee:nth-child(10) { left: 66.35%; top: 49.6%; }
+
+/* Paper gets breathing room and a dedicated gated lane. */
+.room-paper {
+  grid-column: 9 / 11;
+  grid-row: 6 / 8;
+}
+
+.room-monitoring {
+  grid-column: 11 / 13;
+  grid-row: 6 / 8;
+}
+
+.room-learning {
+  grid-column: 10 / 13;
+  grid-row: 8 / 9;
+}
+
+.room-paper::after {
+  content: "PAPER GATE · SEPARATE FROM IC QUEUE";
+  position: absolute;
+  left: 14px;
+  bottom: 10px;
+  font-size: 6px;
+  letter-spacing: .15em;
+  color: rgba(216,177,91,.35);
+  background: none;
+  animation: none;
+}
+
+/* Preserve event sweep on Paper by converting it to an inset glow instead of pseudo animation. */
+.room-paper.is-event {
+  box-shadow:
+    inset 0 5px 0 -3px rgba(216,177,91,.5),
+    inset -5px 0 0 -3px var(--v22-port),
+    0 0 42px rgba(216,177,91,.08),
+    0 12px 28px rgba(0,0,0,.18);
+}
+
+/* MAX bridge remains strong, but the lower routing lane is now visually independent. */
+.spatial-max-platform {
+  grid-row: 5 / 8;
+  margin-top: 30px;
+}
+
+.spatial-max-platform::before {
+  bottom: -18px;
+}
+
+.spatial-bottom {
+  margin-top: 18px;
+}
+
+@media (max-width: 1250px) {
+  .room-paper,
+  .room-monitoring,
+  .room-learning { grid-column: auto; grid-row: auto; }
+
+  .spatial-packets::before,
+  .spatial-packets::after { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spatial-corridors i { animation: none !important; }
+}

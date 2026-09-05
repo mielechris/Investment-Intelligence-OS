@@ -3,8 +3,9 @@ import { type ExpansionSnapshot, SnapshotContext, type TruthState } from "./Expa
 
 const LIVE_READ_ONLY = import.meta.env.VITE_EXPANSION_WING_LIVE_READONLY === "1" && import.meta.env.VITE_BACKEND_RECOVERY_GREEN === "1";
 const FIXTURE_MODE = import.meta.env.VITE_EXPANSION_WING_FIXTURE === "1";
+const UNIFIED_FACTORY = import.meta.env.VITE_UNIFIED_LIVING_FACTORY === "1";
 const ENDPOINT = LIVE_READ_ONLY
-  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || "/snapshot")
+  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || (UNIFIED_FACTORY ? "/expansion-wing/snapshot" : "/snapshot"))
   : "/fixtures/expansion-wing.json";
 const POLL_MS = 15_000;
 const MAX_BACKOFF_MS = 60_000;
