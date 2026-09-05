@@ -1,0 +1,18 @@
+{
+  "fixture_label": "SYNTHETIC_FIXTURE_NON_LIVE",
+  "schema_version": "iios-publisher-rehearsal-scenarios-v1",
+  "provider_requests": 0,
+  "provider_credits": 0,
+  "keychain_access": false,
+  "broker_access": false,
+  "ledger_writes": 0,
+  "paper_orders": 0,
+  "scenarios": [
+    "weekend_stale", "tuesday_pre_market", "first_zero_candidate_cycle", "first_candidate_cycle",
+    "identical_input", "second_changed_cycle", "scanner_failure", "missing_candidate_lineage",
+    "candidate_hash_mismatch", "future_timestamp", "benchmark_incomplete", "benchmark_complete",
+    "shadow_not_consumed", "shadow_consumed", "outcomes_unchanged", "outcomes_advanced",
+    "professional_only", "mixed_multi_asset", "stale_options_intraday", "paper_truth_mismatch",
+    "provider_unavailable", "unsafe_authority", "atomic_interruption", "restart_sequence_recovery"
+  ]
+}

@@ -12,7 +12,7 @@ from typing import Any
 
 SCHEMA_VERSION = "iios-multi-asset-read-only-projection-v1"
 MAX_PAYLOAD_BYTES = 65_536
-STATES = {"AVAILABLE", "AVAILABLE_EMPTY", "STALE", "INCOMPLETE", "UNAVAILABLE", "FAILED_CLOSED"}
+STATES = {"CURRENT", "AVAILABLE", "AVAILABLE_EMPTY", "STALE", "INCOMPLETE", "UNAVAILABLE", "FAILED_CLOSED"}
 LANES = {"us_equities", "equity_etfs", "treasury_rates", "bond_proxies", "commodity_proxies",
     "fx_proxies", "crypto_reference", "listed_options", "intraday", "relative_value"}
 AUTHORITY = {"provider_contact":False,"credential_access":False,"automatic_promotion":False,
