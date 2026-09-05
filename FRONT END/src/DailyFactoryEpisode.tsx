@@ -292,7 +292,7 @@ function buildDraft(snapshot: LivingSnapshot): Episode {
     generated_at: snapshot.generated_at,
     episode_session_id: sessionId,
     status: "LIVE_DRAFT",
-    title: `IIOS Daily Factory Episode · ${sessionId ?? "SESSION WARM-UP"}`,
+    title: `IIOS Daily Factory Episode · ${sessionId ?? "SESSION UNAVAILABLE"}`,
     source_freshness: {
       scorecard_generated_at: scorecard.generated_at,
       shadow_generated_at: shadow.generated_at,
@@ -520,7 +520,7 @@ export default function DailyFactoryEpisode() {
         <span>BATCH 9O · DAILY FACTORY EPISODE</span>
         <h2>
           {error
-            ? "EPISODE SOURCE WARM-UP"
+            ? "EPISODE SOURCE UNAVAILABLE"
             : "ASSEMBLING TODAY'S PERSISTED FACTORY STORY"}
         </h2>
         <p>
@@ -554,7 +554,7 @@ export default function DailyFactoryEpisode() {
           </p>
         </div>
         <div className={`dfe-status ${final ? "is-final" : "is-draft"}`}>
-          <strong>{text(episode.status, "WARM-UP").replaceAll("_", " ")}</strong>
+          <strong>{text(episode.status, "UNAVAILABLE").replaceAll("_", " ")}</strong>
           <span>
             {final ? "PERSISTED END-OF-DAY ARTIFACT" : "LIVE READ-ONLY DRAFT"}
           </span>
@@ -660,7 +660,7 @@ export default function DailyFactoryEpisode() {
               <span>WHAT WE LEARNED</span>
               <h3>Decision-quality memory</h3>
             </div>
-            <strong>{text(learned.learning_status, "WARM-UP")}</strong>
+            <strong>{text(learned.learning_status, "INCOMPLETE")}</strong>
           </div>
           <div className="dfe-quality-grid">
             {Object.entries(qualityCounts).map(([label, count]) => (
@@ -670,11 +670,11 @@ export default function DailyFactoryEpisode() {
               </div>
             ))}
             {!Object.keys(qualityCounts).length ? (
-              <p>WARM-UP — no current-session 9J quality labels.</p>
+              <p>INCOMPLETE — no current-session 9J quality labels.</p>
             ) : null}
           </div>
           <footer>
-            9I · {text(learned.shadow_status, "WARM-UP")} ·{" "}
+            9I · {text(learned.shadow_status, "INCOMPLETE")} ·{" "}
             {text(learned.shadow_complete_session_count, "0")} complete session(s)
           </footer>
         </article>

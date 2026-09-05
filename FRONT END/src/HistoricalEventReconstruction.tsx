@@ -88,7 +88,7 @@ export default function HistoricalEventReconstruction() {
 
   const rows = useMemo(() => payload?.reconstructions ?? [], [payload]);
   if (!payload) {
-    return <section className="her-shell"><span>BATCH 10J · HISTORICAL EVENT RECONSTRUCTION</span><h2>EVENT CORPUS WARM-UP</h2><p>{error ?? "Waiting for governed historical event evidence."}</p></section>;
+    return <section className="her-shell"><span>BATCH 10J · HISTORICAL EVENT RECONSTRUCTION</span><h2>{error ? "EVENT CORPUS UNAVAILABLE" : "LOADING EVENT CORPUS"}</h2><p>{error ? "OPTIONAL_EVENT_CORPUS_UNAVAILABLE" : "Waiting for governed historical event evidence."}</p></section>;
   }
 
   const summary = payload.research_summary ?? {};
@@ -111,7 +111,7 @@ export default function HistoricalEventReconstruction() {
         <article><span>SYMBOLS READY</span><strong>{text(summary.symbols_ready, "0")} / {text(summary.symbols_known, "0")}</strong></article>
         <article><span>CURRENT CONTEXTS READY</span><strong>{text(summary.current_contexts_ready, "0")}</strong></article>
         <article><span>ANALOG CONTEXTS READY</span><strong>{text(summary.analog_contexts_ready, "0")}</strong></article>
-        <article><span>LAST BATCH</span><strong>{(payload.cycle?.processed_symbols ?? []).join(" · ") || "WARM-UP"}</strong></article>
+        <article><span>LAST BATCH</span><strong>{(payload.cycle?.processed_symbols ?? []).join(" · ") || "AVAILABLE EMPTY"}</strong></article>
       </div>
 
       <section className="her-panel">

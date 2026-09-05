@@ -119,7 +119,7 @@ export default function DataExpansionFactory() {
     return (
       <section className="dex-shell dex-waiting">
         <span>BATCH 9R · DATA EXPANSION FACTORY</span>
-        <h2>{error ? "DATA FACTORY WARM-UP" : "SCOUTING INTELLIGENCE GAPS"}</h2>
+        <h2>{error ? "DATA FACTORY SOURCE UNAVAILABLE" : "SCOUTING INTELLIGENCE GAPS"}</h2>
         <p>{error ?? "Waiting for the first governed source-expansion memo."}</p>
       </section>
     );
@@ -161,7 +161,7 @@ export default function DataExpansionFactory() {
         <section className="dex-panel">
           <header>
             <div><span>INTELLIGENCE GAP MAP</span><h3>Why we need more data</h3></div>
-            <strong>{text(factory.status, "WARM-UP").replaceAll("_", " ")}</strong>
+            <strong>{text(factory.status, "UNAVAILABLE").replaceAll("_", " ")}</strong>
           </header>
           <div className="dex-gaps">
             {gaps.map((gap) => (

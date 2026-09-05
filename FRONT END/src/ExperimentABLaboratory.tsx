@@ -109,7 +109,7 @@ export default function ExperimentABLaboratory() {
     return (
       <section className="abl-shell abl-waiting">
         <span>BATCH 9Q · EXPERIMENT & A/B LABORATORY</span>
-        <h2>{error ? "LAB WARM-UP" : "ASSEMBLING SHADOW EXPERIMENTS"}</h2>
+        <h2>{error ? "LAB SOURCE UNAVAILABLE" : "ASSEMBLING SHADOW EXPERIMENTS"}</h2>
         <p>{error ?? "No experiment verdict is rendered until persisted comparison evidence exists."}</p>
       </section>
     );
@@ -159,7 +159,7 @@ export default function ExperimentABLaboratory() {
       <section className="abl-experiments">
         <div className="abl-section-title">
           <div><span>ACTIVE EXPERIMENT BOARD</span><h3>Baseline vs variant evidence</h3></div>
-          <strong>{text(lab.status, "WARM-UP").replaceAll("_", " ")}</strong>
+          <strong>{text(lab.status, "UNAVAILABLE").replaceAll("_", " ")}</strong>
         </div>
         {experiments.map((experiment, index) => {
           const baseline = experiment.baseline_arm ?? null;
@@ -211,7 +211,7 @@ export default function ExperimentABLaboratory() {
                 {(experiment.decision_basis ?? []).map((basis) => <p key={basis}>{basis}</p>)}
               </div>
               <footer>
-                <span>STATUS · {text(experiment.status, "WARM-UP").replaceAll("_", " ")}</span>
+                <span>STATUS · {text(experiment.status, "INCOMPLETE").replaceAll("_", " ")}</span>
                 <strong>NEXT · {text(experiment.next_action, "HUMAN REVIEW").replaceAll("_", " ")}</strong>
               </footer>
             </article>
@@ -222,7 +222,7 @@ export default function ExperimentABLaboratory() {
       <div className="abl-source-state">
         <strong>SOURCE STATE</strong>
         {Object.entries(lab.source_state ?? {}).map(([key, value]) => (
-          <span key={key}>{key.replaceAll("_", " ")} · {text(value, "WARM-UP")}</span>
+          <span key={key}>{key.replaceAll("_", " ")} · {text(value, "UNAVAILABLE")}</span>
         ))}
       </div>
       {error ? <div className="abl-warning">LATEST REFRESH WARNING · {error}</div> : null}

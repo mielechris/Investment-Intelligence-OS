@@ -136,7 +136,7 @@ function timeLabel(value: unknown): string {
 
 function ageLabel(value: unknown): string {
   const seconds = numberValue(value);
-  if (seconds === null) return "WARM-UP";
+  if (seconds === null) return "UNAVAILABLE";
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h`;

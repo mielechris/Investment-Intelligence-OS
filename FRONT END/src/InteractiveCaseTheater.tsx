@@ -389,11 +389,11 @@ function buildStages(theaterCase: TheaterCase, detail: CaseDetail | null): Theat
   );
   const marketOutcome = text(
     learning?.market_outcome,
-    text(learning?.market_outcome_label, "WARM-UP"),
+    text(learning?.market_outcome_label, "INCOMPLETE"),
   );
   const decisionQuality = text(
     learning?.decision_quality,
-    text(learning?.decision_quality_label, "WARM-UP"),
+    text(learning?.decision_quality_label, "INCOMPLETE"),
   );
   const jesseDecline = object(theaterCase.jesse?.decline_analysis);
 
@@ -562,16 +562,16 @@ function buildStages(theaterCase: TheaterCase, detail: CaseDetail | null): Theat
     {
       key: "OUTCOME",
       label: "Outcome",
-      status: learning ? marketOutcome : "WARM-UP",
+      status: learning ? marketOutcome : "INCOMPLETE",
       source: "9J exact case/candidate-linked outcome memory",
-      sourceId: text(learning?.opportunity_id, text(learning?.case_id, "WARM-UP")),
+      sourceId: text(learning?.opportunity_id, text(learning?.case_id, "UNAVAILABLE")),
       timestamp: text(learning?.event_at, text(learning?.measured_at, "")),
       headline: learning
         ? `9J recorded market outcome ${marketOutcome}.`
         : "Outcome has not matured into exact-linked 9J memory yet.",
       body: learning
         ? `Longest available horizon ${text(learning.longest_available_horizon, "—")} · forward return ${pct(learning.forward_return_pct)}. Measurement does not rewrite the original decision.`
-        : "WARM-UP — no outcome is borrowed from another case with the same ticker.",
+        : "INCOMPLETE — no outcome is borrowed from another case with the same ticker.",
       facts: [
         { label: "Market outcome", value: marketOutcome },
         { label: "Forward return", value: pct(learning?.forward_return_pct) },
@@ -583,16 +583,16 @@ function buildStages(theaterCase: TheaterCase, detail: CaseDetail | null): Theat
     {
       key: "LEARNING",
       label: "Learning",
-      status: learning ? decisionQuality : "WARM-UP",
+      status: learning ? decisionQuality : "INCOMPLETE",
       source: "9J governed learning memory",
-      sourceId: text(learning?.opportunity_id, "WARM-UP"),
+      sourceId: text(learning?.opportunity_id, "UNAVAILABLE"),
       timestamp: text(learning?.event_at, text(learning?.measured_at, "")),
       headline: learning
         ? `Decision-quality label: ${decisionQuality}.`
         : "No exact-linked learning label is available yet.",
       body: learning
         ? "This is measurement memory only. It does not automatically change Committee logic, Risk rules, agent weights or capital authority."
-        : "WARM-UP — the factory keeps the stage empty until the persisted learning system has enough evidence.",
+        : "INCOMPLETE — the factory keeps the stage empty until persisted learning evidence exists.",
       facts: [
         { label: "Decision quality", value: decisionQuality },
         { label: "Human review", value: "REQUIRED FOR GOVERNED CHANGES" },
@@ -778,6 +778,8 @@ export default function InteractiveCaseTheater() {
   );
 
   useEffect(() => {
+    // State belongs to the selected external case identity and must reset before its bounded fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDetail(null);
     setDetailCaseId(null);
     setDetailError(null);
@@ -835,7 +837,7 @@ export default function InteractiveCaseTheater() {
     return (
       <section className="ict-shell ict-waiting">
         <span>BATCH 9N · INTERACTIVE CASE THEATER</span>
-        <h2>{snapshotError ? "CASE SOURCE WARM-UP" : "OPENING THE GOVERNED CASE ARCHIVE"}</h2>
+        <h2>{snapshotError ? "CASE SOURCE UNAVAILABLE" : "OPENING THE GOVERNED CASE ARCHIVE"}</h2>
         <p>{snapshotError ?? "No replay can begin until persisted case state is available."}</p>
       </section>
     );
@@ -887,7 +889,7 @@ export default function InteractiveCaseTheater() {
                 </div>
                 <div>
                   <ProvenanceBadge value={selected.provenance} />
-                  <StageStatus value={detailError ? "DETAIL WARM-UP" : snapshot.factory.availability} />
+                  <StageStatus value={detailError ? "DETAIL UNAVAILABLE" : snapshot.factory.availability} />
                 </div>
               </div>
 
@@ -947,7 +949,7 @@ export default function InteractiveCaseTheater() {
               <p>The theater does not generate demonstration cases.</p>
             </div>
           )}
-          {detailError ? <div className="ict-warning">CASE DETAIL WARM-UP · {detailError}</div> : null}
+          {detailError ? <div className="ict-warning">CASE DETAIL UNAVAILABLE · SANITIZED_READ_ONLY_SOURCE_UNAVAILABLE</div> : null}
           {snapshotError ? <div className="ict-warning">LATEST OVERVIEW REFRESH WARNING · {snapshotError}</div> : null}
         </main>
       </div>

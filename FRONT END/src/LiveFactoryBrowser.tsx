@@ -23,6 +23,7 @@ import MobExpansionWing from "./MobExpansionWing";
 import OperatingSuperbatch from "./OperatingSuperbatch";
 import QualificationWatch from "./QualificationWatch";
 import ReadinessSuperbatch from "./ReadinessSuperbatch";
+import { useExpansionWingSnapshot } from "./ExpansionWingSnapshotContext";
 import "./LiveFactoryBrowser.css";
 import "./Batch9MVisualSeal.css";
 import "./LivingFactorySpatialFloorV21.css";
@@ -209,6 +210,8 @@ const CONTROL_MODULES: ControlModule[] = [
 
 export default function LiveFactoryBrowser() {
   const [view, setView] = useState<BrowserView>(viewFromLocation);
+  const { runtimeCapabilities } = useExpansionWingSnapshot();
+  const expansionEnabled = runtimeCapabilities.expansionWingEnabled;
   const floorButton = useRef<HTMLButtonElement>(null);
 
   const chooseView = useCallback((next: BrowserView, historyMode: "push" | "replace" = "push") => {
@@ -230,6 +233,8 @@ export default function LiveFactoryBrowser() {
     return () => { window.removeEventListener("popstate", pop); window.removeEventListener("keydown", escape); };
   }, [chooseView, view]);
 
+  const visibleView: BrowserView = view === "expansion" && !expansionEnabled ? "floor" : view;
+
   return (
     <div className="lfb-shell cinematic-v6 cinematic-v7">
       <div className="lfb-preview-banner">
@@ -246,21 +251,21 @@ export default function LiveFactoryBrowser() {
       <nav className="lfb-viewbar" aria-label="Investment factory browser view">
         <div className="lfb-viewbar-copy">
           <span>IIOS EXPERIENCE</span>
-          <strong>{view === "floor" ? "The Living Operations Floor" : view === "expansion" ? "The Expansion Wing" : "The Living Control Room"}</strong>
+          <strong>{visibleView === "floor" ? "The Living Operations Floor" : visibleView === "expansion" ? "The Expansion Wing" : "The Living Control Room"}</strong>
         </div>
-        <div className="lfb-view-switch">
+        <div className={`lfb-view-switch ${expansionEnabled ? "has-expansion" : ""}`}>
           <button
             ref={floorButton}
             className={`lfb-view-button ${view === "floor" ? "is-active" : ""}`}
             onClick={() => chooseView("floor")}
-            aria-pressed={view === "floor"}
+            aria-pressed={visibleView === "floor"}
             type="button"
           >
             <span>01</span>
             <strong>MAIN FACTORY FLOOR</strong>
             <em>living cast · physical rooms · routed cases</em>
           </button>
-          <button
+          {expansionEnabled ? <button
             className={`lfb-view-button ${view === "expansion" ? "is-active" : ""}`}
             onClick={() => chooseView("expansion")}
             aria-pressed={view === "expansion"}
@@ -269,7 +274,7 @@ export default function LiveFactoryBrowser() {
             <span>02</span>
             <strong>EXPANSION WING</strong>
             <em>ten desks · governed research · paper locks</em>
-          </button>
+          </button> : null}
           <button
             className={`lfb-view-button ${view === "control" ? "is-active" : ""}`}
             onClick={() => chooseView("control")}
@@ -287,15 +292,15 @@ export default function LiveFactoryBrowser() {
         </div>
       </nav>
 
-      <CinematicFactoryCommandDeck view={view === "control" ? "control" : "floor"} />
-      <CinematicFactorySceneStrip view={view === "control" ? "control" : "floor"} />
-      <LivingCharacterDirectorV7 view={view === "control" ? "control" : "floor"} />
+      <CinematicFactoryCommandDeck view={visibleView === "control" ? "control" : "floor"} />
+      <CinematicFactorySceneStrip view={visibleView === "control" ? "control" : "floor"} />
+      <LivingCharacterDirectorV7 view={visibleView === "control" ? "control" : "floor"} />
 
-      {view === "floor" ? (
+      {visibleView === "floor" ? (
         <div className="cinematic-floor-stage">
           <LivingFactorySpatialFloor />
         </div>
-      ) : view === "expansion" ? (
+      ) : visibleView === "expansion" ? (
         <div className="cinematic-floor-stage" id="expansion-wing">
           <MobExpansionWing />
         </div>

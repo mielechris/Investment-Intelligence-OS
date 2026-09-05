@@ -1,14 +1,50 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { type ExpansionSnapshot, SnapshotContext, type TruthState } from "./ExpansionWingSnapshotContext";
+import { type ExpansionSnapshot, type RuntimeCapabilities, SnapshotContext, type TruthState } from "./ExpansionWingSnapshotContext";
 
 const LIVE_READ_ONLY = import.meta.env.VITE_EXPANSION_WING_LIVE_READONLY === "1" && import.meta.env.VITE_BACKEND_RECOVERY_GREEN === "1";
 const FIXTURE_MODE = import.meta.env.VITE_EXPANSION_WING_FIXTURE === "1";
 const UNIFIED_FACTORY = import.meta.env.VITE_UNIFIED_LIVING_FACTORY === "1";
+const EXPANSION_PATH = "/expansion-wing/snapshot";
 const ENDPOINT = LIVE_READ_ONLY
-  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || (UNIFIED_FACTORY ? "/expansion-wing/snapshot" : "/snapshot"))
+  ? (import.meta.env.VITE_EXPANSION_WING_READONLY_ENDPOINT || (UNIFIED_FACTORY ? EXPANSION_PATH : "/snapshot"))
   : "/fixtures/expansion-wing.json";
 const POLL_MS = 15_000;
 const MAX_BACKOFF_MS = 60_000;
+const CAPABILITIES_ENDPOINT = "/living/overview";
+
+type RuntimeCapabilityWire = {
+  schema_version?: unknown;
+  configuration_source?: unknown;
+  configuration_authenticated?: unknown;
+  expansion_wing_enabled?: unknown;
+  expansion_snapshot_path?: unknown;
+  read_only?: unknown;
+  publisher_control?: unknown;
+};
+
+function validateRuntimeCapabilities(value: unknown): RuntimeCapabilities {
+  const envelope = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const capability = envelope.runtime_capabilities && typeof envelope.runtime_capabilities === "object" && !Array.isArray(envelope.runtime_capabilities)
+    ? envelope.runtime_capabilities as RuntimeCapabilityWire
+    : {};
+  const valid = capability.schema_version === "iios-runtime-capabilities-v1"
+    && capability.configuration_source === "SERVER_COMMAND_LINE"
+    && capability.configuration_authenticated === true
+    && typeof capability.expansion_wing_enabled === "boolean"
+    && capability.read_only === true
+    && capability.publisher_control === false
+    && (capability.expansion_wing_enabled === false
+      ? capability.expansion_snapshot_path === null
+      : capability.expansion_snapshot_path === EXPANSION_PATH);
+  if (!valid) return { state: "FAILED_CLOSED", expansionWingEnabled: false, readOnly: true, publisherControl: false };
+  return { state: "CURRENT", expansionWingEnabled: capability.expansion_wing_enabled as boolean, readOnly: true, publisherControl: false };
+}
+
+async function requestJson(path: string, signal: AbortSignal): Promise<unknown> {
+  const response = await fetch(path, { signal, cache: "no-store", headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error("SANITIZED_READ_ONLY_SOURCE_UNAVAILABLE");
+  return response.json() as Promise<unknown>;
+}
 
 function immutableSnapshot<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -21,6 +57,7 @@ function immutableSnapshot<T>(value: T): T {
 export function ExpansionWingSnapshotProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<ExpansionSnapshot | null>(null);
   const [connection, setConnection] = useState<TruthState>("UNKNOWN");
+  const [runtimeCapabilities, setRuntimeCapabilities] = useState<RuntimeCapabilities>({ state: "UNKNOWN", expansionWingEnabled: false, readOnly: true, publisherControl: false });
   const receivedAt = useRef<number | null>(null);
   const [snapshotAgeSeconds, setSnapshotAgeSeconds] = useState<number | null>(null);
   useEffect(() => {
@@ -33,9 +70,16 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
       const requestController = new AbortController();
       controller = requestController;
       try {
-        const response = await fetch(ENDPOINT, { signal: requestController.signal, cache: "no-store" });
-        if (!response.ok) throw new Error(String(response.status));
-        const payload = immutableSnapshot(await response.json() as ExpansionSnapshot);
+        const capability = UNIFIED_FACTORY
+          ? validateRuntimeCapabilities(await requestJson(CAPABILITIES_ENDPOINT, requestController.signal))
+          : { state: "CURRENT" as TruthState, expansionWingEnabled: true, readOnly: true, publisherControl: false };
+        if (capability.state === "FAILED_CLOSED") throw new Error("RUNTIME_CAPABILITY_FAILED_CLOSED");
+        setRuntimeCapabilities(capability);
+        if (!capability.expansionWingEnabled) {
+          if (active) { failures = 0; setSnapshot(null); setConnection("UNAVAILABLE"); }
+          return;
+        }
+        const payload = immutableSnapshot(await requestJson(ENDPOINT, requestController.signal) as ExpansionSnapshot);
         if (active) {
           const now = Date.now();
           failures = 0; setSnapshot(payload); receivedAt.current = now; setSnapshotAgeSeconds(0); setConnection("CURRENT");
@@ -44,6 +88,7 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
         if (active && !(error instanceof DOMException && error.name === "AbortError")) {
           failures += 1; setSnapshotAgeSeconds(receivedAt.current === null ? null : Math.max(0, Math.floor((Date.now() - receivedAt.current) / 1000)));
           setConnection(receivedAt.current === null ? "UNAVAILABLE" : "STALE");
+          setRuntimeCapabilities((current) => current.expansionWingEnabled ? { ...current, state: "STALE" } : { state: "UNAVAILABLE", expansionWingEnabled: false, readOnly: true, publisherControl: false });
         }
       } finally {
         if (controller === requestController) controller = null;
@@ -53,6 +98,6 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
     void load();
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); controller?.abort(); };
   }, []);
-  const value = useMemo(() => ({ snapshot, connection, fixtureMode: FIXTURE_MODE, snapshotAgeSeconds }), [snapshot, connection, snapshotAgeSeconds]);
+  const value = useMemo(() => ({ snapshot, connection, fixtureMode: FIXTURE_MODE, snapshotAgeSeconds, runtimeCapabilities }), [snapshot, connection, snapshotAgeSeconds, runtimeCapabilities]);
   return <SnapshotContext.Provider value={value}>{children}</SnapshotContext.Provider>;
 }

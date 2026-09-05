@@ -89,7 +89,7 @@ export default function ChiefIntelligenceOffice() {
     return (
       <section className="cio-shell cio-waiting">
         <span>BATCH 9P · CHIEF INTELLIGENCE OFFICE</span>
-        <h2>{error ? "OFFICE WARM-UP" : "STUDYING THE FACTORY"}</h2>
+        <h2>{error ? "OFFICE SOURCE UNAVAILABLE" : "STUDYING THE FACTORY"}</h2>
         <p>{error ?? "Waiting for the first advisory improvement memo."}</p>
       </section>
     );
@@ -142,7 +142,7 @@ export default function ChiefIntelligenceOffice() {
         <section className="cio-panel">
           <header>
             <div><span>FACTORY DIAGNOSTICS</span><h3>Current weaknesses</h3></div>
-            <strong>{text(office.status, "WARM-UP").replaceAll("_", " ")}</strong>
+            <strong>{text(office.status, "UNAVAILABLE").replaceAll("_", " ")}</strong>
           </header>
           <div className="cio-weaknesses">
             {(office.current_weaknesses ?? []).map((row) => (

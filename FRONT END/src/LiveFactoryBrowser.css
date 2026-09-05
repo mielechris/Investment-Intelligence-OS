@@ -77,6 +77,10 @@
   gap: 6px;
 }
 
+.lfb-view-switch.has-expansion {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .lfb-view-button {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -223,6 +227,10 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .lfb-view-switch.has-expansion {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .lfb-view-truth {
     grid-column: auto;
     justify-content: flex-start;
@@ -232,6 +240,10 @@
 
 @media (max-width: 460px) {
   .lfb-view-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .lfb-view-switch.has-expansion {
     grid-template-columns: 1fr;
   }
 }

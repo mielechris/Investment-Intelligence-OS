@@ -103,7 +103,7 @@ export default function AgentPerformanceLeague() {
     return (
       <section className="apl-shell apl-waiting">
         <span>BATCH 9S · AGENT PERFORMANCE LEAGUE</span>
-        <h2>{error ? "LEAGUE WARM-UP" : "BUILDING THE SCOREBOARD"}</h2>
+        <h2>{error ? "LEAGUE SOURCE UNAVAILABLE" : "BUILDING THE SCOREBOARD"}</h2>
         <p>{error ?? "Waiting for persisted 9J agent outcome evidence."}</p>
       </section>
     );
@@ -147,7 +147,7 @@ export default function AgentPerformanceLeague() {
           <strong>{text(summary.provisional_count, "0")}</strong>
         </article>
         <article>
-          <span>WARM-UP</span>
+          <span>AVAILABLE EMPTY</span>
           <strong>{text(summary.warm_up_count, "0")}</strong>
         </article>
         <article>

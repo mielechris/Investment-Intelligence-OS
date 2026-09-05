@@ -528,7 +528,7 @@ export default function CharacterStoryEngine() {
     return (
       <section className="cse-shell cse-waiting">
         <span>BATCH 9M · CHARACTER & STORY ENGINE</span>
-        <h2>{error ? "STORY SOURCE WARM-UP" : "WAITING FOR PERSISTED FACTORY EVENTS"}</h2>
+        <h2>{error ? "STORY SOURCE UNAVAILABLE" : "WAITING FOR PERSISTED FACTORY EVENTS"}</h2>
         <p>{error ?? "No character speaks until a real 9G audited event exists."}</p>
       </section>
     );

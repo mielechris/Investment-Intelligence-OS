@@ -584,6 +584,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                     "backend_access": "NONE" if self.preview_server.fixture_isolated else "READ_ONLY_GET_ONLY",
                     "backend_write_permission": False,
                     "live_execution": False,
+                    "runtime_capabilities": self.preview_server.runtime_capabilities(),
                 }
             )
             return
@@ -631,7 +632,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                 str(self.preview_server.telemetry_dir.resolve()),
                 str(self.preview_server.state_dir.resolve()),
             )
-            self._send_json(
+            payload = copy.deepcopy(
                 _living_overview_cache.get(
                     identity,
                     lambda: build_living_factory_snapshot(
@@ -640,6 +641,11 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                     ),
                 )
             )
+            # Runtime capabilities are deliberately attached after the evidence
+            # cache. A response cached before activation can therefore never
+            # suppress an authenticated server configuration after restart.
+            payload["runtime_capabilities"] = self.preview_server.runtime_capabilities()
+            self._send_json(payload)
             return
         if parsed.path.startswith("/living/case/"):
             if self.preview_server.fixture_isolated:
@@ -767,6 +773,18 @@ class PreviewServer(ThreadingHTTPServer):
                 self._expansion_cached = self._expansion_compositor.snapshot()
                 self._expansion_cached_at = now
             return copy.deepcopy(self._expansion_cached)
+
+    def runtime_capabilities(self) -> dict[str, Any]:
+        """Return a fixed, scalar-only projection of authenticated server configuration."""
+        return {
+            "schema_version": "iios-runtime-capabilities-v1",
+            "configuration_source": "SERVER_COMMAND_LINE",
+            "configuration_authenticated": True,
+            "expansion_wing_enabled": bool(self.expansion_enabled),
+            "expansion_snapshot_path": "/expansion-wing/snapshot" if self.expansion_enabled else None,
+            "read_only": True,
+            "publisher_control": False,
+        }
 
 
 def parse_args() -> argparse.Namespace:

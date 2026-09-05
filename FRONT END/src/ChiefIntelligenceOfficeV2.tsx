@@ -62,7 +62,7 @@ export default function ChiefIntelligenceOfficeV2() {
   }, []);
 
   const upgrades = useMemo(() => office?.ranked_upgrades ?? [], [office]);
-  if (!office) return <section className="ciov2-shell"><span>BATCH 10I · CHIEF INTELLIGENCE OFFICE V2</span><h2>WHOLE-STACK REVIEW WARM-UP</h2><p>{error ?? "Waiting for the first whole-stack improvement memo."}</p></section>;
+  if (!office) return <section className="ciov2-shell"><span>BATCH 10I · CHIEF INTELLIGENCE OFFICE V2</span><h2>{error ? "WHOLE-STACK SOURCE UNAVAILABLE" : "ASSEMBLING WHOLE-STACK REVIEW"}</h2><p>{error ? "OPTIONAL_WHOLE_STACK_SOURCE_UNAVAILABLE" : "Waiting for the first whole-stack improvement memo."}</p></section>;
 
   const hd = office.historical_diagnostics ?? {};
   return (

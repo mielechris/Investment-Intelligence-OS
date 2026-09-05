@@ -75,7 +75,7 @@ export default function HistoricalMacroRegimeLibrary() {
 
   const studies = useMemo(() => payload?.normalized_studies ?? [], [payload]);
   const coverage = payload?.coverage ?? {};
-  if (!payload) return <section className="hmr-shell"><span>BATCH 10K · HISTORICAL MACRO + REGIME</span><h2>MACRO LIBRARY WARM-UP</h2><p>{error ?? "Waiting for governed macro history."}</p></section>;
+  if (!payload) return <section className="hmr-shell"><span>BATCH 10K · HISTORICAL MACRO + REGIME</span><h2>{error ? "MACRO LIBRARY UNAVAILABLE" : "LOADING MACRO LIBRARY"}</h2><p>{error ? "OPTIONAL_MACRO_LIBRARY_UNAVAILABLE" : "Waiting for governed macro history."}</p></section>;
 
   return (
     <section className="hmr-shell">

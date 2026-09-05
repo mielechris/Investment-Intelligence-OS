@@ -278,7 +278,7 @@ function timeLabel(value: unknown): string {
 }
 
 function ageLabel(value?: number | null): string {
-  if (value === undefined || value === null) return "WARM-UP";
+  if (value === undefined || value === null) return "UNAVAILABLE";
   if (value < 60) return `${value}s`;
   if (value < 3600) return `${Math.floor(value / 60)}m`;
   return `${Math.floor(value / 3600)}h`;
@@ -467,7 +467,7 @@ function buildStageStates(
             learning.decision_quality,
             text(learning.market_outcome, "RECORDED"),
           )
-        : "WARM-UP",
+        : "INCOMPLETE",
     },
   ];
 }
@@ -648,7 +648,7 @@ function IntelligenceDock({ snapshot }: { snapshot: LivingSnapshot }) {
       state: telemetryLayer.availability,
       age: ageLabel(telemetryLayer.age_seconds),
       metric: `${objectRows(telemetry.recent_meaningful_events).length} events`,
-      detail: text(object(telemetry.health).state, "WARM-UP"),
+      detail: text(object(telemetry.health).state, "UNAVAILABLE"),
     },
     {
       code: "9H",
@@ -963,7 +963,7 @@ function JesseSourceRoom({ snapshot }: { snapshot: LivingSnapshot }) {
             })}
             {!signals.length ? (
               <p>
-                WARM-UP — no qualifying persisted Jesse dislocation rows are
+                AVAILABLE EMPTY — no qualifying persisted Jesse dislocation rows are
                 available.
               </p>
             ) : null}
@@ -1031,7 +1031,7 @@ function LineageInspector({
         </div>
       </div>
       {error ? (
-        <div className="lfx-inline-warning">CASE DETAIL WARM-UP · {error}</div>
+        <div className="lfx-inline-warning">CASE DETAIL UNAVAILABLE · SANITIZED_READ_ONLY_SOURCE_UNAVAILABLE</div>
       ) : null}
       <div className="lfx-lineage-grid">
         <article>
@@ -1108,7 +1108,7 @@ function LineageInspector({
           <span>MONITORING</span>
           <strong>
             {detail?.monitoring?.status ??
-              (learning ? "OBSERVED VIA 9J" : "WARM-UP")}
+              (learning ? "OBSERVED VIA 9J" : "INCOMPLETE")}
           </strong>
           <p>
             {detail?.monitoring
@@ -1126,7 +1126,7 @@ function LineageInspector({
                   learning.decision_quality,
                   text(learning.market_outcome, "RECORDED"),
                 )
-              : "WARM-UP"}
+              : "INCOMPLETE"}
           </strong>
           <p>
             {learning
@@ -1244,6 +1244,8 @@ export default function LivingFactoryExperience() {
   );
 
   useEffect(() => {
+    // State belongs to the selected external case identity and must reset before its bounded fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDetail(null);
     setDetailError(null);
     if (!selected?.caseId) {
@@ -1287,7 +1289,7 @@ export default function LivingFactoryExperience() {
           <span>BATCH 9L · LIVING FACTORY + SIGNAL PROVENANCE</span>
           <h2>
             {error
-              ? "SIDECAR WARM-UP"
+              ? "FACTORY SOURCE UNAVAILABLE"
               : "CONNECTING TO PERSISTED FACTORY STATE"}
           </h2>
           <p>

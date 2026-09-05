@@ -248,7 +248,7 @@ export default function LivingFactorySpatialFloor() {
         setBeat((value) => value + 1);
       } catch (reason) {
         if (disposed || (reason instanceof DOMException && reason.name === "AbortError")) return;
-        setError(reason instanceof Error ? reason.message : "Living factory sidecar unavailable");
+        setError("LIVING_FACTORY_SOURCE_UNAVAILABLE");
       }
     };
     void load();
@@ -356,7 +356,7 @@ export default function LivingFactorySpatialFloor() {
   }, [snapshot]);
 
   if (!snapshot || !model) {
-    return <section className="spatial-shell spatial-loading"><div><span>9L-V2.5 · LIVING CAST SUPERBATCH</span><h1>{error ? "SIDECAR WARM-UP" : "OPENING FACTORY"}</h1><p>{error ?? "Connecting to persisted IIOS state…"}</p></div></section>;
+    return <section className="spatial-shell spatial-loading"><div><span>9L-V2.5 · LIVING CAST SUPERBATCH</span><h1>{error ? "FACTORY SOURCE UNAVAILABLE" : "OPENING FACTORY"}</h1><p>{error ?? "Connecting to persisted IIOS state…"}</p></div></section>;
   }
 
   const universe = text(model.radar.governed_universe_count, "0");

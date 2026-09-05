@@ -57,7 +57,7 @@ export default function MarketRegimeIntelligence() {
 
   const dimensions = useMemo(() => regime?.dimensions ?? [], [regime]);
   if (!regime) {
-    return <section className="mri-shell mri-waiting"><span>BATCH 9T · MARKET REGIME INTELLIGENCE</span><h2>{error ? "REGIME WARM-UP" : "READING THE WATER"}</h2><p>{error ?? "Waiting for persisted 9H cross-sectional evidence."}</p></section>;
+    return <section className="mri-shell mri-waiting"><span>BATCH 9T · MARKET REGIME INTELLIGENCE</span><h2>{error ? "REGIME SOURCE UNAVAILABLE" : "READING THE WATER"}</h2><p>{error ? "OPTIONAL_REGIME_SOURCE_UNAVAILABLE" : "Waiting for persisted 9H cross-sectional evidence."}</p></section>;
   }
   const current = regime.current_regime ?? {};
   const context = regime.factory_context ?? {};
