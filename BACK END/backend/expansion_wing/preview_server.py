@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 from .acceptance_server import Compositor
 from .knowledge_operations import knowledge_operations_projection
 from .projection_runtime import FixedProjectionReader
+from .tuesday_controller_state import ControllerStatusReader
 
 HOST = "127.0.0.1"
 SERVICE_SCHEMA = "expansion-wing-preview-health-v1"
@@ -130,7 +131,8 @@ def main() -> None:
         knowledge_reader = lambda: knowledge_operations_projection(args.security_root, args.archive_root)
     projection_reader = FixedProjectionReader(enabled=args.enable_multi_asset_projection)
     compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend, knowledge_reader,
-                            multi_asset_reader=projection_reader.read)
+                            multi_asset_reader=projection_reader.read,
+                            controller_reader=ControllerStatusReader().read)
     app = PreviewApplication(args.static_root, compositor)
     server = ThreadingHTTPServer((HOST, args.port), handler_for(app))
     server.daemon_threads = True

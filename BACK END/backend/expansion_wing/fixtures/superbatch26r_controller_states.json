@@ -1,0 +1,18 @@
+{
+  "schema_version": "iios-tuesday-controller-fixtures-v1",
+  "fixture_identity": "SYNTHETIC_FIXTURE_NON_LIVE",
+  "scenarios": [
+    {"name": "not_installed", "state": "NOT_INSTALLED", "installed": false, "running": false, "activated": false},
+    {"name": "installed_running_disabled", "state": "INSTALLED_BUT_DISABLED", "installed": true, "running": true, "activated": false},
+    {"name": "installed_process_unavailable", "state": "INSTALLED_BUT_DISABLED", "installed": true, "running": false, "activated": false},
+    {"name": "clean_restart", "restart_recovery": "RESTORED_EXACT_DISABLED_STATE"},
+    {"name": "tampered_state", "failure": "STATE_HASH_INVALID"},
+    {"name": "bad_permissions", "failure": "FILE_MODE_INVALID"},
+    {"name": "symlink", "failure": "UNSAFE_FILE_TYPE"},
+    {"name": "malformed_schema", "failure": "STATE_SCHEMA_INVALID"},
+    {"name": "future_timestamp", "failure": "FUTURE_TIMESTAMP"},
+    {"name": "authority_violation", "failure": "STATE_AUTHORITY_INVALID"},
+    {"name": "budget_inconsistency", "failure": "BUDGET_STATE_INVALID"},
+    {"name": "ambiguous_installation", "failure": "INSTALLATION_STATE_AMBIGUOUS"}
+  ]
+}

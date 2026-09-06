@@ -14,6 +14,7 @@ from .candidate_enrichment_bridge import validate_browser_projection as validate
 from .knowledge_pipeline import room_projection
 from .multi_asset_projection import SCHEMA_VERSION as MULTI_ASSET_SCHEMA, validate_projection
 from .tuesday_opening_day import tuesday_command_projection, validate_browser_projection as validate_tuesday_projection
+from .tuesday_controller_state import BROWSER_SCHEMA as CONTROLLER_BROWSER_SCHEMA
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
@@ -132,7 +133,8 @@ class Compositor:
                  knowledge_reader: Callable[[], dict[str, Any]] | None = None,
                  enrichment_reader: Callable[[], dict[str, Any]] | None = None,
                  multi_asset_reader: Callable[[], dict[str, Any]] | None = None,
-                 case_reader: Callable[[], dict[str, Any]] | None = None) -> None:
+                 case_reader: Callable[[], dict[str, Any]] | None = None,
+                 controller_reader: Callable[[], dict[str, Any]] | None = None) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
         self.snapshot_requests = 0
@@ -143,6 +145,7 @@ class Compositor:
         self.enrichment_reader = enrichment_reader
         self.multi_asset_reader = multi_asset_reader
         self.case_reader = case_reader
+        self.controller_reader = controller_reader
 
     def _reachability(self) -> str:
         self.backend_requests += 1
@@ -446,6 +449,26 @@ class Compositor:
         tuesday = tuesday_command_projection(base_snapshot, fixture=False)
         validate_tuesday_projection(tuesday)
         sections["tuesday_command_center"] = _section("AVAILABLE", tuesday)
+        controller = None
+        if self.controller_reader is not None:
+            try: controller = self.controller_reader()
+            except Exception: controller = None
+        controller_fields = {"schema_version", "state", "installed", "running", "activated", "phase",
+            "monday_rehearsal_status", "requests_today", "credits_today", "human_gate",
+            "restart_recovery", "integrity", "last_update", "next_action", "authority_locked",
+            "error_category"}
+        safe_controller = (
+            isinstance(controller, dict) and set(controller) == controller_fields
+            and controller.get("schema_version") == CONTROLLER_BROWSER_SCHEMA
+            and all(isinstance(controller.get(key), bool) for key in ("installed", "running", "activated", "authority_locked"))
+            and controller.get("activated") is False and controller.get("authority_locked") is True
+            and isinstance(controller.get("requests_today"), int) and isinstance(controller.get("credits_today"), int)
+            and 0 <= controller["credits_today"] <= controller["requests_today"] <= 30
+        )
+        sections["tuesday_controller_status"] = _section(
+            str(controller.get("state")) if safe_controller else "UNAVAILABLE",
+            controller if safe_controller else None,
+        )
         return base_snapshot
 
     def metrics(self) -> dict[str, Any]:

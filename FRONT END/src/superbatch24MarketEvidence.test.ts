@@ -39,7 +39,7 @@ test("every pilot interpretation and forward-only lock is human readable", () =>
 });
 
 test("Expansion Wing leads with the Tuesday opening-day command hierarchy", () => {
-  for (const phrase of ["TUESDAY PAPER TEST", "10 pilots · 3 observations each · 30-credit maximum", "Controller disabled — awaiting authorization", "Opening Evidence", "Intraday Mark", "Closing Mark", "Browser invocation", "Operational trading"])
+  for (const phrase of ["TUESDAY PAPER TEST", "10 pilots · 3 observations each · 30-credit maximum", "disabled — awaiting authorization", "Opening Evidence", "Intraday Mark", "Closing Mark", "Browser invocation", "Operational trading"])
     assert.match(expansion, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.ok(expansion.indexOf("TuesdayCommandCenter") < expansion.indexOf("ProductAccountDirectory"));
 });
@@ -66,10 +66,17 @@ test("selection is hash-addressable, focus-restoring, and sticky-header safe", (
 });
 
 test("disabled controller commissioning truth is visible without a browser control", () => {
-  for (const phrase of ["Monday rehearsal", "September 7, 2026", "Closed holiday · Passed", "<dt>Requests</dt><dd>0</dd>", "Tuesday controller", "<dt>Installed</dt><dd>No</dd>", "<dt>Activated</dt><dd>No</dd>", "Tuesday premarket locked", "Awaiting authorization", "Corporate-action suspensions", "Synthetic / post-close state", "TUESDAY_PREMARKET_LOCKED", "NO REAL MONEY"])
+  for (const phrase of ["Monday rehearsal", "September 7, 2026", "Tuesday controller", "<dt>Installed</dt>", "<dt>Running</dt>", "<dt>Activated</dt>", "<dt>Current phase</dt>", "<dt>Human gate</dt>", "controllerInstalled ? \"Yes\" : \"No\"", "controllerRunning ? \"Yes\" : \"No\"", "Corporate-action suspensions", "Synthetic / post-close state", "CONTROLLER_ACTIVATED_", "NO REAL MONEY"])
     assert.match(expansion, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(expansion, /Activate Tuesday Controller/);
   assert.doesNotMatch(expansion, /<input[^>]+ticker/i);
+});
+
+test("controller presentation is snapshot driven and preserves not-installed truth", () => {
+  for (const phrase of ["tuesday_controller_status", "NOT_INSTALLED", "INSTALLATION REQUIRED", "PREPARE DISABLED INSTALLATION", "Restart recovery", "Last sanitized update", "authority_locked"])
+    assert.match(expansion, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(expansion, /<dd>Yes<\/dd>/);
+  assert.doesNotMatch(expansion, /fetch\(|WebSocket|EventSource/);
 });
 
 test("governance flow and ten fail-closed conclusions are readable", () => {

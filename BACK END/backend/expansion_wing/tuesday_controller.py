@@ -154,8 +154,9 @@ def rehearsal_matrix() -> dict[str, Any]:
 def service_contract() -> dict[str, Any]:
     return {"module": "expansion_wing.tuesday_controller_service", "installed": False,
         "activated": False, "network_listener": False, "child_processes": False,
-        "browser_route": False, "fixed_pilots": PILOTS, "interval": None,
-        "state_mode": "0700", "file_mode": "0600", "keep_alive": False,
+        "browser_route": False, "fixed_pilots": PILOTS, "interval": "BOUNDED_IDLE_WAIT",
+        "state_mode": "0700", "file_mode": "0600", "supervisor_persistent": True,
+        "keep_alive": "UNSUCCESSFUL_EXIT_ONLY",
         "operational_path_override": False, "raw_logs": False, "authority": AUTHORITY.copy()}
 
 

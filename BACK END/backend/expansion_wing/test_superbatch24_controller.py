@@ -39,9 +39,9 @@ class ControllerTests(unittest.TestCase):
     def test_service_is_uninstalled_nonnetworked(self):
         value=service_contract(); self.assertFalse(value["installed"]); self.assertFalse(value["activated"]); self.assertFalse(value["network_listener"]); self.assertEqual(value["authority"],AUTHORITY)
         template=(Path(__file__).parents[3]/"config/com.iios.expansion-wing-tuesday-controller.plist.template").read_text()
-        for phrase in ("<key>Disabled</key><true/>","<key>RunAtLoad</key><false/>","<key>KeepAlive</key><false/>","expansion_wing.tuesday_controller_service"):
+        for phrase in ("<key>RunAtLoad</key><true/>","<key>SuccessfulExit</key><false/>","--supervisor","expansion_wing.tuesday_controller_service"):
             self.assertIn(phrase,template)
-        for prohibited in ("--activate","broker","ledger","Keychain","api-key"):
+        for prohibited in ("--activate","broker","ledger","Keychain","api-key","<key>Disabled</key>"):
             self.assertNotIn(prohibited,template)
     def test_thirty_scenarios_are_explicit_and_inert(self):
         value=rehearsal_matrix(); self.assertEqual(len(SCENARIOS),30); self.assertEqual(value["scenario_count"],30)

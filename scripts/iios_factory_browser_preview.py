@@ -31,6 +31,7 @@ from factory_truth import build_factory_truth
 from expansion_wing.acceptance_server import Compositor
 from expansion_wing.case_registry_adapter import BackgroundCaseRegistry
 from expansion_wing.projection_runtime import FixedProjectionReader
+from expansion_wing.tuesday_controller_state import ControllerStatusReader
 
 SCHEMA_VERSION = "batch9k-live-factory-browser-v1"
 LIVING_SCHEMA_VERSION = "batch9l-living-factory-provenance-v1"
@@ -966,6 +967,7 @@ class PreviewServer(ThreadingHTTPServer):
         expansion_enabled: bool = False,
         expansion_compositor: Any | None = None,
         fixture_isolated: bool = False,
+        controller_state_root: Path | None = None,
     ) -> None:
         self.static_root = static_root
         self.telemetry_dir = telemetry_dir
@@ -995,6 +997,7 @@ class PreviewServer(ThreadingHTTPServer):
                 else FixedProjectionReader(enabled=expansion_enabled).read
             ),
             case_reader=None if self._case_registry is None else self._case_registry.snapshot,
+            controller_reader=ControllerStatusReader(controller_state_root).read,
         )
 
         def handler(*args, **kwargs):
@@ -1047,6 +1050,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture-isolated", action="store_true",
         help="Disable every backend-dependent route for synthetic fixture review")
     parser.add_argument(
+        "--controller-state-root",
+        help="Explicit owner-controlled controller state root (review/install tooling only)",
+    )
+    parser.add_argument(
         "--ledger-path",
         default=str(BACKEND_ROOT / "iios_ledger.db"),
         help="SQLite ledger read only by the Factory Truth endpoint",
@@ -1074,6 +1081,11 @@ def main() -> int:
         ledger_path,
         expansion_enabled=args.enable_expansion_wing,
         fixture_isolated=args.fixture_isolated,
+        controller_state_root=(
+            None
+            if args.controller_state_root is None
+            else Path(args.controller_state_root).expanduser().resolve()
+        ),
     )
     print(
         json.dumps(
