@@ -18,7 +18,8 @@ const MODES: readonly [Mode, string][] = [["gallery", "Gallery"], ["story", "Sto
 const ROTATION: Mode[] = ["gallery", "story", "replay"];
 const modeFromHash = (): Mode => {
   const requested = typeof window === "undefined" ? "" : window.location.hash.slice(1);
-  return MODES.some(([mode]) => mode === requested) ? requested as Mode : requested === "expansion-wing" ? "expansion" : requested === "factory-watch" ? "watch" : "gallery";
+  const namespace = requested.split("/", 1)[0];
+  return MODES.some(([mode]) => mode === namespace) ? namespace as Mode : namespace === "expansion-wing" ? "expansion" : namespace === "factory-watch" ? "watch" : "gallery";
 };
 
 export default function LivingWallApp() {

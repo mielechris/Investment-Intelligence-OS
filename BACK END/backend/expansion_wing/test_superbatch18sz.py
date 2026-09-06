@@ -302,9 +302,9 @@ class RehearsalAndPresentationTests(unittest.TestCase):
         self.assertIn("--mew-sticky-header-height:148px", styles)
         self.assertIn("--mew-anchor-offset:calc(var(--mew-sticky-header-height) + var(--mew-anchor-gap))", styles)
         self.assertIn("html{scroll-padding-top:var(--mew-anchor-offset)}", styles)
-        self.assertIn("#expansion-wing,.mew-shell,.mew-panel,.mew-product-room,.mew-account-detail,.mew-pilot-directory{scroll-margin-top:var(--mew-anchor-offset)}", styles)
-        self.assertIn("@media(max-width:1100px){:root{--mew-sticky-header-height:210px}", styles)
-        self.assertIn("@media(max-width:760px){:root{--mew-sticky-header-height:190px}", styles)
+        self.assertIn("#expansion-wing,.mew-shell [id],.mew-panel,.mew-product-room,.mew-account-detail,.mew-pilot-directory,.mew-directory-heading{scroll-margin-block-start:var(--mew-anchor-offset)}", styles)
+        self.assertIn("@media(max-width:1100px){:root{--mew-sticky-header-height:220px;--mew-anchor-gap:28px}", styles)
+        self.assertIn("@media(max-width:760px){:root{--mew-sticky-header-height:210px;--mew-anchor-gap:24px}", styles)
 
     def test_sparse_room_grids_are_bounded_and_overflow_safe(self):
         styles = (ROOT / "FRONT END/src/MobExpansionWing.css").read_text()

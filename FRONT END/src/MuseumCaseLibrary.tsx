@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useExpansionWingSnapshot } from "./ExpansionWingSnapshotContext";
 import { latestFactoryOutputs, linkPromotionReceipts } from "./museumLiveBinding";
 import "./MuseumCaseLibrary.css";
@@ -16,7 +16,13 @@ const matches=(item:Row,filter:CaseFilter)=>filter==="ALL"||filter==="OUTCOMES"&
 export default function MuseumCaseLibrary({ initialFilter="ALL" }: { initialFilter?: CaseFilter }) {
   const {snapshot,sanitizedOverview}=useExpansionWingSnapshot(); const data=record(snapshot?.sections?.governed_cases?.data); const cases=rows(data.cases); const counts=record(data.counts);
   const receiptLinks=linkPromotionReceipts(latestFactoryOutputs(sanitizedOverview,8),cases);
-  const [filter,setFilter]=useState<CaseFilter>(initialFilter); const [query,setQuery]=useState(""); const [selected,setSelected]=useState<Row|null>(null);
+  const [filter,setFilter]=useState<CaseFilter>(initialFilter); const [query,setQuery]=useState(""); const [selected,setSelectedState]=useState<Row|null>(null); const originRef=useRef<HTMLElement|null>(null);
+  const caseFromHash=()=>{const match=window.location.hash.match(/^#cases\/([^/]+)$/); if(!match)return null; try{return decodeURIComponent(match[1]);}catch{return "";}};
+  const restoreCase=()=>{const identity=caseFromHash(); setSelectedState(identity?cases.find((item)=>value(item.case_id)===identity)??{case_id:identity,status:"CASE UNAVAILABLE"}:null);};
+  // The deferred restore synchronizes an external URL source without a synchronous effect update.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{const timer=window.setTimeout(restoreCase,0); window.addEventListener("popstate",restoreCase); window.addEventListener("hashchange",restoreCase); return()=>{window.clearTimeout(timer);window.removeEventListener("popstate",restoreCase);window.removeEventListener("hashchange",restoreCase);};},[snapshot]);
+  const setSelected=(item:Row|null)=>{if(item){originRef.current=document.activeElement as HTMLElement; const identity=value(item.case_id); window.history.pushState({museumMode:"cases",caseId:identity},"",`#cases/${encodeURIComponent(identity)}`); setSelectedState(item);}else{window.history.pushState({museumMode:"cases"},"","#cases");setSelectedState(null);requestAnimationFrame(()=>originRef.current?.focus());}};
   const visible=cases.filter((item)=>matches(item,filter)&&[item.case_id,item.ticker,item.title,item.stage,item.status].some((field)=>value(field).toLowerCase().includes(query.trim().toLowerCase())));
   const muFound=cases.some((item)=>item.ticker==="MU");
   return <main className="museum-case-library" aria-labelledby="case-library-title"><header><span>AUTHENTICATED CASE REGISTRY · READ ONLY</span><h1 id="case-library-title">Case Library</h1><p>Every row is anchored to an immutable browser-safe case identity. Missing evidence remains unavailable.</p><small>Source: /experience/factory-intelligence/overview · observed {value(data.source_observed_at)} · freshness {value(data.freshness_state)}</small></header>

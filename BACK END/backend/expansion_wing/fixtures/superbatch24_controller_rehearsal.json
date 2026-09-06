@@ -1,0 +1,17 @@
+{
+  "schema_version": "iios-tuesday-controller-rehearsal-v1",
+  "controller_installed": false,
+  "controller_activated": false,
+  "monday_market": "CLOSED_HOLIDAY",
+  "monday_provider_requests": 0,
+  "monday_credits": 0,
+  "monday_keychain_access": 0,
+  "tuesday_phase": "TUESDAY_PREMARKET_LOCKED",
+  "pilot_count": 10,
+  "observation_schedule": ["OPENING_EVIDENCE", "INTRADAY_MARK", "CLOSING_MARK"],
+  "maximum_credits": 30,
+  "scenario_count": 30,
+  "browser_activation": false,
+  "operational_mutation": false,
+  "authority": {"provider": false, "credential": false, "broker": false, "ledger_write": false, "paper_order": false, "live_execution": false, "automatic_promotion": false}
+}

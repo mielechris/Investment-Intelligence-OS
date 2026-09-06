@@ -59,8 +59,30 @@ test("MU feature, capital separation, and human-first states remain explicit", (
 });
 
 test("selection is hash-addressable, focus-restoring, and sticky-header safe", () => {
-  for (const contract of ["history.pushState", "hashchange", "scrollIntoView", "detailRef.current?.focus", "Back to Tuesday pilots", "scroll-padding-top", "scroll-margin-top", "--mew-sticky-header-height:148px", "--mew-sticky-header-height:210px", "--mew-sticky-header-height:190px"])
+  for (const contract of ["history.pushState", "hashchange", "scrollIntoView", "detailRef.current?.focus", "Back to Tuesday pilots", "scroll-padding-top", "scroll-margin-block-start", "--mew-sticky-header-height:148px", "--mew-sticky-header-height:220px", "--mew-sticky-header-height:210px"])
     assert.match(`${expansion}\n${expansionCss}`, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(expansionCss, /grid-template-columns:minmax\(0,1fr\)/);
   assert.doesNotMatch(expansionCss, /overflow-x:visible/);
+});
+
+test("disabled controller commissioning truth is visible without a browser control", () => {
+  for (const phrase of ["Monday rehearsal", "September 7, 2026", "Closed holiday · Passed", "<dt>Requests</dt><dd>0</dd>", "Tuesday controller", "<dt>Installed</dt><dd>No</dd>", "<dt>Activated</dt><dd>No</dd>", "Tuesday premarket locked", "Awaiting authorization", "Corporate-action suspensions", "Synthetic / post-close state", "TUESDAY_PREMARKET_LOCKED", "NO REAL MONEY"])
+    assert.match(expansion, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(expansion, /Activate Tuesday Controller/);
+  assert.doesNotMatch(expansion, /<input[^>]+ticker/i);
+});
+
+test("governance flow and ten fail-closed conclusions are readable", () => {
+  for (const phrase of ["Evidence","Human Review","Committee","Risk","Synthetic Observation","Intraday Mark","Closing Mark","Post-Close Audit","Wrong session","Stale or future evidence","Wrong instrument","Missing candidate lineage","Human decision rejected","Committee rejection","Risk rejection","Budget exhausted","Corporate action unresolved","Unsafe authority"])
+    assert.match(expansion, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("controller metadata is semantic, wrapped, and sticky-offset safe", () => {
+  for (const phrase of ["mew-controller-status", "<dt>Date</dt>", "<dt>Installed</dt>", "<dt>Activated</dt>", "<dt>Current phase</dt>", "<dt>Human gate</dt>"]) assert.match(expansion, new RegExp(phrase));
+  assert.match(expansionCss, /\.mew-controller-status\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);gap:12px/);
+  assert.match(expansionCss, /overflow-wrap:anywhere/);
+  assert.match(expansionCss, /\.mew-shell \[id\].*scroll-margin-block-start:var\(--mew-anchor-offset\)/);
+  assert.match(expansionCss, /html\{scroll-padding-top:var\(--mew-anchor-offset\)\}/);
+  assert.match(expansionCss, /--mew-sticky-header-height:220px;--mew-anchor-gap:28px/);
+  assert.match(expansionCss, /--mew-sticky-header-height:210px;--mew-anchor-gap:24px/);
 });

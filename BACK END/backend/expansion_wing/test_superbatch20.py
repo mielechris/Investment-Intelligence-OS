@@ -100,7 +100,7 @@ class TuesdayContracts(unittest.TestCase):
     def test_ui_and_responsive_contracts_cover_tuesday_rooms(self):
         source = (ROOT / "FRONT END/src/MobExpansionWing.tsx").read_text(); css = (ROOT / "FRONT END/src/MobExpansionWing.css").read_text()
         for marker in ("Tuesday Test Day Command Center", "Independent Sleeve Laboratory", "Post-Close Audit", SYNTHETIC_LABEL): self.assertIn(marker, source)
-        for marker in ("min-width:0", "overflow-x:clip", "focus-visible", "prefers-reduced-motion", "scroll-margin-top"): self.assertIn(marker, css)
+        for marker in ("min-width:0", "overflow-x:clip", "focus-visible", "prefers-reduced-motion", "scroll-margin-block-start"): self.assertIn(marker, css)
 
 
 if __name__ == "__main__": unittest.main()
