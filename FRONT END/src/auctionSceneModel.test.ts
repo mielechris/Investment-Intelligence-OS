@@ -59,7 +59,7 @@ test("a complete exact receipt activates only its authoritative room", () => {
   assert.deepEqual(model.motion, { ambient: true, evidence: true, reason: "VERIFIED_RECEIPT" });
 });
 
-test("stale, unavailable, source-conflict, error, and unsafe inputs freeze movement", () => {
+test("stale truth permits ambient work while evidence and unsafe movement remain frozen", () => {
   for (const state of ["STALE", "SOURCE_CONFLICT", "UNAVAILABLE"] as const) {
     const fixture = available();
     const data = fixture.data as Record<string, unknown>;
@@ -69,14 +69,17 @@ test("stale, unavailable, source-conflict, error, and unsafe inputs freeze movem
     const model = buildAuctionModel(fixture, null);
     assert.equal(model.quiet, true);
     assert.ok(Object.values(model.rooms).every((room) => ["degraded", "unavailable", "locked"].includes(room)));
-    assert.deepEqual(model.motion, { ambient: false, evidence: false, reason: "FROZEN_UNSAFE" });
+    assert.deepEqual(model.motion, { ambient: true, evidence: false, reason: "AMBIENT_ONLY" });
   }
-  assert.equal(buildAuctionModel(null, "failed").condition, "UNAVAILABLE");
+  const failed = buildAuctionModel(null, "failed");
+  assert.equal(failed.condition, "UNAVAILABLE");
+  assert.deepEqual(failed.motion, { ambient: false, evidence: false, reason: "FROZEN_UNSAFE" });
   const unsafe = available();
   (unsafe.data.safety as Record<string, unknown>).live_execution = true;
   const unsafeModel = buildAuctionModel(unsafe, null);
   assert.equal(unsafeModel.quiet, true);
   assert.equal(unsafeModel.safety.live, true);
+  assert.deepEqual(unsafeModel.motion, { ambient: false, evidence: false, reason: "FROZEN_UNSAFE" });
 });
 
 test("Story and Replay preserve explicit provenance boundaries", () => {

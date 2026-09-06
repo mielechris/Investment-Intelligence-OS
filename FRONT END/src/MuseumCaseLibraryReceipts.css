@@ -1,0 +1,5 @@
+.case-library-receipts{margin:12px 0;padding:12px;border:1px solid rgba(184,138,73,.32);background:#0c0c09}
+.case-library-receipts header,.case-library-receipts article{display:grid;grid-template-columns:minmax(150px,.7fr) minmax(180px,1fr) minmax(220px,1.4fr);gap:10px;align-items:center}
+.case-library-receipts header{padding-bottom:8px;color:#d9c18a}.case-library-receipts article{padding:8px;border-top:1px solid rgba(184,138,73,.18)}
+.case-library-receipts article>*{min-width:0;overflow-wrap:anywhere}.case-library-receipts b{color:#e7bd62}.case-library-receipts small{font:9px ui-monospace,monospace}
+@media(max-width:700px){.case-library-receipts header,.case-library-receipts article{grid-template-columns:1fr}}

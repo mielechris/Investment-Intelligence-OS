@@ -1,0 +1,27 @@
+{
+  "schema_version": "iios-superbatch22-rehearsal-fixtures-v1",
+  "fixture_label": "SYNTHETIC_FIXTURE_NON_LIVE",
+  "scenarios": [
+    {"scenario":"monday_holiday","phase":"CLOSED_HOLIDAY","evidence_state":"UNAVAILABLE"},
+    {"scenario":"market_closed","phase":"MARKET_CLOSED","evidence_state":"STALE"},
+    {"scenario":"tuesday_pre_market","phase":"PRE_MARKET","evidence_state":"INCOMPLETE"},
+    {"scenario":"regular_open","phase":"REGULAR_SESSION","evidence_state":"CURRENT"},
+    {"scenario":"regular_active","phase":"REGULAR_SESSION","evidence_state":"CURRENT"},
+    {"scenario":"zero_candidates","phase":"REGULAR_SESSION","evidence_state":"CURRENT","candidate_state":"AVAILABLE_EMPTY"},
+    {"scenario":"valid_immutable_candidate","phase":"REGULAR_SESSION","evidence_state":"CURRENT","candidate_state":"AVAILABLE"},
+    {"scenario":"candidate_lineage_failure","phase":"REGULAR_SESSION","evidence_state":"FAILED_CLOSED","candidate_state":"FAILED_CLOSED"},
+    {"scenario":"mixed_product_availability","phase":"REGULAR_SESSION","evidence_state":"INCOMPLETE","product_overrides":{"us_large_cap_equities":"CURRENT","listed_equity_etf_options":"RESEARCH_ONLY_UNPRICEABLE","treasury_notes_bonds":"INCOMPLETE"}},
+    {"scenario":"stale_product_evidence","phase":"REGULAR_SESSION","evidence_state":"STALE","product_overrides":{"us_large_cap_equities":"STALE"}},
+    {"scenario":"options_unpriceable","phase":"REGULAR_SESSION","evidence_state":"INCOMPLETE","product_overrides":{"listed_equity_etf_options":"RESEARCH_ONLY_UNPRICEABLE","index_options":"RESEARCH_ONLY_UNPRICEABLE"}},
+    {"scenario":"bond_evidence_incomplete","phase":"REGULAR_SESSION","evidence_state":"INCOMPLETE","product_overrides":{"treasury_notes_bonds":"INCOMPLETE","investment_grade_corporate_bonds":"INCOMPLETE"}},
+    {"scenario":"intraday_high_latency","phase":"REGULAR_SESSION","evidence_state":"STALE","product_overrides":{"us_large_cap_equities":"STALE"}},
+    {"scenario":"provider_unavailable","phase":"REGULAR_SESSION","evidence_state":"UNAVAILABLE"},
+    {"scenario":"professional_only_rejected","phase":"REGULAR_SESSION","evidence_state":"UNAVAILABLE","candidate_state":"FAILED_CLOSED"},
+    {"scenario":"committee_rejection","phase":"REGULAR_SESSION","evidence_state":"CURRENT","candidate_state":"AVAILABLE"},
+    {"scenario":"risk_rejection","phase":"REGULAR_SESSION","evidence_state":"CURRENT","candidate_state":"AVAILABLE"},
+    {"scenario":"synthetic_sleeve_observation","phase":"REGULAR_SESSION","evidence_state":"CURRENT"},
+    {"scenario":"market_close","phase":"POST_MARKET","evidence_state":"CURRENT"},
+    {"scenario":"post_close","phase":"POST_CLOSE","evidence_state":"CURRENT"},
+    {"scenario":"complete_failed_closed","phase":"FAILED_CLOSED","evidence_state":"FAILED_CLOSED","candidate_state":"FAILED_CLOSED"}
+  ]
+}

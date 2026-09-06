@@ -3,6 +3,9 @@ import AuctionFactory, { RoomView } from "./AuctionFactory";
 import { AUCTION_ROOMS, type AuctionRoomId } from "./auctionRegistry";
 import { buildAuctionModel, type AuctionModel, type GovernedCase } from "./auctionSceneModel";
 import MobExpansionWing from "./MobExpansionWing";
+import MuseumControlRoom from "./MuseumControlRoom";
+import MuseumCaseLibrary, { type CaseFilter } from "./MuseumCaseLibrary";
+import { latestFactoryOutputs, stationOutput } from "./museumLiveBinding";
 import { useExpansionWingSnapshot } from "./ExpansionWingSnapshotContext";
 import { adaptExpansionSnapshot } from "./TruthSourceAdapter";
 import { activateDialog, requestDialogClose } from "./dialogAccessibility";
@@ -11,7 +14,7 @@ import { BRIGHTNESS_PROFILES, nextBrightnessProfile, resolveProtectionState, typ
 import "./AuctionEdition.css";
 
 type Mode = AuctionMode;
-const MODES: readonly [Mode, string][] = [["gallery", "Gallery"], ["story", "Story"], ["replay", "Replay"], ["command", "Command"], ["expansion", "Expansion Wing"], ["watch", "Factory Watch"]];
+const MODES: readonly [Mode, string][] = [["gallery", "Gallery"], ["story", "Story"], ["replay", "Replay"], ["command", "Command"], ["cases", "Cases"], ["expansion", "Expansion Wing"], ["watch", "Factory Watch"]];
 const ROTATION: Mode[] = ["gallery", "story", "replay"];
 const modeFromHash = (): Mode => {
   const requested = typeof window === "undefined" ? "" : window.location.hash.slice(1);
@@ -19,7 +22,7 @@ const modeFromHash = (): Mode => {
 };
 
 export default function LivingWallApp() {
-  const { snapshot, connection, fixtureMode, snapshotAgeSeconds, runtimeCapabilities } = useExpansionWingSnapshot();
+  const { snapshot, sanitizedOverview, connection, fixtureMode, snapshotAgeSeconds, runtimeCapabilities } = useExpansionWingSnapshot();
   const startInWallMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("wall") === "1";
   const [mode, setMode] = useState<Mode>(modeFromHash);
   const [paused, setPaused] = useState(false);
@@ -29,6 +32,7 @@ export default function LivingWallApp() {
   const [fullscreen, setFullscreen] = useState(false);
   const [room, setRoom] = useState<AuctionRoomId | null>(null);
   const [selectedCase, setSelectedCase] = useState<GovernedCase | null>(null);
+  const [caseFilter, setCaseFilter] = useState<CaseFilter>("ALL");
   const [now, setNow] = useState(() => new Date());
   const [brightness, setBrightness] = useState<BrightnessProfile>(() => {
     const saved = typeof window === "undefined" ? null : window.localStorage.getItem("iios.museum.brightness");
@@ -76,6 +80,7 @@ export default function LivingWallApp() {
   }, [paused, rotation]);
 
   const navigate = (next: Mode) => { window.history.pushState({ museumMode: next }, "", `#${next}`); setMode(next); setRotation(false); setWallMode(false); };
+  const openCases = (filter: CaseFilter = "ALL") => { setCaseFilter(filter); navigate("cases"); };
   const enterWallArtMode = () => { setMode("gallery"); setRotation(false); setWallMode(true); };
   const cycleBrightness = () => setBrightness((current) => {
     const next = nextBrightnessProfile(current);
@@ -92,14 +97,15 @@ export default function LivingWallApp() {
     {model.condition !== "AVAILABLE" || model.freshness !== "CURRENT" ? <Degraded model={model} error={error}/> : null}
     <WallHealth model={model} protection={protection}/>
     <div className="auction-scene-plane">
-    {presentation.factoryVisible ? <Gallery model={model} openRoom={setRoom}/> : null}
+    {presentation.factoryVisible ? <Gallery model={model} snapshot={snapshot} overview={sanitizedOverview} openRoom={setRoom} openCases={openCases} navigate={navigate}/> : null}
     {presentation.effectiveMode === "story" ? <Story model={model} openRoom={setRoom}/> : null}
-    {presentation.effectiveMode === "replay" ? <Replay model={model} openRoom={setRoom}/> : null}
-    {presentation.effectiveMode === "command" ? <Command model={model} selectCase={setSelectedCase} fixtureMode={fixtureMode}/> : null}
+    {presentation.effectiveMode === "replay" ? <Replay model={model} openRoom={setRoom} navigate={navigate}/> : null}
+    {presentation.effectiveMode === "command" ? <Command model={model} selectCase={setSelectedCase} fixtureMode={fixtureMode} openCases={openCases} navigate={navigate}/> : null}
+    {presentation.effectiveMode === "cases" ? <MuseumCaseLibrary key={caseFilter} initialFilter={caseFilter}/> : null}
     {presentation.effectiveMode === "expansion" ? <MobExpansionWing/> : null}
     {presentation.effectiveMode === "watch" ? <FactoryWatch model={model} publisherControl={runtimeCapabilities.publisherControl}/> : null}
     </div>
-    {room ? <RoomView roomId={room} model={model} close={closeRoom}/> : null}
+    {room ? <RoomView roomId={room} model={model} snapshot={snapshot} overview={sanitizedOverview} close={closeRoom}/> : null}
     {selectedCase ? <CaseTheater item={selectedCase} close={() => setSelectedCase(null)}/> : null}
     {plaque ? <CollectorPlaque model={model} close={() => setPlaque(false)}/> : null}
   </div>;
@@ -109,8 +115,19 @@ function Navigation({ mode, paused, wallMode, fullscreen, brightness, navigate, 
   return <header className="auction-nav"><button className="auction-brand" onClick={() => navigate("gallery")}><span>IIOS LIVING WALL</span><strong>THE AUCTION EDITION · MUSEUM MASTER 1.2</strong></button><nav aria-label="Living Wall experiences">{MODES.map(([key, label]) => <button key={key} className={mode === key ? "is-active" : ""} onClick={() => navigate(key)} aria-current={mode === key ? "page" : undefined}>{label}</button>)}</nav><div className="auction-tools"><button onClick={() => setPaused((current) => !current)} aria-pressed={paused}>{paused ? "Resume Scene" : "Pause Scene"}</button><button onClick={() => wallMode ? setWallMode(false) : enterWallArtMode()} aria-pressed={wallMode}>{wallMode ? "Reveal Controls" : "Wall Art Mode"}</button><button onClick={toggleFullscreen} aria-pressed={fullscreen}>{fullscreen ? "Exit Full Screen" : "Enter Full Screen"}</button><button onClick={cycleBrightness}>Brightness: {BRIGHTNESS_PROFILES[brightness].label}</button><button onClick={() => setPlaque(true)}>Collector Plaque</button><button disabled title="Sound remains muted until an owned soundscape is supplied">Sound Muted</button></div></header>;
 }
 
-function Gallery({ model, openRoom }: { model: AuctionModel; openRoom: (id: AuctionRoomId) => void }) {
-  return <main className="auction-gallery"><AuctionFactory model={model} onOpenRoom={openRoom}/><div className="auction-gallery-caption" data-testid="quiet-caption"><span>IIOS LIVING WALL — THE FAMILY FACTORY</span><h1>{model.quiet ? "The House Is Quiet" : "Evidence Is Moving Through the House"}</h1><p>{model.quiet ? "A quiet floor is a truthful floor. MAX patrols; no activity is invented." : "Every illuminated room is anchored to a complete governed receipt."}</p><small><span>CREATED 2026</span><i>·</i><span>THE AUCTION EDITION</span><i>·</i><span>MUSEUM MASTER 1.2</span><i>·</i><span>GOVERNED READ MODEL</span></small></div></main>;
+function Gallery({ model, snapshot, overview, openRoom, openCases, navigate }: { model: AuctionModel; snapshot: import("./ExpansionWingSnapshotContext").ExpansionSnapshot | null; overview: unknown; openRoom: (id: AuctionRoomId) => void; openCases:(filter?:CaseFilter)=>void; navigate:(mode:Mode)=>void }) {
+  const marketOutput = stationOutput("calendar", snapshot, overview);
+  const publisherOutput = stationOutput("publisher", snapshot, overview);
+  const ambient = marketOutput.value.includes("MARKET_CLOSED") ? "MARKET-CLOSED NIGHT WATCH" : model.freshness === "STALE" ? "WAITING-FOR-EVIDENCE INSPECTION" : publisherOutput.value.includes("SEQUENCE") ? "PUBLISHER OBSERVATION WATCH" : "DEPARTMENT READINESS WATCH";
+  const outputs = latestFactoryOutputs(overview, 4);
+  return <main className="auction-gallery">
+    <nav className="auction-gallery-shortcuts" aria-label="Case activity and product destinations">
+      <button onClick={() => openCases("ALL")}>Radar · 40 authenticated cases</button><button onClick={() => openCases("COMMITTEE")}>Committee · 35 cases</button><button onClick={() => openCases("RISK")}>Risk · 5 cases</button><button onClick={() => openCases("INCOMPLETE")}>Evidence · 40 incomplete</button><button onClick={() => openCases("OUTCOMES")}>Learning · 0 outcomes</button><button onClick={() => navigate("replay")}>Replay · 0 authenticated</button><button onClick={() => navigate("expansion")}>24 Product Accounts</button>
+    </nav>
+    <AuctionFactory model={model} snapshot={snapshot} overview={overview} onOpenRoom={openRoom}/>
+    <aside className="auction-latest-feed" aria-label="Latest Factory Outputs"><span>LATEST FACTORY OUTPUTS</span>{outputs.length ? outputs.map((item) => <div key={item.id}><time>{new Date(item.timestamp).toLocaleTimeString()}</time><b>{item.module} · {item.category}</b><small>{item.explanation}</small></div>) : <p>No authenticated output receipts reported.</p>}</aside>
+    <div className="auction-gallery-caption" data-testid="quiet-caption" data-ambient-scene={ambient}><span>IIOS LIVING WALL — THE FAMILY FACTORY</span><h1>{model.quiet ? "The House Is Quiet — and attentive" : "Evidence Is Moving Through the House"}</h1><p>{model.quiet ? "MAX keeps the watch while departments inspect, file, and wait. This is visible ambient factory life—not evidence movement." : "Every illuminated case route is anchored to a complete governed receipt."}</p><b className="auction-ambient-cue">AMBIENT PRESENTATION · {ambient}</b><p>No candidate, trade, position, order, recommendation, endorsement, profit, or provider connection is implied.</p><small><span>CREATED 2026</span><i>·</i><span>THE AUCTION EDITION</span><i>·</i><span>MUSEUM MASTER 1.2</span><i>·</i><span>GOVERNED READ MODEL</span></small></div>
+  </main>;
 }
 
 function Story({ model, openRoom }: { model: AuctionModel; openRoom: (id: AuctionRoomId) => void }) {
@@ -118,12 +135,12 @@ function Story({ model, openRoom }: { model: AuctionModel; openRoom: (id: Auctio
   return <main className="auction-editorial"><header><span>DAILY STORY ENGINE / SOURCE-LINKED</span><h1>{events.length ? "The day, without embellishment." : "Why the factory deliberately did nothing."}</h1><p>{events.length ? "Each scene below is selected by an exact event type, timestamp, and lineage identifier." : "No complete current event receipt was supplied. The correct episode is restraint."}</p></header><ol className="auction-storyline">{events.length ? events.map((event) => <li key={event.id}><button onClick={() => event.room && openRoom(event.room)} disabled={!event.room}><time>{new Date(event.at).toLocaleString()}</time><strong>{event.type.replaceAll("_", " ")}</strong><span>{event.room ? AUCTION_ROOMS.find((candidate) => candidate.id === event.room)?.label : "QUARANTINED / UNMAPPED"}</span><small>CASE {event.caseId ?? "UNKNOWN"} · {event.provenance}</small></button></li>) : <li className="auction-empty"><strong>THE HOUSE IS QUIET</strong><p>Radar supplied no complete receipt. Research makes no claim. Committee has nothing to debate. Risk and Paper remain locked. Monitoring waits. Learning preserves the silence.</p></li>}</ol></main>;
 }
 
-function Replay({ model, openRoom }: { model: AuctionModel; openRoom: (id: AuctionRoomId) => void }) {
-  return <main className="auction-editorial auction-replay"><header><span>REPLAY THEATER / HISTORICAL ONLY</span><h1>{model.replay.length ? "Completed session receipts" : "No replay session available"}</h1><p>Current activity is never relabeled as history. Playback exists only for explicitly historical receipts.</p></header><div className="auction-filmstrip">{model.replay.map((event, index) => <button key={event.id} onClick={() => event.room && openRoom(event.room)}><span>{String(index + 1).padStart(2, "0")}</span><time>{new Date(event.at).toLocaleString()}</time><strong>{event.type.replaceAll("_", " ")}</strong><small>{event.provenance}</small></button>)}</div></main>;
+function Replay({ model, openRoom, navigate }: { model: AuctionModel; openRoom: (id: AuctionRoomId) => void; navigate: (mode: Mode) => void }) {
+  return <main className="auction-editorial auction-replay"><header><span>REPLAY THEATER / HISTORICAL ONLY</span><h1>{model.replay.length ? "Completed session receipts" : "No authenticated replay is available"}</h1><p>Current activity is never relabeled as history. Playback requires an explicitly historical, sanitized receipt with a valid timestamp, immutable lineage, and governed provenance.</p></header>{model.replay.length ? <div className="auction-filmstrip">{model.replay.map((event, index) => <button key={event.id} onClick={() => event.room && openRoom(event.room)}><span>{String(index + 1).padStart(2, "0")}</span><time>{new Date(event.at).toLocaleString()}</time><strong>{event.type.replaceAll("_", " ")}</strong><small>{event.provenance}</small></button>)}</div> : <section className="auction-replay-empty"><span>WHY THE SCREEN IS EMPTY</span><h2>No qualifying historical receipt was supplied.</h2><p>The latest sanitized snapshot is <strong>{model.condition} / {model.freshness}</strong>{model.generatedAt ? `, generated ${new Date(model.generatedAt).toLocaleString()}` : "; its generation time is unavailable"}. It describes present observation state and is not replay history.</p><dl><div><dt>Authenticated replay requires</dt><dd>Historical marker · valid time · immutable lineage · sanitized provenance</dd></div><div><dt>Current evidence movement</dt><dd>{model.motion.evidence ? "PRESENT — NOT RELABELED AS HISTORY" : "NONE"}</dd></div></dl><div><button onClick={() => navigate("gallery")}>Return to Gallery</button><button onClick={() => navigate("command")}>Open Control Room</button></div></section>}</main>;
 }
 
-function Command({ model, selectCase, fixtureMode }: { model: AuctionModel; selectCase: (item: GovernedCase) => void; fixtureMode: boolean }) {
-  return <main className="auction-command"><section className="auction-command-intro"><span>COMMAND MODE / SANITIZED OBSERVER</span><h1>Tuesday Command Center</h1><p>Factory truth remains read-only. Missing fields remain UNKNOWN, and the browser owns no publication or operational control route.</p></section><section className="auction-status-rail" aria-label="Command truth summary"><div><span>HOUSE</span><strong>{model.condition}</strong></div><div><span>FRESHNESS</span><strong>{model.freshness}</strong></div><div><span>FIXTURE</span><strong>{fixtureMode ? "NON-LIVE" : "FALSE"}</strong></div><div><span>PAPER NAV</span><strong>{model.nav === null ? "UNKNOWN" : `$${model.nav.toLocaleString()}`}</strong></div><div><span>AUTHORITY</span><strong>READ ONLY</strong></div></section><section className="auction-case-index"><header><span>CASE THEATER</span><strong>{model.cases.length ? `${model.cases.length} GOVERNED CASES` : "NO CASE DETAIL SUPPLIED"}</strong></header>{model.cases.length ? model.cases.map((item) => <button key={item.id} onClick={() => selectCase(item)}><b>{item.ticker}</b><span>{item.thesis}</span><small>{item.id}</small></button>) : <p>Aggregate case counts cannot create identities. No governed case detail was supplied.</p>}</section></main>;
+function Command({ model, selectCase, fixtureMode, openCases, navigate }: { model: AuctionModel; selectCase: (item: GovernedCase) => void; fixtureMode: boolean; openCases:(filter?:CaseFilter)=>void; navigate:(mode:Mode)=>void }) {
+  return <MuseumControlRoom model={model} fixtureMode={fixtureMode} selectCase={selectCase} openCases={openCases} openProducts={()=>navigate("expansion")}/>;
 }
 
 function FactoryWatch({ model, publisherControl }: { model: AuctionModel; publisherControl: boolean }) {

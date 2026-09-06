@@ -29,6 +29,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from factory_truth import build_factory_truth
 from expansion_wing.acceptance_server import Compositor
+from expansion_wing.case_registry_adapter import BackgroundCaseRegistry
 from expansion_wing.projection_runtime import FixedProjectionReader
 
 SCHEMA_VERSION = "batch9k-live-factory-browser-v1"
@@ -975,6 +976,9 @@ class PreviewServer(ThreadingHTTPServer):
         self._expansion_lock = threading.Lock()
         self._expansion_cached: dict[str, Any] | None = None
         self._expansion_cached_at = 0.0
+        self._case_registry = None if fixture_isolated or not expansion_enabled or expansion_compositor is not None else BackgroundCaseRegistry()
+        if self._case_registry is not None:
+            self._case_registry.start()
         self._expansion_compositor = expansion_compositor or Compositor(
             telemetry_dir / "latest.json",
             state_dir / "latest_market_validation.json",
@@ -990,6 +994,7 @@ class PreviewServer(ThreadingHTTPServer):
                 if fixture_isolated
                 else FixedProjectionReader(enabled=expansion_enabled).read
             ),
+            case_reader=None if self._case_registry is None else self._case_registry.snapshot,
         )
 
         def handler(*args, **kwargs):
@@ -1020,6 +1025,11 @@ class PreviewServer(ThreadingHTTPServer):
             "read_only": True,
             "publisher_control": False,
         }
+
+    def server_close(self) -> None:
+        if self._case_registry is not None:
+            self._case_registry.close()
+        super().server_close()
 
 
 def parse_args() -> argparse.Namespace:

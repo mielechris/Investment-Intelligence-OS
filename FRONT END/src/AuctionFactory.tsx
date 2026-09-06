@@ -4,10 +4,12 @@ import { AUCTION_ROOMS, type AuctionRoom, type AuctionRoomId } from "./auctionRe
 import type { AuctionModel } from "./auctionSceneModel";
 import { LIVING_CAST } from "./livingCast";
 import { activateDialog, requestDialogClose } from "./dialogAccessibility";
+import type { ExpansionSnapshot } from "./ExpansionWingSnapshotContext";
+import { roomOutput, type MuseumOutput } from "./museumLiveBinding";
 
 const money = (value: number | null) => value === null ? "UNKNOWN" : value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 
-export default function AuctionFactory({ model, onOpenRoom }: { model: AuctionModel; onOpenRoom: (id: AuctionRoomId) => void }) {
+export default function AuctionFactory({ model, snapshot, overview, onOpenRoom }: { model: AuctionModel; snapshot: ExpansionSnapshot | null; overview: unknown; onOpenRoom: (id: AuctionRoomId) => void }) {
   const levels = [AUCTION_ROOMS.slice(0, 5), AUCTION_ROOMS.slice(5, 10), AUCTION_ROOMS.slice(10)];
   const route = ["radar","research","external","committee","skeptic","risk","paper","portfolio","monitoring","learning"] as const;
   const activeRouteIndex = model.activeRoom ? route.indexOf(model.activeRoom as typeof route[number]) : -1;
@@ -27,7 +29,7 @@ export default function AuctionFactory({ model, onOpenRoom }: { model: AuctionMo
         <div className="auction-level__legend" aria-hidden="true"><span>0{3 - levelIndex}</span><b>{["INTELLIGENCE & CONTEXT", "DELIBERATION & CONTROL", "STEWARDSHIP & MEMORY"][levelIndex]}</b></div>
         <div className="auction-level__rooms">{rooms.map((room) => {
           const index = AUCTION_ROOMS.indexOf(room);
-          return <Room key={room.id} room={room} index={index} state={model.rooms[room.id]} open={() => onOpenRoom(room.id)}/>;
+          return <Room key={room.id} room={room} index={index} state={model.rooms[room.id]} output={roomOutput(room.id, snapshot, overview)} open={() => onOpenRoom(room.id)}/>;
         })}</div>
       </section>)}
       <div className="auction-evidence-spine" aria-hidden="true"><i/><i/><i/><span>EVIDENCE LIFT</span></div>
@@ -35,6 +37,8 @@ export default function AuctionFactory({ model, onOpenRoom }: { model: AuctionMo
       <div className={`auction-route ${activeRouteIndex >= 0 ? "has-receipt" : ""}`} aria-hidden="true">{["Radar","Research","External","Committee","Skeptic","Risk","Paper","Portfolio","Monitor","Learning"].map((step, index) => <span key={step} className={activeRouteIndex >= index ? "is-lit" : ""}><i/>{step}</span>)}</div>
       <div className="auction-foundation" aria-hidden="true"><i/><i/><i/><span>READ MODEL · SANITIZED TELEMETRY · ZERO EXECUTION AUTHORITY</span></div>
     </div>
+    <aside className="auction-activity-legend" aria-label="Factory activity legend"><span className="is-ambient"><i/>Ambient factory activity</span><span className="is-evidence"><i/>Evidence-driven case movement</span><span className="is-closed"><i/>Market closed</span><span className="is-failed"><i/>Failed closed</span></aside>
+    <div className="auction-ambient-work" aria-label="Ambient presentation only; no evidence or case movement"><span>FILING</span><span>INSPECTION</span><span>MAX NIGHT WATCH</span><strong>AMBIENT ONLY · CASE ROUTE FROZEN</strong></div>
     <section className="auction-status-rail" aria-label="Governed factory status">
       <div><span>HOUSE CONDITION</span><strong>{model.condition} / {model.freshness}</strong></div>
       <div><span>MARKET VALIDATION</span><strong>{model.marketValidation}</strong></div>
@@ -45,24 +49,25 @@ export default function AuctionFactory({ model, onOpenRoom }: { model: AuctionMo
   </div>;
 }
 
-function Room({ room, index, state, open }: { room: AuctionRoom; index: number; state: string; open: () => void }) {
+function Room({ room, index, state, output, open }: { room: AuctionRoom; index: number; state: string; output: MuseumOutput; open: () => void }) {
   const [artFailed, setArtFailed] = useState(false);
   const character = room.characterKeys[0];
   return <button className={`auction-room auction-room--${room.id} auction-room--${state}`} data-testid="auction-room" data-room-id={room.id} data-silhouette={room.silhouette} style={{ "--room-index": index } as React.CSSProperties} onClick={open} aria-label={`Open ${room.label}; ${state}; ${room.silhouette}`}>
     <span className="auction-room__number">{String(index + 1).padStart(2, "0")}</span><div className="auction-room__identity"><b>{room.shortLabel}</b><small>{state.toUpperCase()}</small></div>
     <div className="auction-room__set" aria-hidden="true"><span className="auction-room__lamp"/><span className="auction-room__window"/><span className="auction-room__desk"><i/><i/><i/></span><span className="auction-room__machine"><i/><i/><i/></span><span className="auction-room__artifact"/></div>
     {character && !artFailed ? <div className="auction-room__character" onError={() => setArtFailed(true)}><CinematicCharacterPortrait characterKey={character} variant="scene" active={state === "active"}/></div> : null}
-    {room.guests.length ? <em>{room.guests.join(" · ")}</em> : null}
+    <span className="auction-room__output"><b>{output.state.replaceAll("_", " ")}</b><small>{output.value}</small></span>{room.guests.length ? <em>{room.guests.join(" · ")}</em> : null}
   </button>;
 }
 
-export function RoomView({ roomId, model, close }: { roomId: AuctionRoomId; model: AuctionModel; close: () => void }) {
+export function RoomView({ roomId, model, snapshot, overview, close }: { roomId: AuctionRoomId; model: AuctionModel; snapshot: ExpansionSnapshot | null; overview: unknown; close: () => void }) {
   const room = AUCTION_ROOMS.find((candidate) => candidate.id === roomId)!;
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLElement | null>(typeof document === "undefined" ? null : document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const titleId = `auction-room-title-${room.id}`;
   const descriptionId = `auction-room-description-${room.id}`;
+  const output = roomOutput(roomId, snapshot, overview);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -79,7 +84,7 @@ export function RoomView({ roomId, model, close }: { roomId: AuctionRoomId; mode
       <header className="auction-interior-heading"><span>{room.shortLabel} / {model.rooms[room.id].toUpperCase()}</span><h2 id={titleId}>{room.label}</h2><p id={descriptionId}>{room.purpose}</p><small>{room.silhouette} · {room.light}</small></header>
       <div className="auction-room-cinema">{room.characterKeys.map((key) => <article key={key}><CinematicCharacterPortrait characterKey={key} variant="card"/><b>{LIVING_CAST[key].displayName}</b><small>{LIVING_CAST[key].governedRole}</small></article>)}{room.guests.map((guest) => <article className="auction-guest" key={guest}><b>{guest}</b><small>CONTROLLED EXTERNAL INTELLIGENCE</small></article>)}</div>
       <div className="auction-interior-console" aria-hidden="true"><i/><i/><i/><i/><span>{room.instruments.join(" / ").toUpperCase()}</span></div>
-      <dl><div><dt>Authoritative source</dt><dd>{room.source}</dd></div><div><dt>Current state</dt><dd>{model.rooms[room.id].toUpperCase()}</dd></div><div><dt>Provenance</dt><dd>{model.generatedAt ?? "UNKNOWN"}</dd></div><div><dt>Quiet behavior</dt><dd>{room.idleBehavior}</dd></div><div><dt>Motion authority</dt><dd>{model.motion.reason}</dd></div><div><dt>Authority</dt><dd>READ-ONLY · NO LEDGER WRITE · NO TRADE EXECUTION · LIVE EXECUTION FALSE</dd></div></dl>
+      <dl><div><dt>Sanitized current output</dt><dd>{output.value}</dd></div><div><dt>Latest state</dt><dd>{output.state}</dd></div><div><dt>Sanitized endpoint source</dt><dd>{output.source}</dd></div><div><dt>Evidence timestamp</dt><dd>{output.timestamp ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Freshness</dt><dd>{output.freshness}</dd></div><div><dt>Latest event category</dt><dd>{output.eventCategory ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Count</dt><dd>{output.count ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Blocker</dt><dd>{output.blocker ?? "NONE REPORTED"}</dd></div><div><dt>Room contract</dt><dd>{room.source}</dd></div><div><dt>Quiet behavior</dt><dd>{room.idleBehavior}</dd></div><div><dt>Motion authority</dt><dd>{model.motion.reason}</dd></div><div><dt>Authority</dt><dd>READ-ONLY · NO LEDGER WRITE · NO TRADE EXECUTION · LIVE EXECUTION FALSE</dd></div></dl>
     </section>
   </div>;
 }

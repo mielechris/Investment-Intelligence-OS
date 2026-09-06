@@ -88,8 +88,8 @@ export function buildAuctionModel(result: TruthResult | null, error: string | nu
     nav: typeof paperFund.nav === "number" && Number.isFinite(paperFund.nav) ? paperFund.nav : null,
     marketValidation: text(record(layers.market_validation).availability), rooms, events,
     replay: events.filter((event) => event.historical), cases, activeRoom: active?.room ?? null, lighting: lightingFor(now),
-    motion: healthy
-      ? { ambient: true, evidence: active !== null, reason: active ? "VERIFIED_RECEIPT" : "AMBIENT_ONLY" }
+    motion: safe
+      ? { ambient: true, evidence: healthy && active !== null, reason: healthy && active ? "VERIFIED_RECEIPT" : "AMBIENT_ONLY" }
       : { ambient: false, evidence: false, reason: "FROZEN_UNSAFE" },
   };
 }

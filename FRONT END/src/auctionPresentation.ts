@@ -1,4 +1,4 @@
-export type AuctionMode = "gallery" | "story" | "replay" | "command" | "expansion" | "watch";
+export type AuctionMode = "gallery" | "story" | "replay" | "command" | "cases" | "expansion" | "watch";
 
 export type AuctionPresentation = {
   effectiveMode: AuctionMode;

@@ -12,6 +12,7 @@ export function adaptExpansionSnapshot(snapshot: ExpansionSnapshot, connection: 
   const books = record(section("books")?.data);
   const factory = record(section("multi_asset_factory")?.data);
   const conveyor = record(section("candidate_conveyor")?.data);
+  const projection = record(section("projection_activation")?.data);
   const candidates = Array.isArray(conveyor.candidates) && connection === "CURRENT" && section("candidate_conveyor")?.state === "CURRENT" ? conveyor.candidates : [];
   const events = candidates.flatMap((candidate, index) => {
     const value = record(candidate);
@@ -23,7 +24,7 @@ export function adaptExpansionSnapshot(snapshot: ExpansionSnapshot, connection: 
   const freshness = connection === "CURRENT" && section("projection_freshness")?.state === "CURRENT" ? "CURRENT" : connection === "UNAVAILABLE" ? "UNAVAILABLE" : "STALE";
   const availability = prohibited ? "SOURCE_CONFLICT" : connection === "CURRENT" ? "AVAILABLE" : connection === "UNAVAILABLE" ? "UNAVAILABLE" : "STALE";
   return { source: "same-origin-expansion-snapshot", fallback: false, data: {
-    schema_version: "living_wall_truth.v1", availability, generated_at: null,
+    schema_version: "living_wall_truth.v1", availability, generated_at: typeof projection.last_publication_time === "string" ? projection.last_publication_time : null,
     freshness: { state: freshness, age_seconds: ageSeconds },
     safety: { telemetry_read_only: true, direct_ledger_access: false, backend_write_permission: false, trade_execution_permission: false, live_execution: false },
     factory: { availability: section("service_health")?.state ?? "UNAVAILABLE", payload: { recent_events: events, cases: [] }, paper_fund: { nav: factory.consolidated_paper_nav ?? books.total ?? null, cash: books.cash ?? null } },

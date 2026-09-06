@@ -6,9 +6,9 @@ export type SnapshotSection = { state: TruthState; data: unknown };
 export type RoomState = { state: TruthState; presentation_status: PresentationStatus; data: unknown };
 export type ExpansionSnapshot = { schema_version: string; mode?: string; sections: Record<string, SnapshotSection>; room_states?: Record<string, RoomState>; authority: Record<string, boolean> };
 export type RuntimeCapabilities = { state: TruthState; expansionWingEnabled: boolean; readOnly: boolean; publisherControl: boolean };
-export type SnapshotContextValue = { snapshot: ExpansionSnapshot | null; connection: TruthState; fixtureMode: boolean; snapshotAgeSeconds: number | null; runtimeCapabilities: RuntimeCapabilities };
+export type SnapshotContextValue = { snapshot: ExpansionSnapshot | null; sanitizedOverview: Readonly<Record<string, unknown>> | null; connection: TruthState; fixtureMode: boolean; snapshotAgeSeconds: number | null; runtimeCapabilities: RuntimeCapabilities };
 
-export const SnapshotContext = createContext<SnapshotContextValue>({ snapshot: null, connection: "UNKNOWN", fixtureMode: true, snapshotAgeSeconds: null, runtimeCapabilities: { state: "UNKNOWN", expansionWingEnabled: false, readOnly: true, publisherControl: false } });
+export const SnapshotContext = createContext<SnapshotContextValue>({ snapshot: null, sanitizedOverview: null, connection: "UNKNOWN", fixtureMode: true, snapshotAgeSeconds: null, runtimeCapabilities: { state: "UNKNOWN", expansionWingEnabled: false, readOnly: true, publisherControl: false } });
 
 export function useExpansionWingSnapshot(): SnapshotContextValue {
   return useContext(SnapshotContext);

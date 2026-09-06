@@ -131,7 +131,8 @@ class Compositor:
     def __init__(self, telemetry: Path, validation: Path, shadow: Path, outcome: Path, backend: str,
                  knowledge_reader: Callable[[], dict[str, Any]] | None = None,
                  enrichment_reader: Callable[[], dict[str, Any]] | None = None,
-                 multi_asset_reader: Callable[[], dict[str, Any]] | None = None) -> None:
+                 multi_asset_reader: Callable[[], dict[str, Any]] | None = None,
+                 case_reader: Callable[[], dict[str, Any]] | None = None) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
         self.snapshot_requests = 0
@@ -141,6 +142,7 @@ class Compositor:
         self.knowledge_reader = knowledge_reader
         self.enrichment_reader = enrichment_reader
         self.multi_asset_reader = multi_asset_reader
+        self.case_reader = case_reader
 
     def _reachability(self) -> str:
         self.backend_requests += 1
@@ -227,6 +229,13 @@ class Compositor:
                         "post_close_control", "governed_cases", "primary_source_review_queue",
                         "provider_credit_meter"):
                 sections[key] = _section("UNAVAILABLE", None)
+        if self.case_reader is not None:
+            try: case_registry = self.case_reader()
+            except Exception: case_registry = None
+            if isinstance(case_registry, dict) and case_registry.get("schema_version") == "iios-browser-safe-case-registry-v1":
+                sections["governed_cases"] = _section(str(case_registry.get("state") or "UNAVAILABLE"), case_registry)
+            else:
+                sections["governed_cases"] = _section("UNAVAILABLE", None)
         if validation:
             complete = validation.get("benchmark_complete") is True
             metrics = validation.get("metrics") if isinstance(validation.get("metrics"), dict) else {}
