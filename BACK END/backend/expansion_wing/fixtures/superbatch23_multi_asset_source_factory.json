@@ -1,0 +1,15 @@
+{
+  "schema_version": "iios-superbatch23-multi-asset-fixture-v1",
+  "fixture": true,
+  "label": "FIXTURE / NON-LIVE / RESEARCH ONLY",
+  "providers": [
+    "FINANCIAL_DATASETS", "FMP", "SEC_EDGAR", "ISSUER_OFFICIAL",
+    "KOYFIN_MANUAL", "MARKET_VISION", "SANITIZED_IIOS"
+  ],
+  "financial_datasets_account_tier": "FREE",
+  "financial_datasets_paid_credits_demonstrated": false,
+  "expected_product_count": 24,
+  "expected_synthetic_base_each": 10000,
+  "operational_paper_fund_separate": true,
+  "expected_rehearsals": 17
+}

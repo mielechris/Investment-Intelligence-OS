@@ -1,0 +1,20 @@
+{
+  "schema_version": "iios-superbatch23-fixture-v1",
+  "fixture": true,
+  "label": "SYNTHETIC / NON-LIVE",
+  "mu": {
+    "ticker": "MU",
+    "exchange": "NASDAQ",
+    "security_type": "COMMON_STOCK",
+    "currency": "USD",
+    "observed_at": "2026-09-04T20:00:00Z",
+    "effective_at": "2026-09-04T20:00:00Z",
+    "provider_timestamp": "2026-09-04T20:00:00Z",
+    "session": "CLOSED",
+    "price_basis": "ADJUSTED",
+    "adjustment": "ADJUSTED",
+    "price": 101.25,
+    "volume": 123456,
+    "liquidity": "OBSERVED"
+  }
+}
