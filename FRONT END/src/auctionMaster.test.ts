@@ -78,7 +78,7 @@ test("Case Theater and plaque share complete accessible dialog behavior", () => 
 test("reversible kiosk templates contain no startup installation, credential, or personal path", () => {
   const combined = `${startScript}\n${stopScript}\n${displayConfig}`;
   assert.match(startScript, /open -a Safari/);
-  assert.match(stopScript, /Auction wall server stopped/);
+  assert.match(stopScript, /NO_OWNER_FRONTEND_PROCESS_STOPPED/);
   assert.doesNotMatch(combined, /LaunchAgents|launchctl|defaults write|\/Users\/|\/home\/|BEGIN .*PRIVATE KEY|token\s*[=:]|password\s*[=:]|secret\s*[=:]/i);
   assert.equal(JSON.parse(displayConfig).browser.startup_automation_enabled, false);
 });

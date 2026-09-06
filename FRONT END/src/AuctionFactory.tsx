@@ -3,13 +3,14 @@ import CinematicCharacterPortrait from "./CinematicCharacterPortrait";
 import { AUCTION_ROOMS, type AuctionRoom, type AuctionRoomId } from "./auctionRegistry";
 import type { AuctionModel } from "./auctionSceneModel";
 import { LIVING_CAST } from "./livingCast";
+import { MUSEUM_PORTRAIT_PRESENTATION } from "./museumPortraitPresentation";
 import { activateDialog, requestDialogClose } from "./dialogAccessibility";
 import type { ExpansionSnapshot } from "./ExpansionWingSnapshotContext";
 import { roomOutput, type MuseumOutput } from "./museumLiveBinding";
 
 const money = (value: number | null) => value === null ? "UNKNOWN" : value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 
-export default function AuctionFactory({ model, snapshot, overview, onOpenRoom }: { model: AuctionModel; snapshot: ExpansionSnapshot | null; overview: unknown; onOpenRoom: (id: AuctionRoomId) => void }) {
+export default function AuctionFactory({ model, snapshot, overview, onOpenRoom }: { model: AuctionModel; snapshot: ExpansionSnapshot | null; overview: unknown; onOpenRoom: (id: AuctionRoomId, opener?: HTMLElement) => void }) {
   const levels = [AUCTION_ROOMS.slice(0, 5), AUCTION_ROOMS.slice(5, 10), AUCTION_ROOMS.slice(10)];
   const route = ["radar","research","external","committee","skeptic","risk","paper","portfolio","monitoring","learning"] as const;
   const activeRouteIndex = model.activeRoom ? route.indexOf(model.activeRoom as typeof route[number]) : -1;
@@ -29,7 +30,7 @@ export default function AuctionFactory({ model, snapshot, overview, onOpenRoom }
         <div className="auction-level__legend" aria-hidden="true"><span>0{3 - levelIndex}</span><b>{["INTELLIGENCE & CONTEXT", "DELIBERATION & CONTROL", "STEWARDSHIP & MEMORY"][levelIndex]}</b></div>
         <div className="auction-level__rooms">{rooms.map((room) => {
           const index = AUCTION_ROOMS.indexOf(room);
-          return <Room key={room.id} room={room} index={index} state={model.rooms[room.id]} output={roomOutput(room.id, snapshot, overview)} open={() => onOpenRoom(room.id)}/>;
+          return <Room key={room.id} room={room} index={index} state={model.rooms[room.id]} output={roomOutput(room.id, snapshot, overview)} open={(opener) => onOpenRoom(room.id, opener)}/>;
         })}</div>
       </section>)}
       <div className="auction-evidence-spine" aria-hidden="true"><i/><i/><i/><span>EVIDENCE LIFT</span></div>
@@ -49,10 +50,10 @@ export default function AuctionFactory({ model, snapshot, overview, onOpenRoom }
   </div>;
 }
 
-function Room({ room, index, state, output, open }: { room: AuctionRoom; index: number; state: string; output: MuseumOutput; open: () => void }) {
+function Room({ room, index, state, output, open }: { room: AuctionRoom; index: number; state: string; output: MuseumOutput; open: (opener: HTMLElement) => void }) {
   const [artFailed, setArtFailed] = useState(false);
   const character = room.characterKeys[0];
-  return <button className={`auction-room auction-room--${room.id} auction-room--${state}`} data-testid="auction-room" data-room-id={room.id} data-silhouette={room.silhouette} style={{ "--room-index": index } as React.CSSProperties} onClick={open} aria-label={`Open ${room.label}; ${state}; ${room.silhouette}`}>
+  return <button className={`auction-room auction-room--${room.id} auction-room--${state}`} data-testid="auction-room" data-room-id={room.id} data-silhouette={room.silhouette} style={{ "--room-index": index } as React.CSSProperties} onClick={(event) => open(event.currentTarget)} aria-label={`Open ${room.label}; ${state}; ${room.silhouette}`}>
     <span className="auction-room__number">{String(index + 1).padStart(2, "0")}</span><div className="auction-room__identity"><b>{room.shortLabel}</b><small>{state.toUpperCase()}</small></div>
     <div className="auction-room__set" aria-hidden="true"><span className="auction-room__lamp"/><span className="auction-room__window"/><span className="auction-room__desk"><i/><i/><i/></span><span className="auction-room__machine"><i/><i/><i/></span><span className="auction-room__artifact"/></div>
     {character && !artFailed ? <div className="auction-room__character" onError={() => setArtFailed(true)}><CinematicCharacterPortrait characterKey={character} variant="scene" active={state === "active"}/></div> : null}
@@ -60,31 +61,36 @@ function Room({ room, index, state, output, open }: { room: AuctionRoom; index: 
   </button>;
 }
 
-export function RoomView({ roomId, model, snapshot, overview, close }: { roomId: AuctionRoomId; model: AuctionModel; snapshot: ExpansionSnapshot | null; overview: unknown; close: () => void }) {
+export function RoomView({ roomId, model, snapshot, overview, opener, close }: { roomId: AuctionRoomId; model: AuctionModel; snapshot: ExpansionSnapshot | null; overview: unknown; opener: HTMLElement | null; close: () => void }) {
   const room = AUCTION_ROOMS.find((candidate) => candidate.id === roomId)!;
   const dialogRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const openerRef = useRef<HTMLElement | null>(typeof document === "undefined" ? null : document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  const surfaceRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const titleId = `auction-room-title-${room.id}`;
   const descriptionId = `auction-room-description-${room.id}`;
   const output = roomOutput(roomId, snapshot, overview);
+  const singleCast = room.characterKeys.length === 1 && room.guests.length === 0;
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
-    const initialFocus = closeRef.current;
+    const initialFocus = headingRef.current;
     if (!dialog || !initialFocus || !dialog.parentElement) return;
+    surfaceRef.current?.scrollTo({ top: 0, left: 0, behavior: "instant" });
     const background = Array.from(dialog.parentElement.children).filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialog);
-    return activateDialog({ dialog, initialFocus, opener: openerRef.current, background, close, documentTarget: document });
-  }, [close]);
+    return activateDialog({ dialog, initialFocus, opener, background, close, documentTarget: document });
+  }, [close, opener, roomId]);
 
   return <div ref={dialogRef} className={`auction-room-modal auction-room-modal--${room.id}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} tabIndex={-1} onMouseDown={close}>
-    <section onMouseDown={(event) => event.stopPropagation()}>
+    <section ref={surfaceRef} onMouseDown={(event) => event.stopPropagation()}>
       <div className="auction-interior-architecture" aria-hidden="true"><i/><i/><i/><span/></div>
-      <button ref={closeRef} className="auction-close" onClick={() => requestDialogClose(close)} aria-label={`Close ${room.label}`}>×</button>
-      <header className="auction-interior-heading"><span>{room.shortLabel} / {model.rooms[room.id].toUpperCase()}</span><h2 id={titleId}>{room.label}</h2><p id={descriptionId}>{room.purpose}</p><small>{room.silhouette} · {room.light}</small></header>
-      <div className="auction-room-cinema">{room.characterKeys.map((key) => <article key={key}><CinematicCharacterPortrait characterKey={key} variant="card"/><b>{LIVING_CAST[key].displayName}</b><small>{LIVING_CAST[key].governedRole}</small></article>)}{room.guests.map((guest) => <article className="auction-guest" key={guest}><b>{guest}</b><small>CONTROLLED EXTERNAL INTELLIGENCE</small></article>)}</div>
+      <button className="auction-close" onClick={() => requestDialogClose(close)} aria-label={`Close ${room.label}`}>×</button>
+      <header className="auction-interior-heading"><span>{room.shortLabel} / {model.rooms[room.id].toUpperCase()}</span><h2 ref={headingRef} tabIndex={-1} id={titleId}>{room.label}</h2><p id={descriptionId}>{room.purpose}</p><small>{room.silhouette} · {room.light}</small></header>
+      <div className={`auction-room-stage ${singleCast ? "is-single-cast" : "is-multi-cast"}`} data-cast-size={room.characterKeys.length + room.guests.length}>
+        <div className="auction-room-cinema">{room.characterKeys.map((key) => { const portrait = MUSEUM_PORTRAIT_PRESENTATION[key]; return <article key={key} data-character={key} data-presentation={singleCast ? portrait.mode : "group-card"}>{singleCast ? <img className="auction-single-portrait" src={portrait.asset} width={portrait.sourceWidth} height={portrait.sourceHeight} alt={portrait.alt} draggable={false}/> : <CinematicCharacterPortrait characterKey={key} variant="card"/>}<b>{LIVING_CAST[key].displayName}</b><small>{LIVING_CAST[key].governedRole}</small></article>; })}{room.guests.map((guest) => <article className="auction-guest" key={guest}><b>{guest}</b><small>CONTROLLED EXTERNAL INTELLIGENCE</small></article>)}</div>
+        {output.state === "UNAVAILABLE" || output.state === "NOT_REPORTED" || output.state === "UNKNOWN" ? <aside className="auction-evidence-stage"><strong>EVIDENCE STAGE QUIET</strong><span>No authenticated current visual output is available.</span><small>The room remains read-only and attentive.</small></aside> : null}
+      </div>
       <div className="auction-interior-console" aria-hidden="true"><i/><i/><i/><i/><span>{room.instruments.join(" / ").toUpperCase()}</span></div>
-      <dl><div><dt>Sanitized current output</dt><dd>{output.value}</dd></div><div><dt>Latest state</dt><dd>{output.state}</dd></div><div><dt>Sanitized endpoint source</dt><dd>{output.source}</dd></div><div><dt>Evidence timestamp</dt><dd>{output.timestamp ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Freshness</dt><dd>{output.freshness}</dd></div><div><dt>Latest event category</dt><dd>{output.eventCategory ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Count</dt><dd>{output.count ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Blocker</dt><dd>{output.blocker ?? "NONE REPORTED"}</dd></div><div><dt>Room contract</dt><dd>{room.source}</dd></div><div><dt>Quiet behavior</dt><dd>{room.idleBehavior}</dd></div><div><dt>Motion authority</dt><dd>{model.motion.reason}</dd></div><div><dt>Authority</dt><dd>READ-ONLY · NO LEDGER WRITE · NO TRADE EXECUTION · LIVE EXECUTION FALSE</dd></div></dl>
+      <details className="auction-technical-details"><summary>Technical details · exact sanitized machine state</summary><dl><div><dt>Sanitized current output</dt><dd>{output.value}</dd></div><div><dt>Latest state</dt><dd>{output.state}</dd></div><div><dt>Sanitized endpoint source</dt><dd>{output.source}</dd></div><div><dt>Evidence timestamp</dt><dd>{output.timestamp ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Freshness</dt><dd>{output.freshness}</dd></div><div><dt>Latest event category</dt><dd>{output.eventCategory ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Count</dt><dd>{output.count ?? "AUTHENTICATED FIELD NOT REPORTED"}</dd></div><div><dt>Blocker</dt><dd>{output.blocker ?? "NONE REPORTED"}</dd></div><div><dt>Room contract</dt><dd>{room.source}</dd></div><div><dt>Quiet behavior</dt><dd>{room.idleBehavior}</dd></div><div><dt>Motion authority</dt><dd>{model.motion.reason}</dd></div><div><dt>Authority</dt><dd>READ-ONLY · NO LEDGER WRITE · NO TRADE EXECUTION · LIVE EXECUTION FALSE</dd></div></dl></details>
     </section>
   </div>;
 }

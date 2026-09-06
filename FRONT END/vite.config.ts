@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { resolve } from 'node:path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
@@ -16,8 +17,13 @@ export default defineConfig(({ mode }) => {
   if (livePair && !/^(\/snapshot|\/expansion-wing\/snapshot|http:\/\/127\.0\.0\.1:\d+\/snapshot)$/.test(env.VITE_EXPANSION_WING_READONLY_ENDPOINT || defaultEndpoint)) {
     throw new Error('INVALID_EXPANSION_WING_READONLY_ENDPOINT')
   }
+  const selectedApp = resolve(process.cwd(), unified ? 'src/LivingWallApp.tsx' : app ? 'src/ExpansionWing.tsx' : 'src/PaperFundOperationsShell.tsx')
   return {
-  plugins: [react()],
+  plugins: [{
+    name: 'iios-selected-app',
+    resolveId(id) { return id === 'virtual:iios-selected-app' ? '\0virtual:iios-selected-app' : null },
+    load(id) { return id === '\0virtual:iios-selected-app' ? `export { default } from ${JSON.stringify(selectedApp)}` : null },
+  }, react()],
   server: {
     proxy: {
       '/__iios_api': {

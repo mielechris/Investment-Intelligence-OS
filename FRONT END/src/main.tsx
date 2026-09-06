@@ -1,22 +1,15 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import PaperFundOperationsShell from "./PaperFundOperationsShell.tsx";
-import ExpansionWing from "./ExpansionWing.tsx";
-import LivingWallApp from "./LivingWallApp.tsx";
+import SelectedApp from "virtual:iios-selected-app";
 import { ExpansionWingSnapshotProvider } from "./ExpansionWingSnapshotProvider.tsx";
 
-const expansionApp = import.meta.env.VITE_EXPANSION_WING_APP === "1";
-const unifiedFactory = import.meta.env.VITE_UNIFIED_LIVING_FACTORY === "1";
+// vite.config validates VITE_EXPANSION_WING_APP and selects exactly one build graph.
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ExpansionWingSnapshotProvider>
-      {unifiedFactory
-        ? <LivingWallApp />
-        : expansionApp
-          ? <ExpansionWing />
-          : <PaperFundOperationsShell />}
+      <SelectedApp />
     </ExpansionWingSnapshotProvider>
   </StrictMode>,
 );

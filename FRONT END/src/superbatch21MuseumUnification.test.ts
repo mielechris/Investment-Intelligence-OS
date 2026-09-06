@@ -9,9 +9,11 @@ const registry = readFileSync(new URL("./auctionRegistry.ts", import.meta.url), 
 const expansion = readFileSync(new URL("./MobExpansionWing.tsx", import.meta.url), "utf8");
 const factory = readFileSync(new URL("./AuctionFactory.tsx", import.meta.url), "utf8");
 const adapter = readFileSync(new URL("./TruthSourceAdapter.ts", import.meta.url), "utf8");
+const vite = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
 
 test("Museum Master is the unified factory root with six destinations", () => {
-  assert.match(main, /<LivingWallApp/);
+  assert.match(main, /<SelectedApp/);
+  assert.match(vite, /unified \? 'src\/LivingWallApp\.tsx'/);
   for (const label of ["Gallery", "Story", "Replay", "Command", "Expansion Wing", "Factory Watch"]) assert.match(wall, new RegExp(`"${label}"`));
   assert.match(wall, /MUSEUM MASTER 1\.2/);
 });

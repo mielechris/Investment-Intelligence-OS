@@ -30,7 +30,7 @@ test("all eighteen rooms remain mounted, identified, and interactive", () => {
   assert.equal(new Set(AUCTION_ROOMS.map((room) => room.id)).size, 18);
   assert.match(factory, /data-testid="auction-room"/);
   assert.match(factory, /data-room-id=\{room\.id\}/);
-  assert.match(factory, /onClick=\{open\}/);
+  assert.match(factory, /onClick=\{\(event\) => open\(event\.currentTarget\)\}/);
   assert.doesNotMatch(css, /auction-master-1-2[^}]*auction-room[^}]*display:none/);
 });
 

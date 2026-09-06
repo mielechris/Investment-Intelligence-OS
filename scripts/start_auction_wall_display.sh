@@ -2,44 +2,45 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-runtime_root="${TMPDIR:-/tmp}/iios-auction-wall-display"
-display_url="${1:-http://127.0.0.1:5173/?wall=1}"
+entrypoint_file="$repo_root/config/iios_browser_entrypoint.json"
+display_url="http://127.0.0.1:5176/"
+expected_identity="THE AUCTION EDITION · MUSEUM MASTER 1.2"
+open_browser=false
 
-case "$display_url" in
-  http://127.0.0.1:*|https://*.vercel.app/*|https://*.vercel.app) ;;
-  *) printf '%s\n' "Refusing unapproved display URL." >&2; exit 2 ;;
+case "${1:-}" in
+  "") ;;
+  --open) open_browser=true ;;
+  *) printf '%s\n' "CANONICAL_ENTRYPOINT_ARGUMENT_REJECTED" >&2; exit 2 ;;
 esac
 
-mkdir -p "$runtime_root"
-if [ "${display_url#http://127.0.0.1:}" != "$display_url" ]; then
-  if [ -f "$runtime_root/server.pid" ] && kill -0 "$(sed -n '1p' "$runtime_root/server.pid")" 2>/dev/null; then
-    printf '%s\n' "Auction wall server is already running."
-  else
-    (
-      server_child=""
-      stop_child() {
-        if [ -n "$server_child" ] && kill -0 "$server_child" 2>/dev/null; then kill "$server_child"; fi
-        exit 0
-      }
-      trap stop_child INT TERM
-      while :; do
-        npm --prefix "$repo_root/FRONT END" run dev -- --host 127.0.0.1 &
-        server_child=$!
-        health_attempt=0
-        while [ "$health_attempt" -lt 30 ]; do
-          if /usr/bin/curl --silent --fail --max-time 2 "${display_url%%\?*}" >/dev/null 2>&1; then break; fi
-          health_attempt=$((health_attempt + 1))
-          sleep 1
-        done
-        wait "$server_child" || true
-        server_child=""
-        sleep 2
-      done
-    ) >"$runtime_root/server.log" 2>&1 &
-    printf '%s\n' "$!" >"$runtime_root/server.pid"
-  fi
+if [ ! -f "$entrypoint_file" ] || ! /usr/bin/python3 -c 'import json,sys; value=json.load(open(sys.argv[1],encoding="utf-8")); raise SystemExit(0 if value=={"schema_version":"iios-canonical-browser-entrypoint-v1","canonical_url":"http://127.0.0.1:5176/","expected_identity":"THE AUCTION EDITION · MUSEUM MASTER 1.2","user_facing_frontend_count":1,"internal_diagnostics":{"5177":"INTERNAL_DIAGNOSTIC_ONLY","5185":"INTERNAL_DIAGNOSTIC_ONLY"},"development_frontends":{"5184":"DEVELOPMENT_ONLY","5186":"DEVELOPMENT_ONLY"}} else 1)' "$entrypoint_file"; then
+  printf '%s\n' "CANONICAL_ENTRYPOINT_CONTRACT_INVALID" >&2
+  exit 3
 fi
 
-open -a Safari "$display_url"
-printf '%s\n' "Display opened in Wall Art Mode. Verify truth health, then enter browser full screen manually."
-printf '%s\n' "Exit remains available through Reveal Controls and Exit Full Screen."
+for health_url in \
+  http://127.0.0.1:8002/system/status \
+  http://127.0.0.1:5176/health \
+  http://127.0.0.1:5177/health \
+  http://127.0.0.1:5185/; do
+  if ! /usr/bin/curl --silent --fail --max-time 3 --output /dev/null "$health_url"; then
+    printf '%s\n' "PROTECTED_SERVICE_HEALTH_UNAVAILABLE" >&2
+    exit 4
+  fi
+done
+
+page=$(/usr/bin/curl --silent --fail --max-time 3 "$display_url") || { printf '%s\n' "CANONICAL_MUSEUM_UNAVAILABLE" >&2; exit 5; }
+asset=$(printf '%s' "$page" | /usr/bin/sed -n 's/.*src="\([^\"]*\.js\)".*/\1/p' | /usr/bin/head -n 1)
+case "$asset" in /assets/*.js) ;; *) printf '%s\n' "CANONICAL_MUSEUM_IDENTITY_UNAVAILABLE" >&2; exit 6 ;; esac
+bundle=$(/usr/bin/curl --silent --fail --max-time 5 "http://127.0.0.1:5176$asset") || { printf '%s\n' "CANONICAL_MUSEUM_IDENTITY_UNAVAILABLE" >&2; exit 6; }
+for marker in "$expected_identity" Gallery Story Replay Command Cases "Expansion Wing" "Factory Watch"; do
+  printf '%s' "$bundle" | /usr/bin/grep -F -q "$marker" || { printf '%s\n' "CANONICAL_MUSEUM_IDENTITY_MISMATCH" >&2; exit 7; }
+done
+
+printf '%s\n' "CANONICAL_MUSEUM_READY http://127.0.0.1:5176/"
+if [ "$open_browser" = true ]; then
+  /usr/bin/open -a Safari "$display_url"
+  printf '%s\n' "CANONICAL_MUSEUM_OPEN_REQUESTED"
+else
+  printf '%s\n' "BROWSER_OPEN_NOT_REQUESTED"
+fi

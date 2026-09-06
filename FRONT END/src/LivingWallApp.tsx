@@ -12,6 +12,7 @@ import { activateDialog, requestDialogClose } from "./dialogAccessibility";
 import { resolveAuctionPresentation, type AuctionMode } from "./auctionPresentation";
 import { BRIGHTNESS_PROFILES, nextBrightnessProfile, resolveProtectionState, type BrightnessProfile } from "./commissioningProfile";
 import "./AuctionEdition.css";
+import "./MuseumLegibility.css";
 
 type Mode = AuctionMode;
 const MODES: readonly [Mode, string][] = [["gallery", "Gallery"], ["story", "Story"], ["replay", "Replay"], ["command", "Command"], ["cases", "Cases"], ["expansion", "Expansion Wing"], ["watch", "Factory Watch"]];
@@ -32,6 +33,7 @@ export default function LivingWallApp() {
   const [plaque, setPlaque] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [room, setRoom] = useState<AuctionRoomId | null>(null);
+  const [roomOpener, setRoomOpener] = useState<HTMLElement | null>(null);
   const [selectedCase, setSelectedCase] = useState<GovernedCase | null>(null);
   const [caseFilter, setCaseFilter] = useState<CaseFilter>("ALL");
   const [now, setNow] = useState(() => new Date());
@@ -73,6 +75,10 @@ export default function LivingWallApp() {
   const unavailableSince = connection === "CURRENT" ? null : snapshotAgeSeconds === null ? now.getTime() : now.getTime() - snapshotAgeSeconds * 1000;
   const protection = resolveProtectionState(now, unavailableSince);
   const presentation = resolveAuctionPresentation({ mode, wallMode, paused, reducedMotion, safetyLocked });
+  const openRoom = useCallback((roomId: AuctionRoomId, opener?: HTMLElement) => {
+    setRoomOpener(opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null));
+    setRoom(roomId);
+  }, []);
   const closeRoom = useCallback(() => setRoom(null), []);
   useEffect(() => {
     if (!rotation || paused || document.hidden) return;
@@ -98,15 +104,15 @@ export default function LivingWallApp() {
     {model.condition !== "AVAILABLE" || model.freshness !== "CURRENT" ? <Degraded model={model} error={error}/> : null}
     <WallHealth model={model} protection={protection}/>
     <div className="auction-scene-plane">
-    {presentation.factoryVisible ? <Gallery model={model} snapshot={snapshot} overview={sanitizedOverview} openRoom={setRoom} openCases={openCases} navigate={navigate}/> : null}
-    {presentation.effectiveMode === "story" ? <Story model={model} openRoom={setRoom}/> : null}
-    {presentation.effectiveMode === "replay" ? <Replay model={model} openRoom={setRoom} navigate={navigate}/> : null}
+    {presentation.factoryVisible ? <Gallery model={model} snapshot={snapshot} overview={sanitizedOverview} openRoom={openRoom} openCases={openCases} navigate={navigate}/> : null}
+    {presentation.effectiveMode === "story" ? <Story model={model} openRoom={openRoom}/> : null}
+    {presentation.effectiveMode === "replay" ? <Replay model={model} openRoom={openRoom} navigate={navigate}/> : null}
     {presentation.effectiveMode === "command" ? <Command model={model} selectCase={setSelectedCase} fixtureMode={fixtureMode} openCases={openCases} navigate={navigate}/> : null}
     {presentation.effectiveMode === "cases" ? <MuseumCaseLibrary key={caseFilter} initialFilter={caseFilter}/> : null}
     {presentation.effectiveMode === "expansion" ? <MobExpansionWing/> : null}
     {presentation.effectiveMode === "watch" ? <FactoryWatch model={model} publisherControl={runtimeCapabilities.publisherControl}/> : null}
     </div>
-    {room ? <RoomView roomId={room} model={model} snapshot={snapshot} overview={sanitizedOverview} close={closeRoom}/> : null}
+    {room ? <RoomView roomId={room} model={model} snapshot={snapshot} overview={sanitizedOverview} opener={roomOpener} close={closeRoom}/> : null}
     {selectedCase ? <CaseTheater item={selectedCase} close={() => setSelectedCase(null)}/> : null}
     {plaque ? <CollectorPlaque model={model} close={() => setPlaque(false)}/> : null}
   </div>;
@@ -116,7 +122,7 @@ function Navigation({ mode, paused, wallMode, fullscreen, brightness, navigate, 
   return <header className="auction-nav"><button className="auction-brand" onClick={() => navigate("gallery")}><span>IIOS LIVING WALL</span><strong>THE AUCTION EDITION · MUSEUM MASTER 1.2</strong></button><nav aria-label="Living Wall experiences">{MODES.map(([key, label]) => <button key={key} className={mode === key ? "is-active" : ""} onClick={() => navigate(key)} aria-current={mode === key ? "page" : undefined}>{label}</button>)}</nav><div className="auction-tools"><button onClick={() => setPaused((current) => !current)} aria-pressed={paused}>{paused ? "Resume Scene" : "Pause Scene"}</button><button onClick={() => wallMode ? setWallMode(false) : enterWallArtMode()} aria-pressed={wallMode}>{wallMode ? "Reveal Controls" : "Wall Art Mode"}</button><button onClick={toggleFullscreen} aria-pressed={fullscreen}>{fullscreen ? "Exit Full Screen" : "Enter Full Screen"}</button><button onClick={cycleBrightness}>Brightness: {BRIGHTNESS_PROFILES[brightness].label}</button><button onClick={() => setPlaque(true)}>Collector Plaque</button><button disabled title="Sound remains muted until an owned soundscape is supplied">Sound Muted</button></div></header>;
 }
 
-function Gallery({ model, snapshot, overview, openRoom, openCases, navigate }: { model: AuctionModel; snapshot: import("./ExpansionWingSnapshotContext").ExpansionSnapshot | null; overview: unknown; openRoom: (id: AuctionRoomId) => void; openCases:(filter?:CaseFilter)=>void; navigate:(mode:Mode)=>void }) {
+function Gallery({ model, snapshot, overview, openRoom, openCases, navigate }: { model: AuctionModel; snapshot: import("./ExpansionWingSnapshotContext").ExpansionSnapshot | null; overview: unknown; openRoom: (id: AuctionRoomId, opener?: HTMLElement) => void; openCases:(filter?:CaseFilter)=>void; navigate:(mode:Mode)=>void }) {
   const marketOutput = stationOutput("calendar", snapshot, overview);
   const publisherOutput = stationOutput("publisher", snapshot, overview);
   const ambient = marketOutput.value.includes("MARKET_CLOSED") ? "MARKET-CLOSED NIGHT WATCH" : model.freshness === "STALE" ? "WAITING-FOR-EVIDENCE INSPECTION" : publisherOutput.value.includes("SEQUENCE") ? "PUBLISHER OBSERVATION WATCH" : "DEPARTMENT READINESS WATCH";

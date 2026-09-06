@@ -1,5 +1,34 @@
 # IIOS Factory Developer & Operations Manual
 
+## CANONICAL IIOS ENTRYPOINT
+
+Permanent owner-facing factory: `http://127.0.0.1:5176/`
+
+Expected identity: `THE AUCTION EDITION · MUSEUM MASTER 1.2`
+
+Use 5176 for every normal IIOS interaction: Gallery, Story, Replay, Command, Cases,
+Expansion Wing, Factory Watch, product accounts, Tuesday operations, Professional
+Research, the paper fund, Evidence, and Learning and outcomes. No normal workflow
+requires another localhost frontend.
+
+Ports 8002, 5177, and 5185 are internal services. Ports 5184 and 5186 are
+`DEVELOPMENT_ONLY`; 5177 and 5185 are `INTERNAL_DIAGNOSTIC_ONLY`. Temporary review
+ports are never permanent entrypoints and must be removed after their bounded review.
+Never interpret an old frontend tab as current factory truth. If a blue interface
+shows `IIOS VERSION UNKNOWN`, `FACTORY CONTRACT OFFLINE`, or `OPERATIONS FEED
+OFFLINE`, the wrong legacy frontend is open. Verify both port 5176 and the Museum
+identity before review.
+
+The normal startup verifier never starts Vite or another service. It checks protected
+health and the served Museum identity, then opens exactly 5176 only when invoked with
+`--open`. It neither scripts Safari nor closes unrelated tabs.
+
+After Tuesday stability is proven, retire development-only 5184 and 5186 through a
+separately approved rollback-backed operation: record each label, PID, command, source
+commit and listener; prove no 5176 or backend dependency; preserve its plist and source
+history; boot out only the exact label once; require label/PID/port clearance; and restore
+only that job if a protected health check changes. Do not delete either source tree.
+
 ## Truth and authority
 
 The factory distinguishes container integrity/freshness from underlying evidence freshness. `CURRENT`, `STALE`, `INCOMPLETE`, `UNAVAILABLE`, `FAILED_CLOSED`, `NOT_ACTIVATED`, `RESEARCH_ONLY_UNPRICEABLE`, `CLOSED_HOLIDAY`, and `OPEN_24_7` are not interchangeable. Null is never zero. Registry membership is not availability.
@@ -44,8 +73,9 @@ The operational paper fund is a separate governed $10,000 fund. The 24 synthetic
 
 - Backend sanitized status: loopback 8002.
 - Living Factory / Museum Master: loopback 5176.
-- Standalone Expansion Wing engineering fallback: loopback 5177.
-- Factory Watch development observer: loopback 5185.
+- Standalone Expansion Wing diagnostic/rollback surface: loopback 5177 (`INTERNAL_DIAGNOSTIC_ONLY`).
+- Factory Watch development observer: loopback 5185 (`INTERNAL_DIAGNOSTIC_ONLY`; the owner uses the native 5176 destination).
+- V6 cinematic and V7 Living Vite services: loopback 5184 and 5186 (`DEVELOPMENT_ONLY`; never owner startup targets).
 - Projection publisher: launchd-owned source observer with no browser control route.
 
 Use GET/HEAD health and snapshot routes only. Browser polling has one owner and cannot invoke publication. Startup, shutdown, replacement, or rollback requires explicit authorization for the exact service; do not infer permission from a health-check task.

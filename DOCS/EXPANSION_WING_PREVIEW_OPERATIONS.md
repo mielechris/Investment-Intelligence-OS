@@ -1,6 +1,6 @@
 # Expansion Wing persistent preview
 
-Status: implementation-ready, not installed. Label `com.iios.expansion-wing-preview`; loopback `127.0.0.1:5177` only.
+Status: installed internal diagnostic/rollback surface. Label `com.iios.expansion-wing-preview`; loopback `127.0.0.1:5177` only. The canonical owner-facing factory is Museum Master at `http://127.0.0.1:5176/`; normal startup and navigation never open 5177.
 
 ## Topology and command
 

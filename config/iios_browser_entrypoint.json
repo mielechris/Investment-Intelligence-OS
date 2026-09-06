@@ -1,0 +1,14 @@
+{
+  "schema_version": "iios-canonical-browser-entrypoint-v1",
+  "canonical_url": "http://127.0.0.1:5176/",
+  "expected_identity": "THE AUCTION EDITION · MUSEUM MASTER 1.2",
+  "user_facing_frontend_count": 1,
+  "internal_diagnostics": {
+    "5177": "INTERNAL_DIAGNOSTIC_ONLY",
+    "5185": "INTERNAL_DIAGNOSTIC_ONLY"
+  },
+  "development_frontends": {
+    "5184": "DEVELOPMENT_ONLY",
+    "5186": "DEVELOPMENT_ONLY"
+  }
+}
