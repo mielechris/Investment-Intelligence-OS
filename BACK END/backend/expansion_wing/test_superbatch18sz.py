@@ -23,7 +23,8 @@ OPERATIONAL_PAPER = {"nav": 10_000.0, "cash": 10_000.0, "positions": 0,
 def evidence(product_id: str, **changes):
     product = next(item for item in PRODUCTS if item.product_id == product_id)
     value = {field: "FIXTURE_VALUE" for field in FAMILY_REQUIREMENTS[product.family]}
-    value.update({"observed_at": "2026-09-08T14:59:30Z", "provenance_hash": "a" * 64})
+    value.update({"observed_at": "2026-09-08T14:59:30Z", "source_timestamp": "2026-09-08T14:59:20Z",
+                  "effective_timestamp": "2026-09-08T14:59:25Z", "provenance_hash": "a" * 64})
     if product.family == "OPTION":
         value.update({field: 1.0 for field in ("strike", "multiplier", "bid", "ask", "mark", "open_interest",
             "volume", "implied_volatility", "delta", "gamma", "theta", "vega", "maximum_modeled_loss",

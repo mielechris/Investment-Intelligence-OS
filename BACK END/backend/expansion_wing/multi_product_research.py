@@ -22,7 +22,9 @@ AUTHORITY = {
     "ledger_write": False,
     "live_execution": False,
 }
-TRUTH_STATES = frozenset({"CURRENT", "STALE", "INCOMPLETE", "UNAVAILABLE", "FAILED_CLOSED", "RESEARCH_ONLY_UNPRICEABLE"})
+TRUTH_STATES = frozenset({"AVAILABLE", "AVAILABLE_EMPTY", "CURRENT", "STALE", "INCOMPLETE", "UNAVAILABLE",
+                          "FAILED_CLOSED", "NOT_ACTIVATED", "RESEARCH_ONLY_UNPRICEABLE",
+                          "CLOSED_HOLIDAY", "OPEN_24_7"})
 
 
 def _timestamp(value: Any) -> datetime:
@@ -41,10 +43,10 @@ def _hash(value: Any) -> str:
 
 
 FAMILY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "EQUITY_ETF": ("instrument_id", "exchange", "observed_at", "price_basis", "volume", "liquidity", "corporate_action_basis", "market_session", "source_category", "provenance_hash", "benchmark", "spread_bps", "slippage_bps"),
+    "EQUITY_ETF": ("instrument_id", "exchange", "source_timestamp", "effective_timestamp", "observed_at", "price_basis", "volume", "liquidity", "corporate_action_basis", "market_session", "source_category", "provenance_hash", "benchmark", "spread_bps", "fees", "slippage_bps"),
     "TREASURY": ("instrument_id", "security_type", "issue_date", "maturity_date", "coupon", "price_basis", "yield", "yield_convention", "duration", "convexity", "accrued_interest_basis", "settlement_convention", "run_classification", "liquidity", "observed_at", "provenance_hash"),
     "CREDIT": ("instrument_id", "issuer", "maturity_date", "coupon", "price_basis", "yield", "yield_convention", "duration", "credit_quality", "callable_status", "security_type", "quote_basis", "liquidity", "tax_treatment_basis", "observed_at", "provenance_hash"),
-    "OPTION": ("instrument_id", "underlying_id", "expiration", "strike", "option_type", "exercise_style", "multiplier", "bid", "ask", "mark", "open_interest", "volume", "implied_volatility", "delta", "gamma", "theta", "vega", "assignment_risk", "early_exercise", "maximum_modeled_loss", "break_even", "spread_bps", "fees", "slippage_bps", "observed_at", "underlying_observed_at", "provenance_hash"),
+    "OPTION": ("instrument_id", "underlying_id", "expiration", "strike", "option_type", "exercise_style", "multiplier", "bid", "ask", "mark", "open_interest", "volume", "implied_volatility", "delta", "gamma", "theta", "vega", "assignment_risk", "early_exercise", "maximum_modeled_loss", "break_even", "spread_bps", "fees", "slippage_bps", "observed_at", "underlying_observed_at", "market_hours_evidence", "provenance_hash"),
     "COMMODITY": ("instrument_id", "underlying_id", "exposure_classification", "contract_month", "multiplier", "tick_value", "settlement_basis", "expiry", "roll_policy", "term_structure", "carry_state", "proxy_tracking_basis", "liquidity", "observed_at", "licensing_status", "provenance_hash"),
     "FX": ("instrument_id", "currency_pair", "base_currency", "quote_currency", "exposure_classification", "observed_at", "bid", "ask", "session", "liquidity", "carry_basis", "rollover_basis", "proxy_tracking_basis", "provenance_hash"),
     "CRYPTO": ("instrument_id", "asset_id", "venue_reference", "exposure_classification", "calendar_policy", "observed_at", "price_basis", "liquidity", "custody_warning", "structural_risk_warning", "weekend_policy", "proxy_tracking_basis", "provenance_hash"),
@@ -132,6 +134,20 @@ class MethodDefinition:
     eligibility_rules: tuple[str, ...] = ("POINT_IN_TIME", "TRANSACTION_COSTS", "OUT_OF_SAMPLE", "HUMAN_REVIEW")
     operational_status: str = "NOT_ACTIVATED"
     automatic_promotion: bool = False
+    eligible_families: tuple[str, ...] = tuple(FAMILY_REQUIREMENTS)
+    required_evidence: tuple[str, ...] = ("POINT_IN_TIME", "PROVENANCE", "COST_MODEL")
+    required_freshness: str = "PRODUCT_CONTRACT"
+    market_session_requirements: str = "PRODUCT_CALENDAR"
+    minimum_sample_size: int = 20
+    cost_model: tuple[str, ...] = ("FEES", "SPREAD", "SLIPPAGE")
+    liquidity_requirements: str = "PRODUCT_SPECIFIC"
+    invalidation_rules: tuple[str, ...] = ("EXPLICIT_INVALIDATION",)
+    holding_period_range: str = "METHOD_SPECIFIC"
+    benchmark: str = "SIMPLE_PRODUCT_BENCHMARK"
+    risk_measure: str = "MAXIMUM_MODELED_LOSS"
+    drawdown_measure: str = "MAXIMUM_DRAWDOWN"
+    calibration_measure: str = "OUT_OF_SAMPLE_CALIBRATION"
+    failure_behavior: str = "FAILED_CLOSED"
 
 
 _METHOD_ROWS = (
@@ -177,6 +193,9 @@ def validate_product_evidence(product_id: str, evidence: dict[str, Any], *, now:
         clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         if observed > clock:
             raise ValueError("FUTURE_EVIDENCE")
+        for timestamp_key in ("source_timestamp", "effective_timestamp"):
+            if timestamp_key in evidence and _timestamp(evidence[timestamp_key]) > clock:
+                raise ValueError("FUTURE_EVIDENCE")
         age = (clock - observed).total_seconds()
     except ValueError:
         return {"state": "FAILED_CLOSED", "reason": "EVIDENCE_TIMESTAMP_INVALID", "authority": AUTHORITY.copy()}
@@ -367,6 +386,12 @@ class ParallelResearchSleeve:
     data_completeness: str
     warnings: tuple[str, ...]
     accounting: dict[str, Any]
+    volatility: float | None = None
+    calibration: float | None = None
+    sample_size: int = 0
+    source_freshness: str = "UNAVAILABLE"
+    failure_category: str | None = None
+    no_trade_reason: str = "EVIDENCE_NOT_ELIGIBLE"
     schema_version: str = SLEEVE_SCHEMA
 
 
@@ -407,6 +432,26 @@ class MultiProductPaperLaboratory:
             "unresolved_outcomes": len(self._sleeves) - len(resolved), "sample_size_warning": len(resolved) < 20,
             "disclosure_delay_warning": True, "calibration_limits": "FIXTURE_RESULTS_ARE_NOT_PROFITABILITY",
             "authority": AUTHORITY.copy()}
+
+    def comparison_basis(self) -> dict[str, Any]:
+        return {"label": "Synthetic comparison basis — not deployable capital.",
+                "product_sleeve_count": len({item.product_id for item in self._sleeves.values()}),
+                "method_attribution_count": len({(item.product_id, item.method_id) for item in self._sleeves.values()}),
+                "notional_sum_is_capital": False, "operational_fund_touched": False,
+                "orders": 0, "positions": 0, "fills": 0, "authority": AUTHORITY.copy()}
+
+
+def method_scoreboard(records: tuple[dict[str, Any], ...], *, minimum_sample: int = 20) -> dict[str, Any]:
+    """Rank nothing until authentic, complete outcomes meet the minimum sample."""
+    required = {"method_id", "gross_return", "net_return", "fees", "spread", "slippage", "maximum_drawdown",
+                "volatility", "hit_rate", "calibration", "benchmark_relative_result", "regime_distribution",
+                "data_completeness", "disclosure_delay"}
+    if len(records) < minimum_sample or any(set(row) != required or row["data_completeness"] != "COMPLETE" for row in records):
+        return {"state": "INSUFFICIENT_SAMPLE", "sample_size": len(records), "rankings": None,
+                "missing_is_zero": False, "authority": AUTHORITY.copy()}
+    return {"state": "AVAILABLE", "sample_size": len(records),
+            "rankings": sorted((dict(row) for row in records), key=lambda row: row["net_return"], reverse=True),
+            "missing_is_zero": False, "authority": AUTHORITY.copy()}
 
 
 def browser_registry_projection() -> dict[str, Any]:

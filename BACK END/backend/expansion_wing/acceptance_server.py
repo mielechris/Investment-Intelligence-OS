@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from .candidate_enrichment_bridge import validate_browser_projection as validate_enrichment_projection
 from .knowledge_pipeline import room_projection
 from .multi_asset_projection import SCHEMA_VERSION as MULTI_ASSET_SCHEMA, validate_projection
+from .tuesday_opening_day import tuesday_command_projection, validate_browser_projection as validate_tuesday_projection
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
@@ -428,11 +429,15 @@ class Compositor:
         for room, key in section_rooms.items():
             room_states[room] = {"state": sections[key]["state"], "presentation_status": sections[key]["state"],
                                  "data": sections[key]["data"]}
-        return {"schema_version": "expansion-wing-truth-v1", "mode": "READ_ONLY", "sections": sections,
+        base_snapshot = {"schema_version": "expansion-wing-truth-v1", "mode": "READ_ONLY", "sections": sections,
                 "room_states": room_states,
                 "rooms": ROOMS, "fabricated_activity": False,
                 "authority": {"paper_mode": True, "credential_access": False, "ledger_write_authority": False,
                     "broker_connectivity": False, "live_execution_authority": False}}
+        tuesday = tuesday_command_projection(base_snapshot, fixture=False)
+        validate_tuesday_projection(tuesday)
+        sections["tuesday_command_center"] = _section("AVAILABLE", tuesday)
+        return base_snapshot
 
     def metrics(self) -> dict[str, Any]:
         return {"snapshot_requests": self.snapshot_requests, "backend_requests": self.backend_requests,
