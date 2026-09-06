@@ -1,0 +1,33 @@
+{
+  "schema_version": "iios-superbatch24-live-acceptance-metadata-v1",
+  "provider": "FINANCIAL_DATASETS",
+  "retention": "SANITIZED_METADATA_ONLY",
+  "adjustment_state": "UNSPECIFIED",
+  "attempted_requests": 20,
+  "confirmed_requests": 20,
+  "ambiguous_requests": 0,
+  "new_confirmed_credits": 20,
+  "confirmed_total": 22,
+  "ambiguous_total": 2,
+  "conservative_total": 24,
+  "maximum_remaining": 976,
+  "provider_reported_balance": null,
+  "auto_reload": "DISABLED",
+  "automatic_retry": false,
+  "browser_requests": 0,
+  "latency_ms": {"minimum": 162.782, "maximum": 463.970},
+  "products": [
+    {"ticker":"MU","snapshot_bytes":152,"history_bytes":2213,"observations":20,"snapshot_hash":"e29c83c05f5fe13b3b827b29823941aebfd95ea3c1354850e7e95339f81d05aa","history_hash":"4ae980b77b180c3d37b026974eebeb85c59307f7c52312f013063a19945c994d"},
+    {"ticker":"SPY","snapshot_bytes":154,"history_bytes":2233,"observations":20,"snapshot_hash":"bc98375a3277870a9f9b2bd9d4c324f01e3e952de4518d8d96e25cef97e335ce","history_hash":"1ef86fd127bd358c740f76aeee51afac0783decbba81b1e7bdb1ee169d604416"},
+    {"ticker":"XLK","snapshot_bytes":151,"history_bytes":2219,"observations":20,"snapshot_hash":"29609d336b0400d7b3f7780b7387ffba0ae3ead2b95bd2927d6f825b4152a4f1","history_hash":"0310c6ac92f0ee0b33d1769bcf0cdf04128294b01d6ee9cf7eca777eb71d880a"},
+    {"ticker":"VNQ","snapshot_bytes":153,"history_bytes":2137,"observations":20,"snapshot_hash":"2f16d4539e06b2fef897b841c9fc9e3e0efd0aad0e8fc408e1adff0855bbb25e","history_hash":"07effe192425e6f4de3e277979281f57e632ecdf016bed5d637b5025851c1c28"},
+    {"ticker":"TLT","snapshot_bytes":151,"history_bytes":2158,"observations":20,"snapshot_hash":"62f4c739075b06cf5fa5b4a658e43c3b0a3840718a6b3a11cc0df3c623e8fdc8","history_hash":"8425220fcf1753fd466576603d61c2213605943a70adcd7740f8246af5aa5961"},
+    {"ticker":"GLD","snapshot_bytes":153,"history_bytes":2232,"observations":20,"snapshot_hash":"f91dea45c0eb08b99d093d939f0dd1bc89523236b7a901d0dd85ded92185ee3c","history_hash":"b7201247e2ef29d74a0cb348fc10ed916658d6af96360bc54c9d2314e76a9367"},
+    {"ticker":"UUP","snapshot_bytes":151,"history_bytes":2134,"observations":20,"snapshot_hash":"12ba9a6d9f7d6d0cf5f6e763c29b5cc5dcba980d5bfd6c9beb8d557b0653b217","history_hash":"423df5db3eb9a645f1c0470e225079eb3fac57f0835e46f9aed01f879f010af7"},
+    {"ticker":"IBIT","snapshot_bytes":154,"history_bytes":2185,"observations":20,"snapshot_hash":"b36aa3208aed24cc92c0bfd0e5d8d168d6cd1b33e588fbc76d0197a3b532ab42","history_hash":"a230fc077e25d43f645b9a0c40e8df5be1474e1b4f1a7813ce3b3a36fcaa3764"},
+    {"ticker":"PFF","snapshot_bytes":153,"history_bytes":2139,"observations":20,"snapshot_hash":"5254bab393eed530c59a617c9b9d5d8b62b60641d29678c0419132185b6e6696","history_hash":"67627878095f0102a6a99189853627407f51770987f087be40d1f9de423aeed6"},
+    {"ticker":"BIL","snapshot_bytes":151,"history_bytes":2137,"observations":20,"snapshot_hash":"2236189095124e3e6968ac124a11a79aa33df3afa34580e5c3c2256048aad1a5","history_hash":"2b4476322948f9180c822efeec12611d11064e707d503cf4810f1b30dedcbe14"}
+  ],
+  "classification": "RESEARCH_OBSERVATION_INCOMPLETE_ADJUSTMENT_UNSPECIFIED",
+  "authority": {"provider":false,"credential":false,"broker":false,"ledger_write":false,"paper_order":false,"live_execution":false,"automatic_promotion":false}
+}

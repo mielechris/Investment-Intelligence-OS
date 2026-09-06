@@ -1,0 +1,10 @@
+{
+  "schema_version": "iios-superbatch24-tuesday-rehearsal-v1",
+  "fixture_label": "FIXTURE / NON-LIVE / RESEARCH ONLY",
+  "market_states": ["CLOSED_HOLIDAY", "PREMARKET", "OPEN", "CLOSED", "POST_CLOSE"],
+  "evidence_scenarios": ["FORWARD_ONLY_MU", "CURRENT", "STALE", "MISSING_VOLUME", "MISSING_ADJUSTMENT_BASIS", "ADJUSTMENT_DEPENDENT_METHOD_REJECTED", "FUNDAMENTAL_FORWARD_OBSERVATION", "CATALYST_FORWARD_OBSERVATION", "MISSING_COST_ASSUMPTIONS", "MODELED_COST_NOT_QUOTE", "VALID_COMPOSITE", "CORPORATE_ACTION_SUSPENSION", "SOURCE_FAILURE", "CREDIT_EXHAUSTION"],
+  "decision_scenarios": ["MISSING_IMMUTABLE_CANDIDATE", "IMMUTABLE_CANDIDATE", "SKEPTIC_CHALLENGE", "COMMITTEE_REJECTED", "COMMITTEE_APPROVED", "RISK_REJECTED", "RISK_APPROVED", "OPENING_MARK", "INTRADAY_MARK", "CLOSING_MARK", "SYNTHETIC_OBSERVATION", "NO_HISTORICAL_PERFORMANCE_CLAIM"],
+  "product_room_count": 24,
+  "operational_activity": {"positions": 0, "transactions": 0, "orders": 0, "fills": 0},
+  "authority": {"provider": false, "credential": false, "broker": false, "ledger_write": false, "paper_order": false, "live_execution": false, "automatic_promotion": false}
+}

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from expansion_wing.listed_security_source import (
     AUTHORITY, LicenseDecision, ListedSecurityAdapter, ListedSecurityEvidence, PRODUCTS,
-    parse_mu_fixture, product_classifications, unavailable_projection,
+    parse_mu_fixture, parse_mu_snapshot, product_classifications, unavailable_projection,
 )
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "superbatch23_listed_security.json").read_text())
@@ -47,7 +47,7 @@ class EvidenceTests(unittest.TestCase):
         evidence = parse_mu_fixture(FIXTURE["mu"], now=NOW, license_decision=license())
         self.assertEqual((evidence.instrument_id, evidence.security_type), ("NASDAQ:MU", "COMMON_STOCK"))
         self.assertEqual(evidence.freshness_state, "CURRENT")
-        self.assertEqual(evidence.products, ("US_LARGE_CAP_EQUITIES", "SECTOR_THEMATIC_ETFS", "BROAD_FACTOR_ETFS"))
+        self.assertEqual(evidence.products, ("US_LARGE_CAP_EQUITIES",))
         self.assertTrue(set(evidence.products) <= set(PRODUCTS))
         self.assertFalse(evidence.paper_eligible); self.assertEqual(evidence.authority, AUTHORITY)
         self.assertEqual(evidence.spread_slippage_state, "UNAVAILABLE")
@@ -87,9 +87,35 @@ class EvidenceTests(unittest.TestCase):
         evidence = parse_mu_fixture(FIXTURE["mu"], now=NOW, license_decision=license())
         readiness = product_classifications(evidence)
         self.assertEqual(readiness["US_LARGE_CAP_EQUITIES"], "PAPER_TEST_READY")
-        self.assertEqual(readiness["CRYPTO_ETFS_LISTED_PROXIES"], "PROXY_ONLY")
+        self.assertEqual(readiness["CRYPTO_ETFS_LISTED_PROXIES"], "UNAVAILABLE")
         self.assertNotIn("fetch", evidence.browser_safe())
         self.assertNotIn("endpoint", json.dumps(evidence.browser_safe()))
+
+    def test_credits_snapshot_contract_and_equity_only_classification(self):
+        decision=license(account_tier="CREDITS")
+        payload={"snapshot":{"ticker":"MU","price":100.0,"day_change":1.0,
+            "day_change_percent":1.0,"time":"2026-09-04T20:00:00Z","time_milliseconds":0}}
+        value=parse_mu_snapshot(payload,observed_at="2026-09-04T20:00:00Z",
+            retrieved_at="2026-09-06T20:00:00Z",license_decision=decision,source_hash="b"*64)
+        self.assertEqual((value.provider_tier,value.freshness_state,value.credit_cost),("CREDITS","STALE",1))
+        readiness=product_classifications(value)
+        self.assertEqual(readiness["US_LARGE_CAP_EQUITIES"],"DELAYED_DATA")
+        self.assertTrue(all(state=="UNAVAILABLE" for product,state in readiness.items()
+            if product!="US_LARGE_CAP_EQUITIES"))
+        self.assertFalse(value.volume_available); self.assertEqual(value.adjustment_state,"UNKNOWN")
+        self.assertEqual(value.price_basis,"UNAVAILABLE")
+        self.assertNotIn("100.0",json.dumps(value.browser_safe()))
+
+    def test_snapshot_rejects_wrong_ticker_unknown_fields_future_and_noncredits(self):
+        good={"snapshot":{"ticker":"MU","price":100.0,"time":"2026-09-04T20:00:00Z"}}
+        cases=(good|{"extra":1},{"snapshot":good["snapshot"]|{"ticker":"AMD"}},
+            {"snapshot":good["snapshot"]|{"private":1}},
+            {"snapshot":good["snapshot"]|{"time":"2026-09-08T00:00:00Z"}})
+        for payload in cases:
+            with self.assertRaises(ValueError): parse_mu_snapshot(payload,observed_at="2026-09-04T20:00:00Z",
+                retrieved_at="2026-09-06T20:00:00Z",license_decision=license(account_tier="CREDITS"),source_hash="b"*64)
+        with self.assertRaises(PermissionError): parse_mu_snapshot(good,observed_at="2026-09-04T20:00:00Z",
+            retrieved_at="2026-09-06T20:00:00Z",license_decision=license(),source_hash="b"*64)
 
     def test_invalid_authority_and_paper_eligibility_rejected(self):
         evidence = parse_mu_fixture(FIXTURE["mu"], now=NOW, license_decision=license())

@@ -195,7 +195,7 @@ def parse_mu_fixture(payload: dict[str, Any], *, now: datetime,
     age = (now.astimezone(timezone.utc) - observed).total_seconds()
     freshness = "CURRENT" if 0 <= age <= 900 else "STALE" if age > 900 else "UNAVAILABLE"
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    products = ("US_LARGE_CAP_EQUITIES", "SECTOR_THEMATIC_ETFS", "BROAD_FACTOR_ETFS")
+    products = ("US_LARGE_CAP_EQUITIES",)
     evidence = ListedSecurityEvidence(
         SCHEMA_VERSION, license_decision.provider, license_decision.account_tier or "UNVERIFIED",
         "DISPLAY_APPROVED" if license_decision.browser_display else "INTERNAL_USE_APPROVED",
@@ -221,18 +221,42 @@ def unavailable_projection(reason: str = "ACCOUNT_TIER_UNVERIFIED") -> dict[str,
         "authority": AUTHORITY.copy()}
 
 
+def parse_mu_snapshot(payload: dict[str, Any], *, observed_at: str, retrieved_at: str,
+                      license_decision: LicenseDecision, source_hash: str) -> ListedSecurityEvidence:
+    """Normalize one already-bounded response in memory; raw bodies never enter this contract."""
+    if license_decision.gate() != "LICENSE_APPROVED" or license_decision.account_tier != "CREDITS":
+        raise PermissionError("ENTITLEMENT_UNAPPROVED")
+    if not isinstance(payload, dict) or set(payload) != {"snapshot"} or not isinstance(payload["snapshot"], dict):
+        raise ValueError("PROVIDER_SCHEMA_INVALID")
+    row = payload["snapshot"]
+    allowed = {"ticker", "price", "day_change", "day_change_percent", "time", "time_milliseconds"}
+    if (not {"ticker", "price", "time"} <= set(row) or set(row) - allowed or row.get("ticker") != "MU" or
+            not isinstance(row.get("price"), (int, float)) or isinstance(row.get("price"), bool) or
+            not isinstance(row.get("time"), str)):
+        raise ValueError("PROVIDER_SCHEMA_INVALID")
+    provider_time = _time(row["time"], "PROVIDER_TIMESTAMP_INVALID")
+    retrieved = _time(retrieved_at, "RETRIEVAL_TIMESTAMP_INVALID")
+    observed = _time(observed_at, "OBSERVATION_TIMESTAMP_INVALID")
+    if provider_time > retrieved or observed > retrieved:
+        raise ValueError("POINT_IN_TIME_INVALID")
+    age = (retrieved - provider_time).total_seconds()
+    evidence = ListedSecurityEvidence(SCHEMA_VERSION, "FINANCIAL_DATASETS", "CREDITS", "DISPLAY_APPROVED",
+        "NASDAQ:MU", "MU", "NASDAQ", "COMMON_STOCK", "USD", observed_at, row["time"], row["time"],
+        retrieved_at, "CURRENT" if 0 <= age <= 120 else "STALE", "CLOSED" if age > 120 else "REGULAR",
+        "UNAVAILABLE", "UNKNOWN", True, False, "UNAVAILABLE", "UNAVAILABLE", source_hash, 1, True,
+        ("US_LARGE_CAP_EQUITIES",), age <= 120, False, AUTHORITY.copy())
+    evidence.validate()
+    return evidence
+
+
 def product_classifications(evidence: ListedSecurityEvidence | None) -> dict[str, str]:
     """A common-stock observation cannot activate proxy or unrelated asset-product rooms."""
     values = {product: "UNAVAILABLE" for product in PRODUCTS}
     if evidence is None:
         return values
-    direct = {"US_LARGE_CAP_EQUITIES", "SECTOR_THEMATIC_ETFS", "BROAD_FACTOR_ETFS"}
+    direct = set(evidence.products) if evidence is not None else set()
     for product in direct:
         values[product] = ("PAPER_TEST_READY" if evidence.freshness_state == "CURRENT" and
                            evidence.license_state == "DISPLAY_APPROVED" else "DELAYED_DATA" if
                            evidence.freshness_state == "STALE" else "RESEARCH_ONLY")
-    for product in ("TREASURY_ETFS", "COMMODITY_ETFS_LISTED_PROXIES", "CURRENCY_ETFS_FX_PROXIES",
-                    "CRYPTO_ETFS_LISTED_PROXIES"):
-        if product in values:
-            values[product] = "PROXY_ONLY"
     return values
