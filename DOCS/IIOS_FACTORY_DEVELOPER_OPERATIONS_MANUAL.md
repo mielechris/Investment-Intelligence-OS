@@ -21,3 +21,6 @@ Fixture review uses an unused loopback port and an owner-only temporary root. Pe
 ## Recovery
 
 Fail closed on unsafe files, schema/hash mismatch, future timestamps, private fields, changed paper truth or enabled authority. Preserve the last authentic artifact. Roll back only the explicitly changed component and prove protected PID/start-time, paper, authority and repository equality afterward.
+# Museum Master unified shell
+
+The unified Living Factory frontend uses Museum Master 1.2 as its presentation shell. Its historical provenance, truth adapter, navigation, motion rules, accessibility contract, isolated acceptance procedure, activation gates, and rollback boundary are documented in `SUPERBATCH_21_MUSEUM_MASTER_UNIFICATION.md`.
