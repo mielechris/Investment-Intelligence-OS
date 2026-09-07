@@ -12,8 +12,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--supervisor", action="store_true")
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--activate", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--browser", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.activate:
+    if args.activate or args.browser:
         print(json.dumps({"status": "ACTIVATION_REJECTED"}, sort_keys=True)); return 3
     if not args.supervisor or args.state_root is None:
         print(json.dumps({"status": "SUPERVISOR_MODE_REQUIRED", **service_contract()}, sort_keys=True)); return 2

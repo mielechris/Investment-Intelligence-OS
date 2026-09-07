@@ -166,7 +166,7 @@ def validate_installation(value: Any, *, now: datetime | None = None) -> dict[st
     return value
 
 
-def validate_state(value: Any, installation: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+def validate_state_v1(value: Any, installation: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != STATE_FIELDS:
         raise ValueError("STATE_SCHEMA_INVALID")
     if value.get("schema_version") != STATE_SCHEMA or value.get("controller_identity") != CONTROLLER_ID:
@@ -212,6 +212,13 @@ def validate_state(value: Any, installation: dict[str, Any], *, now: datetime | 
     return value
 
 
+def validate_state(value: Any, installation: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("schema_version") == "iios-tuesday-controller-state-v2":
+        from .tuesday_controller_v2 import validate_state_v2
+        return validate_state_v2(value, installation, now=now)
+    return validate_state_v1(value, installation, now=now)
+
+
 class ControllerStateStore:
     def __init__(self, root: Path) -> None: self.root = root
 
@@ -228,14 +235,20 @@ class ControllerStateStore:
         if not isinstance(value, dict): raise ValueError("STATE_JSON_INVALID")
         return value
 
-    def read(self, *, now: datetime | None = None, allow_lock: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
+    def read(self, *, now: datetime | None = None, allow_lock: bool = True, recover: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
         _directory(self.root, create=False)
-        allowed = {INSTALL_NAME, STATE_NAME} | ({LOCK_NAME} if allow_lock else set())
+        from .tuesday_controller_v2 import LAST_KNOWN_VALID_NAME, V1_ROLLBACK_NAME
+        allowed = {INSTALL_NAME, STATE_NAME, LAST_KNOWN_VALID_NAME, V1_ROLLBACK_NAME} | ({LOCK_NAME} if allow_lock else set())
         if {item.name for item in self.root.iterdir()} - allowed:
             raise ValueError("STATE_INVENTORY_INVALID")
         if (self.root / LOCK_NAME).exists(): _regular_owner_file(self.root / LOCK_NAME)
         install = validate_installation(self._read_json(self.root / INSTALL_NAME), now=now)
-        state = validate_state(self._read_json(self.root / STATE_NAME), install, now=now)
+        try:
+            state = validate_state(self._read_json(self.root / STATE_NAME), install, now=now)
+        except (OSError, ValueError):
+            if not recover or not (self.root / LAST_KNOWN_VALID_NAME).exists():
+                raise
+            state = validate_state(self._read_json(self.root / LAST_KNOWN_VALID_NAME), install, now=now)
         return install, state
 
     def write_state(self, state: dict[str, Any], install: dict[str, Any]) -> None:
@@ -284,6 +297,9 @@ class ControllerStatusReader:
                     else: fcntl.flock(stream, fcntl.LOCK_UN)
                 finally: stream.close()
             running = state["running"] and install["process_running"] and lock_owned
+            if state.get("schema_version") == "iios-tuesday-controller-state-v2":
+                from .tuesday_controller_v2 import browser_projection_v2
+                return browser_projection_v2(state, running=running)
             return {
                 "schema_version": BROWSER_SCHEMA, "state": "INSTALLED_BUT_DISABLED" if installed else "NOT_INSTALLED",
                 "installed": installed, "running": running, "activated": False,
@@ -311,24 +327,40 @@ class DisabledSupervisor:
             stopped.set()
         signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
         try:
-            install, prior = self.store.read()
+            install, prior = self.store.read(recover=True)
             if not install["installed"] or install["controller_activated"]:
                 raise ValueError("INSTALLATION_NOT_DISABLED")
+            prior_install = install
+            if prior.get("schema_version") == "iios-tuesday-controller-state-v2":
+                from .tuesday_controller_v2 import LAST_KNOWN_VALID_NAME
+                _atomic(self.store.root, LAST_KNOWN_VALID_NAME, prior)
             now = self.clock().astimezone(timezone.utc).isoformat()
             install = installation_manifest(install["installation_identity"], installed=True,
                                             registered=True, running=True, generated_at=now)
             self.store.write_installation(install)
-            running = disabled_state(install["installation_identity"], installed=True, running=True,
-                                     updated_at=now, prior=prior, transition="SUPERVISOR_STARTED")
+            if prior.get("schema_version") == "iios-tuesday-controller-state-v2":
+                from .tuesday_controller_v2 import recovered_v2
+                running = recovered_v2(prior, prior_install, install, running=True, timestamp=now)
+            else:
+                running = disabled_state(install["installation_identity"], installed=True, running=True,
+                                         updated_at=now, prior=prior, transition="SUPERVISOR_STARTED")
             self.store.write_state(running, install)
             while not stopped.wait(max(0.25, min(self.wait_seconds, 60.0))): pass
             final_install = installation_manifest(install["installation_identity"], installed=True,
                                                   registered=True, running=False,
                                                   generated_at=self.clock().astimezone(timezone.utc).isoformat())
+            if running.get("schema_version") == "iios-tuesday-controller-state-v2":
+                from .tuesday_controller_v2 import LAST_KNOWN_VALID_NAME
+                _atomic(self.store.root, LAST_KNOWN_VALID_NAME, running)
             self.store.write_installation(final_install)
-            final = disabled_state(install["installation_identity"], installed=True, running=False,
-                                   updated_at=self.clock().astimezone(timezone.utc).isoformat(),
-                                   prior=running, transition="CLEAN_SHUTDOWN")
+            if running.get("schema_version") == "iios-tuesday-controller-state-v2":
+                from .tuesday_controller_v2 import recovered_v2
+                final = recovered_v2(running, install, final_install, running=False,
+                                     timestamp=self.clock().astimezone(timezone.utc).isoformat())
+            else:
+                final = disabled_state(install["installation_identity"], installed=True, running=False,
+                                       updated_at=self.clock().astimezone(timezone.utc).isoformat(),
+                                       prior=running, transition="CLEAN_SHUTDOWN")
             self.store.write_state(final, final_install)
             return 0
         finally:

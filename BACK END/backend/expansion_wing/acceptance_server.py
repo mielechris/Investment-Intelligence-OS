@@ -15,6 +15,7 @@ from .knowledge_pipeline import room_projection
 from .multi_asset_projection import SCHEMA_VERSION as MULTI_ASSET_SCHEMA, validate_projection
 from .tuesday_opening_day import tuesday_command_projection, validate_browser_projection as validate_tuesday_projection
 from .tuesday_controller_state import BROWSER_SCHEMA as CONTROLLER_BROWSER_SCHEMA
+from .tuesday_controller_v2 import BROWSER_SCHEMA_V2 as CONTROLLER_BROWSER_SCHEMA_V2
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
@@ -457,14 +458,29 @@ class Compositor:
             "monday_rehearsal_status", "requests_today", "credits_today", "human_gate",
             "restart_recovery", "integrity", "last_update", "next_action", "authority_locked",
             "error_category"}
-        safe_controller = (
+        controller_v2_fields = controller_fields | {"controller_schema", "daily_hard_ceiling", "released_now",
+            "stage_a", "stage_b", "stage_c", "migration_status"}
+        common_safe = (
             isinstance(controller, dict) and set(controller) == controller_fields
-            and controller.get("schema_version") == CONTROLLER_BROWSER_SCHEMA
             and all(isinstance(controller.get(key), bool) for key in ("installed", "running", "activated", "authority_locked"))
             and controller.get("activated") is False and controller.get("authority_locked") is True
             and isinstance(controller.get("requests_today"), int) and isinstance(controller.get("credits_today"), int)
             and 0 <= controller["credits_today"] <= controller["requests_today"] <= 30
         )
+        v2_safe = (
+            isinstance(controller, dict) and set(controller) == controller_v2_fields
+            and controller.get("schema_version") == CONTROLLER_BROWSER_SCHEMA_V2
+            and controller.get("controller_schema") == "iios-tuesday-controller-state-v2"
+            and all(isinstance(controller.get(key), bool) for key in ("installed", "running", "activated", "authority_locked"))
+            and controller.get("activated") is False and controller.get("authority_locked") is True
+            and controller.get("daily_hard_ceiling") == 200 and controller.get("released_now") == 0
+            and controller.get("stage_a") == {"draft_count": 50, "maximum": 100, "state": "NOT_RELEASED"}
+            and controller.get("stage_b") == {"maximum": 50, "state": "LOCKED"}
+            and controller.get("stage_c") == {"maximum": 50, "state": "LOCKED"}
+            and isinstance(controller.get("requests_today"), int) and isinstance(controller.get("credits_today"), int)
+            and 0 <= controller["credits_today"] <= controller["requests_today"] <= 200
+        )
+        safe_controller = (common_safe and controller.get("schema_version") == CONTROLLER_BROWSER_SCHEMA) or v2_safe
         sections["tuesday_controller_status"] = _section(
             str(controller.get("state")) if safe_controller else "UNAVAILABLE",
             controller if safe_controller else None,
