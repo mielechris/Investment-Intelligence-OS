@@ -84,6 +84,7 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
   const [connection, setConnection] = useState<TruthState>("UNKNOWN");
   const [runtimeCapabilities, setRuntimeCapabilities] = useState<RuntimeCapabilities>({ state: "UNKNOWN", expansionWingEnabled: false, readOnly: true, publisherControl: false });
   const receivedAt = useRef<number | null>(null);
+  const controllerGeneration = useRef<{ readAt: number; sequence: number } | null>(null);
   const [snapshotAgeSeconds, setSnapshotAgeSeconds] = useState<number | null>(null);
   useEffect(() => {
     let active = true;
@@ -108,6 +109,14 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
         }
         const payload = immutableSnapshot(await requestJson(ENDPOINT, requestController.signal) as ExpansionSnapshot);
         if (active) {
+          const controller = object(object(object(payload).sections).tuesday_controller_status);
+          const controllerData = object(controller.data);
+          const readAt = Date.parse(String(controllerData.controller_read_timestamp ?? ""));
+          const sequence = Number(controllerData.controller_generation_sequence);
+          const prior = controllerGeneration.current;
+          if (Number.isFinite(readAt) && Number.isFinite(sequence)
+              && prior !== null && (readAt < prior.readAt || (readAt === prior.readAt && sequence < prior.sequence))) return;
+          if (Number.isFinite(readAt) && Number.isFinite(sequence)) controllerGeneration.current = { readAt, sequence };
           const now = Date.now();
           failures = 0; setSnapshot(payload); receivedAt.current = now; setSnapshotAgeSeconds(0); setConnection("CURRENT");
         }

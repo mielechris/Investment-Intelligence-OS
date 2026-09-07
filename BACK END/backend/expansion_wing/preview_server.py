@@ -25,7 +25,8 @@ ALLOWED_METHODS = {"GET", "HEAD"}
 
 
 class PreviewApplication:
-    def __init__(self, static_root: Path, compositor: Compositor, *, cache_seconds: float = 15.0) -> None:
+    def __init__(self, static_root: Path, compositor: Compositor, *, cache_seconds: float = 15.0,
+                 controller_generation_reader=None) -> None:
         self.static_root = static_root.resolve(strict=True)
         if not self.static_root.is_dir() or not (self.static_root / "index.html").is_file():
             raise ValueError("STATIC_ROOT_INVALID")
@@ -34,13 +35,25 @@ class PreviewApplication:
         self._lock = threading.Lock()
         self._cached: dict[str, Any] | None = None
         self._cached_at = 0.0
+        self._cached_controller_generation = None
+        self._controller_generation_reader = controller_generation_reader
 
     def snapshot(self, now: float | None = None) -> dict[str, Any]:
         instant = time.monotonic() if now is None else now
+        generation = self._controller_generation_reader() if self._controller_generation_reader else ("NO_CONTROLLER",)
         with self._lock:
-            if self._cached is None or instant - self._cached_at >= self.cache_seconds:
-                self._cached = self.compositor.snapshot()
-                self._cached_at = instant
+            if generation is None:
+                return self.compositor.snapshot()
+            if (self._cached is None or instant - self._cached_at >= self.cache_seconds
+                    or generation != self._cached_controller_generation):
+                candidate = self.compositor.snapshot()
+                section = candidate.get("sections", {}).get("tuesday_controller_status", {})
+                if section.get("state") not in {"UNAVAILABLE", "FAILED_CLOSED"}:
+                    self._cached = candidate
+                    self._cached_at = instant
+                    self._cached_controller_generation = generation
+                else:
+                    return candidate
             return self._cached
 
     def health(self) -> dict[str, Any]:
@@ -130,11 +143,12 @@ def main() -> None:
         if args.security_root is None or args.archive_root is None: raise SystemExit("KNOWLEDGE_ROOT_PAIR_REQUIRED")
         knowledge_reader = lambda: knowledge_operations_projection(args.security_root, args.archive_root)
     projection_reader = FixedProjectionReader(enabled=args.enable_multi_asset_projection)
+    controller_reader = ControllerStatusReader()
     compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend, knowledge_reader,
                             multi_asset_reader=projection_reader.read,
-                            controller_reader=ControllerStatusReader().read,
+                            controller_reader=controller_reader.read,
                             controller_status_provenance=CONTROLLER_PROVENANCE_AUTHENTIC)
-    app = PreviewApplication(args.static_root, compositor)
+    app = PreviewApplication(args.static_root, compositor, controller_generation_reader=controller_reader.cache_identity)
     server = ThreadingHTTPServer((HOST, args.port), handler_for(app))
     server.daemon_threads = True
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())

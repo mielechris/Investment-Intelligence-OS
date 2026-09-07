@@ -467,7 +467,7 @@ class Compositor:
         controller_fields = {"schema_version", "state", "installed", "running", "activated", "phase",
             "monday_rehearsal_status", "requests_today", "credits_today", "human_gate",
             "restart_recovery", "integrity", "last_update", "next_action", "authority_locked",
-            "error_category"}
+            "error_category", "controller_generation_sequence", "controller_read_timestamp"}
         controller_v2_fields = controller_fields | {"controller_schema", "daily_hard_ceiling", "released_now",
             "stage_a", "stage_b", "stage_c", "migration_status", "authentic_rehearsal_status",
             "compatibility_rehearsal_status"}
@@ -476,6 +476,8 @@ class Compositor:
             and all(isinstance(controller.get(key), bool) for key in ("installed", "running", "activated", "authority_locked"))
             and controller.get("activated") is False and controller.get("authority_locked") is True
             and isinstance(controller.get("requests_today"), int) and isinstance(controller.get("credits_today"), int)
+            and isinstance(controller.get("controller_generation_sequence"), int)
+            and isinstance(controller.get("controller_read_timestamp"), str)
             and 0 <= controller["credits_today"] <= controller["requests_today"] <= 30
         )
         v2_safe = (
@@ -492,6 +494,8 @@ class Compositor:
             and controller.get("authentic_rehearsal_status") in {"NOT_YET_RECORDED", "PASSED_CLOSED_HOLIDAY"}
             and controller.get("compatibility_rehearsal_status") in {"MIGRATED_COMPATIBILITY_RECEIPT_NOT_OPERATIONAL_PROOF", "UNAVAILABLE"}
             and isinstance(controller.get("requests_today"), int) and isinstance(controller.get("credits_today"), int)
+            and isinstance(controller.get("controller_generation_sequence"), int)
+            and isinstance(controller.get("controller_read_timestamp"), str)
             and 0 <= controller["credits_today"] <= controller["requests_today"] <= 200
         )
         safe_controller = (common_safe and controller.get("schema_version") == CONTROLLER_BROWSER_SCHEMA) or v2_safe

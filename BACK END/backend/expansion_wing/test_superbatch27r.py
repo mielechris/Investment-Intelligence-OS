@@ -40,6 +40,12 @@ class OperationalV2ContractTests(unittest.TestCase):
 
     def v2(self): return migrate_v1_to_v2(self.v1, self.install, timestamp="2026-09-07T00:01:00+00:00")
 
+    def browser_v2(self):
+        return browser_projection_v2(self.v2(), running=False) | {
+            "controller_generation_sequence": self.v2()["sequence"],
+            "controller_read_timestamp": "2026-09-07T00:02:00+00:00",
+        }
+
     def test_valid_v1_and_v2_loading_and_exact_contract(self):
         self.assertEqual(validate_state(self.v1, self.install)["schema_version"], "iios-tuesday-controller-state-v1")
         value = validate_state(self.v2(), self.install)
@@ -111,14 +117,14 @@ class OperationalV2ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "STATE_INVENTORY_INVALID|UNSAFE_FILE_TYPE"): store.read()
 
     def test_browser_projection_is_strict_scalar_summary(self):
-        value = browser_projection_v2(self.v2(), running=False)
+        value = self.browser_v2()
         self.assertEqual(value["daily_hard_ceiling"], 200); self.assertEqual(value["released_now"], 0)
         encoded = json.dumps(value)
         for prohibited in ("request_identities", "installation_identity", "content_hash", "provider_response", "state-root"):
             self.assertNotIn(prohibited, encoded)
 
     def test_compositor_accepts_v2_allowlist_and_rejects_extra_field(self):
-        value = browser_projection_v2(self.v2(), running=False)
+        value = self.browser_v2()
         missing = Path(self.temp.name) / "missing"
         compositor = Compositor(missing, missing, missing, missing, "http://127.0.0.1:1", controller_reader=lambda: value,
                                 controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE")
@@ -129,7 +135,7 @@ class OperationalV2ContractTests(unittest.TestCase):
 
     def test_controller_provenance_is_explicit_strict_and_schema_independent(self):
         missing = Path(self.temp.name) / "missing"
-        v2 = browser_projection_v2(self.v2(), running=False)
+        v2 = self.browser_v2()
         v1_root = Path(self.temp.name) / "v1"
         ControllerStateStore(v1_root).initialize(self.install, self.v1)
         v1 = ControllerStatusReader(v1_root).read()

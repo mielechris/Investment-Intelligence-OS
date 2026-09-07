@@ -117,3 +117,15 @@ corrected, clamped, reinterpreted, or backdated. Expiration requires a new owner
 authorization. A fresh approval still cannot be reused after a receipt succeeds:
 the independent duplicate-identity and same-session ambiguity gates remain in
 force.
+
+Controller status uses a bounded three-attempt coherent read. The reader validates
+one state generation, its installation identity, its last-known-valid pointer and
+receipt-set identity, then rereads the exact state bytes before projecting. A
+whole-snapshot cache is invalidated by a private server-side tuple containing schema,
+sequence, canonical state hash, receipt-set identity and installation identity.
+Failed reads return only unavailable truth and are never retained as successful
+truth. Browser responses carry only a sanitized generation sequence and read
+timestamp; private hashes, identities and paths never leave the compositor. The
+frontend replaces controller status atomically and orders responses by read time,
+which permits a later authenticated rollback while rejecting an older response that
+arrives out of order.

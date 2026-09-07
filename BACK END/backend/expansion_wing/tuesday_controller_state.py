@@ -274,18 +274,79 @@ def unavailable_projection(category: str = "CONTROLLER_STATUS_NOT_AVAILABLE", *,
         "human_gate": "INSTALLATION_REQUIRED", "restart_recovery": "UNAVAILABLE",
         "integrity": "UNAVAILABLE", "last_update": None, "next_action": "PREPARE_DISABLED_INSTALLATION",
         "authority_locked": True, "error_category": category,
+        "controller_generation_sequence": None, "controller_read_timestamp": None,
     }
 
 
 class ControllerStatusReader:
+    MAX_COHERENT_READ_ATTEMPTS = 3
+
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or (Path.home() / "Library" / "Application Support" / "IIOS" / "TuesdayController")
+
+    def _state_bytes(self) -> bytes:
+        path = self.root / STATE_NAME
+        _regular_owner_file(path)
+        data = path.read_bytes()
+        if len(data) > MAX_BYTES:
+            raise ValueError("PAYLOAD_TOO_LARGE")
+        return data
+
+    def _coherent(self) -> tuple[dict[str, Any], dict[str, Any], tuple[str, int, str, str, str]]:
+        from .tuesday_controller_v2 import LAST_KNOWN_VALID_NAME, STATE_SCHEMA_V2, _receipt_hash
+        store = ControllerStateStore(self.root)
+        for _ in range(self.MAX_COHERENT_READ_ATTEMPTS):
+            before = self._state_bytes()
+            install, state = store.read()
+            if state.get("schema_version") == STATE_SCHEMA_V2:
+                lkv = store._read_json(self.root / LAST_KNOWN_VALID_NAME)
+                pointer = state.get("last_known_valid")
+                lkv_is_current = (
+                    lkv.get("schema_version") == state.get("schema_version")
+                    and lkv.get("sequence") == state.get("sequence")
+                    and lkv.get("content_hash") == state.get("content_hash")
+                )
+                lkv_is_predecessor = (
+                    isinstance(pointer, dict)
+                    and pointer.get("schema_version") == lkv.get("schema_version")
+                    and pointer.get("sequence") == lkv.get("sequence")
+                    and pointer.get("content_hash") == lkv.get("content_hash")
+                )
+                if (
+                    not (lkv_is_current or lkv_is_predecessor)
+                    or lkv.get("content_hash") != _hash(lkv)
+                    or lkv.get("installation_identity") != state.get("installation_identity")
+                ):
+                    continue
+            after = self._state_bytes()
+            if before != after:
+                continue
+            receipts = state.get("rehearsal_receipts", [])
+            receipt_ids = [
+                str(item.get("canonical_content_hash") or _receipt_hash(item))
+                for item in receipts if isinstance(item, dict)
+            ]
+            receipt_identity = hashlib.sha256(_canonical({"receipts": receipt_ids})).hexdigest()
+            identity = (
+                str(state["schema_version"]), int(state["sequence"]), str(state["content_hash"]),
+                receipt_identity, str(install["installation_identity"]),
+            )
+            return install, state, identity
+        raise ValueError("CONTROLLER_GENERATION_INCOHERENT")
+
+    def cache_identity(self) -> tuple[str, int, str, str, str] | None:
+        if not self.root.exists():
+            return ("NOT_INSTALLED", 0, "", "", "")
+        try:
+            return self._coherent()[2]
+        except (OSError, ValueError):
+            return None
 
     def read(self) -> dict[str, Any]:
         if not self.root.exists():
             return unavailable_projection("CONTROLLER_NOT_INSTALLED", state="NOT_INSTALLED")
         try:
-            install, state = ControllerStateStore(self.root).read()
+            install, state, _ = self._coherent()
             installed = install["installed"]
             lock_path = self.root / LOCK_NAME
             lock_owned = False
@@ -299,7 +360,10 @@ class ControllerStatusReader:
             running = state["running"] and install["process_running"] and lock_owned
             if state.get("schema_version") == "iios-tuesday-controller-state-v2":
                 from .tuesday_controller_v2 import browser_projection_v2
-                return browser_projection_v2(state, running=running)
+                return browser_projection_v2(state, running=running) | {
+                    "controller_generation_sequence": state["sequence"],
+                    "controller_read_timestamp": datetime.now(timezone.utc).isoformat(),
+                }
             return {
                 "schema_version": BROWSER_SCHEMA, "state": "INSTALLED_BUT_DISABLED" if installed else "NOT_INSTALLED",
                 "installed": installed, "running": running, "activated": False,
@@ -311,6 +375,8 @@ class ControllerStatusReader:
                 "last_update": state["updated_at"],
                 "next_action": "TUESDAY_OWNER_AUTHORIZATION" if installed else "PREPARE_DISABLED_INSTALLATION",
                 "authority_locked": True, "error_category": None,
+                "controller_generation_sequence": state["sequence"],
+                "controller_read_timestamp": datetime.now(timezone.utc).isoformat(),
             }
         except (OSError, ValueError): return unavailable_projection("CONTROLLER_STATUS_FAILED_CLOSED", state="FAILED_CLOSED")
 

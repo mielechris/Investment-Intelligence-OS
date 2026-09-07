@@ -142,7 +142,9 @@ class ControllerStateTests(unittest.TestCase):
     def test_fixture_preview_uses_an_explicit_controller_state_root(self):
         source=(Path(__file__).parents[3]/"scripts/iios_factory_browser_preview.py").read_text()
         self.assertIn('"--controller-state-root"',source)
-        self.assertIn("ControllerStatusReader(controller_state_root).read",source)
+        self.assertIn("ControllerStatusReader(controller_state_root)",source)
+        self.assertIn("controller_reader=self._controller_status_reader.read",source)
+        self.assertIn("self._controller_status_reader.cache_identity",source)
         self.assertNotIn("None if fixture_isolated else ControllerStatusReader().read",source)
 
 

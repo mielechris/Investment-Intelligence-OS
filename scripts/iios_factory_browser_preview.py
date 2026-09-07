@@ -972,6 +972,7 @@ class PreviewServer(ThreadingHTTPServer):
         expansion_compositor: Any | None = None,
         fixture_isolated: bool = False,
         controller_state_root: Path | None = None,
+        controller_generation_reader: Callable[[], Hashable | None] | None = None,
     ) -> None:
         self.static_root = static_root
         self.telemetry_dir = telemetry_dir
@@ -982,9 +983,15 @@ class PreviewServer(ThreadingHTTPServer):
         self._expansion_lock = threading.Lock()
         self._expansion_cached: dict[str, Any] | None = None
         self._expansion_cached_at = 0.0
+        self._expansion_cached_controller_generation = None
         self._case_registry = None if fixture_isolated or not expansion_enabled or expansion_compositor is not None else BackgroundCaseRegistry()
         if self._case_registry is not None:
             self._case_registry.start()
+        self._controller_status_reader = None if expansion_compositor is not None else ControllerStatusReader(controller_state_root)
+        self._controller_generation_reader = (
+            controller_generation_reader
+            or (None if self._controller_status_reader is None else self._controller_status_reader.cache_identity)
+        )
         self._expansion_compositor = expansion_compositor or Compositor(
             telemetry_dir / "latest.json",
             state_dir / "latest_market_validation.json",
@@ -1001,7 +1008,7 @@ class PreviewServer(ThreadingHTTPServer):
                 else FixedProjectionReader(enabled=expansion_enabled).read
             ),
             case_reader=None if self._case_registry is None else self._case_registry.snapshot,
-            controller_reader=ControllerStatusReader(controller_state_root).read,
+            controller_reader=self._controller_status_reader.read,
             controller_status_provenance=(
                 CONTROLLER_PROVENANCE_SYNTHETIC
                 if fixture_isolated
@@ -1020,10 +1027,20 @@ class PreviewServer(ThreadingHTTPServer):
 
     def expansion_snapshot(self) -> dict[str, Any]:
         now = time.monotonic()
+        generation = self._controller_generation_reader() if self._controller_generation_reader is not None else ("FIXTURE",)
         with self._expansion_lock:
-            if self._expansion_cached is None or now - self._expansion_cached_at >= EXPANSION_CACHE_SECONDS:
-                self._expansion_cached = self._expansion_compositor.snapshot()
-                self._expansion_cached_at = now
+            if generation is None:
+                return self._expansion_compositor.snapshot()
+            if (self._expansion_cached is None or now - self._expansion_cached_at >= EXPANSION_CACHE_SECONDS
+                    or generation != self._expansion_cached_controller_generation):
+                candidate = self._expansion_compositor.snapshot()
+                section = candidate.get("sections", {}).get("tuesday_controller_status", {})
+                if section.get("state") not in {"UNAVAILABLE", "FAILED_CLOSED"}:
+                    self._expansion_cached = candidate
+                    self._expansion_cached_at = now
+                    self._expansion_cached_controller_generation = generation
+                else:
+                    return candidate
             return copy.deepcopy(self._expansion_cached)
 
     def runtime_capabilities(self) -> dict[str, Any]:
