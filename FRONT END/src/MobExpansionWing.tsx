@@ -204,6 +204,7 @@ function TuesdayCommandCenter({ snapshot }: { snapshot: ExpansionSnapshot | null
         <header><span>{controllerAuthentic ? "AUTHENTIC CONTROLLER STATUS" : controllerSynthetic ? "SYNTHETIC_FIXTURE_NON_LIVE" : "CONTROLLER STATUS UNAVAILABLE"}</span><strong>{controllerAuthentic ? controllerV2 ? "OPERATIONAL V2 · DISABLED" : "OPERATIONAL V1 · DISABLED" : controllerSynthetic ? "FUTURE REVIEW — NOT OPERATIONAL" : "PROVENANCE NOT AUTHENTICATED"}</strong>{controllerAuthentic && controllerV2 ? <small>MIGRATION COMPLETED · CONTROLLER NOT ACTIVATED</small> : null}</header>
         <dl>
           <div><dt>Schema</dt><dd>{controllerV2 ? "iios-tuesday-controller-state-v2" : "iios-tuesday-controller-state-v1"}</dd></div>
+          <div><dt>Provenance</dt><dd>{controllerProvenanceAvailable ? controllerProvenance : "UNAVAILABLE"}</dd></div>
           <div><dt>Installed</dt><dd>{controllerInstalled ? "Yes" : "No"}</dd></div>
           <div><dt>Running</dt><dd>{controllerRunning ? "Yes" : "No"}</dd></div>
           <div><dt>Activated</dt><dd>{controllerActivated ? "Invalid" : "No"}</dd></div>
@@ -211,7 +212,7 @@ function TuesdayCommandCenter({ snapshot }: { snapshot: ExpansionSnapshot | null
           <div><dt>Released credits</dt><dd>0</dd></div>
           <div><dt>Phase</dt><dd>{controllerPhase}</dd></div>
           <div><dt>Migration</dt><dd>{!controllerProvenanceAvailable ? "UNAVAILABLE" : controllerSynthetic ? "SIMULATED / REHEARSED — NOT OPERATIONAL" : controllerV2 ? "COMPLETED_AND_VALIDATED" : "NOT PERFORMED"}</dd></div>
-          <div><dt>Authority</dt><dd>{controller.authority_locked === true ? "Locked" : "Failed closed"}</dd></div>
+          <div><dt>Authority</dt><dd>{controller.authority_locked === true ? "Authority locked" : "Failed closed"}</dd></div>
         </dl>
         {controllerV2 && controllerProvenanceAvailable ? <div className="mew-v2-stages" aria-label="V2 locked stages"><article><strong>Stage A</strong><span>Draft 50 · Maximum 100 · Locked / not released</span></article><article><strong>Stage B</strong><span>Maximum 50 · Locked</span></article><article><strong>Stage C</strong><span>Maximum 50 · Locked</span></article></div> : null}
       </section>

@@ -63,3 +63,12 @@ mode, phase, installation status or credit values. Authentic v2 is labeled
 `MIGRATION COMPLETED · CONTROLLER NOT ACTIVATED`. Synthetic v2 remains prominently
 marked `SYNTHETIC_FIXTURE_NON_LIVE` and describes migration only as simulated or
 rehearsed. Neither presentation adds activation, mutation or provider controls.
+
+## Canonical unified build input
+
+The permanent Museum candidate uses the source-controlled unified endpoint
+default. Build with the Expansion Wing application, unified Living Factory,
+live-read-only and Backend-recovery gates enabled, and do not redundantly set
+`VITE_EXPANSION_WING_READONLY_ENDPOINT`. In unified mode the reviewed default
+resolves to `/expansion-wing/snapshot`. Two clean builds must have identical
+inventories and byte hashes before installation.
