@@ -65,6 +65,8 @@ test("unavailable truth remains fail-closed with every room and safety indicator
   assert.match(app, /auction-wall-health/);
   assert.match(app, /READ ONLY · LEDGER FALSE · WRITE FALSE · TRADE FALSE · LIVE FALSE/);
   assert.match(css, /protection-rest \.auction-wall-health/);
+  assert.match(css, /auction-wall-health\{position:relative/);
+  assert.doesNotMatch(css, /auction-wall-health\{position:fixed/);
 });
 
 test("brightness, scheduled dim and unavailable rest are deterministic", () => {

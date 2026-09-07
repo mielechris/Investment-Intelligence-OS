@@ -44,13 +44,15 @@ test("Expansion Wing leads with the Tuesday opening-day command hierarchy", () =
   assert.ok(expansion.indexOf("TuesdayCommandCenter") < expansion.indexOf("ProductAccountDirectory"));
 });
 
-test("ten pilots and fourteen future rooms are structurally separate", () => {
+test("all 24 rooms participate through ten pilot, four readiness and ten structural tracks", () => {
   assert.match(expansion, /export const TUESDAY_PILOTS = \[/);
   assert.equal((expansion.match(/ticker: "(?:MU|SPY|XLK|VNQ|TLT|GLD|UUP|IBIT|PFF|BIL)"/g) ?? []).length, 10);
   for (const ticker of ["MU", "SPY", "XLK", "VNQ", "TLT", "GLD", "UUP", "IBIT", "PFF", "BIL"]) assert.match(expansion, new RegExp(`ticker: "${ticker}"`));
   assert.match(expansion, /futureProducts = PRODUCT_DESKS\.filter/);
-  assert.match(expansion, /Exactly fourteen future source wave rooms/);
-  assert.match(expansion, /14 Rooms — Not Available for Tuesday/);
+  assert.match(expansion, /Exactly four listed-equity source-readiness rooms/);
+  assert.match(expansion, /Exactly ten specialized structural fail-closed rooms/);
+  assert.match(expansion, /24 of 24 product rooms participate/);
+  assert.doesNotMatch(expansion, /14 Rooms — Not Available for Tuesday/);
 });
 
 test("MU feature, capital separation, and human-first states remain explicit", () => {
