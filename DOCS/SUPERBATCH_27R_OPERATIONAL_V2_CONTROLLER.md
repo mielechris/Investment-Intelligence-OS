@@ -108,3 +108,12 @@ invalid clocks, non-holiday sessions, malformed state, lock contention, unsafe
 inventory, and partial writes fail closed. No browser route can invoke the
 ceremony, and no provider, credential, paper, broker, ledger, or projection
 interface is present.
+
+Owner authorization has an exact 30-minute lifetime. The command accepts an
+approval timestamp at command time and one exactly 1,800 seconds old; it rejects
+any future timestamp or one older than 1,800 seconds. Missing, malformed, naive,
+or non-UTC timestamps fail with distinct sanitized categories and are never
+corrected, clamped, reinterpreted, or backdated. Expiration requires a new owner
+authorization. A fresh approval still cannot be reused after a receipt succeeds:
+the independent duplicate-identity and same-session ambiguity gates remain in
+force.

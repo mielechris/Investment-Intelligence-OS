@@ -7,7 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from .operational_rehearsal import ClockObservation, _receipt, record_authentic_rehearsal, system_clock
+from .operational_rehearsal import (
+    MAX_OWNER_APPROVAL_AGE_SECONDS, ClockObservation, _receipt,
+    _validate_owner_approval_timestamp, record_authentic_rehearsal, system_clock,
+)
 from .tuesday_controller_state import ControllerStateStore, _hash, disabled_state, installation_manifest
 from .tuesday_controller_v2 import AUTHENTIC_RECEIPT_TYPE, LAST_KNOWN_VALID_NAME, browser_projection_v2, migrate_v1_to_v2, validate_state_v2
 
@@ -59,8 +62,42 @@ class AuthenticOperationalRehearsalTests(unittest.TestCase):
                 _receipt(self.v2, approval_identity=IDENTITY, approval_timestamp=APPROVAL, observation=ClockObservation(local, local.astimezone(timezone.utc), "UNAVAILABLE"))
         with patch("expansion_wing.operational_rehearsal.market_session", return_value={"state": "OPEN"}):
             with self.assertRaisesRegex(ValueError, "CALENDAR_SESSION_INVALID"): self.record()
-        with self.assertRaisesRegex(ValueError, "APPROVAL_TIMESTAMP_INVALID"):
+        with self.assertRaisesRegex(ValueError, "OWNER_APPROVAL_FUTURE"):
             record_authentic_rehearsal(self.store, approval_identity=IDENTITY, approval_timestamp="2026-09-08T00:00:00Z", clock=self.clock)
+
+    def test_owner_approval_age_inclusive_boundaries(self):
+        command = datetime(2026, 9, 7, 18, 0, tzinfo=timezone.utc)
+        for age in (0, 1, 1799, 1800):
+            with self.subTest(age=age):
+                approval = datetime.fromtimestamp(command.timestamp() - age, timezone.utc).isoformat()
+                self.assertEqual((command - _validate_owner_approval_timestamp(approval, command)).total_seconds(), age)
+        self.assertEqual(MAX_OWNER_APPROVAL_AGE_SECONDS, 1800)
+
+    def test_expired_future_missing_malformed_naive_and_non_utc_failures(self):
+        command = datetime(2026, 9, 7, 18, 0, tzinfo=timezone.utc)
+        failures = (
+            ("2026-09-07T17:29:59+00:00", "OWNER_APPROVAL_EXPIRED"),
+            ("2020-01-01T00:00:00+00:00", "OWNER_APPROVAL_EXPIRED"),
+            ("2026-09-07T18:00:01+00:00", "OWNER_APPROVAL_FUTURE"),
+            ("2026-09-07T18:00:00", "OWNER_APPROVAL_TIMESTAMP_INVALID"),
+            ("2026-09-07T11:00:00-07:00", "OWNER_APPROVAL_TIMESTAMP_INVALID"),
+            ("not-a-timestamp", "OWNER_APPROVAL_TIMESTAMP_INVALID"),
+            (None, "OWNER_APPROVAL_MISSING"),
+            ("", "OWNER_APPROVAL_MISSING"),
+        )
+        for value, category in failures:
+            with self.subTest(category=category), self.assertRaisesRegex(ValueError, category):
+                _validate_owner_approval_timestamp(value, command)
+
+    def test_expired_approval_fails_before_lock_and_causes_zero_mutation(self):
+        before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        with self.assertRaisesRegex(ValueError, "OWNER_APPROVAL_EXPIRED"):
+            record_authentic_rehearsal(self.store, approval_identity=IDENTITY, approval_timestamp="2026-09-07T17:29:59+00:00", clock=self.clock)
+        after = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        self.assertEqual(after, before); self.assertNotIn("controller.lock", after)
+        state = self.store.read()[1]
+        self.assertEqual(state["sequence"], self.v2["sequence"]); self.assertEqual(state["content_hash"], self.v2["content_hash"])
+        self.assertFalse(any(row.get("receipt_type") == AUTHENTIC_RECEIPT_TYPE for row in state["rehearsal_receipts"]))
 
     def test_invalid_network_category_tamper_lock_and_state_fail_closed(self):
         local = datetime(2026, 9, 7, 11, tzinfo=ZoneInfo("America/Los_Angeles"))
@@ -100,7 +137,7 @@ class AuthenticOperationalRehearsalTests(unittest.TestCase):
         with patch.dict(os.environ, {"IIOS_DATE": "2026-09-07", "IIOS_SESSION": "CLOSED_HOLIDAY"}):
             local = datetime(2026, 9, 8, 11, tzinfo=ZoneInfo("America/Los_Angeles"))
             with self.assertRaisesRegex(ValueError, "SYSTEM_CLOCK_CONTRACT_INVALID"):
-                record_authentic_rehearsal(self.store, approval_identity=IDENTITY, approval_timestamp=APPROVAL, clock=lambda: ClockObservation(local, local.astimezone(timezone.utc), "VERIFIED"))
+                record_authentic_rehearsal(self.store, approval_identity=IDENTITY, approval_timestamp="2026-09-08T17:59:00+00:00", clock=lambda: ClockObservation(local, local.astimezone(timezone.utc), "VERIFIED"))
 
     def test_system_clock_and_no_browser_automatic_surface(self):
         class Result: returncode = 1; stdout = b"private"; stderr = b"private"

@@ -18,6 +18,7 @@ LOCAL_ZONE = ZoneInfo("America/Los_Angeles")
 REHEARSAL_DATE = "2026-09-07"
 CALENDAR_ID = "IIOS_SOURCE_CONTROLLED_US_MARKET_CALENDAR"
 CALENDAR_VERSION = "2026.09"
+MAX_OWNER_APPROVAL_AGE_SECONDS = 1800
 
 
 @dataclass(frozen=True)
@@ -49,14 +50,32 @@ def _calendar(local: datetime) -> tuple[str, str, str]:
     return CALENDAR_ID, CALENDAR_VERSION, state
 
 
-def _receipt(state: dict, *, approval_identity: str, approval_timestamp: str, observation: ClockObservation) -> dict:
+def _validate_owner_approval_timestamp(value: str | None, command_utc_time: datetime) -> datetime:
+    if value is None or value == "":
+        raise ValueError("OWNER_APPROVAL_MISSING")
+    try:
+        approval = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("OWNER_APPROVAL_TIMESTAMP_INVALID") from exc
+    if approval.tzinfo is None or approval.utcoffset() != timezone.utc.utcoffset(approval):
+        raise ValueError("OWNER_APPROVAL_TIMESTAMP_INVALID")
+    if command_utc_time.tzinfo is None or command_utc_time.utcoffset() != timezone.utc.utcoffset(command_utc_time):
+        raise ValueError("SYSTEM_CLOCK_CONTRACT_INVALID")
+    age_seconds = (command_utc_time - approval).total_seconds()
+    if age_seconds < 0:
+        raise ValueError("OWNER_APPROVAL_FUTURE")
+    if age_seconds > MAX_OWNER_APPROVAL_AGE_SECONDS:
+        raise ValueError("OWNER_APPROVAL_EXPIRED")
+    return approval
+
+
+def _receipt(state: dict, *, approval_identity: str, approval_timestamp: str | None, observation: ClockObservation,
+             validated_approval: datetime | None = None) -> dict:
     local, utc = observation.local, observation.utc
     if str(local.tzinfo) != "America/Los_Angeles" or local.date().isoformat() != REHEARSAL_DATE or local.strftime("%A").upper() != "MONDAY": raise ValueError("SYSTEM_CLOCK_CONTRACT_INVALID")
     calendar_id, calendar_version, session = _calendar(local)
     if not isinstance(approval_identity, str) or not 8 <= len(approval_identity) <= 96 or not approval_identity.replace("-", "").replace("_", "").isalnum(): raise ValueError("APPROVAL_IDENTITY_INVALID")
-    try: approval = datetime.fromisoformat(approval_timestamp.replace("Z", "+00:00"))
-    except (AttributeError, ValueError) as exc: raise ValueError("APPROVAL_TIMESTAMP_INVALID") from exc
-    if approval.tzinfo is None or approval.utcoffset() != timezone.utc.utcoffset(approval) or approval > utc: raise ValueError("APPROVAL_TIMESTAMP_INVALID")
+    approval = validated_approval or _validate_owner_approval_timestamp(approval_timestamp, utc)
     seed = f"{REHEARSAL_DATE}|{session}|{approval_identity}|{approval.isoformat()}"
     receipt = {
         "receipt_schema": AUTHENTIC_RECEIPT_SCHEMA, "receipt_type": AUTHENTIC_RECEIPT_TYPE,
@@ -80,15 +99,16 @@ def _receipt(state: dict, *, approval_identity: str, approval_timestamp: str, ob
     return receipt
 
 
-def record_authentic_rehearsal(store: ControllerStateStore, *, approval_identity: str, approval_timestamp: str,
+def record_authentic_rehearsal(store: ControllerStateStore, *, approval_identity: str, approval_timestamp: str | None,
                                   clock: Callable[[], ClockObservation] = system_clock) -> dict:
     observation = clock()
+    approval = _validate_owner_approval_timestamp(approval_timestamp, observation.utc)
     lock = store.acquire()
     try:
         installation, state = store.read(allow_lock=True, recover=False, now=observation.utc)
         validate_state_v2(state, installation, now=observation.utc)
         if state["activated"] or state["released_credit_total"] or state["requests_used"] or any(not row["locked"] for row in state["stages"].values()) or any(state["authority"].values()) or not state["authority_locked"]: raise ValueError("REHEARSAL_PRECONDITION_INVALID")
-        candidate = json.loads(json.dumps(state)); receipt = _receipt(state, approval_identity=approval_identity, approval_timestamp=approval_timestamp, observation=observation)
+        candidate = json.loads(json.dumps(state)); receipt = _receipt(state, approval_identity=approval_identity, approval_timestamp=approval_timestamp, observation=observation, validated_approval=approval)
         for prior in state["rehearsal_receipts"]:
             if prior.get("immutable_receipt_id") == receipt["immutable_receipt_id"]: raise ValueError("DUPLICATE_REHEARSAL_RECEIPT")
             if prior.get("observed_local_date") == REHEARSAL_DATE and prior.get("session") == "CLOSED_HOLIDAY": raise ValueError("AMBIGUOUS_REHEARSAL_RECEIPT")
