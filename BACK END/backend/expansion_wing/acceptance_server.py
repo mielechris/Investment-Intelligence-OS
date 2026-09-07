@@ -21,6 +21,14 @@ TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
 SHADOW_SCHEMA = "batch9i-browser-shadow-strategy-v1"
 OUTCOME_SCHEMA = "batch9j-browser-outcome-summary-v1"
+CONTROLLER_PROVENANCE_AUTHENTIC = "AUTHENTIC_OPERATIONAL_STATE"
+CONTROLLER_PROVENANCE_SYNTHETIC = "SYNTHETIC_FIXTURE_NON_LIVE"
+CONTROLLER_PROVENANCE_UNAVAILABLE = "UNAVAILABLE"
+CONTROLLER_PROVENANCE_VALUES = {
+    CONTROLLER_PROVENANCE_AUTHENTIC,
+    CONTROLLER_PROVENANCE_SYNTHETIC,
+    CONTROLLER_PROVENANCE_UNAVAILABLE,
+}
 ROOMS = [
     "Interview Studio", "Investor Archive", "Philosophy Arena", "Judgment Foundry",
     "Pattern Laboratory", "Strictness Observatory", "Cross-Asset Observatory", "Regime Chamber",
@@ -135,7 +143,8 @@ class Compositor:
                  enrichment_reader: Callable[[], dict[str, Any]] | None = None,
                  multi_asset_reader: Callable[[], dict[str, Any]] | None = None,
                  case_reader: Callable[[], dict[str, Any]] | None = None,
-                 controller_reader: Callable[[], dict[str, Any]] | None = None) -> None:
+                 controller_reader: Callable[[], dict[str, Any]] | None = None,
+                 controller_status_provenance: str = CONTROLLER_PROVENANCE_UNAVAILABLE) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
         self.snapshot_requests = 0
@@ -147,6 +156,7 @@ class Compositor:
         self.multi_asset_reader = multi_asset_reader
         self.case_reader = case_reader
         self.controller_reader = controller_reader
+        self.controller_status_provenance = controller_status_provenance
 
     def _reachability(self) -> str:
         self.backend_requests += 1
@@ -474,6 +484,7 @@ class Compositor:
             and all(isinstance(controller.get(key), bool) for key in ("installed", "running", "activated", "authority_locked"))
             and controller.get("activated") is False and controller.get("authority_locked") is True
             and controller.get("daily_hard_ceiling") == 200 and controller.get("released_now") == 0
+            and controller.get("migration_status") in {"MIGRATED_FROM_VALID_V1", "V2_DISABLED_RECOVERY"}
             and controller.get("stage_a") == {"draft_count": 50, "maximum": 100, "state": "NOT_RELEASED"}
             and controller.get("stage_b") == {"maximum": 50, "state": "LOCKED"}
             and controller.get("stage_c") == {"maximum": 50, "state": "LOCKED"}
@@ -481,9 +492,16 @@ class Compositor:
             and 0 <= controller["credits_today"] <= controller["requests_today"] <= 200
         )
         safe_controller = (common_safe and controller.get("schema_version") == CONTROLLER_BROWSER_SCHEMA) or v2_safe
+        safe_provenance = self.controller_status_provenance in CONTROLLER_PROVENANCE_VALUES
+        projected_controller = (
+            controller | {"controller_status_provenance": self.controller_status_provenance}
+            if safe_controller and safe_provenance
+            and self.controller_status_provenance != CONTROLLER_PROVENANCE_UNAVAILABLE
+            else None
+        )
         sections["tuesday_controller_status"] = _section(
-            str(controller.get("state")) if safe_controller else "UNAVAILABLE",
-            controller if safe_controller else None,
+            str(controller.get("state")) if projected_controller is not None else "UNAVAILABLE",
+            projected_controller,
         )
         return base_snapshot
 

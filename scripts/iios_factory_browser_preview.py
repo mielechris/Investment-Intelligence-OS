@@ -28,7 +28,11 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from factory_truth import build_factory_truth
-from expansion_wing.acceptance_server import Compositor
+from expansion_wing.acceptance_server import (
+    Compositor,
+    CONTROLLER_PROVENANCE_AUTHENTIC,
+    CONTROLLER_PROVENANCE_SYNTHETIC,
+)
 from expansion_wing.case_registry_adapter import BackgroundCaseRegistry
 from expansion_wing.projection_runtime import FixedProjectionReader
 from expansion_wing.tuesday_controller_state import ControllerStatusReader
@@ -998,6 +1002,11 @@ class PreviewServer(ThreadingHTTPServer):
             ),
             case_reader=None if self._case_registry is None else self._case_registry.snapshot,
             controller_reader=ControllerStatusReader(controller_state_root).read,
+            controller_status_provenance=(
+                CONTROLLER_PROVENANCE_SYNTHETIC
+                if fixture_isolated
+                else CONTROLLER_PROVENANCE_AUTHENTIC
+            ),
         )
 
         def handler(*args, **kwargs):

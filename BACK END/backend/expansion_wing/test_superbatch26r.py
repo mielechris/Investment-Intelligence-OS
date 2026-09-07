@@ -125,7 +125,8 @@ class ControllerStateTests(unittest.TestCase):
     def test_compositor_accepts_only_browser_allowlist(self):
         base=lambda: ControllerStatusReader(self.root).read()
         missing=Path(self.temp.name)/"missing.json"
-        compositor=Compositor(missing,missing,missing,missing,"http://127.0.0.1:1",controller_reader=base)
+        compositor=Compositor(missing,missing,missing,missing,"http://127.0.0.1:1",controller_reader=base,
+                              controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE")
         compositor._reachability=lambda: "UNAVAILABLE"
         projected=compositor.snapshot()["sections"]["tuesday_controller_status"]
         self.assertEqual(projected["state"],"INSTALLED_BUT_DISABLED")

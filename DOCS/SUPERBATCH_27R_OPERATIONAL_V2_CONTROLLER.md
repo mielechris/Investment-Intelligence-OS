@@ -1,11 +1,10 @@
 # Superbatch 27R — operational v2 controller foundation
 
-Status: `SOURCE ONLY / NOT MIGRATED / NOT ACTIVATED`.
+Status: `SOURCE CONTRACT / OPERATIONAL MIGRATION SEPARATELY COMPLETED / NOT ACTIVATED`.
 
-The installed controller remains on the authenticated v1, 30-credit disabled
-state until a separate rollback-backed migration is authorized. This batch adds
-the production-compatible `iios-tuesday-controller-state-v2` contract without
-performing an operational migration.
+The source batch added the production-compatible
+`iios-tuesday-controller-state-v2` contract. Operational migration was a
+separate rollback-backed procedure and does not activate the controller.
 
 ## Compatibility and migration
 
@@ -50,7 +49,17 @@ legacy rehearsal classification, sanitized timestamps and fixed errors. It omits
 request identities, installation identity, hashes, paths, credentials, selectors,
 provider bodies, evidence and mutation controls.
 
-The current authentic v1 view must continue to show the installed 30-credit
-contract and `MIGRATION NOT PERFORMED`. A future review fixture must be marked
-`SYNTHETIC_FIXTURE_NON_LIVE`; it may show validated v2 values but never claim that
-the operational controller was migrated.
+Schema version and presentation provenance are independent. The compositor adds
+exactly one server-issued scalar: `controller_status_provenance`. Its only
+accepted available values are `AUTHENTIC_OPERATIONAL_STATE` and
+`SYNTHETIC_FIXTURE_NON_LIVE`; missing, unknown, contradictory or explicitly
+`UNAVAILABLE` provenance produces `CONTROLLER STATUS UNAVAILABLE`.
+
+An operationally configured reader may present valid v1 or v2 state as authentic.
+An explicitly fixture-isolated reader may present valid v1 or v2 state only as
+synthetic. Browser code must never infer provenance from schema, port, URL, build
+mode, phase, installation status or credit values. Authentic v2 is labeled
+`AUTHENTIC CONTROLLER STATUS`, `OPERATIONAL V2 · DISABLED`, and
+`MIGRATION COMPLETED · CONTROLLER NOT ACTIVATED`. Synthetic v2 remains prominently
+marked `SYNTHETIC_FIXTURE_NON_LIVE` and describes migration only as simulated or
+rehearsed. Neither presentation adds activation, mutation or provider controls.

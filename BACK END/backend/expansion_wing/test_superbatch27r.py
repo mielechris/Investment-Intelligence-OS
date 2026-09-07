@@ -12,7 +12,10 @@ import time
 import unittest
 from pathlib import Path
 
-from .acceptance_server import Compositor
+from .acceptance_server import (
+    CONTROLLER_PROVENANCE_AUTHENTIC, CONTROLLER_PROVENANCE_SYNTHETIC,
+    CONTROLLER_PROVENANCE_UNAVAILABLE, Compositor,
+)
 from .tuesday_controller_state import (
     ControllerStateStore, ControllerStatusReader, DisabledSupervisor, _canonical, _hash,
     disabled_state, installation_manifest, validate_state,
@@ -117,11 +120,45 @@ class OperationalV2ContractTests(unittest.TestCase):
     def test_compositor_accepts_v2_allowlist_and_rejects_extra_field(self):
         value = browser_projection_v2(self.v2(), running=False)
         missing = Path(self.temp.name) / "missing"
-        compositor = Compositor(missing, missing, missing, missing, "http://127.0.0.1:1", controller_reader=lambda: value)
+        compositor = Compositor(missing, missing, missing, missing, "http://127.0.0.1:1", controller_reader=lambda: value,
+                                controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE")
         compositor._reachability = lambda: "UNAVAILABLE"
         self.assertEqual(compositor.snapshot()["sections"]["tuesday_controller_status"]["state"], "INSTALLED_BUT_DISABLED")
         compositor.controller_reader = lambda: value | {"request_identities": []}
         self.assertEqual(compositor.snapshot()["sections"]["tuesday_controller_status"], {"state": "UNAVAILABLE", "data": None})
+
+    def test_controller_provenance_is_explicit_strict_and_schema_independent(self):
+        missing = Path(self.temp.name) / "missing"
+        v2 = browser_projection_v2(self.v2(), running=False)
+        v1_root = Path(self.temp.name) / "v1"
+        ControllerStateStore(v1_root).initialize(self.install, self.v1)
+        v1 = ControllerStatusReader(v1_root).read()
+
+        def projected(value, provenance=CONTROLLER_PROVENANCE_UNAVAILABLE):
+            compositor = Compositor(
+                missing, missing, missing, missing, "http://127.0.0.1:1",
+                controller_reader=lambda: value,
+                controller_status_provenance=provenance,
+            )
+            compositor._reachability = lambda: "UNAVAILABLE"
+            return compositor.snapshot()["sections"]["tuesday_controller_status"]
+
+        for value in (v1, v2):
+            for provenance in (CONTROLLER_PROVENANCE_AUTHENTIC, CONTROLLER_PROVENANCE_SYNTHETIC):
+                with self.subTest(schema=value["schema_version"], provenance=provenance):
+                    result = projected(value, provenance)
+                    self.assertEqual(result["data"]["controller_status_provenance"], provenance)
+                    self.assertNotIn("installation_identity", json.dumps(result))
+                    self.assertNotIn("request_identities", json.dumps(result))
+        for provenance in (CONTROLLER_PROVENANCE_UNAVAILABLE, "UNKNOWN", ""):
+            with self.subTest(provenance=provenance):
+                self.assertEqual(projected(v2, provenance), {"state": "UNAVAILABLE", "data": None})
+
+        contradictory = v2 | {"migration_status": "NOT_MIGRATED"}
+        self.assertEqual(
+            projected(contradictory, CONTROLLER_PROVENANCE_AUTHENTIC),
+            {"state": "UNAVAILABLE", "data": None},
+        )
 
     def test_isolated_lifecycle_restart_and_byte_exact_rollback(self):
         store = ControllerStateStore(self.root); store.initialize(self.install, self.v1)

@@ -5,11 +5,17 @@ import test from "node:test";
 const source = readFileSync(new URL("./MobExpansionWing.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("./MobExpansionWing.css", import.meta.url), "utf8");
 
-test("authentic v1 and synthetic future v2 are unambiguous", () => {
-  for (const phrase of ["AUTHENTIC CURRENT OPERATIONAL STATE", "iios-tuesday-controller-state-v1", "NOT PERFORMED",
-    "SYNTHETIC_FIXTURE_NON_LIVE", "FUTURE REVIEW — NOT OPERATIONAL", "iios-tuesday-controller-state-v2",
-    "NOT OPERATIONAL — REVIEW FIXTURE ONLY", "Released credits", "Authority"])
+test("schema version and server-issued provenance independently control presentation", () => {
+  for (const phrase of ["controller_status_provenance", "AUTHENTIC_OPERATIONAL_STATE", "AUTHENTIC CONTROLLER STATUS",
+    "OPERATIONAL V2 · DISABLED", "MIGRATION COMPLETED · CONTROLLER NOT ACTIVATED", "iios-tuesday-controller-state-v1",
+    "NOT PERFORMED", "SYNTHETIC_FIXTURE_NON_LIVE", "FUTURE REVIEW — NOT OPERATIONAL",
+    "iios-tuesday-controller-state-v2", "SIMULATED / REHEARSED — NOT OPERATIONAL", "Released credits", "Authority"])
     assert.match(source, new RegExp(phrase));
+  assert.doesNotMatch(source, /controllerV2 \? "SYNTHETIC_FIXTURE_NON_LIVE"/);
+  assert.doesNotMatch(source, /controllerV2 \? "FUTURE REVIEW — NOT OPERATIONAL"/);
+  assert.match(source, /controllerAuthentic \? "AUTHENTIC CONTROLLER STATUS"/);
+  assert.match(source, /controllerSynthetic \? "FUTURE REVIEW — NOT OPERATIONAL"/);
+  assert.match(source, /"CONTROLLER STATUS UNAVAILABLE"/);
 });
 
 test("future v2 presents the exact locked staged contract", () => {
@@ -24,5 +30,5 @@ test("controller cards wrap at three responsive widths", () => {
   assert.match(css, /repeat\(2,minmax\(0,1fr\)\)/);
   assert.match(css, /grid-template-columns:minmax\(0,1fr\)/);
   assert.match(css, /overflow-wrap:anywhere/);
-  assert.match(source, /aria-label="Authenticated controller version"/);
+  assert.match(source, /aria-label="Controller status provenance"/);
 });

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from .acceptance_server import Compositor
+from .acceptance_server import Compositor, CONTROLLER_PROVENANCE_AUTHENTIC
 from .knowledge_operations import knowledge_operations_projection
 from .projection_runtime import FixedProjectionReader
 from .tuesday_controller_state import ControllerStatusReader
@@ -132,7 +132,8 @@ def main() -> None:
     projection_reader = FixedProjectionReader(enabled=args.enable_multi_asset_projection)
     compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend, knowledge_reader,
                             multi_asset_reader=projection_reader.read,
-                            controller_reader=ControllerStatusReader().read)
+                            controller_reader=ControllerStatusReader().read,
+                            controller_status_provenance=CONTROLLER_PROVENANCE_AUTHENTIC)
     app = PreviewApplication(args.static_root, compositor)
     server = ThreadingHTTPServer((HOST, args.port), handler_for(app))
     server.daemon_threads = True
