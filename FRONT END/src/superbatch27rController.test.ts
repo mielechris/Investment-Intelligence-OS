@@ -36,3 +36,9 @@ test("controller cards wrap at three responsive widths", () => {
   assert.match(source, /<dt>Provenance<\/dt><dd>/);
   assert.match(source, /"Authority locked"/);
 });
+
+test("authentic rehearsal and migrated compatibility proof stay distinct", () => {
+  for (const phrase of ["AUTHENTIC MONDAY REHEARSAL:", "NOT_YET_RECORDED", "PASSED_CLOSED_HOLIDAY",
+    "MIGRATED COMPATIBILITY RECEIPT — NOT OPERATIONAL PROOF"]) assert.match(source, new RegExp(phrase));
+  assert.doesNotMatch(source, /onClick=.*rehears/i);
+});

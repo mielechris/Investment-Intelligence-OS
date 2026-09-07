@@ -72,3 +72,39 @@ live-read-only and Backend-recovery gates enabled, and do not redundantly set
 `VITE_EXPANSION_WING_READONLY_ENDPOINT`. In unified mode the reviewed default
 resolves to `/expansion-wing/snapshot`. Two clean builds must have identical
 inventories and byte hashes before installation.
+
+## Authentic closed-holiday rehearsal
+
+The migrated four-field `PASSED_CLOSED_HOLIDAY` receipt remains byte-compatible
+history only; it is never operational proof. Until a distinct, strict
+`AUTHENTIC_OPERATIONAL_REHEARSAL` receipt exists, the browser says exactly
+`AUTHENTIC MONDAY REHEARSAL: NOT_YET_RECORDED` and separately identifies the
+migrated receipt as not operational proof.
+
+The authentic writer is an explicit offline owner ceremony:
+
+```text
+python -m expansion_wing.tuesday_controller_service \
+  --rehearse-closed-holiday \
+  --state-root <fixed-reviewed-operational-root> \
+  --approval-identity <opaque-owner-approval-identity> \
+  --approval-timestamp <prior-UTC-timestamp>
+```
+
+Operational execution is separately authorized. The command accepts no date,
+timezone, session, calendar, activity, authority, or credit override. It reads
+the real system wall clock in `America/Los_Angeles`, queries network-time status
+through fixed `/usr/sbin/systemsetup` arguments, and records only `VERIFIED` or
+`UNAVAILABLE`. It verifies the source-controlled September 7, 2026 calendar as
+Monday and `CLOSED_HOLIDAY`, acquires the controller's exclusive lock, validates
+the exact installed v2 state, and requires zero requests, credits, candidates,
+observations, paper activity, released stages, and operational authority.
+
+The receipt records before/after values, opaque approval identity, approval and
+observation timestamps, calendar identity/version, immutable identity, and a
+canonical content hash. State and last-known-valid records use owner-only atomic
+writes with file and directory fsync. Duplicate or ambiguous session receipts,
+invalid clocks, non-holiday sessions, malformed state, lock contention, unsafe
+inventory, and partial writes fail closed. No browser route can invoke the
+ceremony, and no provider, credential, paper, broker, ledger, or projection
+interface is present.

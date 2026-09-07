@@ -52,3 +52,4 @@ html{scroll-padding-top:var(--mew-anchor-offset)}
 .mew-pilot-directory{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media(max-width:1100px){.mew-pilot-directory,.mew-future-directory{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:620px){.mew-pilot-directory,.mew-future-directory{grid-template-columns:minmax(0,1fr)}}
+.mew-mu-feature details p,.mew-account-detail details p{max-width:100%;overflow-wrap:anywhere;word-break:break-word}

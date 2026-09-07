@@ -1,6 +1,7 @@
 """Strict, offline operational state contract for the disabled Tuesday controller."""
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from typing import Any
@@ -13,6 +14,23 @@ BROWSER_SCHEMA_V2 = "iios-tuesday-controller-browser-v2"
 LAST_KNOWN_VALID_NAME = "controller-state.last-known-valid.json"
 V1_ROLLBACK_NAME = "controller-state.v1.rollback.json"
 MIGRATION_STATUS = "MIGRATED_FROM_VALID_V1"
+COMPATIBILITY_RECEIPT_FIELDS = {"classification", "timestamp", "source_schema", "immutable"}
+AUTHENTIC_RECEIPT_SCHEMA = "iios-authentic-operational-rehearsal-v1"
+AUTHENTIC_RECEIPT_TYPE = "AUTHENTIC_OPERATIONAL_REHEARSAL"
+AUTHENTIC_RECEIPT_FIELDS = {
+    "receipt_schema", "receipt_type", "immutable_receipt_id", "classification", "observed_local_date",
+    "observed_weekday", "observed_timezone", "observed_local_timestamp", "observed_utc_timestamp",
+    "clock_source", "network_time_verification", "calendar_contract_identity", "calendar_contract_version",
+    "session", "controller_schema", "controller_identity", "phase_before", "phase_after", "sequence_before",
+    "sequence_after", "activated_before", "activated_after", "released_credits_before", "released_credits_after",
+    "requests_before", "requests_after", "confirmed_credits_before", "confirmed_credits_after",
+    "ambiguous_credits_before", "ambiguous_credits_after", "candidate_count_before", "candidate_count_after",
+    "observation_count_before", "observation_count_after", "paper_positions_before", "paper_positions_after",
+    "paper_orders_before", "paper_orders_after", "paper_fills_before", "paper_fills_after",
+    "paper_transactions_before", "paper_transactions_after", "authority_before", "authority_after",
+    "authority_locked_before", "authority_locked_after", "opaque_owner_approval_identity",
+    "approval_utc_timestamp", "canonical_content_hash", "immutable",
+}
 STAGE_FIELDS = {"maximum", "released", "locked", "approval_identity", "approval_timestamp", "draft_request_identities"}
 V2_FIELDS = {
     "schema_version", "controller_identity", "installation_identity", "created_at", "updated_at", "sequence", "phase",
@@ -62,12 +80,22 @@ def validate_state_v2(value: Any, installation: dict[str, Any], *, now: datetime
     receipts = value.get("rehearsal_receipts")
     if not isinstance(receipts, list) or not receipts or len(receipts) > 64:
         raise ValueError("REHEARSAL_RECEIPTS_MISSING")
+    authentic_ids: set[str] = set()
+    authentic_sessions: set[tuple[str, str]] = set()
     for receipt in receipts:
-        if not isinstance(receipt, dict) or set(receipt) != {"classification", "timestamp", "source_schema", "immutable"}:
+        if not isinstance(receipt, dict):
             raise ValueError("REHEARSAL_RECEIPT_INVALID")
-        if receipt["classification"] != "PASSED_CLOSED_HOLIDAY" or receipt["source_schema"] != "iios-tuesday-controller-state-v1" or receipt["immutable"] is not True:
-            raise ValueError("REHEARSAL_RECEIPT_INVALID")
-        _timestamp(receipt["timestamp"], now)
+        if set(receipt) == COMPATIBILITY_RECEIPT_FIELDS:
+            if receipt["classification"] != "PASSED_CLOSED_HOLIDAY" or receipt["source_schema"] != "iios-tuesday-controller-state-v1" or receipt["immutable"] is not True:
+                raise ValueError("REHEARSAL_RECEIPT_INVALID")
+            _timestamp(receipt["timestamp"], now)
+            continue
+        _validate_authentic_receipt(receipt, now=now)
+        identity = receipt["immutable_receipt_id"]
+        session_key = (receipt["observed_local_date"], receipt["session"])
+        if identity in authentic_ids: raise ValueError("DUPLICATE_REHEARSAL_RECEIPT")
+        if session_key in authentic_sessions: raise ValueError("AMBIGUOUS_REHEARSAL_RECEIPT")
+        authentic_ids.add(identity); authentic_sessions.add(session_key)
     identities = _identities(value.get("request_identities"))
     for key in ("confirmed_credits", "ambiguous_credits", "reserved_credits", "requests_used"):
         if not isinstance(value.get(key), int) or isinstance(value[key], bool) or value[key] < 0:
@@ -111,6 +139,44 @@ def validate_state_v2(value: Any, installation: dict[str, Any], *, now: datetime
     if value.get("failure_category") is not None or value.get("content_hash") != _hash(value):
         raise ValueError("STATE_V2_HASH_OR_FAILURE_INVALID")
     return value
+
+
+def _receipt_hash(receipt: dict[str, Any]) -> str:
+    clean = {key: item for key, item in receipt.items() if key != "canonical_content_hash"}
+    return hashlib.sha256((json.dumps(clean, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
+
+
+def _validate_authentic_receipt(receipt: dict[str, Any], *, now: datetime | None = None) -> None:
+    if set(receipt) != AUTHENTIC_RECEIPT_FIELDS or receipt.get("receipt_schema") != AUTHENTIC_RECEIPT_SCHEMA or receipt.get("receipt_type") != AUTHENTIC_RECEIPT_TYPE:
+        raise ValueError("AUTHENTIC_REHEARSAL_SCHEMA_INVALID")
+    if receipt.get("classification") != "PASSED_CLOSED_HOLIDAY" or receipt.get("session") != "CLOSED_HOLIDAY" or receipt.get("immutable") is not True:
+        raise ValueError("AUTHENTIC_REHEARSAL_CLASSIFICATION_INVALID")
+    if (receipt.get("observed_local_date"), receipt.get("observed_weekday"), receipt.get("observed_timezone")) != ("2026-09-07", "MONDAY", "America/Los_Angeles"):
+        raise ValueError("AUTHENTIC_REHEARSAL_CLOCK_INVALID")
+    if receipt.get("clock_source") != "SYSTEM_WALL_CLOCK" or receipt.get("network_time_verification") not in {"VERIFIED", "UNAVAILABLE"}:
+        raise ValueError("AUTHENTIC_REHEARSAL_CLOCK_INVALID")
+    if (receipt.get("calendar_contract_identity"), receipt.get("calendar_contract_version")) != ("IIOS_SOURCE_CONTROLLED_US_MARKET_CALENDAR", "2026.09"):
+        raise ValueError("AUTHENTIC_REHEARSAL_CALENDAR_INVALID")
+    for key in ("observed_utc_timestamp", "approval_utc_timestamp"):
+        _timestamp(receipt.get(key), now)
+        if not str(receipt[key]).endswith(("Z", "+00:00")): raise ValueError("AUTHENTIC_REHEARSAL_TIMESTAMP_INVALID")
+    if not isinstance(receipt.get("observed_local_timestamp"), str) or not receipt["observed_local_timestamp"].startswith("2026-09-07T") or not receipt["observed_local_timestamp"].endswith("-07:00"):
+        raise ValueError("AUTHENTIC_REHEARSAL_TIMESTAMP_INVALID")
+    if receipt.get("controller_schema") != STATE_SCHEMA_V2 or receipt.get("controller_identity") != CONTROLLER_ID or receipt.get("phase_before") != PHASE or receipt.get("phase_after") != PHASE:
+        raise ValueError("AUTHENTIC_REHEARSAL_CONTROLLER_INVALID")
+    if not isinstance(receipt.get("sequence_before"), int) or receipt.get("sequence_after") != receipt["sequence_before"] + 1:
+        raise ValueError("AUTHENTIC_REHEARSAL_SEQUENCE_INVALID")
+    if receipt.get("activated_before") is not False or receipt.get("activated_after") is not False:
+        raise ValueError("AUTHENTIC_REHEARSAL_ACTIVITY_INVALID")
+    zero = ("released_credits", "requests", "confirmed_credits", "ambiguous_credits", "candidate_count", "observation_count", "paper_positions", "paper_orders", "paper_fills", "paper_transactions")
+    if any(receipt.get(f"{key}_before") != 0 or receipt.get(f"{key}_after") != 0 for key in zero):
+        raise ValueError("AUTHENTIC_REHEARSAL_ACTIVITY_INVALID")
+    if receipt.get("authority_before") != LOCKS or receipt.get("authority_after") != LOCKS or receipt.get("authority_locked_before") is not True or receipt.get("authority_locked_after") is not True:
+        raise ValueError("AUTHENTIC_REHEARSAL_AUTHORITY_INVALID")
+    approval, identity = receipt.get("opaque_owner_approval_identity"), receipt.get("immutable_receipt_id")
+    if not isinstance(approval, str) or not 8 <= len(approval) <= 96 or not approval.replace("-", "").replace("_", "").isalnum(): raise ValueError("AUTHENTIC_REHEARSAL_APPROVAL_INVALID")
+    if not isinstance(identity, str) or not identity.startswith("rehearsal-") or len(identity) != 74: raise ValueError("AUTHENTIC_REHEARSAL_ID_INVALID")
+    if receipt.get("canonical_content_hash") != _receipt_hash(receipt): raise ValueError("AUTHENTIC_REHEARSAL_HASH_INVALID")
 
 
 def migrate_v1_to_v2(state: dict[str, Any], installation: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
@@ -167,6 +233,8 @@ def migrate_store_atomic(store: Any, *, timestamp: str) -> dict[str, Any]:
 
 
 def browser_projection_v2(state: dict[str, Any], *, running: bool) -> dict[str, Any]:
+    authentic = [r for r in state["rehearsal_receipts"] if r.get("receipt_type") == AUTHENTIC_RECEIPT_TYPE]
+    compatibility = [r for r in state["rehearsal_receipts"] if set(r) == COMPATIBILITY_RECEIPT_FIELDS]
     return {"schema_version": BROWSER_SCHEMA_V2, "state": "INSTALLED_BUT_DISABLED", "installed": state["installed"],
             "running": running, "activated": False, "controller_schema": state["schema_version"], "phase": state["phase"],
             "integrity": "VALID", "daily_hard_ceiling": 200, "released_now": 0,
@@ -175,6 +243,8 @@ def browser_projection_v2(state: dict[str, Any], *, running: bool) -> dict[str, 
             "requests_today": state["requests_used"], "credits_today": state["confirmed_credits"] + state["ambiguous_credits"],
             "authority_locked": True, "migration_status": state["migration_status"],
             "restart_recovery": state["restart_recovery_status"],
-            "monday_rehearsal_status": state["rehearsal_receipts"][-1]["classification"],
+            "monday_rehearsal_status": authentic[-1]["classification"] if authentic else "NOT_YET_RECORDED",
+            "authentic_rehearsal_status": "PASSED_CLOSED_HOLIDAY" if authentic else "NOT_YET_RECORDED",
+            "compatibility_rehearsal_status": "MIGRATED_COMPATIBILITY_RECEIPT_NOT_OPERATIONAL_PROOF" if compatibility else "UNAVAILABLE",
             "human_gate": "AWAITING_TUESDAY_OWNER_AUTHORIZATION", "next_action": "OWNER_STAGE_A_AUTHORIZATION",
             "last_update": state["updated_at"], "error_category": None}

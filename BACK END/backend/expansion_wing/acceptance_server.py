@@ -469,7 +469,8 @@ class Compositor:
             "restart_recovery", "integrity", "last_update", "next_action", "authority_locked",
             "error_category"}
         controller_v2_fields = controller_fields | {"controller_schema", "daily_hard_ceiling", "released_now",
-            "stage_a", "stage_b", "stage_c", "migration_status"}
+            "stage_a", "stage_b", "stage_c", "migration_status", "authentic_rehearsal_status",
+            "compatibility_rehearsal_status"}
         common_safe = (
             isinstance(controller, dict) and set(controller) == controller_fields
             and all(isinstance(controller.get(key), bool) for key in ("installed", "running", "activated", "authority_locked"))
@@ -488,6 +489,8 @@ class Compositor:
             and controller.get("stage_a") == {"draft_count": 50, "maximum": 100, "state": "NOT_RELEASED"}
             and controller.get("stage_b") == {"maximum": 50, "state": "LOCKED"}
             and controller.get("stage_c") == {"maximum": 50, "state": "LOCKED"}
+            and controller.get("authentic_rehearsal_status") in {"NOT_YET_RECORDED", "PASSED_CLOSED_HOLIDAY"}
+            and controller.get("compatibility_rehearsal_status") in {"MIGRATED_COMPATIBILITY_RECEIPT_NOT_OPERATIONAL_PROOF", "UNAVAILABLE"}
             and isinstance(controller.get("requests_today"), int) and isinstance(controller.get("credits_today"), int)
             and 0 <= controller["credits_today"] <= controller["requests_today"] <= 200
         )
