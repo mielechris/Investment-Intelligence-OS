@@ -95,6 +95,11 @@ class Superbatch28H(unittest.TestCase):
             self.assertEqual(main(["--reviewed-operational-mode","validate-installed","--expected-source-commit",COMMIT]),5)
         self.assertEqual(main(["--reviewed-operational-mode","--browser","validate-installed","--expected-source-commit",COMMIT]),5)
 
+    def test_repository_gate_uses_explicit_feature_origin(self):
+        source=Path(__file__).with_name("unattended_supervisor_installer.py").read_text()
+        self.assertIn('origin/{BRANCH}',source)
+        self.assertNotIn('"@{u}"',source)
+
     def test_manifest_rejects_duplicate_traversal_absolute_and_noncanonical(self):
         with tempfile.TemporaryDirectory() as raw:
             candidate=self.candidate(raw); value=json.loads((candidate/MANIFEST_NAME).read_text())

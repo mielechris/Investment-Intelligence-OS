@@ -26,6 +26,7 @@ SCHEMA = "iios-unattended-supervisor-installation-v1"
 ROLLBACK_SCHEMA = "iios-unattended-supervisor-rollback-v1"
 INSTALLER_VERSION = "superbatch-28h-v1"
 LABEL = "com.iios.expansion-wing-unattended-tuesday"
+BRANCH = "feature/iios-expansion-wing-dual-book-machinery"
 ENTRYPOINT = "expansion_wing.unattended_tuesday_service"
 STATE_ROOT_IDENTITY = "IIOS_UNATTENDED_TUESDAY"
 PLIST_IDENTITY = "com.iios.expansion-wing-unattended-tuesday.plist"
@@ -383,7 +384,8 @@ def _git(command: list[str]) -> str:
 
 
 def repository_gate(expected: str) -> None:
-    if not _commit(expected) or _git(["rev-parse","HEAD"])!=expected or _git(["rev-parse","@{u}"])!=expected:
+    if (not _commit(expected) or _git(["branch","--show-current"])!=BRANCH
+            or _git(["rev-parse","HEAD"])!=expected or _git(["rev-parse",f"origin/{BRANCH}"])!=expected):
         raise ValueError("SOURCE_COMMIT_MISMATCH")
     if _git(["status","--porcelain=v1"]): raise ValueError("SOURCE_COMMIT_MISMATCH")
 
