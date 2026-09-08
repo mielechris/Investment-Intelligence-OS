@@ -21,6 +21,7 @@ from .unattended_tuesday import BROWSER_SCHEMA as UNATTENDED_BROWSER_SCHEMA, bro
 from .unattended_policy_reader import PROVENANCE_ABSENT, PROVENANCE_AUTHENTIC, PROVENANCE_SYNTHETIC, UnattendedPolicyReader
 from .unattended_supervisor_installer import supervisor_browser_projection
 from .operational_market_executor import LOCKED_AUTHORITY as EXECUTOR_LOCKED_AUTHORITY
+from .operational_market_executor_installer import browser_projection as operational_executor_projection
 
 UNATTENDED_RELEASED_CREDITS_BY_PHASE = {
     "UNATTENDED_POLICY_NOT_INSTALLED": 0,
@@ -205,7 +206,7 @@ class Compositor:
         self.controller_reader = controller_reader
         self.unattended_reader = unattended_reader or UnattendedPolicyReader().read
         self.supervisor_reader = supervisor_reader or supervisor_browser_projection
-        self.executor_reader = executor_reader
+        self.executor_reader = executor_reader or operational_executor_projection
         self.controller_status_provenance = controller_status_provenance
 
     def _reachability(self) -> str:

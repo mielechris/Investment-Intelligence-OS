@@ -160,6 +160,16 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
     store=PolicyStore(policy_root); now=clock or (lambda:datetime.now(timezone.utc)); wait=sleep or time.sleep; count=0
     try:
         while iterations is None or count<iterations:
+            # The installed executor is reconstructed from its persisted plan on
+            # every supervisor cycle. Recovery is read/write-local only; canary
+            # dispatch remains exclusive to the owner-authorized one-shot CLI.
+            if root is None:
+                from .operational_market_executor_installer import INSTALL_ROOT
+                if INSTALL_ROOT.exists():
+                    try:
+                        from .operational_market_executor_service import production_coordinator
+                        production_coordinator().recover()
+                    except (OSError,ValueError,RuntimeError): return 4
             if (policy_root/POLICY_NAME).exists():
                 try: tick(store,now())
                 except (OSError,ValueError): return 4

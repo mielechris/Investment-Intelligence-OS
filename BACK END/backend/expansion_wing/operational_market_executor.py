@@ -23,12 +23,14 @@ from .tuesday_whole_factory import LOCKED_AUTHORITY
 
 SCHEMA = "iios-operational-market-executor-v1"
 RECEIPT_SCHEMA = "iios-operational-market-evidence-receipt-v1"
+PLAN_SCHEMA = "iios-operational-market-request-plan-v1"
 FULL_PLAN = "FULL_SESSION_50"
 LATE_PLAN = "PARTIAL_SESSION_LATE_START"
+CANARY_PLAN = "SPY_SNAPSHOT_CANARY_1"
 LIFECYCLES = {"PLANNED", "RESERVED", "DISPATCH_STARTED", "CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 TERMINAL = {"CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 PATHS = {"MARKET_SNAPSHOT": "/prices/snapshot", "HISTORICAL_OHLCV": "/prices", "COMPANY_FACTS": "/company/facts"}
-WINDOWS = {"OPENING": ("06:30", "07:00"), "BASELINE": ("06:30", "09:30"),
+WINDOWS = {"CANARY": ("00:00", "23:59"), "OPENING": ("06:30", "07:00"), "BASELINE": ("06:30", "09:30"),
            "INTRADAY": ("09:30", "12:55"), "CLOSING": ("12:55", "13:05")}
 MAX_BODY = 2_000_000
 PILOTS = tuple(row[0] for row in PILOT_INSTRUMENTS)
@@ -72,6 +74,10 @@ def partial_session_plan(now_local: datetime) -> tuple[dict[str, Any], ...]:
     if hm < WINDOWS["BASELINE"][1]: rows.append(_row(LATE_PLAN, "BASELINE", "COMPANY_FACTS", "MU"))
     return tuple(rows)
 
+def canary_plan() -> tuple[dict[str, Any], ...]:
+    """The only plan accepted by the separately owner-authorized canary command."""
+    return (_row(CANARY_PLAN, "CANARY", "MARKET_SNAPSHOT", "SPY"),)
+
 def plan_identity(rows: tuple[dict[str, Any], ...]) -> str:
     return hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -90,12 +96,12 @@ class ProviderBoundary(Protocol):
 class FinancialDatasetsOperationalBoundary:
     """Credential bytes exist only for the duration of one exact header call."""
     def __init__(self, credentials: SecurityFrameworkCredentialProvider, transport: Any):
-        self.credentials=credentials; self.transport=transport
+        self.credentials=credentials; self.transport=transport; self.credential_accesses=0
     def validate(self)->None:
         if self.credentials.adapter.service!=KEYCHAIN_SERVICE.encode("ascii") or self.transport.trust_readiness()!="READY": raise ValueError("OPERATIONAL_BOUNDARY_INVALID")
     def request(self,row:dict[str,Any])->BoundaryResponse:
         if row.get("path") not in PATHS.values() or row.get("cost")!=1: raise ValueError("ENDPOINT_NOT_ALLOWED")
-        secret=self.credentials.retrieve()
+        self.credential_accesses+=1; secret=self.credentials.retrieve()
         try:
             status,content_type,body,latency=self.transport.operational_request(path=row["path"],ticker=row["ticker"],credential=secret)
             return BoundaryResponse(status,content_type,body,latency,True)
@@ -107,21 +113,26 @@ class ExecutorStore:
     def state_path(self) -> Path: return self.root / "executor-state.json"
     @property
     def lkv_path(self) -> Path: return self.root / "executor-state.last-known-valid.json"
+    @property
+    def plan_path(self) -> Path: return self.root / "request-plan.json"
     def initialize(self, rows: tuple[dict[str, Any], ...], classification: str) -> dict[str, Any]:
         if self.root.exists(): raise ValueError("EXECUTOR_STORE_ALREADY_EXISTS")
         self.root.mkdir(mode=0o700, parents=False); (self.root / "receipts").mkdir(mode=0o700); (self.root / "evidence").mkdir(mode=0o700)
+        plan={"schema_version":PLAN_SCHEMA,"classification":classification,"plan_identity":plan_identity(rows),
+              "rows":list(rows),"content_hash":""}
+        plan["content_hash"]=_digest(plan); _atomic(self.root,self.plan_path.name,plan)
         state = {"schema_version": SCHEMA, "generation": 1, "classification": classification,
                  "plan_identity": plan_identity(rows), "planned": len(rows), "dispatched": 0, "completed": 0,
                  "failed": 0, "ambiguous": 0, "confirmed_credits": 0, "ambiguous_credits": 0,
                  "released_credits": 0, "stage_a": "LOCKED", "stage_b": "LOCKED", "stage_c": "LOCKED",
                  "phase": "EXECUTOR_READY_DISABLED", "next_gate": "OWNER_CANARY_AUTHORIZATION",
-                 "requests": {r["identity"]: {"lifecycle": "PLANNED", "cost": 1} for r in rows},
+                 "keychain_accesses":0,"requests": {r["identity"]: {"lifecycle": "PLANNED", "cost": 1} for r in rows},
                  "authority": LOCKED_AUTHORITY.copy(), "content_hash": ""}
         state["content_hash"] = _digest(state); self.write(state); return state
     def validate_root(self) -> None:
         info=self.root.lstat()
         if self.root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("EXECUTOR_ROOT_INVALID")
-        allowed={"executor-state.json","executor-state.last-known-valid.json","executor.lock","receipts","evidence"}
+        allowed={"executor-state.json","executor-state.last-known-valid.json","request-plan.json","executor.lock","receipts","evidence"}
         if {p.name for p in self.root.iterdir()}-allowed: raise ValueError("EXECUTOR_INVENTORY_INVALID")
         for dirname in ("receipts","evidence"):
             p=self.root/dirname; i=p.lstat()
@@ -132,6 +143,15 @@ class ExecutorStore:
         self.validate_root(); state=_read_json(self.state_path); lkv=_read_json(self.lkv_path)
         if state != lkv: raise ValueError("EXECUTOR_STATE_AMBIGUOUS")
         return validate_state(state)
+    def read_plan(self) -> tuple[dict[str,Any],...]:
+        value=_read_json(self.plan_path)
+        if (value.get("schema_version")!=PLAN_SCHEMA or value.get("content_hash")!=_digest(value)
+                or not isinstance(value.get("rows"),list)):
+            raise ValueError("REQUEST_PLAN_INVALID")
+        rows=tuple(value["rows"])
+        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN}:
+            raise ValueError("REQUEST_PLAN_INVALID")
+        return rows
     def write(self, state: dict[str, Any]) -> None:
         validate_state(state)
         _atomic(self.root, self.state_path.name, state); _atomic(self.root, self.lkv_path.name, state)
@@ -141,9 +161,12 @@ class ExecutorStore:
         _atomic(self.root/"receipts", identity+".json", receipt)
 
 def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(_read_bytes(path))
+
+def _read_bytes(path: Path) -> bytes:
     i=path.lstat()
     if path.is_symlink() or not stat.S_ISREG(i.st_mode) or stat.S_IMODE(i.st_mode)!=0o600 or i.st_uid!=os.getuid() or not 0<i.st_size<=MAX_BODY: raise ValueError("EXECUTOR_FILE_INVALID")
-    return json.loads(path.read_bytes())
+    return path.read_bytes()
 
 def _atomic_bytes(root: Path, name: str, payload: bytes) -> None:
     if len(payload)>MAX_BODY: raise ValueError("RESPONSE_TOO_LARGE")
@@ -160,6 +183,7 @@ def _atomic(root: Path, name: str, value: dict[str, Any]) -> None:
 def validate_state(s: Any) -> dict[str, Any]:
     if not isinstance(s,dict) or s.get("schema_version")!=SCHEMA or s.get("content_hash")!=_digest(s): raise ValueError("EXECUTOR_STATE_INVALID")
     if s.get("authority")!=LOCKED_AUTHORITY or any(s.get(k)!="LOCKED" for k in ("stage_b","stage_c")): raise ValueError("EXECUTOR_AUTHORITY_INVALID")
+    if not isinstance(s.get("keychain_accesses"),int) or s["keychain_accesses"]<0: raise ValueError("EXECUTOR_ACCOUNTING_INVALID")
     req=s.get("requests")
     if not isinstance(req,dict) or len(req)!=s.get("planned") or any(v.get("lifecycle") not in LIFECYCLES for v in req.values()): raise ValueError("EXECUTOR_REQUEST_STATE_INVALID")
     confirmed=sum(v["lifecycle"]=="CONFIRMED" for v in req.values()); ambiguous=sum(v["lifecycle"]=="AMBIGUOUS" for v in req.values())
@@ -174,7 +198,7 @@ class OperationalMarketEvidenceCoordinator:
         required={"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}
         if set(gates)!=required or not all(gates.values()) or len(self.rows)>50 or any(r["cost"]!=1 for r in self.rows): return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
         self.boundary.validate(); s=self.store.read()
-        if s["plan_identity"]!=plan_identity(self.rows): raise ValueError("REQUEST_PLAN_MISMATCH")
+        if s["plan_identity"]!=plan_identity(self.rows) or self.store.read_plan()!=self.rows: raise ValueError("REQUEST_PLAN_MISMATCH")
         return "EXECUTOR_READY"
     def release(self, credits: int) -> None:
         s=self.store.read()
@@ -188,6 +212,8 @@ class OperationalMarketEvidenceCoordinator:
                 if receipt.exists():
                     documented=_read_json(receipt)
                     if documented.get("schema_version")!=RECEIPT_SCHEMA or documented.get("request_identity")!=identity or documented.get("content_hash")!=_digest(documented): raise ValueError("RECEIPT_INVALID")
+                    evidence=self.store.root/"evidence"/(identity+".json")
+                    if hashlib.sha256(_read_bytes(evidence)).hexdigest()!=documented.get("evidence_hash"): raise ValueError("EVIDENCE_INVALID")
                     value["lifecycle"]="CONFIRMED"
                 else: value["lifecycle"]="AMBIGUOUS"
                 changed=True
@@ -204,19 +230,28 @@ class OperationalMarketEvidenceCoordinator:
             if s["stage_a"]!="RUNNING" or s["released_credits"]<1: return "REQUEST_BLOCKED"
             s["requests"][identity]["lifecycle"]="RESERVED"; self._write(s)
             s["requests"][identity]["lifecycle"]="DISPATCH_STARTED"; self._recount(s); self._write(s)
+            before=int(getattr(self.boundary,"credential_accesses",0))
             try: response=self.boundary.request(row)
             except Exception as exc:
-                s=self.store.read(); transmitted=getattr(exc,"transmitted",True)
+                s=self.store.read(); s["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before); transmitted=getattr(exc,"transmitted",getattr(exc,"request_started",True))
                 s["requests"][identity]["lifecycle"]="AMBIGUOUS" if transmitted else "FAILED_PRETRANSMISSION"
                 if not transmitted: s["failed"]+=1
-                self._recount(s); self._write(s); return s["requests"][identity]["lifecycle"]
-            clean=_validate_response(row,response)
+                self._recount(s); self._terminalize(s,"PROVIDER_BOUNDARY_FAILED"); return s["requests"][identity]["lifecycle"]
+            s=self.store.read(); s["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before); self._write(s)
+            try: clean=_validate_response(row,response)
+            except Exception as exc:
+                s=self.store.read(); s["requests"][identity]["lifecycle"]="AMBIGUOUS"
+                self._recount(s); self._terminalize(s,_safe_category(exc,"PROVIDER_RESPONSE_REJECTED")); return "AMBIGUOUS"
             receipt={"schema_version":RECEIPT_SCHEMA,"request_identity":identity,"ticker":row["ticker"],"endpoint":row["endpoint"],
                      "window":row["window"],"status":"CONFIRMED","credit_cost":1,"observed_at":datetime.now(timezone.utc).isoformat(),
                      "response_bytes":len(response.body),"latency_ms":response.latency_ms,"evidence_hash":hashlib.sha256(response.body).hexdigest(),
+                     "provider_timestamp":clean["provider_timestamp"],"freshness":clean["freshness"],
                      "normalized_hash":_digest(clean),"content_hash":""}
             receipt["content_hash"]=_digest(receipt); self.store.receipt(identity,receipt,response.body)
-            s=self.store.read(); s["requests"][identity]["lifecycle"]="CONFIRMED"; self._recount(s); self._write(s); return "CONFIRMED"
+            s=self.store.read(); s["requests"][identity]["lifecycle"]="CONFIRMED"; self._recount(s)
+            if s["classification"]==CANARY_PLAN: self._terminalize(s,None,phase="CANARY_CONFIRMED")
+            else: self._write(s)
+            return "CONFIRMED"
         finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
     def scheduled_tick(self, now_local: datetime) -> str:
         """Run only identities in the current immutable window; never releases allowance."""
@@ -236,20 +271,41 @@ class OperationalMarketEvidenceCoordinator:
         s=self.store.read(); s["released_credits"]=0; s["stage_a"]="LOCKED"; s["stage_b"]="LOCKED"; s["stage_c"]="LOCKED"
         s["phase"]="SESSION_CLOSED" if failure is None else "SESSION_FAILED_CLOSED"; s["next_gate"]="NONE"; s["failure_category"]=failure; self._write(s)
     def projection(self) -> dict[str,Any]:
-        s=self.store.read(); return {k:s[k] for k in ("schema_version","generation","classification","phase","next_gate","planned","dispatched","completed","failed","ambiguous","confirmed_credits","ambiguous_credits","released_credits","stage_a","stage_b","stage_c","authority")}
+        s=self.store.read(); return {k:s[k] for k in ("schema_version","generation","classification","phase","next_gate","planned","dispatched","completed","failed","ambiguous","confirmed_credits","ambiguous_credits","released_credits","keychain_accesses","stage_a","stage_b","stage_c","authority")}
     def _recount(self,s):
         vals=list(s["requests"].values()); s["dispatched"]=sum(v["lifecycle"] in {"DISPATCH_STARTED","CONFIRMED","AMBIGUOUS"} for v in vals); s["completed"]=sum(v["lifecycle"]=="CONFIRMED" for v in vals); s["ambiguous"]=sum(v["lifecycle"]=="AMBIGUOUS" for v in vals); s["confirmed_credits"]=s["completed"]; s["ambiguous_credits"]=s["ambiguous"]
     def _write(self,s): s["generation"]+=1; s["content_hash"]=_digest(s); self.store.write(s)
+    def _terminalize(self,s,failure,*,phase="FAILED_CLOSED"):
+        s["released_credits"]=0
+        for key in ("stage_a","stage_b","stage_c"): s[key]="LOCKED"
+        s["phase"]=phase; s["next_gate"]="NONE"; s["failure_category"]=failure; self._write(s)
+
+def _safe_category(exc:Exception,default:str)->str:
+    value=str(exc)
+    return value if re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}",value) else default
 
 def _validate_response(row:dict[str,Any], response:BoundaryResponse)->dict[str,Any]:
     if not response.transmitted or response.status!=200 or response.content_type.split(";",1)[0].strip().lower()!="application/json" or not 0<len(response.body)<=MAX_BODY: raise ValueError("PROVIDER_RESPONSE_REJECTED")
-    value=json.loads(response.body)
+    try: value=json.loads(response.body)
+    except (UnicodeDecodeError,json.JSONDecodeError): raise ValueError("PROVIDER_SCHEMA_REJECTED") from None
     if not isinstance(value,dict): raise ValueError("PROVIDER_SCHEMA_REJECTED")
-    rows=value.get("data") if row["endpoint"]!="COMPANY_FACTS" else [value.get("company_facts")]
+    if row["endpoint"]=="MARKET_SNAPSHOT": rows=[value.get("snapshot")]
+    elif row["endpoint"]=="COMPANY_FACTS": rows=[value.get("company_facts")]
+    else: rows=value.get("prices") or value.get("data")
     if not isinstance(rows,list) or not rows or not isinstance(rows[0],dict) or rows[0].get("ticker")!=row["ticker"]: raise ValueError("PROVIDER_SCHEMA_REJECTED")
     stamp=rows[0].get("time") or rows[0].get("timestamp")
     if row["endpoint"]!="COMPANY_FACTS" and not isinstance(stamp,str): raise ValueError("PROVIDER_TIMESTAMP_MISSING")
-    return {"ticker":row["ticker"],"timestamp_available":stamp is not None,"field_count":len(rows[0])}
+    if row["endpoint"]=="MARKET_SNAPSHOT" and (not isinstance(rows[0].get("price"),(int,float)) or isinstance(rows[0].get("price"),bool)):
+        raise ValueError("PROVIDER_SCHEMA_REJECTED")
+    freshness="UNAVAILABLE"
+    if stamp is not None:
+        try: parsed=datetime.fromisoformat(stamp.replace("Z","+00:00"))
+        except ValueError: raise ValueError("PROVIDER_TIMESTAMP_INVALID") from None
+        if parsed.tzinfo is None or parsed.utcoffset()!=timezone.utc.utcoffset(parsed): raise ValueError("PROVIDER_TIMESTAMP_INVALID")
+        age=(datetime.now(timezone.utc)-parsed).total_seconds()
+        if age < -60: raise ValueError("PROVIDER_TIMESTAMP_FUTURE")
+        freshness="CURRENT" if age<=900 else "STALE"
+    return {"ticker":row["ticker"],"provider_timestamp":stamp,"freshness":freshness,"field_count":len(rows[0])}
 
 def production_contract() -> dict[str,Any]:
     """Static contract only; construction performs no Keychain or network access."""

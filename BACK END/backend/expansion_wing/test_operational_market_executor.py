@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json, os, stat, tempfile, unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from .operational_market_executor import *
@@ -11,14 +11,14 @@ class Boundary:
     def request(self,row):
         self.calls.append(row["identity"])
         if self.fail: raise self.fail
-        payload={"company_facts":{"ticker":row["ticker"]}} if row["endpoint"]=="COMPANY_FACTS" else {"data":[{"ticker":row["ticker"],"time":"2026-09-08T15:00:00Z","price":1}]}
+        stamp=datetime.now(timezone.utc).isoformat(); payload={"company_facts":{"ticker":row["ticker"]}} if row["endpoint"]=="COMPANY_FACTS" else ({"snapshot":{"ticker":row["ticker"],"time":stamp,"price":1}} if row["endpoint"]=="MARKET_SNAPSHOT" else {"prices":[{"ticker":row["ticker"],"time":stamp,"price":1}]})
         return BoundaryResponse(200,"application/json",json.dumps(payload).encode(),1.0)
 class Pre(Exception): transmitted=False
 class Amb(Exception): transmitted=True
 
 class OperationalExecutorTests(unittest.TestCase):
     def make(self,rows=None):
-        td=tempfile.TemporaryDirectory(); root=Path(td.name)/"executor"; rows=rows or full_plan(); store=ExecutorStore(root); store.initialize(rows,FULL_PLAN); boundary=Boundary(); return td,store,boundary,OperationalMarketEvidenceCoordinator(store,rows,boundary),rows
+        td=tempfile.TemporaryDirectory(); root=Path(td.name)/"executor"; rows=rows or full_plan(); store=ExecutorStore(root); store.initialize(rows,rows[0]["plan"]); boundary=Boundary(); return td,store,boundary,OperationalMarketEvidenceCoordinator(store,rows,boundary),rows
     def gates(self): return {k:True for k in {"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}}
     def test_exact_full_plan(self):
         rows=full_plan(); self.assertEqual((len(rows),len({r['identity'] for r in rows}),sum(r['cost'] for r in rows)),(50,50,50))
@@ -43,8 +43,8 @@ class OperationalExecutorTests(unittest.TestCase):
     def test_ambiguous_never_repeats_and_pretransmission_remains_unspent(self):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50)
         b.fail=Amb(); self.assertEqual(c.execute(rows[0]["identity"]),"AMBIGUOUS"); b.fail=None; self.assertEqual(c.execute(rows[0]["identity"]),"DUPLICATE_SUPPRESSED")
-        b.fail=Pre(); self.assertEqual(c.execute(rows[1]["identity"]),"FAILED_PRETRANSMISSION"); s=store.read(); self.assertEqual((s["ambiguous_credits"],s["confirmed_credits"]),(1,0))
-        b.fail=None; self.assertEqual(c.execute(rows[1]["identity"]),"DUPLICATE_SUPPRESSED")
+        s=store.read(); self.assertEqual((s["ambiguous_credits"],s["confirmed_credits"],s["released_credits"]),(1,0,0))
+        self.assertEqual(c.execute(rows[1]["identity"]),"REQUEST_BLOCKED")
     def test_crash_recovery_marks_dispatched_ambiguous(self):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50); s=store.read(); s["requests"][rows[0]["identity"]]["lifecycle"]="DISPATCH_STARTED"; c._recount(s); c._write(s)
         self.assertEqual(c.recover()["requests"][rows[0]["identity"]]["lifecycle"],"AMBIGUOUS"); self.assertEqual(c.execute(rows[0]["identity"]),"DUPLICATE_SUPPRESSED")
@@ -56,5 +56,15 @@ class OperationalExecutorTests(unittest.TestCase):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50); c.close("EXECUTOR_UNAVAILABLE"); s=store.read(); self.assertEqual((s["released_credits"],s["stage_a"],s["stage_b"],s["stage_c"]),(0,"LOCKED","LOCKED","LOCKED"))
     def test_production_contract_is_fixed_and_inert(self):
         value=production_contract(); self.assertFalse(value["network_enabled_by_default"]); self.assertFalse(value["retry"]); self.assertEqual((value["host"],value["port"],value["auth_header"]),("api.financialdatasets.ai",443,"X-API-KEY")); self.assertFalse(any(value["authority"].values()))
+    def test_canary_is_one_immutable_row_and_closes_allowance(self):
+        rows=canary_plan(); self.assertEqual((len(rows),rows[0]["ticker"],rows[0]["path"],rows[0]["cost"]),(1,"SPY","/prices/snapshot",1))
+        td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); self.assertEqual(store.read_plan(),rows)
+        c.preflight(self.gates()); c.release(1); self.assertEqual(c.execute(rows[0]["identity"]),"CONFIRMED")
+        s=store.read(); self.assertEqual((s["phase"],s["released_credits"],s["completed"]),("CANARY_CONFIRMED",0,1))
+    def test_post_transmission_schema_failure_is_ambiguous_and_locked(self):
+        rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1)
+        def bad(_): return BoundaryResponse(200,"application/json",b'{"data":[]}',1.0)
+        b.request=bad; self.assertEqual(c.execute(rows[0]["identity"]),"AMBIGUOUS")
+        s=store.read(); self.assertEqual((s["phase"],s["ambiguous_credits"],s["released_credits"],s["stage_a"]),("FAILED_CLOSED",1,0,"LOCKED"))
 
 if __name__=="__main__": unittest.main()

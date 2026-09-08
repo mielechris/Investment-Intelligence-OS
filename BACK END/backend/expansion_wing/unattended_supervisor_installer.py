@@ -31,13 +31,16 @@ BRANCH = "feature/iios-expansion-wing-dual-book-machinery"
 ENTRYPOINT = "expansion_wing.unattended_tuesday_service"
 STATE_ROOT_IDENTITY = "IIOS_UNATTENDED_TUESDAY"
 PLIST_IDENTITY = "com.iios.expansion-wing-unattended-tuesday.plist"
-MAX_FILES = 8
+MAX_FILES = 9
 MAX_FILE_BYTES = 1_048_576
 ARTIFACT_NAMES = (
     "expansion_wing/provider_readiness.py",
     "expansion_wing/provider_readiness_service.py",
     "expansion_wing/unattended_tuesday.py",
     "expansion_wing/unattended_tuesday_service.py",
+    "expansion_wing/operational_market_executor.py",
+    "expansion_wing/operational_market_executor_installer.py",
+    "expansion_wing/operational_market_executor_service.py",
     PLIST_IDENTITY,
 )
 INSTALL_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor"
