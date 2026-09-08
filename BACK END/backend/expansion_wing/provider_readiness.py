@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
 from .financial_datasets import API_HOST, AUTH_HEADER, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
@@ -20,8 +22,14 @@ BROWSER_SCHEMA = "iios-provider-stage-a-readiness-browser-v1"
 PROVIDER = "FINANCIAL_DATASETS"
 PROVIDER_CONTRACT = "fd-stage-a-standard-v1"
 PRICING_OBSERVATION_IDENTITY = "financial-datasets-pricing-2026-09-08-v1"
-PRICING_OBSERVED_AT = "2026-09-08T01:09:06+00:00"
-PRICING_EXPIRES_AT = "2026-09-08T13:20:00+00:00"
+PRICING_OBSERVED_AT = "2026-09-08T01:25:49+00:00"
+PRICING_EXPIRES_AT = "2026-09-09T01:25:49+00:00"
+MAX_COST_EVIDENCE_AGE_SECONDS = 86_400
+REQUIRED_SESSION_COVERAGE_UTC = "2026-09-08T20:05:00+00:00"
+READINESS_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdayReadiness"
+COST_CONTRACT_NAME = "provider-cost-contract.json"
+CREDENTIAL_STATUS_NAME = "credential-presence.json"
+READINESS_INVENTORY = frozenset({COST_CONTRACT_NAME, CREDENTIAL_STATUS_NAME})
 PRIOR_SESSION_DATE = "2026-09-04"
 SOURCE_CONTROLLED_SESSIONS = ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08")
 RATE_LIMIT_PER_MINUTE = 10
@@ -110,7 +118,8 @@ class EndpointCost:
             observed, expires = _utc(self.observed_at), _utc(self.expires_at)
         except (TypeError, ValueError):
             return "ENDPOINT_COST_UNKNOWN"
-        if expires <= observed or now < observed or now > expires:
+        if (expires <= observed or (expires-observed).total_seconds() > MAX_COST_EVIDENCE_AGE_SECONDS
+                or expires < _utc(REQUIRED_SESSION_COVERAGE_UTC) or now < observed or now > expires):
             return "COST_CONTRACT_EXPIRED"
         return "VALID"
 
@@ -145,8 +154,52 @@ class FixedCredentialBoundary:
         self._probe = probe
 
     def status(self) -> str:
-        result = self._probe.exists(service=self.service, account=self.account)
-        return "AVAILABLE" if result is True else "NOT_AVAILABLE" if result is False else "AMBIGUOUS"
+        try: result = self._probe.exists(service=self.service, account=self.account)
+        except PermissionError: return "ACCESS_DENIED"
+        return "AVAILABLE" if result is True else "UNAVAILABLE" if result is False else "AMBIGUOUS"
+
+
+def cost_contract_document() -> dict[str, Any]:
+    contracts=reviewed_cost_contracts()
+    value={"schema":COST_SCHEMA,"provider_identity":PROVIDER,"pricing_change_invalidation":True,
+        "browser_refresh":False,"provider_execution_refresh":False,"planned_request_count":50,
+        "worst_case_credits":50,"stage_a_maximum":STAGE_A_MAXIMUM,"daily_hard_ceiling":DAILY_CEILING,
+        "contracts":[contracts[key].document() for key in sorted(contracts)]}
+    return value|{"document_hash":_hash(value)}
+
+
+def validate_cost_contract_document(value:Any,*,now:datetime)->dict[str,Any]:
+    expected=cost_contract_document()
+    if value != expected: raise ValueError("COST_CONTRACT_HASH_INVALID")
+    if any(contract.validate(now)!="VALID" for contract in reviewed_cost_contracts().values()):
+        raise ValueError("COST_CONTRACT_EXPIRED")
+    return value
+
+
+def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=None)->dict[str,Any]:
+    """Read fixed owner-only metadata only; never reads Keychain or network."""
+    current=datetime.now(timezone.utc) if now is None else now
+    try:
+        info=root.lstat()
+        if root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700: raise ValueError("READINESS_ROOT_INVALID")
+        if {item.name for item in root.iterdir()}!=READINESS_INVENTORY: raise ValueError("READINESS_INVENTORY_INVALID")
+        docs={}
+        for name in READINESS_INVENTORY:
+            path=root/name; item=path.lstat()
+            if path.is_symlink() or not stat.S_ISREG(item.st_mode) or stat.S_IMODE(item.st_mode)!=0o600: raise ValueError("READINESS_FILE_INVALID")
+            docs[name]=json.loads(path.read_text())
+        validate_cost_contract_document(docs[COST_CONTRACT_NAME],now=current)
+        credential=docs[CREDENTIAL_STATUS_NAME]
+        if set(credential)!={"schema","status","checked_at"} or credential.get("schema")!="iios-credential-presence-v1" or credential.get("status") not in {"AVAILABLE","UNAVAILABLE","AMBIGUOUS","ACCESS_DENIED"}: raise ValueError("CREDENTIAL_METADATA_INVALID")
+        class StoredProbe:
+            def exists(self,**kwargs):
+                del kwargs
+                return True if credential["status"]=="AVAILABLE" else False if credential["status"]=="UNAVAILABLE" else None
+        projection=evaluate_readiness(reviewed_cost_contracts(),FixedCredentialBoundary(StoredProbe()),now=current)
+        projection.update({"commissioning_state":"READY_FOR_OWNER_POLICY_AUTHORIZATION" if projection["failure_category"]=="PROVIDER_READY" else "FAILED_CLOSED","unattended_service_state":"INSTALLED_DISABLED","one_day_policy_state":"NOT_AUTHORIZED"})
+        return projection
+    except (OSError,ValueError,json.JSONDecodeError):
+        return {"schema_version":BROWSER_SCHEMA,"provider_state":"FAILED_CLOSED","commissioning_state":"UNAVAILABLE","unattended_service_state":"UNAVAILABLE","one_day_policy_state":"NOT_AUTHORIZED","authority_locked":True,"network_enabled":False}
 
 
 def revised_request_plan() -> tuple[dict[str, Any], ...]:
@@ -230,7 +283,7 @@ def evaluate_readiness(contracts: Mapping[str, EndpointCost], credential: FixedC
             failure = failure or "BUDGET_INSUFFICIENT"
     credential_state = credential.status()
     if credential_state != "AVAILABLE" and failure is None:
-        failure = "CREDENTIAL_NOT_AVAILABLE" if credential_state == "NOT_AVAILABLE" else "CREDENTIAL_AMBIGUOUS"
+        failure = {"UNAVAILABLE":"CREDENTIAL_NOT_AVAILABLE","AMBIGUOUS":"CREDENTIAL_AMBIGUOUS","ACCESS_DENIED":"CREDENTIAL_ACCESS_DENIED"}.get(credential_state,"CREDENTIAL_AMBIGUOUS")
     category = failure or "PROVIDER_READY"
     return {
         "schema_version": BROWSER_SCHEMA,

@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from .candidate_enrichment_bridge import validate_browser_projection as validate_enrichment_projection
 from .knowledge_pipeline import room_projection
 from .multi_asset_projection import SCHEMA_VERSION as MULTI_ASSET_SCHEMA, validate_projection
-from .provider_readiness import FixedCredentialBoundary, evaluate_readiness, reviewed_cost_contracts
+from .provider_readiness import installed_readiness_projection
 from .tuesday_opening_day import tuesday_command_projection, validate_browser_projection as validate_tuesday_projection
 from .tuesday_controller_state import BROWSER_SCHEMA as CONTROLLER_BROWSER_SCHEMA
 from .tuesday_controller_v2 import BROWSER_SCHEMA_V2 as CONTROLLER_BROWSER_SCHEMA_V2
@@ -528,14 +528,7 @@ class Compositor:
             "UNATTENDED_POLICY_NOT_INSTALLED" if unattended_safe else "UNAVAILABLE",
             unattended if unattended_safe else None,
         )
-        class _UnavailableCredential:
-            @staticmethod
-            def exists(*, service: str, account: str) -> bool:
-                # Deliberately does not inspect Keychain; arguments are fixed by the boundary.
-                return False
-        provider_readiness = evaluate_readiness(
-            reviewed_cost_contracts(), FixedCredentialBoundary(_UnavailableCredential()), now=datetime.now(timezone.utc)
-        )
+        provider_readiness = installed_readiness_projection(now=datetime.now(timezone.utc))
         sections["provider_stage_a_readiness"] = _section(
             str(provider_readiness["provider_state"]), provider_readiness
         )

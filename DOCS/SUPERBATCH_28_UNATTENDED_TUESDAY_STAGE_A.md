@@ -1,7 +1,7 @@
 # Superbatch 28 — Unattended Tuesday Stage A
 
 This checkpoint commissions source and isolated rehearsal contracts only. The
-operational one-day policy, its state root, and its LaunchAgent remain absent
+operational one-day policy and its session state remain absent. The separately reviewed unattended supervisor may be installed in an idle, disabled state; it owns a distinct lock and performs no scheduled work until the one-day policy exists.
 until separately checkpointed and authorized.
 
 ## Authority boundary

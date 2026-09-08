@@ -15,6 +15,8 @@ from .unattended_tuesday import (
 )
 
 OPERATIONAL_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesday"
+SUPERVISOR_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor"
+SUPERVISOR_LOCK_NAME = "unattended-supervisor.lock"
 ROLLBACK_ROOT = Path.home()/"Library/Application Support/IIOS/Rollback/UnattendedTuesday"
 ROLLBACK_FILES = frozenset({POLICY_NAME, STATE_NAME, LKV_NAME})
 
@@ -108,17 +110,29 @@ def tick(store:PolicyStore,now:datetime)->str:
         _write_state(store,state,policy); return target
     return "NO_ELIGIBLE_TRANSITION"
 
-def supervise(*,root:Path|None=None,clock=None,sleep=None)->int:
-    store=PolicyStore(OPERATIONAL_ROOT if root is None else root); now=clock or (lambda:datetime.now(timezone.utc)); wait=sleep or time.sleep
-    while True:
-        try: tick(store,now())
-        except (OSError,ValueError): return 4
-        wait(60)
+def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None)->int:
+    policy_root=OPERATIONAL_ROOT if root is None else root
+    lock_root=SUPERVISOR_ROOT if root is None else root.parent/(root.name+"Supervisor")
+    lock_root.mkdir(mode=0o700,parents=False,exist_ok=True); os.chmod(lock_root,0o700)
+    lock=open(lock_root/SUPERVISOR_LOCK_NAME,"a+"); os.chmod(lock.name,0o600)
+    try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError: lock.close(); return 4
+    store=PolicyStore(policy_root); now=clock or (lambda:datetime.now(timezone.utc)); wait=sleep or time.sleep; count=0
+    try:
+        while iterations is None or count<iterations:
+            if (policy_root/POLICY_NAME).exists():
+                try: tick(store,now())
+                except (OSError,ValueError): return 4
+            count+=1
+            if iterations is None or count<iterations: wait(60)
+        return 0
+    finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
 
 def main(argv:list[str]|None=None)->int:
     p=argparse.ArgumentParser(); group=p.add_mutually_exclusive_group(required=True)
     group.add_argument("--install-one-day-policy",action="store_true"); group.add_argument("--validate-policy",action="store_true")
     group.add_argument("--supervisor",action="store_true"); group.add_argument("--emergency-stop",action="store_true")
+    group.add_argument("--operational-supervisor",action="store_true")
     group.add_argument("--remove-policy-with-rollback",action="store_true")
     group.add_argument("--restore-policy-from-rollback",action="store_true")
     p.add_argument("--owner-authorization"); p.add_argument("--approval-timestamp"); p.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
