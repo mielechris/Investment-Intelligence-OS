@@ -86,6 +86,7 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
   const receivedAt = useRef<number | null>(null);
   const controllerGeneration = useRef<{ readAt: number; sequence: number } | null>(null);
   const unattendedGeneration = useRef<{ readAt: number; sequence: number } | null>(null);
+  const supervisorGeneration = useRef<{ readAt: number; identity: string } | null>(null);
   const [snapshotAgeSeconds, setSnapshotAgeSeconds] = useState<number | null>(null);
   useEffect(() => {
     let active = true;
@@ -126,6 +127,14 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
           if (Number.isFinite(unattendedReadAt) && Number.isFinite(unattendedSequence) && priorUnattended !== null
               && (unattendedReadAt < priorUnattended.readAt || (unattendedReadAt === priorUnattended.readAt && unattendedSequence < priorUnattended.sequence))) return;
           if (Number.isFinite(unattendedReadAt) && Number.isFinite(unattendedSequence)) unattendedGeneration.current = { readAt: unattendedReadAt, sequence: unattendedSequence };
+          const supervisor = object(object(object(payload).sections).unattended_supervisor_installation);
+          const supervisorData = object(supervisor.data);
+          const supervisorReadAt = Date.parse(String(supervisorData.coherent_read_timestamp ?? ""));
+          const supervisorIdentity = String(supervisorData.generation_identity ?? "");
+          const priorSupervisor = supervisorGeneration.current;
+          if (Number.isFinite(supervisorReadAt) && supervisorIdentity && priorSupervisor !== null
+              && supervisorReadAt < priorSupervisor.readAt) return;
+          if (Number.isFinite(supervisorReadAt) && supervisorIdentity) supervisorGeneration.current = { readAt: supervisorReadAt, identity: supervisorIdentity };
           const now = Date.now();
           failures = 0; setSnapshot(payload); receivedAt.current = now; setSnapshotAgeSeconds(0); setConnection("CURRENT");
         }

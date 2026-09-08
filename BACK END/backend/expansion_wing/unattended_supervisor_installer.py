@@ -47,6 +47,8 @@ MANIFEST_NAME = "installation-manifest.json"
 LOCK_NAME = "installation.lock"
 ROLLBACK_PARENT = Path.home()/"Library/Application Support/IIOS/Rollback"
 ROLLBACK_ROOT = ROLLBACK_PARENT/"UnattendedTuesdaySupervisor28H"
+MUSEUM_IDENTITY_ROOT = Path.home()/"Library/Application Support/IIOS/Museum5176"
+MUSEUM_IDENTITY_MANIFEST = MUSEUM_IDENTITY_ROOT/"installation-manifest.json"
 POLICY_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesday"
 LAUNCH_PLIST = Path.home()/"Library/LaunchAgents"/PLIST_IDENTITY
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
@@ -212,6 +214,69 @@ def validate_installed_root(*, expected_commit: str, root: Path = INSTALL_ROOT) 
     value=json.loads(manifest_path.read_text())
     validate_manifest(value,root/"installed-artifacts",expected_commit=expected_commit)
     return "INSTALLED_VALID"
+
+
+def museum_identity_document(source_commit:str,inventory_identity:str)->dict[str,Any]:
+    if not _commit(source_commit) or not isinstance(inventory_identity,str) or len(inventory_identity)!=64:
+        raise ValueError("MANIFEST_INVALID")
+    body={"schema":"iios-museum-5176-installation-v1","installed_source_commit":source_commit,
+          "bundle_inventory_identity":inventory_identity,"immutable":True}
+    return body|{"canonical_content_hash":_hash(body)}
+
+
+def validate_museum_identity(value:Any)->str:
+    if not isinstance(value,dict) or set(value)!={"schema","installed_source_commit","bundle_inventory_identity","immutable","canonical_content_hash"}:
+        raise ValueError("MANIFEST_INVALID")
+    body={k:value[k] for k in value if k!="canonical_content_hash"}
+    if value!=museum_identity_document(value.get("installed_source_commit"),value.get("bundle_inventory_identity")) or value["canonical_content_hash"]!=_hash(body):
+        raise ValueError("MANIFEST_INVALID")
+    return value["installed_source_commit"]
+
+
+def _read_owner_file(path:Path)->bytes:
+    stat=path.lstat()
+    if path.is_symlink() or not path.is_file() or stat.st_uid!=os.getuid() or stat.st_mode&0o777!=0o600:
+        raise ValueError("MANIFEST_INVALID")
+    return path.read_bytes()
+
+
+def _validate_owner_root(path:Path)->None:
+    stat=path.lstat()
+    if path.is_symlink() or not path.is_dir() or stat.st_uid!=os.getuid() or stat.st_mode&0o777!=0o700:
+        raise ValueError("MANIFEST_INVALID")
+
+
+def supervisor_browser_projection(*,supervisor_root:Path=INSTALL_ROOT,museum_manifest:Path=MUSEUM_IDENTITY_MANIFEST,
+                                  service_probe:Callable[[],dict[str,Any]]|None=None,clock:Callable[[],datetime]|None=None)->dict[str,Any]:
+    unavailable={"schema_version":"iios-unattended-supervisor-browser-v1","provenance":"UNAVAILABLE",
+        "supervisor_installed":None,"supervisor_running":None,"manifest_status":"UNAVAILABLE","inventory_status":"UNAVAILABLE",
+        "commit_binding":"UNAVAILABLE","service_ownership":"UNAVAILABLE","lock_ownership":"UNAVAILABLE",
+        "listener_count":None,"child_count":None,"coherent_read_timestamp":None,"generation_identity":None,
+        "readiness_classification":"UNAVAILABLE"}
+    if not supervisor_root.exists():
+        return unavailable|{"provenance":"SUPERVISOR_NOT_INSTALLED","supervisor_installed":False,
+                            "supervisor_running":False,"readiness_classification":"SUPERVISOR_NOT_INSTALLED"}
+    try:
+        _validate_owner_root(supervisor_root)
+        _validate_owner_root(museum_manifest.parent)
+        for _attempt in range(3):
+            first=_read_owner_file(supervisor_root/MANIFEST_NAME)
+            museum_first=_read_owner_file(museum_manifest)
+            manifest=json.loads(first); validate_manifest(manifest,supervisor_root/"installed-artifacts")
+            museum=json.loads(museum_first); museum_commit=validate_museum_identity(museum)
+            service=(service_probe or _service_probe)()
+            second=_read_owner_file(supervisor_root/MANIFEST_NAME); museum_second=_read_owner_file(museum_manifest)
+            if first!=second or museum_first!=museum_second: continue
+            if service!={"running":True,"supervisor_count":1,"lock_owned":True,"listeners":0,"children":0}: raise ValueError("FAILED_CLOSED")
+            commit=manifest["installed_source_commit"]; now=(clock or (lambda:datetime.now(timezone.utc)))()
+            generation=_hash({"supervisor_manifest":manifest["canonical_manifest_content_hash"],"museum":museum["canonical_content_hash"],"service":service})[:16]
+            return {"schema_version":"iios-unattended-supervisor-browser-v1","provenance":"AUTHENTIC_OPERATIONAL_SUPERVISOR_INSTALLATION",
+                "supervisor_installed":True,"supervisor_running":True,"manifest_status":"VALID","inventory_status":"VALID",
+                "commit_binding":"MATCH" if commit==museum_commit else "MISMATCH","service_ownership":"LAUNCHD","lock_ownership":"VALID",
+                "listener_count":0,"child_count":0,"coherent_read_timestamp":now.isoformat(),"generation_identity":generation,
+                "readiness_classification":"READY_FOR_OWNER_POLICY_AUTHORIZATION"}
+        raise ValueError("FAILED_CLOSED")
+    except (OSError,ValueError,json.JSONDecodeError,KeyError): return unavailable
 
 
 def build_operational_candidate(expected_commit: str) -> str:

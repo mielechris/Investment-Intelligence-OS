@@ -174,6 +174,7 @@ function TuesdayCommandCenter({ snapshot }: { snapshot: ExpansionSnapshot | null
   const books = record(section(snapshot, "books")?.data);
   const controller = record(section(snapshot, "tuesday_controller_status")?.data);
   const unattended = record(section(snapshot, "unattended_tuesday_status")?.data);
+  const supervisor = record(section(snapshot, "unattended_supervisor_installation")?.data);
   const unattendedUnavailable = section(snapshot, "unattended_tuesday_status")?.state === "UNAVAILABLE" || unattended.provenance === "UNAVAILABLE";
   const providerReadiness = record(section(snapshot, "provider_stage_a_readiness")?.data);
   const unattendedPhase = text(unattended.phase, "UNATTENDED_POLICY_NOT_INSTALLED");
@@ -256,6 +257,9 @@ function TuesdayCommandCenter({ snapshot }: { snapshot: ExpansionSnapshot | null
         {unattendedUnavailable ? <p className="mew-unattended-failure" role="alert">POLICY STATE FAILED CLOSED · OPERATOR REVIEW REQUIRED · NO TRADING ACTIVITY IMPLIED</p> : null}
         {unattended.failure_category ? <p className="mew-unattended-failure">PREFLIGHT FAILED CLOSED · {text(unattended.failure_category).replaceAll("_", " ")}</p> : null}
         <details><summary>Technical status</summary><p>{text(unattended.phase)} · GENERATION {scalar(unattended.generation_sequence)} · READ {scalar(unattended.last_coherent_read_timestamp)}</p></details>
+      </section>
+      <section className="mew-controller-status" aria-label="Authenticated unattended supervisor installation">
+        <article><h3>Unattended supervisor installation</h3><dl><div><dt>Provenance</dt><dd>{text(supervisor.provenance,"UNAVAILABLE")}</dd></div><div><dt>Installed</dt><dd>{supervisor.supervisor_installed === true ? "Yes" : "Unavailable"}</dd></div><div><dt>Running</dt><dd>{supervisor.supervisor_running === true ? "Yes" : "Unavailable"}</dd></div><div><dt>Manifest</dt><dd>{text(supervisor.manifest_status,"UNAVAILABLE")}</dd></div><div><dt>Inventory</dt><dd>{text(supervisor.inventory_status,"UNAVAILABLE")}</dd></div><div><dt>Commit binding</dt><dd>{text(supervisor.commit_binding,"UNAVAILABLE")}</dd></div><div><dt>Service ownership</dt><dd>{text(supervisor.service_ownership,"UNAVAILABLE")}</dd></div><div><dt>Lock ownership</dt><dd>{text(supervisor.lock_ownership,"UNAVAILABLE")}</dd></div><div><dt>Listeners / children</dt><dd>{scalar(supervisor.listener_count)} / {scalar(supervisor.child_count)}</dd></div><div><dt>Readiness</dt><dd>{text(supervisor.readiness_classification,"UNAVAILABLE")}</dd></div></dl></article>
       </section>
       <section className="mew-controller-status" aria-label="Tuesday commissioning status">
         <article><h3>Monday rehearsal</h3><p><strong>AUTHENTIC MONDAY REHEARSAL: {authenticRehearsalDisplay}</strong></p><p>{compatibilityRehearsal}</p><dl><div><dt>Date</dt><dd>September 7, 2026</dd></div><div><dt>Session</dt><dd>{authenticRehearsal === "PASSED_CLOSED_HOLIDAY" ? "Closed holiday · Passed" : "Closed holiday · Not yet recorded"}</dd></div><div><dt>Requests</dt><dd>0</dd></div><div><dt>Credits</dt><dd>0</dd></div><div><dt>Candidates</dt><dd>0</dd></div><div><dt>Operational activity</dt><dd>0</dd></div></dl></article>

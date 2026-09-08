@@ -157,6 +157,16 @@ unlocked, symlinked, malformed, wrong-mode, wrong-owner, and ambiguous states ar
 classified before teardown proceeds. Changed Python modules must also pass the
 installed static undefined-name (`F821`) gate before checkpointing.
 
+The Museum consumes a separate browser-safe supervisor installation projection.
+It coherently rereads the fixed strict supervisor manifest, validates every
+referenced artifact with the installer validator, validates the fixed Museum
+installation identity, and samples launchd/lock/listener/child state. Only two
+valid manifests bound to the same commit produce `commit_binding: MATCH`.
+Different valid commits produce `MISMATCH`; missing, partial, unsafe, tampered, or
+incoherent state produces `UNAVAILABLE`, never clean absence. Browser output is
+limited to scalar validity, ownership, counts, bounded generation identity, read
+time, and readiness; paths and raw hashes remain server-private.
+
 Before future installation: checkpoint this source; create an owner-only rollback
 package; validate actual clock/calendar; validate the authentic Monday receipt;
 verify provider costs without charge; prove the credential boundary separately;
