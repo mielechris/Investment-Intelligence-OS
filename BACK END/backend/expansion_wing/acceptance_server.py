@@ -514,7 +514,8 @@ class Compositor:
         )
         unattended = unattended_projection(None, None, read_at=datetime.now(timezone.utc).isoformat())
         unattended_fields = {"schema_version", "policy_installed", "policy_status", "session_date", "phase",
-            "next_gate", "preflight_status", "stage_a_status", "stage_a_maximum", "released_credits", "planned",
+            "next_gate", "preflight_status", "stage_a_status", "policy_schema", "commit_binding",
+            "stage_a_authorized_allowance", "stage_a_maximum", "released_credits", "planned",
             "completed", "failed", "ambiguous", "confirmed_credits", "ambiguous_credits", "pilot_rooms",
             "readiness_rooms", "structural_rooms", "market_session", "failure_category", "authority_locked",
             "last_coherent_read_timestamp", "generation_sequence"}

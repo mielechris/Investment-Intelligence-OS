@@ -9,16 +9,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .unattended_tuesday import (
-    LKV_NAME, LOCK_NAME, POLICY_NAME, STATE_NAME, OfflineSession, PolicyStore, _atomic,
+    LKV_NAME, LOCK_NAME, POLICY_NAME, STATE_NAME, OfflineSession, PolicyStore, _atomic, _hash,
     browser_projection, classify_time, initial_state, make_policy, next_gate,
     transition, validate_policy, validate_session,
 )
+from .provider_readiness import operational_cost_binding
 
 OPERATIONAL_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesday"
 SUPERVISOR_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor"
 SUPERVISOR_LOCK_NAME = "unattended-supervisor.lock"
 ROLLBACK_ROOT = Path.home()/"Library/Application Support/IIOS/Rollback/UnattendedTuesday"
 ROLLBACK_FILES = frozenset({POLICY_NAME, STATE_NAME, LKV_NAME})
+INSTALLATION_MANIFEST = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor/installation-manifest.json"
+
+def _installed_commit(path: Path = INSTALLATION_MANIFEST) -> str:
+    info=path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600 or info.st_uid!=os.getuid():
+        raise ValueError("POLICY_BINDING_INVALID")
+    value=json.loads(path.read_text())
+    if set(value)!={"schema","installed_commit"} or value["schema"]!="iios-unattended-installation-v1": raise ValueError("POLICY_BINDING_INVALID")
+    commit=value["installed_commit"]
+    if not isinstance(commit,str) or len(commit)!=40 or any(c not in "0123456789abcdef" for c in commit): raise ValueError("POLICY_BINDING_INVALID")
+    return commit
 
 def _read(store:PolicyStore):
     store.validate_root()
@@ -28,10 +40,15 @@ def _read(store:PolicyStore):
 def _write_state(store:PolicyStore,state,policy):
     validate_session(state,policy); _atomic(store.root,STATE_NAME,state); _atomic(store.root,LKV_NAME,state)
 
-def install(owner:str,approval:str,*,command_time:datetime|None=None,root:Path|None=None)->str:
+def install(owner:str,approval:str,authorized_commit:str,*,command_time:datetime|None=None,root:Path|None=None,
+            manifest:Path|None=None,readiness_root:Path|None=None)->str:
     # Production never accepts an injected time or path from argv/environment.
     now=datetime.now(timezone.utc) if command_time is None else command_time
-    policy=make_policy(owner_identity=owner,approval_timestamp=approval,command_time=now)
+    installed=_installed_commit(INSTALLATION_MANIFEST if manifest is None else manifest)
+    if authorized_commit != installed: raise ValueError("POLICY_BINDING_INVALID")
+    binding=operational_cost_binding(now=now, **({} if readiness_root is None else {"root":readiness_root}))
+    policy=make_policy(owner_identity=owner,approval_timestamp=approval,command_time=now,
+        installed_commit=installed,authorized_commit=authorized_commit,cost_binding=binding)
     target=OPERATIONAL_ROOT if root is None else root
     if not target.exists(): target.mkdir(mode=0o700,parents=False)
     PolicyStore(target).install(policy); return "ONE_DAY_POLICY_INSTALLED_DISABLED"
@@ -93,7 +110,7 @@ def restore_from_rollback(*,root:Path|None=None,rollback:Path|None=None)->str:
         store.validate_root(); _read(store); return "ONE_DAY_POLICY_RESTORED_DISABLED"
     finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
 
-def tick(store:PolicyStore,now:datetime)->str:
+def tick(store:PolicyStore,now:datetime,*,readiness_root:Path|None=None)->str:
     policy,state=_read(store); moment=classify_time(now)
     if moment=="SESSION_INELIGIBLE" or moment=="SESSION_EXPIRED": return "SESSION_INELIGIBLE"
     if moment=="WAIT": return "BOUNDED_IDLE_WAIT"
@@ -101,13 +118,31 @@ def tick(store:PolicyStore,now:datetime)->str:
         ("TUESDAY_POLICY_INSTALLED_DISABLED","RECOVERY"):"TUESDAY_WAITING_FOR_PREFLIGHT",
         ("TUESDAY_POLICY_INSTALLED_DISABLED","PREFLIGHT"):"TUESDAY_WAITING_FOR_PREFLIGHT",
         ("TUESDAY_WAITING_FOR_PREFLIGHT","PREFLIGHT"):"TUESDAY_PREFLIGHT_RUNNING",
-        ("TUESDAY_PREFLIGHT_RUNNING","READINESS"):"TUESDAY_PREFLIGHT_FAILED_CLOSED",
     }
     target=transitions.get((state["phase"],moment))
     if target:
         # With no operational provider-cost adapter, readiness must remain zero-call.
         state=transition(state,policy,target,failure="ENDPOINT_COST_UNKNOWN" if target.endswith("FAILED_CLOSED") else None)
         _write_state(store,state,policy); return target
+    if state["phase"]=="TUESDAY_PREFLIGHT_RUNNING" and moment=="READINESS":
+        try:
+            binding=operational_cost_binding(now=now,**({} if readiness_root is None else {"root":readiness_root}))
+            if (binding["cost_contract_hash"]!=policy["cost_contract_hash"]
+                    or binding["request_plan_identity"]!=policy["request_plan_identity"]
+                    or binding["exact_planned_cost_credits"]!=policy["stage_a_authorized_allowance_credits"]):
+                raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
+            state=transition(state,policy,"TUESDAY_READY_FOR_OPEN")
+            state["preflight_status"]="PASSED"; state["content_hash"]=_hash(state)
+            _write_state(store,state,policy); return "TUESDAY_READY_FOR_OPEN"
+        except (OSError,ValueError):
+            state=transition(state,policy,"TUESDAY_PREFLIGHT_FAILED_CLOSED",failure="OPERATIONAL_COST_BINDING_UNAVAILABLE")
+            _write_state(store,state,policy); return "TUESDAY_PREFLIGHT_FAILED_CLOSED"
+    if state["phase"]=="TUESDAY_READY_FOR_OPEN" and moment=="OPEN_OR_INTRADAY":
+        if state["released_credits"] != 0: return "STAGE_A_ALLOWANCE_CONTRACT_UNSUPPORTED"
+        state=transition(state,policy,"TUESDAY_STAGE_A_RUNNING")
+        state["released_credits"]=policy["stage_a_authorized_allowance_credits"]
+        state["content_hash"]=_hash(state); validate_session(state,policy); _write_state(store,state,policy)
+        return "TUESDAY_STAGE_A_RUNNING"
     return "NO_ELIGIBLE_TRANSITION"
 
 def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None)->int:
@@ -135,13 +170,14 @@ def main(argv:list[str]|None=None)->int:
     group.add_argument("--operational-supervisor",action="store_true")
     group.add_argument("--remove-policy-with-rollback",action="store_true")
     group.add_argument("--restore-policy-from-rollback",action="store_true")
-    p.add_argument("--owner-authorization"); p.add_argument("--approval-timestamp"); p.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
+    p.add_argument("--owner-authorization"); p.add_argument("--approval-timestamp"); p.add_argument("--authorized-commit"); p.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
     args=p.parse_args(argv)
     if args.browser: print(json.dumps({"status":"BROWSER_INVOCATION_REJECTED"})); return 3
     try:
         if args.install_one_day_policy:
             if not args.owner_authorization or not args.approval_timestamp: raise ValueError("OWNER_AUTHORIZATION_MISSING")
-            status=install(args.owner_authorization,args.approval_timestamp)
+            if not args.authorized_commit: raise ValueError("POLICY_BINDING_INVALID")
+            status=install(args.owner_authorization,args.approval_timestamp,args.authorized_commit)
         elif args.validate_policy: status=validate_installed()
         elif args.emergency_stop: status=emergency_stop()
         elif args.remove_policy_with_rollback: status=remove_with_rollback()

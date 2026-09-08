@@ -6,7 +6,7 @@ const source=readFileSync(new URL("./MobExpansionWing.tsx",import.meta.url),"utf
 const css=readFileSync(new URL("./MobExpansionWing.css",import.meta.url),"utf8");
 
 test("unattended presentation is scalar read only and authority locked",()=>{
-  for(const phrase of ["UNATTENDED TUESDAY · READ-ONLY STATUS","POLICY INSTALLED — DISABLED","POLICY NOT INSTALLED","NO TRADING AUTHORITY","Released credits","Authority locked"])
+  for(const phrase of ["UNATTENDED TUESDAY · READ-ONLY STATUS","POLICY INSTALLED — DISABLED","POLICY NOT INSTALLED","NO TRADING AUTHORITY","Policy schema","Commit binding","Authorized allowance","Stage A maximum","Released credits","Authority locked"])
     assert.ok(source.includes(phrase),phrase);
   for(const forbidden of ["Install policy","Release credits","Run now","Activate Stage A","X-API-KEY"])
     assert.ok(!source.includes(`>${forbidden}<`),forbidden);

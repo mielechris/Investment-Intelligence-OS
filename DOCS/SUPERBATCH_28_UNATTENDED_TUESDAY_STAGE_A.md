@@ -1,12 +1,33 @@
 # Superbatch 28 — Unattended Tuesday Stage A
 
+## Superbatch 28E exact operational binding
+
+The strict operational policy is `iios-unattended-market-session-policy-v2`.
+It reads the installed source commit from a fixed owner-only installation
+manifest and requires it to equal the commit named by the owner. Browser,
+environment, URL, port, and working-directory inference are not trusted. A v1
+policy remains rejection/rollback material and is never upgraded implicitly.
+
+The policy separately records an authorized allowance of 50 credits, a Stage A
+maximum of 100, initially released credits of zero, and a daily ceiling of 200.
+The scheduled release is exactly 50 and cannot expand automatically. Close and
+emergency stop return unused allowance to zero.
+
+The supervisor validates the fixed owner-only Financial Datasets readiness
+contract before readiness: 50 unique supported identities, zero blocked or
+duplicate identities, exact and worst-case cost 50, the reviewed endpoint
+allowlist, and the fixed request-plan identity. Missing, changed, expired, or
+ambiguous material yields `OPERATIONAL_COST_BINDING_UNAVAILABLE` before any
+provider request or allowance release.
+
 This checkpoint commissions source and isolated rehearsal contracts only. The
 operational one-day policy and its session state remain absent. The separately reviewed unattended supervisor may be installed in an idle, disabled state; it owns a distinct lock and performs no scheduled work until the one-day policy exists.
 until separately checkpointed and authorized.
 
 ## Authority boundary
 
-The policy schema is `iios-unattended-market-session-policy-v1`. Its first use is
+The operational policy schema is `iios-unattended-market-session-policy-v2`; v1
+is retained only for strict rejection and rollback compatibility. Its first use is
 fixed to Tuesday, September 8, 2026 in `America/Los_Angeles`, is non-recurring,
 immutable, canonically hashed, and bound to controller v2, the approved commit,
 the ten instruments, the approved endpoint set, and the deterministic 50-item

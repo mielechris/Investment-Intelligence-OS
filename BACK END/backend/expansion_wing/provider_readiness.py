@@ -242,6 +242,28 @@ def revised_plan_identity() -> str:
     return _hash({"schema": "iios-stage-a-provider-plan-v2", "requests": revised_request_plan()})
 
 
+def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | None = None) -> dict[str, Any]:
+    """Validate the fixed installed cost document and its exact 50-row plan."""
+    current = datetime.now(timezone.utc) if now is None else now
+    projection = installed_readiness_projection(root=root, now=current)
+    if projection.get("provider_state") != "READY":
+        raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
+    expected = {
+        "request_plan_identity": revised_plan_identity(),
+        "planned_identity_count": 50,
+        "supported_costed_identity_count": 50,
+        "blocked_identity_count": 0,
+        "exact_planned_cost_credits": 50,
+        "worst_case_cost_credits": 50,
+        "stage_a_authorized_allowance_credits": 50,
+        "stage_a_maximum_credits": STAGE_A_MAXIMUM,
+        "daily_hard_ceiling_credits": DAILY_CEILING,
+    }
+    document = json.loads((root / COST_CONTRACT_NAME).read_text())
+    validate_cost_contract_document(document, now=current)
+    return expected | {"cost_contract_hash": document["document_hash"]}
+
+
 def classify_identity(row: Mapping[str, Any]) -> str:
     instrument, endpoint = row.get("instrument"), row.get("endpoint")
     if instrument not in INSTRUMENT_CLASSES:
@@ -297,6 +319,7 @@ def evaluate_readiness(contracts: Mapping[str, EndpointCost], credential: FixedC
         "ambiguous_identity_count": ambiguous,
         "planned_identity_count": len(rows),
         "worst_case_stage_a_credits": worst_case,
+        "stage_a_authorized_allowance_credits": 50,
         "stage_a_maximum": STAGE_A_MAXIMUM,
         "stage_a_safety_margin": None if worst_case is None else STAGE_A_MAXIMUM - worst_case,
         "daily_hard_ceiling": DAILY_CEILING,
@@ -306,6 +329,7 @@ def evaluate_readiness(contracts: Mapping[str, EndpointCost], credential: FixedC
         "failure_category": category,
         "network_enabled": False,
         "authority_locked": True,
+        "cost_contract_binding": "VALID" if category == "PROVIDER_READY" else "UNAVAILABLE",
     }
 
 
