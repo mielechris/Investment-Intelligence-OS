@@ -20,6 +20,45 @@ from .tuesday_controller_v2 import BROWSER_SCHEMA_V2 as CONTROLLER_BROWSER_SCHEM
 from .unattended_tuesday import BROWSER_SCHEMA as UNATTENDED_BROWSER_SCHEMA, browser_projection as unattended_projection
 from .unattended_policy_reader import PROVENANCE_ABSENT, PROVENANCE_AUTHENTIC, PROVENANCE_SYNTHETIC, UnattendedPolicyReader
 
+UNATTENDED_RELEASED_CREDITS_BY_PHASE = {
+    "UNATTENDED_POLICY_NOT_INSTALLED": 0,
+    "TUESDAY_POLICY_INSTALLED_DISABLED": 0,
+    "TUESDAY_WAITING_FOR_PREFLIGHT": 0,
+    "TUESDAY_PREFLIGHT_RUNNING": 0,
+    "TUESDAY_PREFLIGHT_FAILED_CLOSED": 0,
+    "TUESDAY_READY_FOR_OPEN": 0,
+    "TUESDAY_STAGE_A_RUNNING": 50,
+    "TUESDAY_STAGE_A_PARTIAL": 50,
+    "TUESDAY_STAGE_A_COMPLETED": 0,
+    "TUESDAY_STAGE_A_LOCKED": 0,
+    "TUESDAY_EMERGENCY_STOPPED": 0,
+    "TUESDAY_SESSION_CLOSED": 0,
+}
+
+def _unattended_credit_invariant(value: Any) -> bool:
+    if not isinstance(value, dict): return False
+    phase=value.get("phase"); released=value.get("released_credits")
+    if phase not in UNATTENDED_RELEASED_CREDITS_BY_PHASE or not isinstance(released,int) or isinstance(released,bool): return False
+    if released != UNATTENDED_RELEASED_CREDITS_BY_PHASE[phase]: return False
+    if value.get("stage_a_authorized_allowance") != 50 or value.get("stage_a_maximum") != 100: return False
+    if phase == "UNATTENDED_POLICY_NOT_INSTALLED":
+        return value.get("policy_installed") is False and value.get("provenance") in {PROVENANCE_ABSENT,PROVENANCE_SYNTHETIC}
+    if value.get("policy_installed") is not True or value.get("provenance") != PROVENANCE_AUTHENTIC: return False
+    if phase in {"TUESDAY_STAGE_A_RUNNING","TUESDAY_STAGE_A_PARTIAL"}:
+        return True
+    return True
+
+def _unavailable_unattended_projection() -> dict[str,Any]:
+    return {
+        "schema_version":UNATTENDED_BROWSER_SCHEMA,"policy_installed":None,"policy_status":"FAILED_CLOSED",
+        "session_date":None,"phase":"UNAVAILABLE","next_gate":"OPERATOR REVIEW REQUIRED","preflight_status":"UNAVAILABLE",
+        "stage_a_status":"LOCKED","policy_schema":None,"commit_binding":"UNAVAILABLE","stage_a_authorized_allowance":50,
+        "stage_a_maximum":100,"released_credits":None,"planned":None,"completed":None,"failed":None,"ambiguous":None,
+        "confirmed_credits":None,"ambiguous_credits":None,"pilot_rooms":10,"readiness_rooms":4,"structural_rooms":10,
+        "market_session":"UNAVAILABLE","failure_category":"UNATTENDED_POLICY_FAILED_CLOSED","authority_locked":True,
+        "last_coherent_read_timestamp":None,"generation_sequence":None,"provenance":"UNAVAILABLE",
+    }
+
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
 SHADOW_SCHEMA = "batch9i-browser-shadow-strategy-v1"
@@ -525,15 +564,16 @@ class Compositor:
         unattended_safe = (
             isinstance(unattended,dict) and set(unattended) == unattended_fields and unattended.get("schema_version") == UNATTENDED_BROWSER_SCHEMA
             and unattended.get("provenance") in {PROVENANCE_ABSENT,PROVENANCE_AUTHENTIC,PROVENANCE_SYNTHETIC}
-            and unattended.get("authority_locked") is True and unattended.get("released_credits") == 0
+            and unattended.get("authority_locked") is True and _unattended_credit_invariant(unattended)
             and unattended.get("pilot_rooms") == 10 and unattended.get("readiness_rooms") == 4
             and unattended.get("structural_rooms") == 10
         )
-        sections["unattended_tuesday_status"] = _section(
-            str(unattended.get("phase")) if unattended_safe else "UNAVAILABLE",
-            unattended if unattended_safe else None,
-        )
+        unattended_projected=unattended if unattended_safe else _unavailable_unattended_projection()
+        sections["unattended_tuesday_status"] = _section(str(unattended_projected["phase"]),unattended_projected)
         provider_readiness = installed_readiness_projection(now=datetime.now(timezone.utc),policy_installed=bool(unattended_safe and unattended.get("policy_installed")))
+        if not unattended_safe:
+            provider_readiness["one_day_policy_state"]="UNAVAILABLE"
+            provider_readiness["commissioning_state"]="FAILED_CLOSED"
         sections["provider_stage_a_readiness"] = _section(
             str(provider_readiness["provider_state"]), provider_readiness
         )

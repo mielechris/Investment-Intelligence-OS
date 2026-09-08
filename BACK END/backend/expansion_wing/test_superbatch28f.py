@@ -6,6 +6,7 @@ from .provider_readiness import operational_cost_binding
 from .provider_readiness_service import install_cost_contract, probe_credential_once
 from .unattended_policy_reader import PROVENANCE_ABSENT, PROVENANCE_AUTHENTIC, PROVENANCE_SYNTHETIC, UnattendedPolicyReader, synthetic_absence_projection
 from .unattended_tuesday import PolicyStore, make_policy
+from .acceptance_server import UNATTENDED_RELEASED_CREDITS_BY_PHASE, _unattended_credit_invariant, _unavailable_unattended_projection
 
 NOW=datetime(2026,9,8,2,0,tzinfo=timezone.utc); COMMIT="f"*40
 class Probe:
@@ -42,4 +43,18 @@ class Superbatch28F(unittest.TestCase):
             base=Path(raw); ready=base/"ready"; install_cost_contract(root=ready); probe_credential_once(root=ready,runner=Probe(),clock=lambda:NOW)
             self.assertEqual(installed_readiness_projection(root=ready,now=NOW,policy_installed=False)["one_day_policy_state"],"NOT_AUTHORIZED")
             self.assertEqual(installed_readiness_projection(root=ready,now=NOW,policy_installed=True)["one_day_policy_state"],"AUTHORIZED_WAITING")
+    def test_phase_aware_credit_projection(self):
+        base={"policy_installed":True,"provenance":PROVENANCE_AUTHENTIC,"stage_a_authorized_allowance":50,"stage_a_maximum":100}
+        for phase,released in UNATTENDED_RELEASED_CREDITS_BY_PHASE.items():
+            value=base|{"phase":phase,"released_credits":released}
+            if phase=="UNATTENDED_POLICY_NOT_INSTALLED": value|={"policy_installed":False,"provenance":PROVENANCE_ABSENT}
+            self.assertTrue(_unattended_credit_invariant(value),phase)
+            self.assertFalse(_unattended_credit_invariant(value|{"released_credits":49 if released==50 else 50}),phase)
+        for released in (0,49,51,100):
+            self.assertFalse(_unattended_credit_invariant(base|{"phase":"TUESDAY_STAGE_A_RUNNING","released_credits":released}))
+        self.assertFalse(_unattended_credit_invariant(base|{"phase":"UNKNOWN","released_credits":0}))
+        self.assertFalse(_unattended_credit_invariant(base|{"phase":"TUESDAY_STAGE_A_RUNNING","released_credits":True}))
+    def test_failed_closed_projection_is_not_absence(self):
+        value=_unavailable_unattended_projection()
+        self.assertEqual((value["provenance"],value["policy_status"],value["phase"],value["next_gate"],value["released_credits"]),("UNAVAILABLE","FAILED_CLOSED","UNAVAILABLE","OPERATOR REVIEW REQUIRED",None))
 if __name__=="__main__": unittest.main()

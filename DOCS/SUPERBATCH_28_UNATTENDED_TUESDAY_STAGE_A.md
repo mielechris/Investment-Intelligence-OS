@@ -32,6 +32,12 @@ preview cache by byte identity rather than timestamps. Valid absence projects
 prior installed-success cache entry. Only sanitized sequence, read time, and
 provenance reach the browser.
 
+Released-credit projection is phase-aware: running and partial require exactly
+the authorized 50-credit allowance; every disabled, preflight, ready, failed,
+locked, stopped, closed, and absent phase requires zero. Invalid combinations
+project `UNAVAILABLE` / `FAILED CLOSED` with operator review required and are
+never presented as clean policy absence.
+
 This checkpoint commissions source and isolated rehearsal contracts only. The
 operational one-day policy and its session state remain absent. The separately reviewed unattended supervisor may be installed in an idle, disabled state; it owns a distinct lock and performs no scheduled work until the one-day policy exists.
 until separately checkpointed and authorized.
