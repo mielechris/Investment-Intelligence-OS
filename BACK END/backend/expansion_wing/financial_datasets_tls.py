@@ -161,6 +161,35 @@ class FinancialDatasetsHTTPSTransport:
                 try: connection.close()
                 except Exception: pass
 
+    def operational_request(self, *, path: str, ticker: str, credential: bytes,
+                            connect_timeout: float = 5.0, response_timeout: float = 10.0):
+        """Exact-host GET used only by the owner-authorized operational coordinator."""
+        from urllib.parse import quote, urlencode
+        allowed={"/prices/snapshot","/prices","/company/facts"}
+        if path not in allowed or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}",ticker):
+            raise FinancialDatasetsTransportError("ACCOUNTING_UNCERTAIN",request_started=False)
+        if self.trust_readiness()!="READY":
+            raise FinancialDatasetsTransportError("TLS_TRUST_UNSAFE",request_started=False)
+        context=self.trust.build_context(); target=path+"?"+urlencode((("ticker",ticker),),quote_via=quote,safe="")
+        connection=None; started=self.clock(); request_started=False
+        try:
+            connection=self.connection_factory(API_HOST,443,context,min(connect_timeout,response_timeout)); request_started=True
+            connection.request("GET",target,headers={AUTH_HEADER:credential.decode("ascii")})
+            response=connection.getresponse(); body=response.read(2_000_001)
+            if 300<=response.status<400 or response.getheader("Location"):
+                raise FinancialDatasetsTransportError("ACCOUNTING_UNCERTAIN",request_started=True)
+            return int(response.status),str(response.getheader("Content-Type") or ""),body,max(0.0,(self.clock()-started)*1000)
+        except FinancialDatasetsTransportError: raise
+        except ssl.SSLCertVerificationError as exc:
+            raise FinancialDatasetsTransportError("TLS_HOSTNAME_FAILED" if getattr(exc,"verify_code",None)==62 else "TLS_CERTIFICATE_VERIFICATION_FAILED",request_started=request_started) from None
+        except (TimeoutError,socket.timeout): raise FinancialDatasetsTransportError("TLS_TIMEOUT",request_started=request_started) from None
+        except (socket.gaierror,ConnectionRefusedError,ConnectionResetError,BrokenPipeError,ssl.SSLError):
+            raise FinancialDatasetsTransportError("ACCOUNTING_UNCERTAIN",request_started=request_started) from None
+        finally:
+            if connection is not None:
+                try: connection.close()
+                except Exception: pass
+
 
 def browser_tls_readiness(*, credential_available: bool = False) -> dict[str, Any]:
     return {"schema_version": "iios-financial-datasets-tls-readiness-v1", "tls_transport": "AVAILABLE",

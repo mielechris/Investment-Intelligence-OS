@@ -20,6 +20,7 @@ from .tuesday_controller_v2 import BROWSER_SCHEMA_V2 as CONTROLLER_BROWSER_SCHEM
 from .unattended_tuesday import BROWSER_SCHEMA as UNATTENDED_BROWSER_SCHEMA, browser_projection as unattended_projection
 from .unattended_policy_reader import PROVENANCE_ABSENT, PROVENANCE_AUTHENTIC, PROVENANCE_SYNTHETIC, UnattendedPolicyReader
 from .unattended_supervisor_installer import supervisor_browser_projection
+from .operational_market_executor import LOCKED_AUTHORITY as EXECUTOR_LOCKED_AUTHORITY
 
 UNATTENDED_RELEASED_CREDITS_BY_PHASE = {
     "UNATTENDED_POLICY_NOT_INSTALLED": 0,
@@ -189,6 +190,7 @@ class Compositor:
                  controller_reader: Callable[[], dict[str, Any]] | None = None,
                  unattended_reader: Callable[[], dict[str, Any] | None] | None = None,
                  supervisor_reader: Callable[[], dict[str, Any]] | None = None,
+                 executor_reader: Callable[[], dict[str, Any] | None] | None = None,
                  controller_status_provenance: str = CONTROLLER_PROVENANCE_UNAVAILABLE) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
@@ -203,6 +205,7 @@ class Compositor:
         self.controller_reader = controller_reader
         self.unattended_reader = unattended_reader or UnattendedPolicyReader().read
         self.supervisor_reader = supervisor_reader or supervisor_browser_projection
+        self.executor_reader = executor_reader
         self.controller_status_provenance = controller_status_provenance
 
     def _reachability(self) -> str:
@@ -576,6 +579,12 @@ class Compositor:
         supervisor = self.supervisor_reader()
         sections["unattended_supervisor_installation"] = _section(
             "CURRENT" if supervisor["provenance"]=="AUTHENTIC_OPERATIONAL_SUPERVISOR_INSTALLATION" else "UNAVAILABLE", supervisor)
+        executor = None
+        if self.executor_reader is not None:
+            try: executor=self.executor_reader()
+            except Exception: executor=None
+        executor_safe=isinstance(executor,dict) and executor.get("authority")==EXECUTOR_LOCKED_AUTHORITY
+        sections["operational_market_executor"]=_section(str(executor.get("phase")) if executor_safe else "UNAVAILABLE",executor if executor_safe else None)
         provider_readiness = installed_readiness_projection(now=datetime.now(timezone.utc),policy_installed=bool(unattended_safe and unattended.get("policy_installed")))
         if not unattended_safe:
             provider_readiness["one_day_policy_state"]="UNAVAILABLE"
