@@ -85,6 +85,7 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
   const [runtimeCapabilities, setRuntimeCapabilities] = useState<RuntimeCapabilities>({ state: "UNKNOWN", expansionWingEnabled: false, readOnly: true, publisherControl: false });
   const receivedAt = useRef<number | null>(null);
   const controllerGeneration = useRef<{ readAt: number; sequence: number } | null>(null);
+  const unattendedGeneration = useRef<{ readAt: number; sequence: number } | null>(null);
   const [snapshotAgeSeconds, setSnapshotAgeSeconds] = useState<number | null>(null);
   useEffect(() => {
     let active = true;
@@ -117,6 +118,14 @@ export function ExpansionWingSnapshotProvider({ children }: { children: ReactNod
           if (Number.isFinite(readAt) && Number.isFinite(sequence)
               && prior !== null && (readAt < prior.readAt || (readAt === prior.readAt && sequence < prior.sequence))) return;
           if (Number.isFinite(readAt) && Number.isFinite(sequence)) controllerGeneration.current = { readAt, sequence };
+          const unattended = object(object(object(payload).sections).unattended_tuesday_status);
+          const unattendedData = object(unattended.data);
+          const unattendedReadAt = Date.parse(String(unattendedData.last_coherent_read_timestamp ?? ""));
+          const unattendedSequence = Number(unattendedData.generation_sequence);
+          const priorUnattended = unattendedGeneration.current;
+          if (Number.isFinite(unattendedReadAt) && Number.isFinite(unattendedSequence) && priorUnattended !== null
+              && (unattendedReadAt < priorUnattended.readAt || (unattendedReadAt === priorUnattended.readAt && unattendedSequence < priorUnattended.sequence))) return;
+          if (Number.isFinite(unattendedReadAt) && Number.isFinite(unattendedSequence)) unattendedGeneration.current = { readAt: unattendedReadAt, sequence: unattendedSequence };
           const now = Date.now();
           failures = 0; setSnapshot(payload); receivedAt.current = now; setSnapshotAgeSeconds(0); setConnection("CURRENT");
         }

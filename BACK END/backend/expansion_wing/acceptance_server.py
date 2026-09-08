@@ -18,6 +18,7 @@ from .tuesday_opening_day import tuesday_command_projection, validate_browser_pr
 from .tuesday_controller_state import BROWSER_SCHEMA as CONTROLLER_BROWSER_SCHEMA
 from .tuesday_controller_v2 import BROWSER_SCHEMA_V2 as CONTROLLER_BROWSER_SCHEMA_V2
 from .unattended_tuesday import BROWSER_SCHEMA as UNATTENDED_BROWSER_SCHEMA, browser_projection as unattended_projection
+from .unattended_policy_reader import PROVENANCE_ABSENT, PROVENANCE_AUTHENTIC, PROVENANCE_SYNTHETIC, UnattendedPolicyReader
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
@@ -146,6 +147,7 @@ class Compositor:
                  multi_asset_reader: Callable[[], dict[str, Any]] | None = None,
                  case_reader: Callable[[], dict[str, Any]] | None = None,
                  controller_reader: Callable[[], dict[str, Any]] | None = None,
+                 unattended_reader: Callable[[], dict[str, Any] | None] | None = None,
                  controller_status_provenance: str = CONTROLLER_PROVENANCE_UNAVAILABLE) -> None:
         self.paths = telemetry, validation, shadow, outcome
         self.backend = backend
@@ -158,6 +160,7 @@ class Compositor:
         self.multi_asset_reader = multi_asset_reader
         self.case_reader = case_reader
         self.controller_reader = controller_reader
+        self.unattended_reader = unattended_reader or UnattendedPolicyReader().read
         self.controller_status_provenance = controller_status_provenance
 
     def _reachability(self) -> str:
@@ -512,24 +515,25 @@ class Compositor:
             str(controller.get("state")) if projected_controller is not None else "UNAVAILABLE",
             projected_controller,
         )
-        unattended = unattended_projection(None, None, read_at=datetime.now(timezone.utc).isoformat())
+        unattended = self.unattended_reader()
         unattended_fields = {"schema_version", "policy_installed", "policy_status", "session_date", "phase",
             "next_gate", "preflight_status", "stage_a_status", "policy_schema", "commit_binding",
             "stage_a_authorized_allowance", "stage_a_maximum", "released_credits", "planned",
             "completed", "failed", "ambiguous", "confirmed_credits", "ambiguous_credits", "pilot_rooms",
             "readiness_rooms", "structural_rooms", "market_session", "failure_category", "authority_locked",
-            "last_coherent_read_timestamp", "generation_sequence"}
+            "last_coherent_read_timestamp", "generation_sequence", "provenance"}
         unattended_safe = (
-            set(unattended) == unattended_fields and unattended.get("schema_version") == UNATTENDED_BROWSER_SCHEMA
+            isinstance(unattended,dict) and set(unattended) == unattended_fields and unattended.get("schema_version") == UNATTENDED_BROWSER_SCHEMA
+            and unattended.get("provenance") in {PROVENANCE_ABSENT,PROVENANCE_AUTHENTIC,PROVENANCE_SYNTHETIC}
             and unattended.get("authority_locked") is True and unattended.get("released_credits") == 0
             and unattended.get("pilot_rooms") == 10 and unattended.get("readiness_rooms") == 4
             and unattended.get("structural_rooms") == 10
         )
         sections["unattended_tuesday_status"] = _section(
-            "UNATTENDED_POLICY_NOT_INSTALLED" if unattended_safe else "UNAVAILABLE",
+            str(unattended.get("phase")) if unattended_safe else "UNAVAILABLE",
             unattended if unattended_safe else None,
         )
-        provider_readiness = installed_readiness_projection(now=datetime.now(timezone.utc))
+        provider_readiness = installed_readiness_projection(now=datetime.now(timezone.utc),policy_installed=bool(unattended_safe and unattended.get("policy_installed")))
         sections["provider_stage_a_readiness"] = _section(
             str(provider_readiness["provider_state"]), provider_readiness
         )

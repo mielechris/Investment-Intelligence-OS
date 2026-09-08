@@ -17,6 +17,7 @@ from .acceptance_server import Compositor, CONTROLLER_PROVENANCE_AUTHENTIC
 from .knowledge_operations import knowledge_operations_projection
 from .projection_runtime import FixedProjectionReader
 from .tuesday_controller_state import ControllerStatusReader
+from .unattended_policy_reader import UnattendedPolicyReader
 
 HOST = "127.0.0.1"
 SERVICE_SCHEMA = "expansion-wing-preview-health-v1"
@@ -26,7 +27,7 @@ ALLOWED_METHODS = {"GET", "HEAD"}
 
 class PreviewApplication:
     def __init__(self, static_root: Path, compositor: Compositor, *, cache_seconds: float = 15.0,
-                 controller_generation_reader=None) -> None:
+                 controller_generation_reader=None, unattended_generation_reader=None) -> None:
         self.static_root = static_root.resolve(strict=True)
         if not self.static_root.is_dir() or not (self.static_root / "index.html").is_file():
             raise ValueError("STATIC_ROOT_INVALID")
@@ -37,10 +38,12 @@ class PreviewApplication:
         self._cached_at = 0.0
         self._cached_controller_generation = None
         self._controller_generation_reader = controller_generation_reader
+        self._unattended_generation_reader = unattended_generation_reader
 
     def snapshot(self, now: float | None = None) -> dict[str, Any]:
         instant = time.monotonic() if now is None else now
-        generation = self._controller_generation_reader() if self._controller_generation_reader else ("NO_CONTROLLER",)
+        generation = ((self._controller_generation_reader() if self._controller_generation_reader else "NO_CONTROLLER"),
+                      (self._unattended_generation_reader() if self._unattended_generation_reader else "NO_POLICY"))
         with self._lock:
             if generation is None:
                 return self.compositor.snapshot()
@@ -144,11 +147,13 @@ def main() -> None:
         knowledge_reader = lambda: knowledge_operations_projection(args.security_root, args.archive_root)
     projection_reader = FixedProjectionReader(enabled=args.enable_multi_asset_projection)
     controller_reader = ControllerStatusReader()
+    unattended_reader = UnattendedPolicyReader()
     compositor = Compositor(args.telemetry, args.validation, args.shadow, args.outcome, args.backend, knowledge_reader,
                             multi_asset_reader=projection_reader.read,
-                            controller_reader=controller_reader.read,
+                            controller_reader=controller_reader.read, unattended_reader=unattended_reader.read,
                             controller_status_provenance=CONTROLLER_PROVENANCE_AUTHENTIC)
-    app = PreviewApplication(args.static_root, compositor, controller_generation_reader=controller_reader.cache_identity)
+    app = PreviewApplication(args.static_root, compositor, controller_generation_reader=controller_reader.cache_identity,
+                             unattended_generation_reader=lambda:unattended_reader.cache_identity)
     server = ThreadingHTTPServer((HOST, args.port), handler_for(app))
     server.daemon_threads = True
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())

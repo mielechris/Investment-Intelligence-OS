@@ -36,6 +36,7 @@ from expansion_wing.acceptance_server import (
 from expansion_wing.case_registry_adapter import BackgroundCaseRegistry
 from expansion_wing.projection_runtime import FixedProjectionReader
 from expansion_wing.tuesday_controller_state import ControllerStatusReader
+from expansion_wing.unattended_policy_reader import UnattendedPolicyReader, synthetic_absence_projection
 
 SCHEMA_VERSION = "batch9k-live-factory-browser-v1"
 LIVING_SCHEMA_VERSION = "batch9l-living-factory-provenance-v1"
@@ -988,9 +989,11 @@ class PreviewServer(ThreadingHTTPServer):
         if self._case_registry is not None:
             self._case_registry.start()
         self._controller_status_reader = None if expansion_compositor is not None else ControllerStatusReader(controller_state_root)
+        self._unattended_policy_reader = None if expansion_compositor is not None or fixture_isolated else UnattendedPolicyReader()
         self._controller_generation_reader = (
             controller_generation_reader
-            or (None if self._controller_status_reader is None else self._controller_status_reader.cache_identity)
+            or (None if self._controller_status_reader is None else lambda:(self._controller_status_reader.cache_identity(),
+                None if self._unattended_policy_reader is None else self._unattended_policy_reader.cache_identity))
         )
         self._expansion_compositor = expansion_compositor or Compositor(
             telemetry_dir / "latest.json",
@@ -1009,6 +1012,8 @@ class PreviewServer(ThreadingHTTPServer):
             ),
             case_reader=None if self._case_registry is None else self._case_registry.snapshot,
             controller_reader=self._controller_status_reader.read,
+            unattended_reader=(synthetic_absence_projection if fixture_isolated else
+                None if self._unattended_policy_reader is None else self._unattended_policy_reader.read),
             controller_status_provenance=(
                 CONTROLLER_PROVENANCE_SYNTHETIC
                 if fixture_isolated

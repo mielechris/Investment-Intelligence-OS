@@ -20,6 +20,18 @@ allowlist, and the fixed request-plan identity. Missing, changed, expired, or
 ambiguous material yields `OPERATIONAL_COST_BINDING_UNAVAILABLE` before any
 provider request or allowance release.
 
+## Superbatch 28F authenticated browser projection
+
+Museum status is derived from a fixed-path coherent reader over the installation
+manifest, policy, state, and last-known-valid state. It reads and validates the
+complete generation twice, retries boundedly when bytes change, and keys the
+preview cache by byte identity rather than timestamps. Valid absence projects
+`POLICY_NOT_INSTALLED`; a valid installation projects
+`AUTHENTIC_OPERATIONAL_POLICY_STATE`; partial, unsafe, or contradictory state is
+`UNAVAILABLE`. Rollback to absence is accepted immediately and never inherits a
+prior installed-success cache entry. Only sanitized sequence, read time, and
+provenance reach the browser.
+
 This checkpoint commissions source and isolated rehearsal contracts only. The
 operational one-day policy and its session state remain absent. The separately reviewed unattended supervisor may be installed in an idle, disabled state; it owns a distinct lock and performs no scheduled work until the one-day policy exists.
 until separately checkpointed and authorized.

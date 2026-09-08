@@ -176,7 +176,7 @@ def validate_cost_contract_document(value:Any,*,now:datetime)->dict[str,Any]:
     return value
 
 
-def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=None)->dict[str,Any]:
+def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=None,policy_installed:bool=False)->dict[str,Any]:
     """Read fixed owner-only metadata only; never reads Keychain or network."""
     current=datetime.now(timezone.utc) if now is None else now
     try:
@@ -196,7 +196,7 @@ def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=
                 del kwargs
                 return True if credential["status"]=="AVAILABLE" else False if credential["status"]=="UNAVAILABLE" else None
         projection=evaluate_readiness(reviewed_cost_contracts(),FixedCredentialBoundary(StoredProbe()),now=current)
-        projection.update({"commissioning_state":"READY_FOR_OWNER_POLICY_AUTHORIZATION" if projection["failure_category"]=="PROVIDER_READY" else "FAILED_CLOSED","unattended_service_state":"INSTALLED_DISABLED","one_day_policy_state":"NOT_AUTHORIZED"})
+        projection.update({"commissioning_state":"AUTHORIZED_WAITING" if policy_installed and projection["failure_category"]=="PROVIDER_READY" else "READY_FOR_OWNER_POLICY_AUTHORIZATION" if projection["failure_category"]=="PROVIDER_READY" else "FAILED_CLOSED","unattended_service_state":"INSTALLED_DISABLED","one_day_policy_state":"AUTHORIZED_WAITING" if policy_installed else "NOT_AUTHORIZED"})
         return projection
     except (OSError,ValueError,json.JSONDecodeError):
         return {"schema_version":BROWSER_SCHEMA,"provider_state":"FAILED_CLOSED","commissioning_state":"UNAVAILABLE","unattended_service_state":"UNAVAILABLE","one_day_policy_state":"NOT_AUTHORIZED","authority_locked":True,"network_enabled":False}
