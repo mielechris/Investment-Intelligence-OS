@@ -16,3 +16,11 @@ test("wraps boundedly without horizontal overflow", () => {
   assert.match(css, /flex-wrap:wrap/);
   assert.match(css, /overflow-wrap:anywhere/);
 });
+test("unattended technical tokens remain complete and wrap at narrow widths", () => {
+  assert.match(css, /\.mew-unattended-status details,\.mew-unattended-status details p\{min-width:0;max-width:100%\}/);
+  assert.match(css, /\.mew-unattended-status details p\{white-space:normal;overflow-wrap:anywhere;word-break:break-word\}/);
+  assert.doesNotMatch(css, /\.mew-unattended-status details p\{[^}]*overflow:hidden/);
+  assert.doesNotMatch(css, /\.mew-unattended-status details p\{[^}]*white-space:nowrap/);
+  assert.match(source, /UNATTENDED_POLICY_NOT_INSTALLED/);
+  assert.doesNotMatch(source, /onClick=\{[^}]*release|onClick=\{[^}]*provider/i);
+});

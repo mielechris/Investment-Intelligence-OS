@@ -6,6 +6,8 @@ The observation identity is `financial-datasets-pricing-2026-09-08-v1`, observed
 
 The fixed-path readiness administrator installs only the canonical three-endpoint cost contract and performs one metadata-only Keychain presence classification. It never retrieves a secret. The separate unattended LaunchAgent runs with `--operational-supervisor`, owns a dedicated lock, idles without a one-day policy, and cannot access providers or credentials. With all preparation valid and the policy absent, the only truthful classification is `READY_FOR_OWNER_POLICY_AUTHORIZATION`; `STAGE_A_READY_TO_RUN` remains prohibited.
 
+Long technical status tokens remain complete, selectable and copyable. Their container and text may shrink below intrinsic token width and use normal white-space plus safe anywhere/break-word wrapping; truncation, hidden overflow, ellipsis and horizontal scrolling are prohibited.
+
 The original plan bound `fd-contract-v1`, establishing Financial Datasets as canonical. Its nine abstract `INSTRUMENT_PROFILE` identities were invalid. Provider plan v2 replaces each with a distinct `PRIOR_SESSION_BASELINE` identity using `/prices` and the source-controlled Friday, September 4, 2026 session. It is a bounded historical baseline, never company fundamentals and never a live backfill. The unsupported profile category remains a negative test only.
 
 Official evidence: https://www.financialdatasets.ai/pricing, https://docs.financialdatasets.ai/api/prices/snapshot, https://docs.financialdatasets.ai/api/prices/historical, and https://docs.financialdatasets.ai/api/company/facts/ticker.
