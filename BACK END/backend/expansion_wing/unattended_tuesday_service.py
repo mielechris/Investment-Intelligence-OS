@@ -27,8 +27,13 @@ def _installed_commit(path: Path = INSTALLATION_MANIFEST) -> str:
     if path.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600 or info.st_uid!=os.getuid():
         raise ValueError("POLICY_BINDING_INVALID")
     value=json.loads(path.read_text())
-    if set(value)!={"schema","installed_commit"} or value["schema"]!="iios-unattended-installation-v1": raise ValueError("POLICY_BINDING_INVALID")
-    commit=value["installed_commit"]
+    if value.get("schema")=="iios-unattended-installation-v1" and set(value)=={"schema","installed_commit"}:
+        commit=value["installed_commit"]
+    elif value.get("schema")=="iios-unattended-supervisor-installation-v1":
+        from .unattended_supervisor_installer import validate_manifest
+        validate_manifest(value,path.parent/"installed-artifacts")
+        commit=value["installed_source_commit"]
+    else: raise ValueError("POLICY_BINDING_INVALID")
     if not isinstance(commit,str) or len(commit)!=40 or any(c not in "0123456789abcdef" for c in commit): raise ValueError("POLICY_BINDING_INVALID")
     return commit
 

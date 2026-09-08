@@ -113,6 +113,42 @@ receipts and accounting, sets allowance to zero, and survives restart.
 
 ## Installation and rollback gate
 
+### Verified unattended-supervisor installer
+
+Superbatch 28H adds `expansion_wing.unattended_supervisor_installer`. Its strict
+`iios-unattended-supervisor-installation-v1` manifest binds a reviewed source
+commit to a complete sorted fixed artifact inventory. Every entry records only a
+relative path, regular-file type, byte size, mode, and SHA-256. The manifest also
+binds the fixed service label, state-root identity, module entrypoint, plist
+identity, installer version, immutable flag, canonical inventory identity, UTC
+installation time, and canonical manifest content hash. Unknown fields,
+noncanonical paths, traversal, duplicates, missing or extra files, symlinks,
+special files, oversized files, mode/size/hash disagreement, future timestamps,
+and source-commit disagreement fail closed.
+
+Operational mode has no caller-selectable destination. It requires an explicit
+reviewed-mode flag, a clean synchronized repository, and the expected commit.
+Candidate roots are accepted only by the isolated Python test API. Browser,
+activation, provider, credential-value, paper, broker, ledger, and execution
+arguments are absent or rejected. Candidate hashes are always computed from the
+bytes being installed; changing only an old manifest's commit is not a valid
+reconciliation.
+
+The non-spending readiness boundary validates the installed manifest/inventory,
+one launchd-owned supervisor and exclusive lock, policy absence, controller and
+authentic Monday receipt, cost/request-plan/allowance binding, metadata-only
+credential readiness, calendar, paper boundary, authority lock, and zero provider
+activity. Only that complete state returns
+`READY_FOR_OWNER_POLICY_AUTHORIZATION`. It cannot install policy, release credit,
+retrieve a credential, contact a provider, or mutate controller, paper, ledger,
+projection, candidates, or observations.
+
+Rollback packages are owner-only, inventory-bound, and byte-exact. Restoration
+must reject arbitrary destinations, validate the recorded presence/absence state,
+stop only the unattended label, wait for label/PID/lock clearance, restore the
+complete prior inventory and manifest, bootstrap once, and validate the restored
+state. The September 8 policy remains a separate fresh owner authorization.
+
 Before future installation: checkpoint this source; create an owner-only rollback
 package; validate actual clock/calendar; validate the authentic Monday receipt;
 verify provider costs without charge; prove the credential boundary separately;
