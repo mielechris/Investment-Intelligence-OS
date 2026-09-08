@@ -173,6 +173,23 @@ function TuesdayCommandCenter({ snapshot }: { snapshot: ExpansionSnapshot | null
   const market = record(section(snapshot, "market_session")?.data);
   const books = record(section(snapshot, "books")?.data);
   const controller = record(section(snapshot, "tuesday_controller_status")?.data);
+  const unattended = record(section(snapshot, "unattended_tuesday_status")?.data);
+  const unattendedPhase = text(unattended.phase, "UNATTENDED_POLICY_NOT_INSTALLED");
+  const unattendedHeadings: Record<string, string> = {
+    UNATTENDED_POLICY_NOT_INSTALLED: "POLICY NOT INSTALLED",
+    TUESDAY_POLICY_INSTALLED_DISABLED: "POLICY INSTALLED — DISABLED",
+    TUESDAY_WAITING_FOR_PREFLIGHT: "WAITING FOR PREFLIGHT",
+    TUESDAY_PREFLIGHT_RUNNING: "PREFLIGHT RUNNING",
+    TUESDAY_PREFLIGHT_FAILED_CLOSED: "PREFLIGHT FAILED CLOSED",
+    TUESDAY_READY_FOR_OPEN: "READY FOR TUESDAY",
+    TUESDAY_STAGE_A_RUNNING: "STAGE A RUNNING",
+    TUESDAY_STAGE_A_PARTIAL: "PARTIAL SESSION",
+    TUESDAY_STAGE_A_COMPLETED: "STAGE A COMPLETE",
+    TUESDAY_STAGE_A_LOCKED: "STAGE A LOCKED",
+    TUESDAY_SESSION_CLOSED: "SESSION CLOSED",
+    TUESDAY_EMERGENCY_STOPPED: "EMERGENCY STOPPED",
+  };
+  const unattendedHeading = unattendedHeadings[unattendedPhase] ?? "FAILED CLOSED";
   const controllerInstalled = controller.installed === true;
   const controllerRunning = controller.running === true;
   const controllerActivated = controller.activated === true;
@@ -220,6 +237,21 @@ function TuesdayCommandCenter({ snapshot }: { snapshot: ExpansionSnapshot | null
           <div><dt>Authority</dt><dd>{controller.authority_locked === true ? "Authority locked" : "Failed closed"}</dd></div>
         </dl>
         {controllerV2 && controllerProvenanceAvailable ? <div className="mew-v2-stages" aria-label="V2 locked stages"><article><strong>Stage A</strong><span>Draft 50 · Maximum 100 · Locked / not released</span></article><article><strong>Stage B</strong><span>Maximum 50 · Locked</span></article><article><strong>Stage C</strong><span>Maximum 50 · Locked</span></article></div> : null}
+      </section>
+      <section className="mew-unattended-status" aria-labelledby="mew-unattended-title" data-phase={unattendedPhase}>
+        <header><span>UNATTENDED TUESDAY · READ-ONLY STATUS</span><h3 id="mew-unattended-title">{unattendedHeading}</h3><strong>NO TRADING AUTHORITY</strong></header>
+        <p>The one-day September 8 policy is non-recurring. Browser activity cannot install it, release credits, invoke providers, or control the supervisor.</p>
+        <dl>
+          <div><dt>Session</dt><dd>{scalar(unattended.session_date)}</dd></div><div><dt>Policy status</dt><dd>{text(unattended.policy_status, "NOT INSTALLED").replaceAll("_", " ")}</dd></div>
+          <div><dt>Controller phase</dt><dd>{text(unattended.phase, "UNATTENDED POLICY NOT INSTALLED").replaceAll("_", " ")}</dd></div><div><dt>Next scheduled gate</dt><dd>{text(unattended.next_gate, "OWNER POLICY INSTALLATION")}</dd></div>
+          <div><dt>Preflight</dt><dd>{text(unattended.preflight_status, "NOT RUN").replaceAll("_", " ")}</dd></div><div><dt>Stage A</dt><dd>{text(unattended.stage_a_status, "LOCKED").replaceAll("_", " ")}</dd></div>
+          <div><dt>Stage A maximum</dt><dd>{scalar(unattended.stage_a_maximum)}</dd></div><div><dt>Released credits</dt><dd>{scalar(unattended.released_credits)}</dd></div>
+          <div><dt>Requests planned / completed</dt><dd>{scalar(unattended.planned)} / {scalar(unattended.completed)}</dd></div><div><dt>Failed / ambiguous</dt><dd>{scalar(unattended.failed)} / {scalar(unattended.ambiguous)}</dd></div>
+          <div><dt>Confirmed / ambiguous credits</dt><dd>{scalar(unattended.confirmed_credits)} / {scalar(unattended.ambiguous_credits)}</dd></div><div><dt>Market session</dt><dd>{text(unattended.market_session, "UNAVAILABLE").replaceAll("_", " ")}</dd></div>
+          <div><dt>Tuesday room participation</dt><dd>{scalar(unattended.pilot_rooms)} pilots · {scalar(unattended.readiness_rooms)} readiness · {scalar(unattended.structural_rooms)} structural</dd></div><div><dt>Authority</dt><dd>{unattended.authority_locked === true ? "Authority locked" : "FAILED CLOSED"}</dd></div>
+        </dl>
+        {unattended.failure_category ? <p className="mew-unattended-failure">PREFLIGHT FAILED CLOSED · {text(unattended.failure_category).replaceAll("_", " ")}</p> : null}
+        <details><summary>Technical status</summary><p>{text(unattended.phase)} · GENERATION {scalar(unattended.generation_sequence)} · READ {scalar(unattended.last_coherent_read_timestamp)}</p></details>
       </section>
       <section className="mew-controller-status" aria-label="Tuesday commissioning status">
         <article><h3>Monday rehearsal</h3><p><strong>AUTHENTIC MONDAY REHEARSAL: {authenticRehearsalDisplay}</strong></p><p>{compatibilityRehearsal}</p><dl><div><dt>Date</dt><dd>September 7, 2026</dd></div><div><dt>Session</dt><dd>{authenticRehearsal === "PASSED_CLOSED_HOLIDAY" ? "Closed holiday · Passed" : "Closed holiday · Not yet recorded"}</dd></div><div><dt>Requests</dt><dd>0</dd></div><div><dt>Credits</dt><dd>0</dd></div><div><dt>Candidates</dt><dd>0</dd></div><div><dt>Operational activity</dt><dd>0</dd></div></dl></article>

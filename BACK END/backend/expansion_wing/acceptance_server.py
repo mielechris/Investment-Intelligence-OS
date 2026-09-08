@@ -16,6 +16,7 @@ from .multi_asset_projection import SCHEMA_VERSION as MULTI_ASSET_SCHEMA, valida
 from .tuesday_opening_day import tuesday_command_projection, validate_browser_projection as validate_tuesday_projection
 from .tuesday_controller_state import BROWSER_SCHEMA as CONTROLLER_BROWSER_SCHEMA
 from .tuesday_controller_v2 import BROWSER_SCHEMA_V2 as CONTROLLER_BROWSER_SCHEMA_V2
+from .unattended_tuesday import BROWSER_SCHEMA as UNATTENDED_BROWSER_SCHEMA, browser_projection as unattended_projection
 
 TELEMETRY_SCHEMA = "batch9g-factory-telemetry-v2"
 VALIDATION_SCHEMA = "batch9h-remote-market-validation-v1"
@@ -509,6 +510,22 @@ class Compositor:
         sections["tuesday_controller_status"] = _section(
             str(controller.get("state")) if projected_controller is not None else "UNAVAILABLE",
             projected_controller,
+        )
+        unattended = unattended_projection(None, None, read_at=datetime.now(timezone.utc).isoformat())
+        unattended_fields = {"schema_version", "policy_installed", "policy_status", "session_date", "phase",
+            "next_gate", "preflight_status", "stage_a_status", "stage_a_maximum", "released_credits", "planned",
+            "completed", "failed", "ambiguous", "confirmed_credits", "ambiguous_credits", "pilot_rooms",
+            "readiness_rooms", "structural_rooms", "market_session", "failure_category", "authority_locked",
+            "last_coherent_read_timestamp", "generation_sequence"}
+        unattended_safe = (
+            set(unattended) == unattended_fields and unattended.get("schema_version") == UNATTENDED_BROWSER_SCHEMA
+            and unattended.get("authority_locked") is True and unattended.get("released_credits") == 0
+            and unattended.get("pilot_rooms") == 10 and unattended.get("readiness_rooms") == 4
+            and unattended.get("structural_rooms") == 10
+        )
+        sections["unattended_tuesday_status"] = _section(
+            "UNATTENDED_POLICY_NOT_INSTALLED" if unattended_safe else "UNAVAILABLE",
+            unattended if unattended_safe else None,
         )
         return base_snapshot
 
