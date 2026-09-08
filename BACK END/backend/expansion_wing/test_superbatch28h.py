@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, tempfile, unittest
+import json, os, subprocess, sys, tempfile, unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +8,9 @@ from .unattended_supervisor_installer import (
     ARTIFACT_NAMES, INSTALLER_VERSION, LABEL, MANIFEST_NAME, SCHEMA,
     build_candidate, compare, inventory, make_manifest, readiness,
     validate_candidate, validate_manifest, write_manifest, main,
+    supervisor_lock_path, supervisor_lock_state, SUPERVISOR_LOCK_NAME,
 )
+from .unattended_tuesday_service import SUPERVISOR_LOCK_NAME as SERVICE_LOCK_NAME
 
 COMMIT="a"*40
 NOW=datetime(2026,9,8,3,tzinfo=timezone.utc)
@@ -99,6 +101,30 @@ class Superbatch28H(unittest.TestCase):
         source=Path(__file__).with_name("unattended_supervisor_installer.py").read_text()
         self.assertIn('origin/{BRANCH}',source)
         self.assertNotIn('"@{u}"',source)
+
+    def test_canonical_lock_identity_missing_stale_symlink_and_mode(self):
+        self.assertIs(SUPERVISOR_LOCK_NAME,SERVICE_LOCK_NAME)
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)/"root"; root.mkdir(mode=0o700)
+            self.assertEqual(supervisor_lock_path(root),root/SERVICE_LOCK_NAME)
+            self.assertEqual(supervisor_lock_state(root),"MISSING")
+            lock=root/SERVICE_LOCK_NAME; lock.touch(mode=0o600)
+            self.assertEqual(supervisor_lock_state(root),"STALE_UNLOCKED")
+            lock.chmod(0o644)
+            with self.assertRaisesRegex(ValueError,"SUPERVISOR_LOCK_MALFORMED"): supervisor_lock_state(root)
+            lock.unlink(); (root/"elsewhere").touch(); lock.symlink_to(root/"elsewhere")
+            with self.assertRaisesRegex(ValueError,"SUPERVISOR_LOCK_MALFORMED"): supervisor_lock_state(root)
+
+    def test_real_subprocess_holds_and_releases_canonical_lock(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)/"root"; root.mkdir(mode=0o700); lock=root/SERVICE_LOCK_NAME
+            code="import fcntl,os,sys,time;p=sys.argv[1];f=open(p,'a+');os.chmod(p,0o600);fcntl.flock(f,fcntl.LOCK_EX);print('READY',flush=True);time.sleep(1)"
+            process=subprocess.Popen([sys.executable,"-c",code,str(lock)],stdout=subprocess.PIPE,text=True)
+            self.assertEqual(process.stdout.readline().strip(),"READY")
+            self.assertEqual(supervisor_lock_state(root),"HELD")
+            process.wait(timeout=3)
+            process.stdout.close()
+            self.assertEqual(supervisor_lock_state(root),"STALE_UNLOCKED")
 
     def test_manifest_rejects_duplicate_traversal_absolute_and_noncanonical(self):
         with tempfile.TemporaryDirectory() as raw:

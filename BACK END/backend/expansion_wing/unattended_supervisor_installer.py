@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from .provider_readiness import installed_readiness_projection, operational_cost_binding
+from .unattended_tuesday_service import SUPERVISOR_LOCK_NAME
 
 SCHEMA = "iios-unattended-supervisor-installation-v1"
 ROLLBACK_SCHEMA = "iios-unattended-supervisor-rollback-v1"
@@ -229,6 +230,29 @@ def plan_install(expected_commit: str) -> str:
     return "INSTALL_PLAN_READY"
 
 
+def supervisor_lock_path(root: Path = INSTALL_ROOT) -> Path:
+    root_info=root.lstat()
+    if root.is_symlink() or not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid!=os.getuid() or stat.S_IMODE(root_info.st_mode)!=0o700:
+        raise ValueError("SUPERVISOR_LOCK_ROOT_INVALID")
+    path=root/SUPERVISOR_LOCK_NAME
+    if path.parent.resolve()!=root.resolve(): raise ValueError("SUPERVISOR_LOCK_PATH_INVALID")
+    return path
+
+
+def supervisor_lock_state(root: Path = INSTALL_ROOT) -> str:
+    path=supervisor_lock_path(root)
+    if not path.exists(): return "MISSING"
+    info=path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or stat.S_IMODE(info.st_mode)!=0o600:
+        raise ValueError("SUPERVISOR_LOCK_MALFORMED")
+    handle=open(path,"a+")
+    try:
+        try: fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: return "HELD"
+        fcntl.flock(handle,fcntl.LOCK_UN); return "STALE_UNLOCKED"
+    finally: handle.close()
+
+
 def _wait_absent(old_pid: int, timeout: int = 30) -> None:
     import time
     for _ in range(timeout):
@@ -236,15 +260,8 @@ def _wait_absent(old_pid: int, timeout: int = 30) -> None:
         alive=True
         try: os.kill(old_pid,0)
         except ProcessLookupError: alive=False
-        lock=INSTALL_ROOT/SUPERVISOR_LOCK_NAME
-        owned=False
-        if lock.exists():
-            handle=open(lock,"a+")
-            try:
-                try: fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB); fcntl.flock(handle,fcntl.LOCK_UN)
-                except BlockingIOError: owned=True
-            finally: handle.close()
-        if label and not alive and not owned: return
+        lock_state=supervisor_lock_state()
+        if label and not alive and lock_state in {"MISSING","STALE_UNLOCKED"}: return
         time.sleep(1)
     raise ValueError("FAILED_CLOSED")
 
@@ -348,11 +365,7 @@ def _service_probe() -> dict[str,Any]:
     children=subprocess.run(["pgrep","-P",str(pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
     listener_run=subprocess.run(["lsof","-nP","-a","-p",str(pid),"-iTCP","-sTCP:LISTEN"],text=True,capture_output=True)
     listeners=listener_run.stdout.splitlines()
-    lock=INSTALL_ROOT/SUPERVISOR_LOCK_NAME; handle=open(lock,"a+"); owned=False
-    try:
-        try: fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB); fcntl.flock(handle,fcntl.LOCK_UN)
-        except BlockingIOError: owned=True
-    finally: handle.close()
+    owned=supervisor_lock_state()=="HELD"
     return {"running":"state = running" in printed,"supervisor_count":1,"lock_owned":owned,
             "listeners":max(0,len(listeners)-1),"children":1 if children else 0}
 

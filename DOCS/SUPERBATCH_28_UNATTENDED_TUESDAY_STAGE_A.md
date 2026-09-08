@@ -149,6 +149,14 @@ stop only the unattended label, wait for label/PID/lock clearance, restore the
 complete prior inventory and manifest, bootstrap once, and validate the restored
 state. The September 8 policy remains a separate fresh owner authorization.
 
+The canonical supervisor lock filename is owned by
+`unattended_tuesday_service.SUPERVISOR_LOCK_NAME` and imported by the installer;
+it is never duplicated or derived from input. The resolved path must remain
+directly inside the fixed owner-only supervisor root. Missing, held, stale
+unlocked, symlinked, malformed, wrong-mode, wrong-owner, and ambiguous states are
+classified before teardown proceeds. Changed Python modules must also pass the
+installed static undefined-name (`F821`) gate before checkpointing.
+
 Before future installation: checkpoint this source; create an owner-only rollback
 package; validate actual clock/calendar; validate the authentic Monday receipt;
 verify provider costs without charge; prove the credential boundary separately;
