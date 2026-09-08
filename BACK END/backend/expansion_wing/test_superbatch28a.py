@@ -3,7 +3,8 @@ import json
 import unittest
 
 from .financial_datasets import API_HOST, AUTH_HEADER, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
-from .provider_readiness import COST_SCHEMA, ENDPOINT_PATHS, OFFICIAL_SOURCES, PRICING_OBSERVATION_IDENTITY, PRIOR_SESSION_DATE, PROVIDER, EndpointCost, FixedCredentialBoundary, FixtureAccounting, bounded_stub_request, classify_identity, evaluate_readiness, prior_market_session, revised_plan_identity, revised_request_plan, reviewed_cost_contracts
+from .provider_readiness import COST_SCHEMA, ENDPOINT_PATHS, OFFICIAL_SOURCES, PRICING_OBSERVATION_IDENTITY, PRIOR_SESSION_DATE, PROVIDER, SEPTEMBER_9_REQUIRED_COVERAGE_UTC, EndpointCost, FixedCredentialBoundary, FixtureAccounting, bounded_stub_request, classify_identity, evaluate_readiness, prior_market_session, revised_plan_identity, revised_request_plan, reviewed_cost_contracts, september_9_cost_evidence_document, september_9_plan_identity, september_9_request_plan, validate_september_9_cost_evidence
+from .operational_market_executor_service import validate_september_9_readiness
 from .unattended_tuesday import request_plan
 
 NOW = datetime(2026, 9, 8, 2, tzinfo=timezone.utc)
@@ -51,6 +52,28 @@ class Superbatch28A(unittest.TestCase):
         self.assertEqual(prior_market_session("2026-09-08"),"2026-09-04")
         self.assertEqual(prior_market_session("2026-09-07"),"2026-09-04")
         self.assertEqual(prior_market_session("2026-09-06"),"2026-09-04")
+
+    def test_september_9_plan_and_cost_evidence_are_separate_and_nonspending(self):
+        rows=september_9_request_plan()
+        self.assertEqual((len(rows),len({r['request_identity'] for r in rows}),sum(r['confirmed_cost'] for r in rows)),(50,50,50))
+        self.assertTrue(all(r['session_date']=='2026-09-09' and r['retry'] is False for r in rows))
+        self.assertFalse({r['request_identity'] for r in rows}&{r['request_identity'] for r in revised_request_plan()})
+        observed='2026-09-09T12:00:00+00:00'; expires='2026-09-09T20:05:00+00:00'
+        doc=september_9_cost_evidence_document(observed_at=observed,expires_at=expires,
+            observation_identity='financial-datasets-pricing-2026-09-09-review-v1')
+        self.assertEqual(validate_september_9_cost_evidence(doc,now=datetime(2026,9,9,13,tzinfo=timezone.utc)),doc)
+        self.assertEqual(doc['request_plan_identity'],september_9_plan_identity())
+        self.assertEqual(doc['required_session_coverage_utc'],SEPTEMBER_9_REQUIRED_COVERAGE_UTC)
+        self.assertFalse(doc['browser_refresh']); self.assertFalse(doc['provider_execution_refresh'])
+        self.assertEqual(validate_september_9_readiness(observed_at=observed,expires_at=expires,
+            observation_identity='financial-datasets-pricing-2026-09-09-review-v1',
+            command_time=datetime(2026,9,9,13,tzinfo=timezone.utc)),'SEPTEMBER_9_READINESS_VALIDATED_NOT_INSTALLED')
+
+    def test_september_9_cost_evidence_fails_closed_when_stale_or_short(self):
+        with self.assertRaisesRegex(ValueError,'SEPTEMBER_9_COST_EVIDENCE_INVALID'):
+            september_9_cost_evidence_document(observed_at='2026-09-08T12:00:00+00:00',
+                expires_at='2026-09-09T12:00:00+00:00',
+                observation_identity='financial-datasets-pricing-2026-09-09-review-v1')
 
     def test_old_instrument_profile_remains_a_negative_classification(self):
         old=[row for row in request_plan("tuesday-2026-09-08-stage-a") if row["endpoint"]=="INSTRUMENT_PROFILE"]

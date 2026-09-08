@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from .financial_datasets import API_HOST, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
-from .operational_market_executor import CANARY_PLAN, ExecutorStore, canary_plan, plan_identity
+from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, SEPTEMBER_9_PLAN,
+    ExecutorStore, canary_plan, plan_identity, post_0930_plan, september_9_plan)
 
 INSTALL_SCHEMA="iios-operational-market-executor-installation-v1"
 INSTALL_ROOT=Path.home()/"Library/Application Support/IIOS/OperationalMarketExecutor"
@@ -25,6 +26,10 @@ ARTIFACT_ROOT=INSTALL_ROOT/"installed-artifacts"
 MANIFEST=INSTALL_ROOT/"installation-manifest.json"
 ROLLBACK_ROOT=Path.home()/"Library/Application Support/IIOS/Rollback/OperationalMarketExecutor"
 UPGRADE_ROLLBACK_ROOT=Path.home()/"Library/Application Support/IIOS/Rollback/OperationalMarketExecutorUpgrade"
+SESSIONS_NAME="sessions"
+SELECTOR_NAME="selected-session.json"
+ARCHIVE_SCHEMA="iios-operational-market-session-archive-v1"
+SELECTOR_SCHEMA="iios-operational-market-session-selector-v1"
 COORDINATOR="expansion_wing.operational_market_executor.OperationalMarketEvidenceCoordinator"
 APPROVED_ENDPOINTS=("/company/facts","/prices","/prices/snapshot")
 ARTIFACTS=("operational_market_executor.py","operational_market_executor_installer.py",
@@ -50,6 +55,121 @@ def _write_bytes(path:Path,data:bytes)->None:
     os.replace(temp,path); dfd=os.open(path.parent,os.O_RDONLY)
     try: os.fsync(dfd)
     finally: os.close(dfd)
+
+def _hash_document(value:dict[str,Any])->str:
+    clean=dict(value); clean.pop("content_hash",None)
+    return hashlib.sha256((json.dumps(clean,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+
+def _regular_owner_file(path:Path)->None:
+    info=path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600 or info.st_uid!=os.getuid():
+        raise ValueError("SESSION_GENERATION_FILE_INVALID")
+
+def _copy_session_archive(source:Path,target:Path)->dict[str,Any]:
+    target.mkdir(mode=0o700,parents=True,exist_ok=True); os.chmod(target,0o700)
+    inventory=[]
+    for path in sorted(source.rglob("*")):
+        relative=path.relative_to(source)
+        if path.name=="executor.lock": continue
+        info=path.lstat()
+        destination=target/relative
+        if path.is_symlink() or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            raise ValueError("SESSION_ARCHIVE_SOURCE_INVALID")
+        if path.is_dir(): destination.mkdir(mode=0o700,parents=True,exist_ok=True); os.chmod(destination,0o700)
+        else:
+            destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+            _write_bytes(destination,path.read_bytes())
+            inventory.append({"path":str(relative),"bytes":info.st_size,"sha256":_sha(path)})
+    value={"schema":ARCHIVE_SCHEMA,"session_date":"2026-09-08","classification":POST_0930_PLAN,
+        "source_plan_identity":plan_identity(post_0930_plan()),"files":inventory,"content_hash":""}
+    value["content_hash"]=_hash_document(value); _write(target/"archive-manifest.json",value); return value
+
+def _validate_archive(root:Path)->dict[str,Any]:
+    info=root.lstat()
+    if root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("SESSION_ARCHIVE_INVALID")
+    manifest_path=root/"archive-manifest.json"; _regular_owner_file(manifest_path); value=json.loads(manifest_path.read_text())
+    if (value.get("schema")!=ARCHIVE_SCHEMA or value.get("session_date")!="2026-09-08"
+            or value.get("classification")!=POST_0930_PLAN or value.get("source_plan_identity")!=plan_identity(post_0930_plan())
+            or value.get("content_hash")!=_hash_document(value)): raise ValueError("SESSION_ARCHIVE_INVALID")
+    expected={row["path"]:row for row in value.get("files",[])}
+    observed={str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and p.name!="archive-manifest.json"}
+    if observed!=set(expected): raise ValueError("SESSION_ARCHIVE_INVENTORY_INVALID")
+    for relative,row in expected.items():
+        path=root/relative; _regular_owner_file(path)
+        if path.stat().st_size!=row["bytes"] or _sha(path)!=row["sha256"]: raise ValueError("SESSION_ARCHIVE_HASH_MISMATCH")
+    return value
+
+def _selector(archive:dict[str,Any])->dict[str,Any]:
+    value={"schema":SELECTOR_SCHEMA,"selected_session":"2026-09-09","selected_root":"sessions/2026-09-09",
+        "plan_classification":SEPTEMBER_9_PLAN,"plan_identity":plan_identity(september_9_plan()),
+        "september_8_archive_hash":archive["content_hash"],"content_hash":""}
+    value["content_hash"]=_hash_document(value); return value
+
+def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
+    selector_path=root/SELECTOR_NAME
+    if not selector_path.exists(): return root/"state"
+    _regular_owner_file(selector_path); value=json.loads(selector_path.read_text())
+    archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
+    if value!=_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
+    selected=root/SESSIONS_NAME/"2026-09-09"; rows=ExecutorStore(selected).read_plan(); state=ExecutorStore(selected).read()
+    identities={row["identity"]:row for row in rows}
+    receipts={p.stem:p for p in (selected/"receipts").iterdir()}; evidence={p.stem:p for p in (selected/"evidence").iterdir()}
+    if (rows!=september_9_plan() or state["classification"]!=SEPTEMBER_9_PLAN or state["plan_identity"]!=plan_identity(rows)
+            or set(state["requests"])!=set(identities) or set(receipts)!=set(evidence) or not set(receipts)<=set(identities)):
+        raise ValueError("SELECTED_SESSION_MIXED")
+    for identity,path in receipts.items():
+        _regular_owner_file(path); _regular_owner_file(evidence[identity]); receipt=json.loads(path.read_text()); row=identities[identity]
+        if (receipt.get("request_identity")!=identity or receipt.get("ticker")!=row["ticker"]
+                or receipt.get("window")!=row["window"] or receipt.get("endpoint")!=row["endpoint"]
+                or receipt.get("credit_cost")!=1 or receipt.get("evidence_hash")!=_sha(evidence[identity])):
+            raise ValueError("SELECTED_SESSION_MIXED")
+    return selected
+
+def prepare_september_9_generation(root:Path=INSTALL_ROOT,*,interrupt_after:str|None=None)->str:
+    """Archive September 8 and atomically select a locked September 9 generation."""
+    validate_installed(root); source=ExecutorStore(root/"state"); state=source.read(); rows=source.read_plan()
+    terminal={"CONFIRMED","AMBIGUOUS","FAILED_PRETRANSMISSION"}
+    if (state["classification"]!=POST_0930_PLAN or rows!=post_0930_plan() or state["phase"]!="SESSION_CLOSED"
+            or state["released_credits"]!=0 or any(state[key]!="LOCKED" for key in ("stage_a","stage_b","stage_c"))
+            or any(row["lifecycle"] not in terminal for row in state["requests"].values())
+            or state["completed"]+state["ambiguous"]+state["failed"]!=state["planned"]):
+        raise ValueError("SEPTEMBER_8_NOT_TERMINAL")
+    sessions=root/SESSIONS_NAME; sessions.mkdir(mode=0o700,exist_ok=True); os.chmod(sessions,0o700)
+    archive=sessions/"2026-09-08"; archive_stage=sessions/".2026-09-08.archive.tmp"
+    if not archive.exists():
+        document=_copy_session_archive(root/"state",archive_stage); _validate_archive(archive_stage)
+        if interrupt_after=="archive": raise RuntimeError("INTERRUPTED_ARCHIVAL")
+        os.replace(archive_stage,archive)
+    document=_validate_archive(archive)
+    generation=sessions/"2026-09-09"; generation_stage=sessions/".2026-09-09.generation.tmp"
+    if not generation.exists():
+        if generation_stage.exists(): shutil.rmtree(generation_stage)
+        ExecutorStore(generation_stage).initialize(september_9_plan(),SEPTEMBER_9_PLAN)
+        if interrupt_after=="generation": raise RuntimeError("INTERRUPTED_GENERATION")
+        os.replace(generation_stage,generation)
+    store=ExecutorStore(generation)
+    if store.read_plan()!=september_9_plan() or store.read()["released_credits"]!=0: raise ValueError("SEPTEMBER_9_GENERATION_INVALID")
+    selector=_selector(document); selector_temp=root/("."+SELECTOR_NAME+".tmp"); _write(selector_temp,selector)
+    if interrupt_after=="selection": raise RuntimeError("INTERRUPTED_SELECTION")
+    os.replace(selector_temp,root/SELECTOR_NAME); dfd=os.open(root,os.O_RDONLY)
+    try: os.fsync(dfd)
+    finally: os.close(dfd)
+    if resolve_selected_state_root(root)!=generation: raise ValueError("SESSION_SELECTION_FAILED")
+    return "SEPTEMBER_9_GENERATION_SELECTED_LOCKED"
+
+def recover_session_transition(root:Path=INSTALL_ROOT)->str:
+    selector_temp=root/("."+SELECTOR_NAME+".tmp")
+    if (root/SELECTOR_NAME).exists(): resolve_selected_state_root(root); return "SESSION_SELECTION_VALID"
+    if selector_temp.exists():
+        _regular_owner_file(selector_temp); value=json.loads(selector_temp.read_text())
+        archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
+        if value!=_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
+        selected=root/SESSIONS_NAME/"2026-09-09"
+        if ExecutorStore(selected).read_plan()!=september_9_plan(): raise ValueError("SELECTED_SESSION_MIXED")
+        os.replace(selector_temp,root/SELECTOR_NAME)
+        resolve_selected_state_root(root); return "SESSION_SELECTION_RECOVERED"
+    # Pre-selection interruptions remain safely on the untouched September 8 root.
+    return "SEPTEMBER_8_REMAINS_SELECTED"
 
 def render_manifest(source_root:Path,commit:str)->dict[str,Any]:
     if len(commit)!=40 or any(c not in "0123456789abcdef" for c in commit): raise ValueError("INSTALL_COMMIT_INVALID")
@@ -85,8 +205,8 @@ def validate_manifest(value:Any,source_root:Path|None=None)->dict[str,Any]:
 def validate_installed(root:Path=INSTALL_ROOT)->dict[str,Any]:
     info=root.lstat()
     if root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("INSTALL_ROOT_INVALID")
-    allowed={"installation-manifest.json","state","recovery","installed-artifacts"}
-    if {p.name for p in root.iterdir()}!=allowed: raise ValueError("INSTALL_INVENTORY_INVALID")
+    base={"installation-manifest.json","state","recovery","installed-artifacts"}; observed_root={p.name for p in root.iterdir()}
+    if not observed_root in (base,base|{SESSIONS_NAME},base|{SESSIONS_NAME,SELECTOR_NAME}): raise ValueError("INSTALL_INVENTORY_INVALID")
     for directory in (STATE_ROOT if root==INSTALL_ROOT else root/"state",RECOVERY_ROOT if root==INSTALL_ROOT else root/"recovery",ARTIFACT_ROOT if root==INSTALL_ROOT else root/"installed-artifacts"):
         i=directory.lstat()
         if directory.is_symlink() or not stat.S_ISDIR(i.st_mode) or stat.S_IMODE(i.st_mode)!=0o700 or i.st_uid!=os.getuid(): raise ValueError("INSTALL_ROOT_INVALID")
@@ -101,6 +221,7 @@ def validate_installed(root:Path=INSTALL_ROOT)->dict[str,Any]:
         artifact=artifact_root/Path(relative).name; a=artifact.lstat()
         if artifact.is_symlink() or not stat.S_ISREG(a.st_mode) or stat.S_IMODE(a.st_mode)!=0o600 or a.st_uid!=os.getuid() or a.st_size!=row["bytes"] or _sha(artifact)!=row["sha256"]:
             raise ValueError("INSTALL_ARTIFACT_HASH_MISMATCH")
+    if SELECTOR_NAME in observed_root: resolve_selected_state_root(root)
     return manifest
 
 def browser_projection(root:Path=INSTALL_ROOT)->dict[str,Any]:
@@ -110,7 +231,7 @@ def browser_projection(root:Path=INSTALL_ROOT)->dict[str,Any]:
         return {"schema_version":"iios-operational-market-executor-browser-v1","phase":"NOT_INSTALLED",
                 "installed":False,"authority":LOCKED_AUTHORITY.copy()}
     try:
-        validate_installed(root); state=ExecutorStore(root/"state").read()
+        validate_installed(root); state=ExecutorStore(resolve_selected_state_root(root)).read()
         phases={"EXECUTOR_READY_DISABLED":"CANARY_READY","POST_0930_PARTIAL_READY":"POST_0930_PARTIAL_SESSION",
                 "CANARY_CONFIRMED":"CANARY_CONFIRMED","FAILED_CLOSED":"FAILED_CLOSED",
                 "SESSION_FAILED_CLOSED":"FAILED_CLOSED","SESSION_CLOSED":"INSTALLED_DISABLED"}

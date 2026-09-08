@@ -55,4 +55,17 @@ class Superbatch28C(unittest.TestCase):
         for word in ("activate","provider","credential","policy","browser","ledger","broker"): self.assertNotIn(word,forbidden.lower())
         self.assertTrue(value["RunAtLoad"]); self.assertEqual(value["KeepAlive"],{"SuccessfulExit":False})
 
+    def test_supervisor_schedules_selected_september_9_generation_only(self):
+        class Coordinator:
+            def __init__(self): self.ticks=[]
+            def recover(self): return {"classification":"SEPTEMBER_9_MARKET_OPEN_50","phase":"STAGE_A_RUNNING"}
+            def scheduled_tick(self,now): self.ticks.append(now); return "BOUNDED_WAIT"
+        selected=Coordinator(); factories=[]
+        def factory(): factories.append(True); return selected
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)/"policy"
+            self.assertEqual(supervise(root=root,iterations=1,clock=lambda:datetime(2026,9,9,8,tzinfo=timezone.utc),coordinator_factory=factory),0)
+        self.assertEqual((len(factories),len(selected.ticks)),(1,1))
+        self.assertEqual(selected.ticks[0].date().isoformat(),"2026-09-09")
+
 if __name__=="__main__": unittest.main()

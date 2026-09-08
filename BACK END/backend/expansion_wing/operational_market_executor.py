@@ -29,6 +29,8 @@ FULL_PLAN = "FULL_SESSION_50"
 LATE_PLAN = "PARTIAL_SESSION_LATE_START"
 CANARY_PLAN = "SPY_SNAPSHOT_CANARY_1"
 POST_0930_PLAN = "POST_0930_PARTIAL_SESSION"
+SEPTEMBER_9_PLAN = "SEPTEMBER_9_MARKET_OPEN_50"
+SEPTEMBER_9_SESSION_DATE = "2026-09-09"
 ADOPTION_SCHEMA = "iios-operational-market-canary-adoption-v1"
 LIFECYCLES = {"PLANNED", "RESERVED", "DISPATCH_STARTED", "CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 TERMINAL = {"CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
@@ -45,6 +47,10 @@ def _digest(value: Any) -> str:
 
 def _identity(plan: str, window: str, endpoint: str, ticker: str) -> str:
     seed = f"2026-09-08|{plan}|{window}|{endpoint}|{ticker}|fd-operational-v1"
+    return "market-evidence-" + hashlib.sha256(seed.encode()).hexdigest()
+
+def _dated_identity(session_date: str, plan: str, window: str, endpoint: str, ticker: str) -> str:
+    seed = f"{session_date}|{plan}|{window}|{endpoint}|{ticker}|fd-operational-v1"
     return "market-evidence-" + hashlib.sha256(seed.encode()).hexdigest()
 
 def full_plan() -> tuple[dict[str, Any], ...]:
@@ -64,6 +70,27 @@ def _row(plan: str, window: str, endpoint: str, ticker: str, *, variant: str = "
     return {"identity": _identity(plan, window, endpoint + ":" + variant, ticker), "plan": plan,
             "window": window, "endpoint": endpoint, "path": PATHS[endpoint], "ticker": ticker,
             "earliest": start, "latest": end, "cost": 1, "retry": False, "variant": variant}
+
+def _dated_row(session_date: str, plan: str, window: str, endpoint: str, ticker: str, *, variant: str = "STANDARD") -> dict[str, Any]:
+    start, end = WINDOWS[window]
+    return {"identity": _dated_identity(session_date, plan, window, endpoint + ":" + variant, ticker),
+            "plan": plan, "session_date": session_date, "window": window, "endpoint": endpoint,
+            "path": PATHS[endpoint], "ticker": ticker, "earliest": start, "latest": end,
+            "cost": 1, "retry": False, "variant": variant}
+
+def september_9_plan() -> tuple[dict[str, Any], ...]:
+    """A separate immutable next-session plan; it never reuses September 8 rows."""
+    rows: list[dict[str, Any]] = []
+    for ticker in PILOTS:
+        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "OPENING", "MARKET_SNAPSHOT", ticker))
+        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "BASELINE", "HISTORICAL_OHLCV", ticker))
+        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "INTRADAY", "MARKET_SNAPSHOT", ticker))
+        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "CLOSING", "MARKET_SNAPSHOT", ticker))
+    rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "BASELINE", "COMPANY_FACTS", "MU"))
+    for ticker in PILOTS:
+        if ticker != "MU":
+            rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "BASELINE", "HISTORICAL_OHLCV", ticker, variant="FUND_BASELINE"))
+    return tuple(rows)
 
 def partial_session_plan(now_local: datetime) -> tuple[dict[str, Any], ...]:
     if now_local.tzinfo is None or now_local.date().isoformat() != "2026-09-08": raise ValueError("LATE_START_CLOCK_INVALID")
@@ -161,7 +188,7 @@ class ExecutorStore:
                 or not isinstance(value.get("rows"),list)):
             raise ValueError("REQUEST_PLAN_INVALID")
         rows=tuple(value["rows"])
-        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN,POST_0930_PLAN}:
+        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN,POST_0930_PLAN,SEPTEMBER_9_PLAN}:
             raise ValueError("REQUEST_PLAN_INVALID")
         return rows
     def write_plan(self,rows:tuple[dict[str,Any],...],classification:str)->None:
@@ -296,7 +323,8 @@ class OperationalMarketEvidenceCoordinator:
         finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
     def scheduled_tick(self, now_local: datetime) -> str:
         """Run only identities in the current immutable window; never releases allowance."""
-        if now_local.tzinfo is None or now_local.date().isoformat()!="2026-09-08":
+        expected_date = SEPTEMBER_9_SESSION_DATE if self.rows and self.rows[0]["plan"]==SEPTEMBER_9_PLAN else "2026-09-08"
+        if now_local.tzinfo is None or now_local.date().isoformat()!=expected_date:
             self.close("SESSION_TIME_INVALID"); return "SESSION_FAILED_CLOSED"
         hm=now_local.strftime("%H:%M")
         if hm>"13:05": self.close(); return "SESSION_CLOSED"
@@ -307,7 +335,7 @@ class OperationalMarketEvidenceCoordinator:
         for row in self.rows:
             if row["window"] in windows: self.execute(row["identity"])
         current=self.store.read()
-        if self.rows and self.rows[0]["plan"]==POST_0930_PLAN and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
+        if self.rows and self.rows[0]["plan"] in {POST_0930_PLAN,SEPTEMBER_9_PLAN} and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
             self.close(); return "SESSION_CLOSED"
         final=windows[-1]; state=self.store.read(); state["next_gate"]={"OPENING":"INTRADAY","BASELINE":"INTRADAY","INTRADAY":"CLOSE_READINESS","CLOSING":"SESSION_CLOSE"}[final]; self._write(state)
         return "+".join(windows)+"_OBSERVED"

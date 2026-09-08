@@ -32,6 +32,9 @@ CREDENTIAL_STATUS_NAME = "credential-presence.json"
 READINESS_INVENTORY = frozenset({COST_CONTRACT_NAME, CREDENTIAL_STATUS_NAME})
 PRIOR_SESSION_DATE = "2026-09-04"
 SOURCE_CONTROLLED_SESSIONS = ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08")
+SEPTEMBER_9_SESSION_DATE = "2026-09-09"
+SEPTEMBER_9_REQUIRED_COVERAGE_UTC = "2026-09-09T20:05:00+00:00"
+SEPTEMBER_9_COST_SCHEMA = "iios-provider-endpoint-cost-contract-september-9-v1"
 RATE_LIMIT_PER_MINUTE = 10
 MAX_RESPONSE_BYTES = 1_048_576
 CONNECT_TIMEOUT_SECONDS = 5
@@ -240,6 +243,73 @@ def revised_request_plan() -> tuple[dict[str, Any], ...]:
 
 def revised_plan_identity() -> str:
     return _hash({"schema": "iios-stage-a-provider-plan-v2", "requests": revised_request_plan()})
+
+
+def september_9_request_plan() -> tuple[dict[str, Any], ...]:
+    """Separate 50-row readiness plan with September 9-bound identities."""
+    prior = prior_market_session(SEPTEMBER_9_SESSION_DATE)
+    windows = (
+        ("OPENING_SESSION", "MARKET_SNAPSHOT", "06:30", "07:00", None),
+        ("POINT_IN_TIME_OHLCV", "HISTORICAL_OHLCV", "06:30", "09:30", f"{prior}/{SEPTEMBER_9_SESSION_DATE}"),
+        ("APPLICABLE_FACTS", "APPLICABLE", "07:00", "10:00", None),
+        ("INTRADAY_MARK", "MARKET_SNAPSHOT", "09:30", "12:55", None),
+        ("CLOSING_MARK", "MARKET_SNAPSHOT", "12:55", "13:05", None),
+    )
+    result = []
+    for room, (instrument, _description) in PILOT_BY_PRODUCT.items():
+        for category, endpoint, earliest, latest, date_window in windows:
+            resolved_endpoint, resolved_category, resolved_window = endpoint, category, date_window
+            if endpoint == "APPLICABLE":
+                if instrument == "MU": resolved_endpoint = "COMPANY_FACTS"
+                else:
+                    resolved_endpoint, resolved_category = "HISTORICAL_OHLCV", "PRIOR_SESSION_BASELINE"
+                    resolved_window = f"{prior}/{prior}"
+            identity_payload = {
+                "provider": PROVIDER, "provider_contract": PROVIDER_CONTRACT,
+                "session_date": SEPTEMBER_9_SESSION_DATE, "instrument": instrument,
+                "endpoint": resolved_endpoint, "evidence_category": resolved_category,
+                "earliest": earliest, "latest": latest, "date_window": resolved_window,
+            }
+            result.append(identity_payload | {"product_room": room, "confirmed_cost": 1,
+                "retry": False, "request_identity": "stage-a-" + _hash(identity_payload)})
+    return tuple(result)
+
+
+def september_9_plan_identity() -> str:
+    return _hash({"schema":"iios-stage-a-provider-plan-september-9-v1","requests":september_9_request_plan()})
+
+
+def september_9_cost_evidence_document(*, observed_at: str, expires_at: str,
+                                       observation_identity: str) -> dict[str, Any]:
+    """Construct reviewed metadata only; this function performs no I/O or secret access."""
+    observed, expires = _utc(observed_at), _utc(expires_at)
+    coverage = _utc(SEPTEMBER_9_REQUIRED_COVERAGE_UTC)
+    if (not observation_identity.startswith("financial-datasets-pricing-2026-09-09-")
+            or expires <= observed or (expires-observed).total_seconds()>MAX_COST_EVIDENCE_AGE_SECONDS
+            or expires < coverage):
+        raise ValueError("SEPTEMBER_9_COST_EVIDENCE_INVALID")
+    value = {"schema":SEPTEMBER_9_COST_SCHEMA,"provider_identity":PROVIDER,
+        "provider_contract_version":PROVIDER_CONTRACT,"pricing_observation_identity":observation_identity,
+        "source_url_identity":"https://www.financialdatasets.ai/pricing",
+        "documentation_observed_at":observed_at,"expiration_revalidation_time":expires_at,
+        "required_session_coverage_utc":SEPTEMBER_9_REQUIRED_COVERAGE_UTC,
+        "planned_request_count":50,"exact_planned_cost_credits":50,
+        "worst_case_cost_credits":50,"rate_limit_per_minute":RATE_LIMIT_PER_MINUTE,
+        "browser_refresh":False,"provider_execution_refresh":False,
+        "request_plan_identity":september_9_plan_identity()}
+    return value | {"document_hash":_hash(value)}
+
+
+def validate_september_9_cost_evidence(value: Any, *, now: datetime) -> dict[str, Any]:
+    if not isinstance(value,dict) or value.get("schema")!=SEPTEMBER_9_COST_SCHEMA:
+        raise ValueError("SEPTEMBER_9_COST_EVIDENCE_INVALID")
+    expected=september_9_cost_evidence_document(
+        observed_at=value.get("documentation_observed_at"),
+        expires_at=value.get("expiration_revalidation_time"),
+        observation_identity=value.get("pricing_observation_identity"))
+    if value!=expected or now.tzinfo!=timezone.utc or not _utc(expected["documentation_observed_at"])<=now<=_utc(expected["expiration_revalidation_time"]):
+        raise ValueError("SEPTEMBER_9_COST_EVIDENCE_INVALID")
+    return value
 
 
 def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | None = None) -> dict[str, Any]:

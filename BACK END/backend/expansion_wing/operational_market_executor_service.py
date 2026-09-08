@@ -12,12 +12,15 @@ from zoneinfo import ZoneInfo
 from .financial_datasets import KEYCHAIN_SERVICE, SecurityFrameworkCredentialProvider
 from .financial_datasets_tls import FinancialDatasetsHTTPSTransport, TrustBundlePolicy
 from .keychain_adapter import KeychainAdapter, SecurityFrameworkAPI
-from .provider_readiness import installed_readiness_projection, operational_cost_binding
+from .provider_readiness import (installed_readiness_projection, operational_cost_binding,
+    september_9_cost_evidence_document, september_9_request_plan,
+    validate_september_9_cost_evidence)
 from .operational_market_executor import (
     CANARY_PLAN, POST_0930_PLAN, ExecutorStore, FinancialDatasetsOperationalBoundary,
-    OperationalMarketEvidenceCoordinator, canary_plan, post_0930_plan,
+    OperationalMarketEvidenceCoordinator, canary_plan, post_0930_plan, september_9_plan,
 )
-from .operational_market_executor_installer import INSTALL_ROOT, STATE_ROOT, install_disabled, upgrade_disabled, validate_installed
+from .operational_market_executor_installer import (INSTALL_ROOT, install_disabled,
+    resolve_selected_state_root, upgrade_disabled, validate_installed)
 
 TRUST_ROOT=Path.home()/"Library/Application Support/IIOS/ExpansionWingFinancialDatasets"
 TRUST_BUNDLE=TRUST_ROOT/"cacert.pem"
@@ -36,8 +39,8 @@ def _trust_policy()->TrustBundlePolicy:
 
 def production_coordinator()->OperationalMarketEvidenceCoordinator:
     validate_installed()
-    store=ExecutorStore(STATE_ROOT); rows=store.read_plan()
-    if rows!=canary_plan() and rows!=post_0930_plan(): raise ValueError("REQUEST_PLAN_MISMATCH")
+    store=ExecutorStore(resolve_selected_state_root()); rows=store.read_plan()
+    if rows not in (canary_plan(),post_0930_plan(),september_9_plan()): raise ValueError("REQUEST_PLAN_MISMATCH")
     adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
     boundary=FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
     return OperationalMarketEvidenceCoordinator(store,rows,boundary)
@@ -70,6 +73,21 @@ def transition_post_0930()->str:
         raise ValueError(state.get("failure_category") or "POST_0930_EXECUTION_FAILED_CLOSED")
     return "POST_0930_PARTIAL_SESSION_RUNNING:"+result
 
+def validate_september_9_readiness(*,observed_at:str,expires_at:str,observation_identity:str,
+                                   command_time:datetime|None=None)->str:
+    """Non-spending administrative validation; never reads Keychain or operational state."""
+    document=september_9_cost_evidence_document(observed_at=observed_at,expires_at=expires_at,
+        observation_identity=observation_identity)
+    validate_september_9_cost_evidence(document,now=command_time or datetime.now(ZoneInfo("UTC")))
+    provider_rows=september_9_request_plan(); executor_rows=september_9_plan()
+    if (len(provider_rows),len(executor_rows))!=(50,50) or len({r["request_identity"] for r in provider_rows})!=50 or len({r["identity"] for r in executor_rows})!=50:
+        raise ValueError("SEPTEMBER_9_REQUEST_PLAN_INVALID")
+    if any(r["session_date"]!="2026-09-09" or r["retry"] is not False or r["confirmed_cost"]!=1 for r in provider_rows):
+        raise ValueError("SEPTEMBER_9_REQUEST_PLAN_INVALID")
+    if any(r["session_date"]!="2026-09-09" or r["retry"] is not False or r["cost"]!=1 for r in executor_rows):
+        raise ValueError("SEPTEMBER_9_REQUEST_PLAN_INVALID")
+    return "SEPTEMBER_9_READINESS_VALIDATED_NOT_INSTALLED"
+
 def main(argv:list[str]|None=None)->int:
     parser=argparse.ArgumentParser(); group=parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--install-disabled",action="store_true")
@@ -77,8 +95,10 @@ def main(argv:list[str]|None=None)->int:
     group.add_argument("--upgrade-disabled",action="store_true")
     group.add_argument("--run-spy-canary",action="store_true")
     group.add_argument("--transition-post-0930",action="store_true")
+    group.add_argument("--validate-september-9-readiness",action="store_true")
     parser.add_argument("--source-root"); parser.add_argument("--authorized-commit")
     parser.add_argument("--owner-authorized",action="store_true"); parser.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
+    parser.add_argument("--cost-observed-at"); parser.add_argument("--cost-expires-at"); parser.add_argument("--cost-observation-identity")
     args=parser.parse_args(argv)
     try:
         if args.browser: raise ValueError("BROWSER_INVOCATION_REJECTED")
@@ -93,9 +113,14 @@ def main(argv:list[str]|None=None)->int:
         elif args.run_spy_canary:
             if not args.owner_authorized: raise ValueError("OWNER_CANARY_AUTHORIZATION_REQUIRED")
             status=run_canary()
-        else:
+        elif args.transition_post_0930:
             if not args.owner_authorized: raise ValueError("OWNER_PARTIAL_SESSION_AUTHORIZATION_REQUIRED")
             status=transition_post_0930()
+        else:
+            if not all((args.cost_observed_at,args.cost_expires_at,args.cost_observation_identity)):
+                raise ValueError("SEPTEMBER_9_COST_EVIDENCE_MISSING")
+            status=validate_september_9_readiness(observed_at=args.cost_observed_at,
+                expires_at=args.cost_expires_at,observation_identity=args.cost_observation_identity)
         print(json.dumps({"status":status},sort_keys=True)); return 0
     except (OSError,ValueError,RuntimeError) as exc:
         category=str(exc)

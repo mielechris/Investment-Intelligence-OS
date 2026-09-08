@@ -150,7 +150,7 @@ def tick(store:PolicyStore,now:datetime,*,readiness_root:Path|None=None)->str:
         return "TUESDAY_STAGE_A_RUNNING"
     return "NO_ELIGIBLE_TRANSITION"
 
-def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None)->int:
+def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None,coordinator_factory=None)->int:
     policy_root=OPERATIONAL_ROOT if root is None else root
     lock_root=SUPERVISOR_ROOT if root is None else root.parent/(root.name+"Supervisor")
     lock_root.mkdir(mode=0o700,parents=False,exist_ok=True); os.chmod(lock_root,0o700)
@@ -163,13 +163,17 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
             # The installed executor is reconstructed from its persisted plan on
             # every supervisor cycle. Recovery is read/write-local only; canary
             # dispatch remains exclusive to the owner-authorized one-shot CLI.
-            if root is None:
+            if root is None or coordinator_factory is not None:
                 from .operational_market_executor_installer import INSTALL_ROOT
-                if INSTALL_ROOT.exists():
+                if coordinator_factory is not None or INSTALL_ROOT.exists():
                     try:
-                        from .operational_market_executor_service import production_coordinator
-                        coordinator=production_coordinator(); state=coordinator.recover()
-                        if state.get("classification")=="POST_0930_PARTIAL_SESSION" and state.get("phase")=="STAGE_A_RUNNING":
+                        if coordinator_factory is None:
+                            from .operational_market_executor_service import production_coordinator
+                            coordinator=production_coordinator()
+                        else: coordinator=coordinator_factory()
+                        state=coordinator.recover()
+                        if (state.get("classification") in {"POST_0930_PARTIAL_SESSION","SEPTEMBER_9_MARKET_OPEN_50"}
+                                and state.get("phase")=="STAGE_A_RUNNING"):
                             from zoneinfo import ZoneInfo
                             coordinator.scheduled_tick(now().astimezone(ZoneInfo("America/Los_Angeles")))
                     except (OSError,ValueError,RuntimeError): return 4

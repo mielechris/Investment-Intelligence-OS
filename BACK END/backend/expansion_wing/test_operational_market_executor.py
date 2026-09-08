@@ -24,6 +24,28 @@ class OperationalExecutorTests(unittest.TestCase):
         rows=full_plan(); self.assertEqual((len(rows),len({r['identity'] for r in rows}),sum(r['cost'] for r in rows)),(50,50,50))
         self.assertEqual(sum(r['window']=="OPENING" for r in rows),10); self.assertEqual(sum(r['window']=="INTRADAY" for r in rows),10); self.assertEqual(sum(r['window']=="CLOSING" for r in rows),10)
         self.assertEqual(sum(r['endpoint']=="COMPANY_FACTS" for r in rows),1); self.assertEqual(sum(r['variant']=="FUND_BASELINE" for r in rows),9)
+    def test_september_9_plan_is_separate_date_bound_and_exact(self):
+        old=full_plan(); rows=september_9_plan()
+        self.assertEqual((len(rows),len({r['identity'] for r in rows}),sum(r['cost'] for r in rows)),(50,50,50))
+        self.assertTrue(all(r['plan']==SEPTEMBER_9_PLAN and r['session_date']==SEPTEMBER_9_SESSION_DATE for r in rows))
+        self.assertFalse({r['identity'] for r in old}&{r['identity'] for r in rows})
+        self.assertEqual({r['window'] for r in rows},{'OPENING','BASELINE','INTRADAY','CLOSING'})
+        self.assertTrue(all(r['retry'] is False for r in rows))
+    def test_september_9_restart_duplicate_suppression_and_automatic_close(self):
+        rows=september_9_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup)
+        c.preflight(self.gates()); c.release(50); zone=ZoneInfo('America/Los_Angeles')
+        c.scheduled_tick(datetime(2026,9,9,6,30,tzinfo=zone)); before=len(b.calls)
+        restarted=OperationalMarketEvidenceCoordinator(store,store.read_plan(),b)
+        restarted.scheduled_tick(datetime(2026,9,9,6,30,tzinfo=zone))
+        self.assertEqual(len(b.calls),before)
+        restarted.scheduled_tick(datetime(2026,9,9,9,30,tzinfo=zone))
+        self.assertEqual(restarted.scheduled_tick(datetime(2026,9,9,12,55,tzinfo=zone)),'SESSION_CLOSED')
+        state=store.read(); self.assertEqual((state['completed'],state['confirmed_credits'],state['released_credits'],state['stage_a']),(50,50,0,'LOCKED'))
+        self.assertEqual((len(b.calls),len(set(b.calls))),(50,50))
+    def test_september_9_plan_rejects_other_dates_before_dispatch(self):
+        rows=september_9_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50)
+        self.assertEqual(c.scheduled_tick(datetime(2026,9,8,6,30,tzinfo=ZoneInfo('America/Los_Angeles'))),'SESSION_FAILED_CLOSED')
+        self.assertEqual(b.calls,[]); self.assertEqual(store.read()['released_credits'],0)
     def test_late_plan_has_no_opening_and_is_deterministic(self):
         now=datetime(2026,9,8,8,0,tzinfo=ZoneInfo("America/Los_Angeles")); a=partial_session_plan(now); b=partial_session_plan(now)
         self.assertEqual(a,b); self.assertNotIn("OPENING",{r['window'] for r in a}); self.assertEqual(len(a),31); self.assertEqual(plan_identity(a),plan_identity(b))
