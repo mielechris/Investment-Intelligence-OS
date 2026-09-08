@@ -29,5 +29,12 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(browser_projection(self.root)["phase"],"UNAVAILABLE")
     def test_absent_projection_is_not_installed(self):
         value=browser_projection(self.root); self.assertEqual((value["phase"],value["installed"]),("NOT_INSTALLED",False))
+    def test_upgrade_preserves_state_and_is_rollback_backed(self):
+        install_disabled(self.source,"a"*40,self.root,self.rollback,observed_commit="a"*40)
+        before=(self.root/"state"/"executor-state.json").read_bytes(); upgrade_rollback=Path(self.temp.name)/"upgrade-rollback"
+        base=self.source/"BACK END/backend/expansion_wing"; (base/ARTIFACTS[0]).write_text("changed\n")
+        self.assertEqual(upgrade_disabled(self.source,"b"*40,self.root,upgrade_rollback,observed_commit="b"*40),"EXECUTOR_UPGRADED_DISABLED")
+        self.assertEqual(validate_installed(self.root)["installed_source_commit"],"b"*40)
+        self.assertEqual(before,(self.root/"state"/"executor-state.json").read_bytes()); self.assertTrue((upgrade_rollback/"installation-manifest.json").is_file())
 
 if __name__=="__main__": unittest.main()

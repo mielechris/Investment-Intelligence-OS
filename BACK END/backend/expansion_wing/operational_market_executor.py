@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from .financial_datasets import API_HOST, AUTH_HEADER, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE, SecurityFrameworkCredentialProvider
 from .tuesday_market_evidence import PILOT_INSTRUMENTS
@@ -27,6 +28,8 @@ PLAN_SCHEMA = "iios-operational-market-request-plan-v1"
 FULL_PLAN = "FULL_SESSION_50"
 LATE_PLAN = "PARTIAL_SESSION_LATE_START"
 CANARY_PLAN = "SPY_SNAPSHOT_CANARY_1"
+POST_0930_PLAN = "POST_0930_PARTIAL_SESSION"
+ADOPTION_SCHEMA = "iios-operational-market-canary-adoption-v1"
 LIFECYCLES = {"PLANNED", "RESERVED", "DISPATCH_STARTED", "CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 TERMINAL = {"CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 PATHS = {"MARKET_SNAPSHOT": "/prices/snapshot", "HISTORICAL_OHLCV": "/prices", "COMPANY_FACTS": "/company/facts"}
@@ -78,6 +81,13 @@ def canary_plan() -> tuple[dict[str, Any], ...]:
     """The only plan accepted by the separately owner-authorized canary command."""
     return (_row(CANARY_PLAN, "CANARY", "MARKET_SNAPSHOT", "SPY"),)
 
+def post_0930_plan() -> tuple[dict[str, Any], ...]:
+    rows=[]
+    for ticker in PILOTS:
+        rows.append(_row(POST_0930_PLAN,"INTRADAY","MARKET_SNAPSHOT",ticker))
+        rows.append(_row(POST_0930_PLAN,"CLOSING","MARKET_SNAPSHOT",ticker))
+    return tuple(rows)
+
 def plan_identity(rows: tuple[dict[str, Any], ...]) -> str:
     return hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -115,6 +125,8 @@ class ExecutorStore:
     def lkv_path(self) -> Path: return self.root / "executor-state.last-known-valid.json"
     @property
     def plan_path(self) -> Path: return self.root / "request-plan.json"
+    @property
+    def adoption_path(self) -> Path: return self.root / "canary-adoption.json"
     def initialize(self, rows: tuple[dict[str, Any], ...], classification: str) -> dict[str, Any]:
         if self.root.exists(): raise ValueError("EXECUTOR_STORE_ALREADY_EXISTS")
         self.root.mkdir(mode=0o700, parents=False); (self.root / "receipts").mkdir(mode=0o700); (self.root / "evidence").mkdir(mode=0o700)
@@ -132,7 +144,7 @@ class ExecutorStore:
     def validate_root(self) -> None:
         info=self.root.lstat()
         if self.root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("EXECUTOR_ROOT_INVALID")
-        allowed={"executor-state.json","executor-state.last-known-valid.json","request-plan.json","executor.lock","receipts","evidence"}
+        allowed={"executor-state.json","executor-state.last-known-valid.json","request-plan.json","canary-adoption.json","executor.lock","receipts","evidence"}
         if {p.name for p in self.root.iterdir()}-allowed: raise ValueError("EXECUTOR_INVENTORY_INVALID")
         for dirname in ("receipts","evidence"):
             p=self.root/dirname; i=p.lstat()
@@ -149,9 +161,12 @@ class ExecutorStore:
                 or not isinstance(value.get("rows"),list)):
             raise ValueError("REQUEST_PLAN_INVALID")
         rows=tuple(value["rows"])
-        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN}:
+        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN,POST_0930_PLAN}:
             raise ValueError("REQUEST_PLAN_INVALID")
         return rows
+    def write_plan(self,rows:tuple[dict[str,Any],...],classification:str)->None:
+        value={"schema_version":PLAN_SCHEMA,"classification":classification,"plan_identity":plan_identity(rows),"rows":list(rows),"content_hash":""}
+        value["content_hash"]=_digest(value); _atomic(self.root,self.plan_path.name,value)
     def write(self, state: dict[str, Any]) -> None:
         validate_state(state)
         _atomic(self.root, self.state_path.name, state); _atomic(self.root, self.lkv_path.name, state)
@@ -202,8 +217,34 @@ class OperationalMarketEvidenceCoordinator:
         return "EXECUTOR_READY"
     def release(self, credits: int) -> None:
         s=self.store.read()
-        if s["phase"]!="EXECUTOR_READY_DISABLED" or credits!=len(self.rows): raise ValueError("ALLOWANCE_RELEASE_REJECTED")
+        allowed=s["phase"]=="EXECUTOR_READY_DISABLED" and credits==len(self.rows)
+        allowed=allowed or (s["phase"]=="POST_0930_PARTIAL_READY" and credits==s["planned"]-s["completed"]-s["ambiguous"])
+        if not allowed: raise ValueError("ALLOWANCE_RELEASE_REJECTED")
         s["released_credits"]=credits; s["stage_a"]="RUNNING"; s["phase"]="STAGE_A_RUNNING"; self._write(s)
+    def migrate_canary_to_post_0930(self,now_local:datetime)->dict[str,Any]:
+        if now_local.tzinfo is None or now_local.astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()!="2026-09-08": raise ValueError("POST_0930_CLOCK_INVALID")
+        local=now_local.astimezone(ZoneInfo("America/Los_Angeles")); hm=local.strftime("%H:%M")
+        if not WINDOWS["INTRADAY"][0]<=hm<WINDOWS["INTRADAY"][1]: raise ValueError("INTRADAY_WINDOW_CLOSED")
+        lock=self.store.lock()
+        try:
+            s=self.store.read(); old_rows=self.store.read_plan()
+            if s["classification"]!=CANARY_PLAN or old_rows!=canary_plan() or s["phase"]!="CANARY_CONFIRMED" or s["completed"]!=1 or s["confirmed_credits"]!=1 or s["ambiguous_credits"]!=0 or s["released_credits"]!=0: raise ValueError("CANARY_ADOPTION_REJECTED")
+            old=old_rows[0]; old_id=old["identity"]; receipt=_read_json(self.store.root/"receipts"/(old_id+".json")); evidence=_read_bytes(self.store.root/"evidence"/(old_id+".json"))
+            if (old["ticker"]!="SPY" or old["path"]!="/prices/snapshot" or receipt.get("ticker")!="SPY"
+                    or receipt.get("endpoint")!="MARKET_SNAPSHOT" or receipt.get("credit_cost")!=1
+                    or receipt.get("status")!="CONFIRMED" or receipt.get("content_hash")!=_digest(receipt)
+                    or receipt.get("evidence_hash")!=hashlib.sha256(evidence).hexdigest()): raise ValueError("CANARY_ADOPTION_REJECTED")
+            try: provider_time=datetime.fromisoformat(str(receipt["provider_timestamp"]).replace("Z","+00:00")).astimezone(ZoneInfo("America/Los_Angeles"))
+            except (KeyError,ValueError): raise ValueError("CANARY_ADOPTION_REJECTED") from None
+            if provider_time.date().isoformat()!="2026-09-08" or not WINDOWS["INTRADAY"][0]<=provider_time.strftime("%H:%M")<WINDOWS["INTRADAY"][1]: raise ValueError("CANARY_ADOPTION_REJECTED")
+            rows=post_0930_plan(); adopted=next(r for r in rows if r["window"]=="INTRADAY" and r["ticker"]=="SPY")
+            link={"schema_version":ADOPTION_SCHEMA,"source_identity":old_id,"adopted_identity":adopted["identity"],"provider":"FINANCIAL_DATASETS","session_date":"2026-09-08","ticker":"SPY","path":"/prices/snapshot","credit_cost":1,"evidence_hash":receipt["evidence_hash"],"receipt_hash":receipt["content_hash"],"content_hash":""}
+            link["content_hash"]=_digest(link); _atomic(self.store.root,self.store.adoption_path.name,link)
+            self.store.write_plan(rows,POST_0930_PLAN)
+            requests={r["identity"]:{"lifecycle":"CONFIRMED" if r["identity"]==adopted["identity"] else "PLANNED","cost":1} for r in rows}
+            s.update({"classification":POST_0930_PLAN,"plan_identity":plan_identity(rows),"planned":20,"requests":requests,"dispatched":1,"completed":1,"failed":0,"ambiguous":0,"confirmed_credits":1,"ambiguous_credits":0,"released_credits":0,"stage_a":"LOCKED","stage_b":"LOCKED","stage_c":"LOCKED","phase":"POST_0930_PARTIAL_READY","next_gate":"INTRADAY","adopted_canary_count":1,"failure_category":None})
+            self.rows=rows; self._write(s); return s
+        finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
     def recover(self) -> dict[str,Any]:
         s=self.store.read(); changed=False
         for identity,value in s["requests"].items():
@@ -265,13 +306,17 @@ class OperationalMarketEvidenceCoordinator:
         if state["stage_a"]!="RUNNING": return "STAGE_A_LOCKED"
         for row in self.rows:
             if row["window"] in windows: self.execute(row["identity"])
+        current=self.store.read()
+        if self.rows and self.rows[0]["plan"]==POST_0930_PLAN and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
+            self.close(); return "SESSION_CLOSED"
         final=windows[-1]; state=self.store.read(); state["next_gate"]={"OPENING":"INTRADAY","BASELINE":"INTRADAY","INTRADAY":"CLOSE_READINESS","CLOSING":"SESSION_CLOSE"}[final]; self._write(state)
         return "+".join(windows)+"_OBSERVED"
     def close(self, failure: str|None=None) -> None:
         s=self.store.read(); s["released_credits"]=0; s["stage_a"]="LOCKED"; s["stage_b"]="LOCKED"; s["stage_c"]="LOCKED"
         s["phase"]="SESSION_CLOSED" if failure is None else "SESSION_FAILED_CLOSED"; s["next_gate"]="NONE"; s["failure_category"]=failure; self._write(s)
     def projection(self) -> dict[str,Any]:
-        s=self.store.read(); return {k:s[k] for k in ("schema_version","generation","classification","phase","next_gate","planned","dispatched","completed","failed","ambiguous","confirmed_credits","ambiguous_credits","released_credits","keychain_accesses","stage_a","stage_b","stage_c","authority")}
+        s=self.store.read(); result={k:s[k] for k in ("schema_version","generation","classification","phase","next_gate","planned","dispatched","completed","failed","ambiguous","confirmed_credits","ambiguous_credits","released_credits","keychain_accesses","stage_a","stage_b","stage_c","authority")}
+        result["remaining"]=s["planned"]-s["completed"]-s["ambiguous"]-s["failed"]; result["adopted_canary_count"]=s.get("adopted_canary_count",0); return result
     def _recount(self,s):
         vals=list(s["requests"].values()); s["dispatched"]=sum(v["lifecycle"] in {"DISPATCH_STARTED","CONFIRMED","AMBIGUOUS"} for v in vals); s["completed"]=sum(v["lifecycle"]=="CONFIRMED" for v in vals); s["ambiguous"]=sum(v["lifecycle"]=="AMBIGUOUS" for v in vals); s["confirmed_credits"]=s["completed"]; s["ambiguous_credits"]=s["ambiguous"]
     def _write(self,s): s["generation"]+=1; s["content_hash"]=_digest(s); self.store.write(s)

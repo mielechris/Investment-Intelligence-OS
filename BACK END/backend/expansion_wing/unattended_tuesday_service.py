@@ -168,7 +168,10 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
                 if INSTALL_ROOT.exists():
                     try:
                         from .operational_market_executor_service import production_coordinator
-                        production_coordinator().recover()
+                        coordinator=production_coordinator(); state=coordinator.recover()
+                        if state.get("classification")=="POST_0930_PARTIAL_SESSION" and state.get("phase")=="STAGE_A_RUNNING":
+                            from zoneinfo import ZoneInfo
+                            coordinator.scheduled_tick(now().astimezone(ZoneInfo("America/Los_Angeles")))
                     except (OSError,ValueError,RuntimeError): return 4
             if (policy_root/POLICY_NAME).exists():
                 try: tick(store,now())

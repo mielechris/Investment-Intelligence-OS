@@ -66,5 +66,23 @@ class OperationalExecutorTests(unittest.TestCase):
         def bad(_): return BoundaryResponse(200,"application/json",b'{"data":[]}',1.0)
         b.request=bad; self.assertEqual(c.execute(rows[0]["identity"]),"AMBIGUOUS")
         s=store.read(); self.assertEqual((s["phase"],s["ambiguous_credits"],s["released_credits"],s["stage_a"]),("FAILED_CLOSED",1,0,"LOCKED"))
+    def test_post_0930_adopts_canary_and_completes_without_duplicate(self):
+        rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1)
+        self.assertEqual(c.execute(rows[0]["identity"]),"CONFIRMED"); canary_calls=list(b.calls); now=datetime.now(ZoneInfo("America/Los_Angeles")).replace(hour=10,minute=0)
+        state=c.migrate_canary_to_post_0930(now); self.assertEqual((state["planned"],state["completed"],state["adopted_canary_count"]),(20,1,1))
+        migrated=store.read_plan(); self.assertEqual({r["window"] for r in migrated},{"INTRADAY","CLOSING"}); self.assertTrue(all(r["endpoint"]=="MARKET_SNAPSHOT" for r in migrated))
+        self.assertTrue(store.adoption_path.is_file()); self.assertEqual(len(list((store.root/"receipts").iterdir())),1)
+        c.release(19); self.assertIn("INTRADAY",c.scheduled_tick(now)); self.assertEqual(store.read()["completed"],10)
+        restarted=OperationalMarketEvidenceCoordinator(store,store.read_plan(),b)
+        for row in store.read_plan():
+            if row["window"]=="INTRADAY": self.assertEqual(restarted.execute(row["identity"]),"DUPLICATE_SUPPRESSED")
+        self.assertEqual(c.scheduled_tick(now.replace(hour=12,minute=55)),"SESSION_CLOSED")
+        final=store.read(); self.assertEqual((final["completed"],final["confirmed_credits"],final["released_credits"]),(20,20,0))
+        self.assertEqual((len(b.calls),len(set(b.calls))),(20,20)); self.assertEqual(b.calls.count(canary_calls[0]),1)
+    def test_invalid_canary_receipt_cannot_migrate_or_change_plan(self):
+        rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1); c.execute(rows[0]["identity"])
+        receipt=store.root/"receipts"/(rows[0]["identity"]+".json"); value=json.loads(receipt.read_text()); value["ticker"]="NOPE"; receipt.write_text(json.dumps(value)); receipt.chmod(0o600)
+        with self.assertRaisesRegex(ValueError,"CANARY_ADOPTION_REJECTED"): c.migrate_canary_to_post_0930(datetime.now(ZoneInfo("America/Los_Angeles")).replace(hour=10))
+        self.assertEqual(store.read_plan(),rows); self.assertEqual(store.read()["classification"],CANARY_PLAN)
 
 if __name__=="__main__": unittest.main()

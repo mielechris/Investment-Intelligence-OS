@@ -6,15 +6,18 @@ import json
 import os
 import stat
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .financial_datasets import KEYCHAIN_SERVICE, SecurityFrameworkCredentialProvider
 from .financial_datasets_tls import FinancialDatasetsHTTPSTransport, TrustBundlePolicy
 from .keychain_adapter import KeychainAdapter, SecurityFrameworkAPI
+from .provider_readiness import installed_readiness_projection, operational_cost_binding
 from .operational_market_executor import (
-    CANARY_PLAN, ExecutorStore, FinancialDatasetsOperationalBoundary,
-    OperationalMarketEvidenceCoordinator, canary_plan,
+    CANARY_PLAN, POST_0930_PLAN, ExecutorStore, FinancialDatasetsOperationalBoundary,
+    OperationalMarketEvidenceCoordinator, canary_plan, post_0930_plan,
 )
-from .operational_market_executor_installer import INSTALL_ROOT, STATE_ROOT, install_disabled, validate_installed
+from .operational_market_executor_installer import INSTALL_ROOT, STATE_ROOT, install_disabled, upgrade_disabled, validate_installed
 
 TRUST_ROOT=Path.home()/"Library/Application Support/IIOS/ExpansionWingFinancialDatasets"
 TRUST_BUNDLE=TRUST_ROOT/"cacert.pem"
@@ -34,7 +37,7 @@ def _trust_policy()->TrustBundlePolicy:
 def production_coordinator()->OperationalMarketEvidenceCoordinator:
     validate_installed()
     store=ExecutorStore(STATE_ROOT); rows=store.read_plan()
-    if rows!=canary_plan(): raise ValueError("CANARY_PLAN_MISMATCH")
+    if rows!=canary_plan() and rows!=post_0930_plan(): raise ValueError("REQUEST_PLAN_MISMATCH")
     adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
     boundary=FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
     return OperationalMarketEvidenceCoordinator(store,rows,boundary)
@@ -52,11 +55,28 @@ def run_canary()->str:
         final=coordinator.store.read()
         if final["released_credits"]!=0: coordinator.close("CANARY_TERMINAL_SAFETY_CLOSE")
 
+def transition_post_0930()->str:
+    coordinator=production_coordinator(); now=datetime.now(ZoneInfo("America/Los_Angeles"))
+    readiness=installed_readiness_projection(); binding=operational_cost_binding()
+    if readiness.get("credential_presence_state")!="AVAILABLE" or binding.get("exact_planned_cost_credits")!=50:
+        raise ValueError("POST_0930_PREFLIGHT_FAILED_CLOSED")
+    gates={key:True for key in {"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}}
+    if coordinator.preflight(gates)!="EXECUTOR_READY": raise ValueError("POST_0930_PREFLIGHT_FAILED_CLOSED")
+    coordinator.migrate_canary_to_post_0930(now)
+    coordinator.release(19)
+    result=coordinator.scheduled_tick(now)
+    state=coordinator.store.read()
+    if state["phase"]=="FAILED_CLOSED" or state["released_credits"]==0 and state["completed"]<10:
+        raise ValueError(state.get("failure_category") or "POST_0930_EXECUTION_FAILED_CLOSED")
+    return "POST_0930_PARTIAL_SESSION_RUNNING:"+result
+
 def main(argv:list[str]|None=None)->int:
     parser=argparse.ArgumentParser(); group=parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--install-disabled",action="store_true")
     group.add_argument("--validate-installed",action="store_true")
+    group.add_argument("--upgrade-disabled",action="store_true")
     group.add_argument("--run-spy-canary",action="store_true")
+    group.add_argument("--transition-post-0930",action="store_true")
     parser.add_argument("--source-root"); parser.add_argument("--authorized-commit")
     parser.add_argument("--owner-authorized",action="store_true"); parser.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
@@ -67,9 +87,15 @@ def main(argv:list[str]|None=None)->int:
             status=install_disabled(Path(args.source_root).resolve(),args.authorized_commit)
         elif args.validate_installed:
             validate_installed(); status="EXECUTOR_INSTALLATION_VALID"
-        else:
+        elif args.upgrade_disabled:
+            if not args.source_root or not args.authorized_commit: raise ValueError("INSTALL_AUTHORIZATION_MISSING")
+            status=upgrade_disabled(Path(args.source_root).resolve(),args.authorized_commit)
+        elif args.run_spy_canary:
             if not args.owner_authorized: raise ValueError("OWNER_CANARY_AUTHORIZATION_REQUIRED")
             status=run_canary()
+        else:
+            if not args.owner_authorized: raise ValueError("OWNER_PARTIAL_SESSION_AUTHORIZATION_REQUIRED")
+            status=transition_post_0930()
         print(json.dumps({"status":status},sort_keys=True)); return 0
     except (OSError,ValueError,RuntimeError) as exc:
         category=str(exc)

@@ -24,6 +24,7 @@ RECOVERY_ROOT=INSTALL_ROOT/"recovery"
 ARTIFACT_ROOT=INSTALL_ROOT/"installed-artifacts"
 MANIFEST=INSTALL_ROOT/"installation-manifest.json"
 ROLLBACK_ROOT=Path.home()/"Library/Application Support/IIOS/Rollback/OperationalMarketExecutor"
+UPGRADE_ROLLBACK_ROOT=Path.home()/"Library/Application Support/IIOS/Rollback/OperationalMarketExecutorUpgrade"
 COORDINATOR="expansion_wing.operational_market_executor.OperationalMarketEvidenceCoordinator"
 APPROVED_ENDPOINTS=("/company/facts","/prices","/prices/snapshot")
 ARTIFACTS=("operational_market_executor.py","operational_market_executor_installer.py",
@@ -35,6 +36,14 @@ def _sha(path:Path)->str:
 
 def _write(path:Path,value:dict[str,Any])->None:
     data=(json.dumps(value,sort_keys=True,separators=(",",":"))+"\n").encode()
+    temp=path.parent/("."+path.name+".tmp"); fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    try: os.write(fd,data); os.fsync(fd)
+    finally: os.close(fd)
+    os.replace(temp,path); dfd=os.open(path.parent,os.O_RDONLY)
+    try: os.fsync(dfd)
+    finally: os.close(dfd)
+
+def _write_bytes(path:Path,data:bytes)->None:
     temp=path.parent/("."+path.name+".tmp"); fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     try: os.write(fd,data); os.fsync(fd)
     finally: os.close(fd)
@@ -102,15 +111,18 @@ def browser_projection(root:Path=INSTALL_ROOT)->dict[str,Any]:
                 "installed":False,"authority":LOCKED_AUTHORITY.copy()}
     try:
         validate_installed(root); state=ExecutorStore(root/"state").read()
-        phases={"EXECUTOR_READY_DISABLED":"CANARY_READY","STAGE_A_RUNNING":"CANARY_RUNNING",
+        phases={"EXECUTOR_READY_DISABLED":"CANARY_READY","POST_0930_PARTIAL_READY":"POST_0930_PARTIAL_SESSION",
                 "CANARY_CONFIRMED":"CANARY_CONFIRMED","FAILED_CLOSED":"FAILED_CLOSED",
                 "SESSION_FAILED_CLOSED":"FAILED_CLOSED","SESSION_CLOSED":"INSTALLED_DISABLED"}
+        phase="POST_0930_PARTIAL_SESSION" if state["classification"]=="POST_0930_PARTIAL_SESSION" and state["phase"]=="STAGE_A_RUNNING" else phases.get(state["phase"],"UNAVAILABLE")
         return {"schema_version":"iios-operational-market-executor-browser-v1","installed":True,
-                "phase":phases.get(state["phase"],"UNAVAILABLE"),"classification":state["classification"],
+                "phase":phase,"classification":state["classification"],
                 "generation":state["generation"],"planned":state["planned"],"dispatched":state["dispatched"],
                 "completed":state["completed"],"failed":state["failed"],"ambiguous":state["ambiguous"],
                 "confirmed_credits":state["confirmed_credits"],"ambiguous_credits":state["ambiguous_credits"],
                 "released_credits":state["released_credits"],"keychain_accesses":state["keychain_accesses"],
+                "remaining":state["planned"]-state["completed"]-state["ambiguous"]-state["failed"],
+                "adopted_canary_count":state.get("adopted_canary_count",0),
                 "stage_a":state["stage_a"],"stage_b":state["stage_b"],"stage_c":state["stage_c"],
                 "next_gate":state["next_gate"],"authority":state["authority"]}
     except (OSError,ValueError,json.JSONDecodeError):
@@ -146,3 +158,23 @@ def rollback_install(root:Path=INSTALL_ROOT,rollback:Path=ROLLBACK_ROOT)->str:
     shutil.rmtree(root)
     if root.exists(): raise ValueError("ROLLBACK_FAILED")
     return "EXECUTOR_INSTALLATION_ABSENT_RESTORED"
+
+def upgrade_disabled(source_root:Path,commit:str,root:Path=INSTALL_ROOT,rollback:Path=UPGRADE_ROLLBACK_ROOT,*,observed_commit:str|None=None)->str:
+    validate_installed(root)
+    if observed_commit is None:
+        head=subprocess.run(("git","rev-parse","HEAD"),cwd=source_root,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,check=False)
+        status=subprocess.run(("git","status","--porcelain"),cwd=source_root,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,check=False)
+        if head.returncode or status.returncode or status.stdout: raise ValueError("INSTALL_SOURCE_NOT_CLEAN")
+        observed_commit=head.stdout.strip()
+    if observed_commit!=commit or rollback.exists(): raise ValueError("INSTALL_COMMIT_MISMATCH" if observed_commit!=commit else "ROLLBACK_ALREADY_EXISTS")
+    candidate=render_manifest(source_root,commit); validate_manifest(candidate,source_root)
+    shutil.copytree(root,rollback,copy_function=shutil.copy2)
+    for directory in [rollback,*[p for p in rollback.rglob("*") if p.is_dir()]]: os.chmod(directory,0o700)
+    for path in [p for p in rollback.rglob("*") if p.is_file()]: os.chmod(path,0o600)
+    before_state=(root/"state"/"executor-state.json").read_bytes(); before_lkv=(root/"state"/"executor-state.last-known-valid.json").read_bytes()
+    source_base=source_root/"BACK END/backend/expansion_wing"
+    for name in ARTIFACTS: _write_bytes(root/"installed-artifacts"/name,(source_base/name).read_bytes())
+    _write(root/"installation-manifest.json",candidate)
+    validate_installed(root)
+    if before_state!=(root/"state"/"executor-state.json").read_bytes() or before_lkv!=(root/"state"/"executor-state.last-known-valid.json").read_bytes(): raise ValueError("INSTALL_STATE_MUTATED")
+    return "EXECUTOR_UPGRADED_DISABLED"
