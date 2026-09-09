@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import signal
@@ -24,6 +25,20 @@ SERVICE_SCHEMA = "iios-projection-publisher-service-v1"
 SERVICE_LABEL = "com.iios.expansion-wing-projection-publisher"
 MINIMUM_INTERVAL_SECONDS = 60
 STATUS_LIMIT_BYTES = 65_536
+ACTIVE_RELEASE_MANIFEST=Path.home()/"Library/Application Support/IIOS/Release/active-release.json"
+
+def _active_release_commit()->str:
+    info=ACTIVE_RELEASE_MANIFEST.lstat()
+    if (ACTIVE_RELEASE_MANIFEST.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid()
+            or stat.S_IMODE(info.st_mode)!=0o600): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
+    try: value=json.loads(ACTIVE_RELEASE_MANIFEST.read_bytes())
+    except (OSError,json.JSONDecodeError): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE") from None
+    clean=dict(value); supplied=clean.pop("content_hash",None)
+    calculated=hashlib.sha256((json.dumps(clean,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+    commit=value.get("git_commit")
+    if (value.get("schema")!="iios-active-immutable-release-v1" or supplied!=calculated
+            or not re.fullmatch(r"[0-9a-f]{40}",str(commit))): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
+    return commit
 
 
 def operational_service_root() -> Path:
@@ -107,8 +122,7 @@ def _operational_service() -> PublisherService:
     if not state_root.exists(): raise RuntimeError("PUBLISHER_STATE_ROOT_MISSING")
     bindings = load_binding_manifest()
     builder = EnvelopeSnapshotBuilder(operational_input_root(), bindings)
-    release_commit=os.getenv("IIOS_EXPECTED_RELEASE_COMMIT","")
-    if not re.fullmatch(r"[0-9a-f]{40}",release_commit): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
+    release_commit=_active_release_commit()
     return PublisherService(builder, GovernedProjectionPublisher(reviewed_projection_root(),release_commit=release_commit),
         SingleFlightLock(state_root / "publisher.lock"), BoundedStatusLog(state_root / "publisher-status.jsonl"))
 

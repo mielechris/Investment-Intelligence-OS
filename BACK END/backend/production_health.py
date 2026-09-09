@@ -11,6 +11,7 @@ MAX_HEARTBEAT_AGE_SECONDS=180
 MAX_PROJECTION_AGE_SECONDS=900
 SUPERVISOR_LABEL="com.iios.expansion-wing-unattended-tuesday"
 PUBLISHER_LABEL="com.iios.expansion-wing-projection-publisher"
+ACTIVE_RELEASE_MANIFEST=Path.home()/"Library/Application Support/IIOS/Release/active-release.json"
 AUTHORITY_FIELDS=("broker_authority","paper_order_authority","candidate_promotion_authority",
                   "ledger_write_authority","live_execution_authority")
 HEX64=re.compile(r"[0-9a-f]{64}")
@@ -53,11 +54,7 @@ def _owner_json(path:Path)->dict[str,Any]:
     if not isinstance(value,dict): raise RuntimeError("RUNTIME_ARTIFACT_INVALID")
     return value
 
-def _process_pid(label:str,environment_name:str)->int:
-    injected=os.getenv(environment_name)
-    if injected is not None:
-        try: pid=int(injected); os.kill(pid,0); return pid
-        except (OSError,ValueError): raise RuntimeError("RUNTIME_PROCESS_UNAVAILABLE") from None
+def _process_pid(label:str)->int:
     result=subprocess.run(("launchctl","print",f"gui/{os.getuid()}/{label}"),check=False,
                           capture_output=True,text=True,timeout=2)
     match=re.search(r"^\s*pid = (\d+)\s*$",result.stdout,re.MULTILINE)
@@ -120,11 +117,12 @@ def _operational_runtime_probe(*,now:datetime,ledger_identity:str)->RuntimeReadi
         MANIFEST_NAME as SUPERVISOR_MANIFEST_NAME,validate_installed_root)
     from expansion_wing.unattended_tuesday_service import HEARTBEAT_NAME
 
-    expected=os.getenv("IIOS_EXPECTED_RELEASE_COMMIT","")
-    if not re.fullmatch(r"[0-9a-f]{40}",expected): raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
-    supervisor_root=Path(os.getenv("IIOS_READINESS_SUPERVISOR_ROOT",str(SUPERVISOR_ROOT)))
-    executor_root=Path(os.getenv("IIOS_READINESS_EXECUTOR_ROOT",str(EXECUTOR_ROOT)))
-    projection_root=Path(os.getenv("IIOS_READINESS_PROJECTION_ROOT",str(reviewed_projection_root())))
+    release=_owner_json(ACTIVE_RELEASE_MANIFEST)
+    if (release.get("schema")!="iios-active-immutable-release-v1" or release.get("content_hash")!=_digest(release)
+            or not re.fullmatch(r"[0-9a-f]{40}",str(release.get("git_commit")))):
+        raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
+    expected=release["git_commit"]
+    supervisor_root=SUPERVISOR_ROOT; executor_root=EXECUTOR_ROOT; projection_root=reviewed_projection_root()
     supervisor_manifest=_owner_json(supervisor_root/SUPERVISOR_MANIFEST_NAME)
     validate_installed_root(expected_commit=expected,root=supervisor_root)
     executor_manifest=validate_installed(executor_root)
@@ -141,8 +139,7 @@ def _operational_runtime_probe(*,now:datetime,ledger_identity:str)->RuntimeReadi
     projection_file=_owner_json(projection_root/PROJECTION_MANIFEST_NAME)
     if projection_manifest!=projection_file: raise RuntimeError("PROJECTION_MANIFEST_INVALID")
     return RuntimeReadinessEvidence(
-        expected,_process_pid(SUPERVISOR_LABEL,"IIOS_READINESS_SUPERVISOR_PID"),
-        _process_pid(PUBLISHER_LABEL,"IIOS_READINESS_PUBLISHER_PID"),
+        expected,_process_pid(SUPERVISOR_LABEL),_process_pid(PUBLISHER_LABEL),
         str(supervisor_manifest.get("installed_source_commit","")),str(supervisor_manifest.get("canonical_manifest_content_hash","")),
         str(executor_manifest.get("installed_source_commit","")),str(executor_manifest.get("content_hash","")),
         selected.name,state["plan_identity"],state["content_hash"],_utc(heartbeat.get("observed_at")),
