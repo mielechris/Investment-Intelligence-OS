@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .operational_market_executor import (
     BoundaryResponse,
     EndpointCertificationCoordinator,
     EndpointCertificationStore,
+    ExecutorStore,
+    OperationalMarketEvidenceCoordinator,
     SanitizedResponseError,
     _validate_response,
     endpoint_certification_plan,
@@ -42,6 +46,20 @@ class Superbatch31ContractTests(unittest.TestCase):
         self.assertTrue(all(r["retry"] is False and r["provider"]=="FINANCIAL_DATASETS" for r in rows))
         self.assertEqual(plan_identity(september_9_plan()),"995fff0ea1d2b1487b95055f3a68031a7847fbc2d9b5441001b04948fc062b63")
         self.assertNotEqual(plan_identity(rows),plan_identity(september_9_plan()))
+
+    def test_intraday_recovery_dispatch_is_bounded_to_ten_per_cycle(self):
+        rows=september_9_intraday_recovery_plan("2026-09-09T08:45:00-07:00")
+        with tempfile.TemporaryDirectory() as raw:
+            store=ExecutorStore(Path(raw)/"state"); store.initialize(rows,"SEPTEMBER_9_INTRADAY_RECOVERY")
+            observed=datetime.now(ZoneInfo("UTC")).isoformat().replace("+00:00","Z")
+            boundary=Boundary([response({"snapshot":{"ticker":row["ticker"],"price":100.0,
+                "timestamp":observed}}) for row in rows[:10]])
+            coordinator=OperationalMarketEvidenceCoordinator(store,rows,boundary)
+            coordinator.release(39)
+            coordinator.scheduled_tick(datetime(2026,9,9,8,46,tzinfo=ZoneInfo("America/Los_Angeles")))
+            state=store.read()
+            self.assertEqual(state["dispatched"],10)
+            self.assertEqual(len(boundary.rows),10)
     def test_plan_is_three_unique_one_shot_contracts(self):
         rows=endpoint_certification_plan()
         self.assertEqual([r["purpose"] for r in rows],["POINT_IN_TIME_OHLCV","PRIOR_SESSION_OHLCV","MU_COMPANY_FACTS"])

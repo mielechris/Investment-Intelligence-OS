@@ -371,8 +371,15 @@ class OperationalMarketEvidenceCoordinator:
         if not windows: return "BOUNDED_WAIT"
         state=self.store.read()
         if state["stage_a"]!="RUNNING": return "STAGE_A_LOCKED"
-        for row in self.rows:
-            if row["window"] in windows: self.execute(row["identity"])
+        eligible=[row for row in self.rows if row["window"] in windows and
+                  state["requests"][row["identity"]]["lifecycle"]=="PLANNED"]
+        # The reviewed Financial Datasets contract permits at most ten standard
+        # requests per minute.  Recovery can make several windows concurrent,
+        # so one supervisor cycle must never drain the whole eligible set.
+        cycle_limit=10 if self.rows and self.rows[0]["plan"]==SEPTEMBER_9_RECOVERY_PLAN else len(eligible)
+        for row in eligible[:cycle_limit]:
+            if self.store.read()["stage_a"]!="RUNNING": break
+            self.execute(row["identity"])
         current=self.store.read()
         if self.rows and self.rows[0]["plan"] in {POST_0930_PLAN,SEPTEMBER_9_PLAN,SEPTEMBER_9_RECOVERY_PLAN} and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
             self.close(); return "SESSION_CLOSED"
