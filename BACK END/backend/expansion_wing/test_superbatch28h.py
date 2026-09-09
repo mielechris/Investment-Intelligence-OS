@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, subprocess, sys, tempfile, unittest
+import json, os, plistlib, subprocess, sys, tempfile, unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -21,11 +21,11 @@ NOW=datetime(2026,9,8,3,tzinfo=timezone.utc)
 class Superbatch28H(unittest.TestCase):
     def test_same_layout_upgrade_and_byte_exact_rollback(self):
         with tempfile.TemporaryDirectory() as raw:
-            root=Path(raw); source=self.source(root); old=root/'old'; build_candidate(old,source_commit=COMMIT,source_root=source,python='/usr/bin/python3',log_path='/tmp/log'); write_manifest(old,source_commit=COMMIT,installed_at=NOW)
+            root=Path(raw); source=self.source(root); old=root/'old'; build_candidate(old,source_commit=COMMIT,source_root=source,python='/usr/bin/python3',log_path='/tmp/log',ledger_path='/tmp/ledger.db'); write_manifest(old,source_commit=COMMIT,installed_at=NOW)
             install=root/'install'; install.mkdir(mode=0o700); old.rename(install/'installed-artifacts'); (install/'installed-artifacts'/MANIFEST_NAME).rename(install/MANIFEST_NAME)
             plist=root/'launch.plist'; plist.write_bytes((install/'installed-artifacts'/ARTIFACT_NAMES[-1]).read_bytes()); plist.chmod(0o600)
             target='b'*40; before=_tree_records(install)
-            self.assertEqual(upgrade_same_layout(source_root=source,install_root=install,launch_plist=plist,backup=root/'backup',source_commit=COMMIT,target_commit=target,installed_at=NOW,service_stopped=True),'SUPERVISOR_SAME_LAYOUT_UPGRADED_DISABLED')
+            self.assertEqual(upgrade_same_layout(source_root=source,install_root=install,launch_plist=plist,backup=root/'backup',source_commit=COMMIT,target_commit=target,installed_at=NOW,service_stopped=True,ledger_path='/tmp/ledger.db'),'SUPERVISOR_SAME_LAYOUT_UPGRADED_DISABLED')
             self.assertEqual(validate_installed_root(expected_commit=target,root=install),'INSTALLED_VALID')
             self.assertEqual(_tree_records(root/'backup'/'prior-installation'),before)
     def source(self, root:Path)->Path:
@@ -37,7 +37,7 @@ class Superbatch28H(unittest.TestCase):
             '<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>'+LABEL+'</string>'
             '<key>ProgramArguments</key><array><string>__FIXED_PYTHON__</string><string>-m</string><string>expansion_wing.unattended_tuesday_service</string><string>--operational-supervisor</string></array>'
             '<key>WorkingDirectory</key><string>__FIXED_WORKTREE__</string>'
-            '<key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>__FIXED_WORKTREE__</string></dict>'
+            '<key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>__FIXED_WORKTREE__</string><key>IIOS_DB_PATH</key><string>__OPERATIONAL_LEDGER_PATH__</string><key>PYTHONDONTWRITEBYTECODE</key><string>1</string></dict>'
             '<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>'
             '<key>ProcessType</key><string>Background</string><key>ThrottleInterval</key><integer>60</integer>'
             '<key>StandardOutPath</key><string>__OWNER_ONLY_LOG__</string><key>StandardErrorPath</key><string>__OWNER_ONLY_LOG__</string>'
@@ -46,13 +46,17 @@ class Superbatch28H(unittest.TestCase):
 
     def candidate(self, raw:str)->Path:
         root=Path(raw); source=self.source(root); candidate=root/"candidate"
-        self.assertEqual(build_candidate(candidate,source_commit=COMMIT,source_root=source,python="/usr/bin/python3",log_path="/tmp/log"),"CANDIDATE_VALID")
+        self.assertEqual(build_candidate(candidate,source_commit=COMMIT,source_root=source,python="/usr/bin/python3",log_path="/tmp/log",ledger_path="/tmp/ledger.db"),"CANDIDATE_VALID")
         write_manifest(candidate,source_commit=COMMIT,installed_at=NOW)
         return candidate
 
     def legacy_installation(self, root:Path)->tuple[Path,Path,Path,Path]:
         source=self.source(root); candidate=root/"legacy-candidate"
-        build_candidate(candidate,source_commit=COMMIT,source_root=source,python="/usr/bin/python3",log_path="/tmp/log")
+        build_candidate(candidate,source_commit=COMMIT,source_root=source,python="/usr/bin/python3",log_path="/tmp/log",ledger_path="/tmp/ledger.db")
+        plist_path=candidate/LEGACY_ARTIFACT_NAMES[-1]
+        plist_value=plistlib.loads(plist_path.read_bytes())
+        plist_value["EnvironmentVariables"]={"PYTHONPATH":plist_value["WorkingDirectory"]}
+        plist_path.write_bytes(plistlib.dumps(plist_value,sort_keys=True)); plist_path.chmod(0o600)
         for name in set(ARTIFACT_NAMES)-set(LEGACY_ARTIFACT_NAMES): (candidate/name).unlink()
         rows=inventory(candidate,LEGACY_ARTIFACT_NAMES)
         body={"schema":SCHEMA,"installed_source_commit":COMMIT,"installation_timestamp":NOW.isoformat(),
@@ -73,6 +77,17 @@ class Superbatch28H(unittest.TestCase):
             self.assertEqual(value["schema"],SCHEMA); self.assertEqual(value["installer_version"],INSTALLER_VERSION)
             self.assertEqual(validate_candidate(candidate,expected_commit=COMMIT),"CANDIDATE_VALID")
             self.assertEqual([x["relative_path"] for x in value["artifact_inventory"]],sorted(ARTIFACT_NAMES))
+
+    def test_candidate_requires_external_operational_ledger_path(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); source=self.source(root)
+            with self.assertRaisesRegex(ValueError,"LEDGER_PATH_CONTRACT_INVALID"):
+                build_candidate(root/"missing",source_commit=COMMIT,source_root=source,
+                    python="/usr/bin/python3",log_path="/tmp/log")
+            with self.assertRaisesRegex(ValueError,"LEDGER_PATH_CONTRACT_INVALID"):
+                build_candidate(root/"inside",source_commit=COMMIT,source_root=source,
+                    python="/usr/bin/python3",log_path="/tmp/log",
+                    ledger_path=str(source/"state/ledger.db"))
 
     def test_manifest_strict_tamper_and_commit(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -101,8 +116,8 @@ class Superbatch28H(unittest.TestCase):
     def test_compare_byte_identical_and_changed(self):
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw); source=self.source(root); old=root/"old"; new=root/"new"
-            build_candidate(old,source_commit=COMMIT,source_root=source,python="/usr/bin/python3",log_path="/tmp/log")
-            build_candidate(new,source_commit="b"*40,source_root=source,python="/usr/bin/python3",log_path="/tmp/log")
+            build_candidate(old,source_commit=COMMIT,source_root=source,python="/usr/bin/python3",log_path="/tmp/log",ledger_path="/tmp/ledger.db")
+            build_candidate(new,source_commit="b"*40,source_root=source,python="/usr/bin/python3",log_path="/tmp/log",ledger_path="/tmp/ledger.db")
             self.assertEqual(compare(old,new)["changed"],[])
             (new/ARTIFACT_NAMES[0]).write_text("changed")
             self.assertEqual(compare(old,new)["changed"],[ARTIFACT_NAMES[0]])
@@ -174,12 +189,12 @@ class Superbatch28H(unittest.TestCase):
             root=Path(raw); source,install,plist,state=self.legacy_installation(root); backup=root/"rollback"
             before=_tree_records(state)
             self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True),
+                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db"),
                 "SUPERVISOR_LAYOUT_MIGRATED_DISABLED")
             self.assertEqual(validate_candidate(install/"installed-artifacts",expected_commit="b"*40) if False else len(inventory(install/"installed-artifacts")),9)
             self.assertEqual(before,_tree_records(state)); self.assertEqual(rehearse_legacy_restoration(backup),"LEGACY_RESTORATION_REHEARSED")
             self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True),
+                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db"),
                 "SUPERVISOR_LAYOUT_ALREADY_CURRENT")
 
     def test_unknown_incomplete_hash_and_mixed_legacy_rejected(self):
@@ -195,7 +210,7 @@ class Superbatch28H(unittest.TestCase):
                     extra=install/"installed-artifacts"/ARTIFACT_NAMES[4]; extra.write_text("mixed"); extra.chmod(0o600)
                 if mutation=="schema": path.write_bytes(_canonical(value))
                 with self.assertRaises(ValueError): migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                    backup=root/"rollback",legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True)
+                    backup=root/"rollback",legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db")
 
     def test_symlink_special_file_and_permissions_rejected(self):
         for kind in ("symlink","fifo","mode"):
@@ -205,28 +220,28 @@ class Superbatch28H(unittest.TestCase):
                 elif kind=="fifo": target.unlink(); os.mkfifo(target,0o600)
                 else: target.chmod(0o644)
                 with self.assertRaises(ValueError): migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                    backup=root/"rollback",legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True)
+                    backup=root/"rollback",legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db")
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw); source,install,plist,state=self.legacy_installation(root)
             with patch("expansion_wing.unattended_supervisor_installer.os.getuid",return_value=os.getuid()+1):
                 with self.assertRaises(ValueError): migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                    backup=root/"rollback",legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True)
+                    backup=root/"rollback",legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db")
 
     def test_service_teardown_is_an_explicit_gate(self):
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw); source,install,plist,state=self.legacy_installation(root)
             with self.assertRaisesRegex(ValueError,"SERVICE_TEARDOWN_REQUIRED"):
                 migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,backup=root/"rollback",
-                    legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state)
+                    legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,ledger_path="/tmp/ledger.db")
 
     def test_interrupted_backup_staging_and_before_selection_restart_safely(self):
         for phase in ("backup","staging","before_selection"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as raw:
                 root=Path(raw); source,install,plist,state=self.legacy_installation(root); backup=root/"rollback"
                 with self.assertRaises(RuntimeError): migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                    backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,interrupt_at=phase,service_stopped=True)
+                    backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,interrupt_at=phase,service_stopped=True,ledger_path="/tmp/ledger.db")
                 self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                    backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True),
+                    backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db"),
                     "SUPERVISOR_LAYOUT_MIGRATED_DISABLED")
 
     def test_interruption_during_backup_never_selects_partial_backup(self):
@@ -238,15 +253,15 @@ class Superbatch28H(unittest.TestCase):
             self.assertFalse(backup.exists()); self.assertTrue((root/"rollback.building").exists())
             self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
                 backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,
-                protected_state_root=state,service_stopped=True),"SUPERVISOR_LAYOUT_MIGRATED_DISABLED")
+                protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db"),"SUPERVISOR_LAYOUT_MIGRATED_DISABLED")
 
     def test_interruption_after_selection_recovers_current_target(self):
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw); source,install,plist,state=self.legacy_installation(root); backup=root/"rollback"
             with self.assertRaises(RuntimeError): migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,interrupt_at="after_selection",service_stopped=True)
+                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,interrupt_at="after_selection",service_stopped=True,ledger_path="/tmp/ledger.db")
             self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
-                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True),
+                backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True,ledger_path="/tmp/ledger.db"),
                 "SUPERVISOR_LAYOUT_MIGRATED_DISABLED")
 
     def test_post_selection_failure_restores_legacy_exactly(self):
@@ -254,7 +269,7 @@ class Superbatch28H(unittest.TestCase):
             root=Path(raw); source,install,plist,state=self.legacy_installation(root); backup=root/"rollback"; before=_tree_records(install)
             with self.assertRaisesRegex(ValueError,"TARGET_REJECTED"): migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
                 backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,
-                post_select_validator=lambda _root: (_ for _ in ()).throw(ValueError("TARGET_REJECTED")),service_stopped=True)
+                post_select_validator=lambda _root: (_ for _ in ()).throw(ValueError("TARGET_REJECTED")),service_stopped=True,ledger_path="/tmp/ledger.db")
             validate_legacy_manifest(json.loads((install/MANIFEST_NAME).read_text()),install/"installed-artifacts",expected_commit=COMMIT)
             self.assertEqual(before,_tree_records(install))
 

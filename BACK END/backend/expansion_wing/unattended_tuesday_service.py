@@ -23,6 +23,8 @@ HEARTBEAT_NAME = "supervisor-heartbeat.json"
 ROLLBACK_ROOT = Path.home()/"Library/Application Support/IIOS/Rollback/UnattendedTuesday"
 ROLLBACK_FILES = frozenset({POLICY_NAME, STATE_NAME, LKV_NAME})
 INSTALLATION_MANIFEST = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor/installation-manifest.json"
+ACTIVE_RELEASE_MANIFEST = Path.home()/"Library/Application Support/IIOS/Release/active-release.json"
+ACTIVE_RELEASE_SCHEMA = "iios-active-immutable-release-v2"
 
 class SupervisorIncidentStore:
     """Bounded owner-only diagnostic state; never persists exception text."""
@@ -63,10 +65,11 @@ class SupervisorHeartbeatStore:
                 or not observed_at<=next_wake_at<=observed_at+timedelta(seconds=180)):
             raise ValueError("HEARTBEAT_CLOCK_INVALID")
         required={"release_commit","supervisor_manifest_hash","executor_manifest_hash","selected_generation",
-                  "plan_identity","executor_state_hash","projection_hash","projection_generation","ledger_identity"}
+                  "plan_identity","executor_state_hash","projection_hash","projection_executor_generation",
+                  "ledger_identity","ledger_path_contract_hash"}
         if set(evidence)!=required or any(not isinstance(evidence[key],str) or not evidence[key] for key in required):
             raise ValueError("HEARTBEAT_EVIDENCE_INVALID")
-        value={"schema":"iios-unattended-supervisor-heartbeat-v1",**evidence,
+        value={"schema":"iios-unattended-supervisor-heartbeat-v2",**evidence,
             "observed_at":observed_at.isoformat(),"next_wake_at":next_wake_at.isoformat(),
             "pid":os.getpid() if pid is None else pid,"content_hash":""}
         value["content_hash"]=_hash(value); _atomic(self.root,HEARTBEAT_NAME,value); return value
@@ -87,13 +90,45 @@ def _production_heartbeat_evidence()->dict:
     selected=resolve_selected_state_root(executor_root); store=ExecutorStore(selected); rows,state=store.read_plan(),store.read()
     if state["plan_identity"]!=plan_identity(rows): raise ValueError("REQUEST_PLAN_MISMATCH")
     _,projection=ProjectionStore(reviewed_projection_root()).read()
-    ledger_info=ledger.DB_PATH.stat()
+    ledger_info=ledger.DB_PATH.lstat()
+    if (ledger.DB_PATH.is_symlink() or not stat.S_ISREG(ledger_info.st_mode)
+            or ledger_info.st_uid!=os.getuid() or stat.S_IMODE(ledger_info.st_mode)!=0o600):
+        raise ValueError("RUNTIME_LEDGER_PATH_MISMATCH")
     ledger_identity=hashlib.sha256(f"{ledger_info.st_dev}:{ledger_info.st_ino}:{ledger_info.st_size}:{ledger_info.st_mtime_ns}".encode()).hexdigest()
+    active_info=ACTIVE_RELEASE_MANIFEST.lstat()
+    if (ACTIVE_RELEASE_MANIFEST.is_symlink() or not stat.S_ISREG(active_info.st_mode)
+            or active_info.st_uid!=os.getuid() or stat.S_IMODE(active_info.st_mode)!=0o600):
+        raise ValueError("RUNTIME_RELEASE_MISMATCH")
+    release_record=json.loads(ACTIVE_RELEASE_MANIFEST.read_text())
+    clean=dict(release_record); supplied=clean.pop("content_hash",None)
+    if supplied!=hashlib.sha256((json.dumps(clean,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest():
+        raise ValueError("RUNTIME_RELEASE_MISMATCH")
+    release_root=Path(str(release_record.get("release_root",""))); configured=os.environ.get("IIOS_DB_PATH")
+    ledger_path=Path(str(release_record.get("operational_ledger_path","")))
+    binding={"release_id":release_record.get("release_id"),"git_commit":release_record.get("git_commit"),
+        "release_root":str(release_root),"operational_ledger_path":str(ledger_path)}
+    ledger_contract=hashlib.sha256((json.dumps(binding,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+    release_manifest=release_root/"release-manifest.json"
+    expected_release_keys={"schema","release_id","git_commit","release_manifest_sha256","release_root",
+        "operational_ledger_path","ledger_path_contract_hash","content_hash"}
+    if (set(release_record)!=expected_release_keys or release_record.get("schema")!=ACTIVE_RELEASE_SCHEMA
+            or release_record.get("git_commit")!=release or not release_root.is_absolute()
+            or not ledger_path.is_absolute() or release_root in ledger_path.parents or configured!=str(ledger_path)
+            or ledger.DB_PATH.resolve()!=ledger_path.resolve()
+            or release_record.get("ledger_path_contract_hash")!=ledger_contract
+            or not release_manifest.is_file() or release_manifest.is_symlink()
+            or hashlib.sha256(release_manifest.read_bytes()).hexdigest()!=release_record.get("release_manifest_sha256")):
+        raise ValueError("RUNTIME_LEDGER_PATH_MISMATCH")
+    if (projection.get("release_commit")!=release
+            or projection.get("executor_generation")!=selected.name
+            or projection.get("ledger_path_contract_hash")!=ledger_contract):
+        raise ValueError("RUNTIME_PROJECTION_MISMATCH")
     return {"release_commit":release,"supervisor_manifest_hash":supervisor_manifest["canonical_manifest_content_hash"],
         "executor_manifest_hash":executor_manifest["content_hash"],"selected_generation":selected.name,
         "plan_identity":state["plan_identity"],"executor_state_hash":state["content_hash"],
-        "projection_hash":projection["projection_sha256"],"projection_generation":str(projection["source_cycle_id"]),
-        "ledger_identity":ledger_identity}
+        "projection_hash":projection["projection_sha256"],
+        "projection_executor_generation":str(projection["executor_generation"]),
+        "ledger_identity":ledger_identity,"ledger_path_contract_hash":ledger_contract}
 
 def _installed_commit(path: Path = INSTALLATION_MANIFEST) -> str:
     info=path.lstat()

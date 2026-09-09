@@ -35,14 +35,16 @@ def live_probe()->dict[str,Any]:
     return {"status":"LIVE","pid":os.getpid(),"thread":threading.current_thread().name,
             "observed_at":datetime.now(timezone.utc).isoformat(),"probe_monotonic_ns":time.monotonic_ns()}
 
-def _ledger_probe()->str:
+def _ledger_probe()->tuple[str,Path]:
     from ledger import DB_PATH
     if not DB_PATH.is_file(): raise RuntimeError("LEDGER_UNAVAILABLE")
     info=DB_PATH.stat(); connection=sqlite3.connect(f"file:{DB_PATH}?mode=ro",uri=True,timeout=2)
+    if DB_PATH.is_symlink() or info.st_uid!=os.getuid() or stat.S_IMODE(info.st_mode)!=0o600:
+        raise RuntimeError("LEDGER_UNAVAILABLE")
     try: row=connection.execute("SELECT 1").fetchone()
     finally: connection.close()
     if row!=(1,): raise RuntimeError("LEDGER_UNAVAILABLE")
-    return hashlib.sha256(f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}".encode()).hexdigest()
+    return hashlib.sha256(f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}".encode()).hexdigest(),DB_PATH.resolve()
 
 def _owner_json(path:Path)->dict[str,Any]:
     info=path.lstat()
@@ -73,9 +75,11 @@ class RuntimeReadinessEvidence:
     heartbeat_at:datetime; heartbeat_next_wake:datetime; heartbeat_release:str
     heartbeat_supervisor_manifest_hash:str; heartbeat_executor_manifest_hash:str
     heartbeat_generation:str; heartbeat_plan_identity:str; heartbeat_executor_state_hash:str
-    heartbeat_projection_hash:str; heartbeat_projection_generation:str
-    projection_at:datetime; projection_release:str; projection_hash:str; projection_generation:str
-    ledger_identity:str; heartbeat_ledger_identity:str; authorities:dict[str,bool]
+    heartbeat_projection_hash:str; heartbeat_projection_executor_generation:str
+    heartbeat_ledger_path_contract_hash:str
+    projection_at:datetime; projection_release:str; projection_hash:str; projection_executor_generation:str
+    projection_ledger_path_contract_hash:str
+    ledger_identity:str; heartbeat_ledger_identity:str; ledger_path_contract_hash:str; authorities:dict[str,bool]
 
     def validate(self,*,now:datetime)->dict[str,str]:
         if now.tzinfo is None or now.utcoffset()!=timezone.utc.utcoffset(now):
@@ -91,7 +95,8 @@ class RuntimeReadinessEvidence:
             "projection_freshness":"READY" if 0<=(now-self.projection_at).total_seconds()<=MAX_PROJECTION_AGE_SECONDS else "UNAVAILABLE",
         }
         hashes=(self.supervisor_manifest_hash,self.executor_manifest_hash,self.plan_identity,
-                self.executor_state_hash,self.projection_hash,self.ledger_identity)
+                self.executor_state_hash,self.projection_hash,self.ledger_identity,self.ledger_path_contract_hash,
+                self.heartbeat_ledger_path_contract_hash,self.projection_ledger_path_contract_hash)
         checks["artifact_integrity"]="READY" if all(HEX64.fullmatch(value) for value in hashes) else "UNAVAILABLE"
         coherent=(self.heartbeat_supervisor_manifest_hash==self.supervisor_manifest_hash
             and self.heartbeat_executor_manifest_hash==self.executor_manifest_hash
@@ -99,15 +104,17 @@ class RuntimeReadinessEvidence:
             and self.heartbeat_plan_identity==self.plan_identity
             and self.heartbeat_executor_state_hash==self.executor_state_hash
             and self.heartbeat_projection_hash==self.projection_hash
-            and self.heartbeat_projection_generation==self.projection_generation
-            and self.projection_generation==self.selected_generation
-            and self.heartbeat_ledger_identity==self.ledger_identity)
+            and self.heartbeat_projection_executor_generation==self.projection_executor_generation
+            and self.projection_executor_generation==self.selected_generation
+            and self.heartbeat_ledger_identity==self.ledger_identity
+            and self.heartbeat_ledger_path_contract_hash==self.ledger_path_contract_hash
+            and self.projection_ledger_path_contract_hash==self.ledger_path_contract_hash)
         checks["runtime_reconciliation"]="READY" if coherent else "UNAVAILABLE"
         checks["authority_lock"]="READY" if (set(self.authorities)==set(AUTHORITY_FIELDS)
             and all(self.authorities[key] is False for key in AUTHORITY_FIELDS)) else "UNAVAILABLE"
         return checks
 
-def _operational_runtime_probe(*,now:datetime,ledger_identity:str)->RuntimeReadinessEvidence:
+def _operational_runtime_probe(*,now:datetime,ledger_identity:str,ledger_path:Path)->RuntimeReadinessEvidence:
     from expansion_wing.operational_market_executor import ExecutorStore,plan_identity
     from expansion_wing.operational_market_executor_installer import (INSTALL_ROOT as EXECUTOR_ROOT,
         SELECTOR_NAME,resolve_selected_state_root,validate_installed)
@@ -118,8 +125,22 @@ def _operational_runtime_probe(*,now:datetime,ledger_identity:str)->RuntimeReadi
     from expansion_wing.unattended_tuesday_service import HEARTBEAT_NAME
 
     release=_owner_json(ACTIVE_RELEASE_MANIFEST)
-    if (release.get("schema")!="iios-active-immutable-release-v1" or release.get("content_hash")!=_digest(release)
-            or not re.fullmatch(r"[0-9a-f]{40}",str(release.get("git_commit")))):
+    release_root=Path(str(release.get("release_root",""))); expected_ledger=Path(str(release.get("operational_ledger_path","")))
+    binding={"release_id":release.get("release_id"),"git_commit":release.get("git_commit"),
+        "release_root":str(release_root),"operational_ledger_path":str(expected_ledger)}
+    ledger_contract=hashlib.sha256(_canonical(binding)).hexdigest()
+    if (set(release)!={"schema","release_id","git_commit","release_manifest_sha256","release_root",
+            "operational_ledger_path","ledger_path_contract_hash","content_hash"}
+            or release.get("schema")!="iios-active-immutable-release-v2" or release.get("content_hash")!=_digest(release)
+            or not re.fullmatch(r"[0-9a-f]{40}",str(release.get("git_commit")))
+            or not re.fullmatch(r"[0-9a-f]{64}",str(release.get("release_manifest_sha256")))
+            or not release_root.is_absolute() or not release_root.is_dir() or not expected_ledger.is_absolute()
+            or release_root in expected_ledger.parents or ledger_path!=expected_ledger.resolve()
+            or release.get("ledger_path_contract_hash")!=ledger_contract):
+        raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
+    release_manifest=release_root/"release-manifest.json"
+    if (not release_manifest.is_file() or release_manifest.is_symlink()
+            or hashlib.sha256(release_manifest.read_bytes()).hexdigest()!=release["release_manifest_sha256"]):
         raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
     expected=release["git_commit"]
     supervisor_root=SUPERVISOR_ROOT; executor_root=EXECUTOR_ROOT; projection_root=reviewed_projection_root()
@@ -133,7 +154,7 @@ def _operational_runtime_probe(*,now:datetime,ledger_identity:str)->RuntimeReadi
             or selector.get("plan_identity")!=state["plan_identity"]):
         raise RuntimeError("EXECUTOR_GENERATION_INCOHERENT")
     heartbeat=_owner_json(supervisor_root/HEARTBEAT_NAME)
-    if heartbeat.get("schema")!="iios-unattended-supervisor-heartbeat-v1" or heartbeat.get("content_hash")!=_digest(heartbeat):
+    if heartbeat.get("schema")!="iios-unattended-supervisor-heartbeat-v2" or heartbeat.get("content_hash")!=_digest(heartbeat):
         raise RuntimeError("SUPERVISOR_HEARTBEAT_INVALID")
     _,projection_manifest=ProjectionStore(projection_root).read(now=now)
     projection_file=_owner_json(projection_root/PROJECTION_MANIFEST_NAME)
@@ -147,10 +168,12 @@ def _operational_runtime_probe(*,now:datetime,ledger_identity:str)->RuntimeReadi
         str(heartbeat.get("supervisor_manifest_hash","")),str(heartbeat.get("executor_manifest_hash","")),
         str(heartbeat.get("selected_generation","")),str(heartbeat.get("plan_identity","")),
         str(heartbeat.get("executor_state_hash","")),str(heartbeat.get("projection_hash","")),
-        str(heartbeat.get("projection_generation","")),_utc(projection_manifest["generated_at"]),
+        str(heartbeat.get("projection_executor_generation","")),str(heartbeat.get("ledger_path_contract_hash","")),
+        _utc(projection_manifest["generated_at"]),
         str(projection_file.get("release_commit","")),
-        str(projection_manifest["projection_sha256"]),str(projection_manifest["source_cycle_id"]),
-        ledger_identity,str(heartbeat.get("ledger_identity","")),
+        str(projection_manifest["projection_sha256"]),str(projection_file.get("executor_generation","")),
+        str(projection_file.get("ledger_path_contract_hash","")),
+        ledger_identity,str(heartbeat.get("ledger_identity","")),ledger_contract,
         {"broker_authority":state.get("authority",{}).get("broker"),
          "paper_order_authority":state.get("authority",{}).get("paper_order"),
          "candidate_promotion_authority":state.get("authority",{}).get("automatic_promotion"),
@@ -162,7 +185,8 @@ def ready_probe(*,runtime_probe:Callable[...,RuntimeReadinessEvidence]=_operatio
     import jesse_scheduler,monitoring_engine,opportunity_scheduler
     from production_safety_freeze import production_freeze_manifest
     observed=(now or datetime.now(timezone.utc)).astimezone(timezone.utc); checks={}; ledger_identity=""
-    try: ledger_identity=_ledger_probe(); checks["ledger"]="READY"
+    ledger_path=Path()
+    try: ledger_identity,ledger_path=_ledger_probe(); checks["ledger"]="READY"
     except (OSError,RuntimeError,sqlite3.Error): checks["ledger"]="UNAVAILABLE"
     for name,thread in {"monitoring_scheduler":monitoring_engine._scheduler_thread,
         "opportunity_scheduler":opportunity_scheduler._scheduler_thread,"jesse_scheduler":jesse_scheduler._thread}.items():
@@ -174,7 +198,7 @@ def ready_probe(*,runtime_probe:Callable[...,RuntimeReadinessEvidence]=_operatio
                                                           "trade_execution_permission","live_execution")))
         checks["backend_authority_lock"]="READY" if safe else "UNAVAILABLE"
     except (OSError,RuntimeError,ValueError,KeyError): checks["backend_authority_lock"]="UNAVAILABLE"
-    try: checks.update(runtime_probe(now=observed,ledger_identity=ledger_identity).validate(now=observed))
+    try: checks.update(runtime_probe(now=observed,ledger_identity=ledger_identity,ledger_path=ledger_path).validate(now=observed))
     except (OSError,RuntimeError,ValueError,KeyError,TypeError):
         for name in ("release_binding","operational_supervisor","projection_publisher","supervisor_heartbeat",
                      "projection_freshness","artifact_integrity","runtime_reconciliation","authority_lock"):

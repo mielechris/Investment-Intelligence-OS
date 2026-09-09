@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,11 +101,27 @@ class EvaluationTimes:
 
 class GovernedProjectionPublisher:
     def __init__(self, root: Path, *, contracts: dict[str, SourceContract] | None = None,
-                 before_commit: Callable[[], None] | None = None,release_commit:str|None=None) -> None:
+                 before_commit: Callable[[], None] | None = None,release_commit:str|None=None,
+                 executor_generation_reader: Callable[[], str] | None = None,
+                 ledger_path_contract_hash: str | None = None) -> None:
         self.store = ProjectionStore(root)
         self.contracts = contracts or source_registry()
         self.before_commit = before_commit
         self.release_commit = release_commit
+        self.executor_generation_reader = executor_generation_reader
+        self.ledger_path_contract_hash = ledger_path_contract_hash
+
+    def _executor_generation(self) -> str | None:
+        if self.release_commit is None:
+            return None
+        if self.executor_generation_reader is None:
+            raise ValueError("EXECUTOR_GENERATION_UNAVAILABLE")
+        generation=self.executor_generation_reader()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}",str(generation)):
+            raise ValueError("EXECUTOR_GENERATION_INVALID")
+        if not re.fullmatch(r"[0-9a-f]{64}",str(self.ledger_path_contract_hash)):
+            raise ValueError("LEDGER_PATH_CONTRACT_INVALID")
+        return generation
 
     def _receipts(self, envelopes: dict[str, Any], now: datetime) -> dict[str, dict[str, Any]]:
         unknown = set(envelopes) - set(self.contracts)
@@ -120,7 +137,7 @@ class GovernedProjectionPublisher:
         return receipts
 
     def _projection(self, receipts: dict[str, dict[str, Any]], *, now: datetime,
-                    generated_at: str) -> dict[str, Any]:
+                    generated_at: str,executor_generation: str|None) -> dict[str, Any]:
         payload = lambda name: receipts[name]["payload"] if name in receipts else None
         authority = payload("authority_locks")
         if authority != AUTHORITY or any(authority.values()):
@@ -192,13 +209,15 @@ class GovernedProjectionPublisher:
                 "ambiguous_credits": provider.get("ambiguous_credits"),
                 "remaining_ceiling": provider.get("remaining_ceiling"), "outbound_requests": 0},
             queue={"state": "UNAVAILABLE", "depth": None}, authoritative_paper_nav=paper["nav"],
-            last_trustworthy_hash=combined, enabled=True, validation_clock=now)
+            last_trustworthy_hash=combined, enabled=True, validation_clock=now,
+            executor_generation=executor_generation)
 
     def evaluate(self, envelopes: dict[str, Any], *, now: datetime) -> EvaluationResult:
         if now.tzinfo is None:
             return EvaluationResult("FAILED_CLOSED", "CLOCK_INVALID", False, None, None, None)
         try:
             receipts = self._receipts(envelopes, now)
+            executor_generation=self._executor_generation()
             existing = manifest = None
             try:
                 existing, manifest = self.store.read(now=now)
@@ -209,7 +228,8 @@ class GovernedProjectionPublisher:
             times = EvaluationTimes.resolve(receipts, observation_time=now,
                 prior_projection_generated_at=existing["projection_generated_at"] if existing else None)
             proposed_for_compare = self._projection(receipts, now=times.freshness_evaluated_at,
-                generated_at=times.comparison_projection_generated_at.isoformat())
+                generated_at=times.comparison_projection_generated_at.isoformat(),
+                executor_generation=executor_generation)
             semantic = proposed_for_compare["last_trustworthy_hash"]
             prior_semantic = existing.get("last_trustworthy_hash") if existing else None
             decision: PublicationDecision = publication_decision(previous_semantic_hash=prior_semantic,
@@ -225,10 +245,12 @@ class GovernedProjectionPublisher:
                     times.newest_source_generated_at.isoformat(), times.newest_evidence_effective_at.isoformat(),
                     receipts["market_session"]["payload"]["session_date"])
             projection = self._projection(receipts, now=times.freshness_evaluated_at,
-                generated_at=times.publication_projection_generated_at.isoformat())
+                generated_at=times.publication_projection_generated_at.isoformat(),
+                executor_generation=executor_generation)
             if self.before_commit:
                 self.before_commit()
-            published = self.store.publish(projection, now=now,release_commit=self.release_commit)
+            published = self.store.publish(projection, now=now,release_commit=self.release_commit,
+                ledger_path_contract_hash=self.ledger_path_contract_hash)
             return EvaluationResult("PUBLISHED", decision.category, published.changed, published.sequence,
                 published.projection_sha256, semantic, now.isoformat(),
                 times.newest_source_generated_at.isoformat(), times.newest_evidence_effective_at.isoformat(),

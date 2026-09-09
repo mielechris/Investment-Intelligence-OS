@@ -9,6 +9,7 @@ from .provider_readiness import (ENDPOINT_PATHS, MAX_COST_EVIDENCE_AGE_SECONDS, 
     validate_september_9_cost_evidence)
 from .provider_readiness_service import (install_cost_contract, probe_credential_once,
     refresh_september_9_cost_contract, restore_prior_pricing, _backup_value, main)
+from .projection_publisher_service import render_launch_plist as render_publisher_launch_plist
 from .unattended_tuesday_service import SupervisorHeartbeatStore, SupervisorIncidentStore, supervise
 
 class Probe:
@@ -62,12 +63,25 @@ class Superbatch28C(unittest.TestCase):
 
     def test_reviewed_plist_is_fixed_and_disabled(self):
         path=Path(__file__).parents[3]/"config/com.iios.expansion-wing-unattended-tuesday.plist.template"
-        value=plistlib.loads(path.read_bytes().replace(b"__FIXED_PYTHON__",b"/usr/bin/python3").replace(b"__FIXED_WORKTREE__",b"/tmp/work").replace(b"__OWNER_ONLY_LOG__",b"/tmp/log"))
+        value=plistlib.loads(path.read_bytes().replace(b"__FIXED_PYTHON__",b"/usr/bin/python3").replace(b"__FIXED_WORKTREE__",b"/tmp/work").replace(b"__OWNER_ONLY_LOG__",b"/tmp/log").replace(b"__OPERATIONAL_LEDGER_PATH__",b"/tmp/operational-ledger.db"))
         self.assertEqual(value["Label"],"com.iios.expansion-wing-unattended-tuesday")
         self.assertEqual(value["ProgramArguments"][-1],"--operational-supervisor")
         forbidden=" ".join(value["ProgramArguments"])
         for word in ("activate","provider","credential","policy","browser","ledger","broker"): self.assertNotIn(word,forbidden.lower())
         self.assertTrue(value["RunAtLoad"]); self.assertEqual(value["KeepAlive"],{"SuccessfulExit":False})
+        self.assertEqual(value["EnvironmentVariables"]["IIOS_DB_PATH"],"/tmp/operational-ledger.db")
+
+    def test_publisher_plist_requires_the_same_external_operational_ledger(self):
+        release_root=Path("/opt/iios/releases/release-1")
+        ledger_path=Path("/var/lib/iios/operational-ledger.db")
+        value=plistlib.loads(render_publisher_launch_plist(
+            release_root=release_root,ledger_path=ledger_path,python="/usr/bin/python3"))
+        self.assertEqual(value["EnvironmentVariables"]["IIOS_DB_PATH"],str(ledger_path))
+        self.assertEqual(value["EnvironmentVariables"]["PYTHONPATH"],str(release_root/"source/BACK END/backend"))
+        self.assertEqual(value["ProgramArguments"][-1],"--operational")
+        with self.assertRaisesRegex(ValueError,"PUBLISHER_DEPLOYMENT_CONTRACT_INVALID"):
+            render_publisher_launch_plist(release_root=release_root,
+                ledger_path=release_root/"state/ledger.db",python="/usr/bin/python3")
 
     def test_supervisor_schedules_selected_september_9_generation_only(self):
         class Coordinator:
@@ -100,7 +114,8 @@ class Superbatch28C(unittest.TestCase):
         digest="a"*64; commit="b"*40; generation="2026-09-09-shadow"
         evidence={"release_commit":commit,"supervisor_manifest_hash":digest,"executor_manifest_hash":digest,
             "selected_generation":generation,"plan_identity":digest,"executor_state_hash":digest,
-            "projection_hash":digest,"projection_generation":generation,"ledger_identity":digest}
+            "projection_hash":digest,"projection_executor_generation":generation,"ledger_identity":digest,
+            "ledger_path_contract_hash":digest}
         observed=datetime(2026,9,9,17,tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as raw:
             base=Path(raw); root=base/"policy"; heartbeat=SupervisorHeartbeatStore(base/"heartbeat")
@@ -109,7 +124,7 @@ class Superbatch28C(unittest.TestCase):
                 heartbeat_store=heartbeat,heartbeat_evidence_factory=lambda:evidence),0)
             value=json.loads((base/"heartbeat"/"supervisor-heartbeat.json").read_text())
             mode=(base/"heartbeat"/"supervisor-heartbeat.json").stat().st_mode&0o777
-        self.assertEqual(value["schema"],"iios-unattended-supervisor-heartbeat-v1")
+        self.assertEqual(value["schema"],"iios-unattended-supervisor-heartbeat-v2")
         self.assertEqual(value["selected_generation"],generation); self.assertEqual(mode,0o600)
         supplied=value.pop("content_hash"); self.assertEqual(supplied,__import__("hashlib").sha256(
             (json.dumps(value,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest())

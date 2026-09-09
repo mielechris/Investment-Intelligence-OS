@@ -16,6 +16,7 @@ from expansion_wing.projection_runtime import (
     ROOT_IDENTIFIER, ROLLBACK_NAME, compose_from_sanitized_snapshot,
 )
 from expansion_wing.tuesday_rehearsal import rehearsal_projection
+from expansion_wing.multi_asset_projection import build_projection
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 8, 20, 0, tzinfo=UTC)
@@ -27,6 +28,17 @@ class Calendar:
 
 def projection(at=NOW):
     return rehearsal_projection(at, Calendar(), scenario="regular_zero_candidates")
+
+def bound_projection(at=NOW,generation="2026-09-09-shadow"):
+    value=projection(at)
+    return build_projection(source_generated_at=value["source_generated_at"],
+        source_cycle_id=value["source_cycle_id"],projection_generated_at=value["projection_generated_at"],
+        evidence_freshness_state=value["evidence_freshness_state"],market_session_state=value["market_session_state"],
+        lane_states=value["lane_states"],candidate_conveyor=value["candidate_conveyor"],
+        professional_observatory=value["professional_observatory"],scoreboard=value["scoreboard"],
+        paper_research_sleeves=value["paper_research_sleeves"],provider=value["provider"],queue=value["queue"],
+        authoritative_paper_nav=value["consolidated_paper_nav"],last_trustworthy_hash=value["last_trustworthy_hash"],
+        enabled=True,validation_clock=at,executor_generation=generation)
 
 
 def sanitized_snapshot(*, lineage="UNAVAILABLE", candidates=None):
@@ -82,13 +94,22 @@ class ProjectionStoreTests(unittest.TestCase):
     def test_release_bound_projection_manifest_is_direct_and_strict(self):
         commit="a"*40
         legacy=self.store.publish(projection(),now=NOW)
-        upgraded=self.store.publish(projection(),now=NOW,release_commit=commit)
+        upgraded=self.store.publish(bound_projection(),now=NOW,release_commit=commit,
+            ledger_path_contract_hash="b"*64)
         _,manifest=self.store.read(now=NOW)
         self.assertTrue(upgraded.changed); self.assertEqual(upgraded.sequence,legacy.sequence+1)
-        self.assertEqual(manifest["schema_version"],"iios-multi-asset-projection-manifest-v2")
+        self.assertEqual(manifest["schema_version"],"iios-multi-asset-projection-manifest-v3")
         self.assertEqual(manifest["release_commit"],commit)
+        self.assertEqual(manifest["executor_generation"],"2026-09-09-shadow")
+        self.assertEqual(manifest["ledger_path_contract_hash"],"b"*64)
         with self.assertRaisesRegex(RuntimeError,"PROJECTION_RELEASE_INVALID"):
-            self.store.publish(projection(),now=NOW,release_commit="not-a-commit")
+            self.store.publish(bound_projection(),now=NOW,release_commit="not-a-commit",
+                ledger_path_contract_hash="b"*64)
+
+    def test_release_bound_projection_rejects_shadow5_legacy_projection(self):
+        with self.assertRaisesRegex(RuntimeError,"PROJECTION_RUNTIME_BINDING_INVALID"):
+            self.store.publish(projection(),now=NOW,release_commit="a"*40,
+                ledger_path_contract_hash="b"*64)
 
     def test_identical_publication_is_idempotent_and_change_is_monotonic(self):
         first = self.store.publish(projection(), now=NOW); before = (self.root / PROJECTION_NAME).stat().st_mtime_ns

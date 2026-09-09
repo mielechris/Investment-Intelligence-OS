@@ -5,10 +5,12 @@ import fcntl
 import hashlib
 import json
 import os
+import plistlib
 import signal
 import stat
 import sys
 import re
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,8 +28,25 @@ SERVICE_LABEL = "com.iios.expansion-wing-projection-publisher"
 MINIMUM_INTERVAL_SECONDS = 60
 STATUS_LIMIT_BYTES = 65_536
 ACTIVE_RELEASE_MANIFEST=Path.home()/"Library/Application Support/IIOS/Release/active-release.json"
+ACTIVE_RELEASE_SCHEMA="iios-active-immutable-release-v2"
+PUBLISHER_PLIST_TEMPLATE=Path(__file__).resolve().parents[3]/"config/com.iios.expansion-wing-projection-publisher.plist.template"
 
-def _active_release_commit()->str:
+def render_launch_plist(*,release_root:Path,ledger_path:Path,
+        python:str="/Library/Frameworks/Python.framework/Versions/3.14/bin/python3") -> bytes:
+    backend=release_root/"source/BACK END/backend"
+    if (not release_root.is_absolute() or not ledger_path.is_absolute() or release_root in ledger_path.parents
+            or not python.startswith("/")): raise ValueError("PUBLISHER_DEPLOYMENT_CONTRACT_INVALID")
+    raw=PUBLISHER_PLIST_TEMPLATE.read_text().replace("__FIXED_PYTHON__",python)
+    raw=raw.replace("__FIXED_WORKTREE__",str(release_root/"source"))
+    raw=raw.replace("__OPERATIONAL_LEDGER_PATH__",str(ledger_path)).encode()
+    value=plistlib.loads(raw); environment=value.get("EnvironmentVariables")
+    if (value.get("Label")!=SERVICE_LABEL or value.get("WorkingDirectory")!=str(backend)
+            or environment!={"PYTHONPATH":str(backend),"IIOS_DB_PATH":str(ledger_path),"PYTHONDONTWRITEBYTECODE":"1"}
+            or value.get("ProgramArguments")!=[python,"-m","expansion_wing.projection_publisher","--operational"]):
+        raise ValueError("PUBLISHER_DEPLOYMENT_CONTRACT_INVALID")
+    return raw
+
+def _active_release_contract()->tuple[str,str]:
     info=ACTIVE_RELEASE_MANIFEST.lstat()
     if (ACTIVE_RELEASE_MANIFEST.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid()
             or stat.S_IMODE(info.st_mode)!=0o600): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
@@ -35,10 +54,43 @@ def _active_release_commit()->str:
     except (OSError,json.JSONDecodeError): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE") from None
     clean=dict(value); supplied=clean.pop("content_hash",None)
     calculated=hashlib.sha256((json.dumps(clean,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
-    commit=value.get("git_commit")
-    if (value.get("schema")!="iios-active-immutable-release-v1" or supplied!=calculated
-            or not re.fullmatch(r"[0-9a-f]{40}",str(commit))): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
-    return commit
+    commit=value.get("git_commit"); release_root=Path(str(value.get("release_root","")))
+    ledger_path=Path(str(value.get("operational_ledger_path","")))
+    binding={"release_id":value.get("release_id"),"git_commit":commit,
+        "release_root":str(release_root),"operational_ledger_path":str(ledger_path)}
+    binding_hash=hashlib.sha256((json.dumps(binding,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+    expected_keys={"schema","release_id","git_commit","release_manifest_sha256","release_root",
+        "operational_ledger_path","ledger_path_contract_hash","content_hash"}
+    configured=os.environ.get("IIOS_DB_PATH")
+    if (set(value)!=expected_keys or value.get("schema")!=ACTIVE_RELEASE_SCHEMA or supplied!=calculated
+            or not re.fullmatch(r"[0-9a-f]{40}",str(commit))
+            or not re.fullmatch(r"[0-9a-f]{64}",str(value.get("release_manifest_sha256")))
+            or not release_root.is_absolute() or not ledger_path.is_absolute()
+            or not release_root.is_dir() or release_root in ledger_path.parents
+            or configured!=str(ledger_path) or value.get("ledger_path_contract_hash")!=binding_hash):
+        raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
+    release_manifest=release_root/"release-manifest.json"
+    if (not release_manifest.is_file() or release_manifest.is_symlink()
+            or hashlib.sha256(release_manifest.read_bytes()).hexdigest()!=value["release_manifest_sha256"]):
+        raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
+    info=ledger_path.lstat()
+    if (ledger_path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid()
+            or stat.S_IMODE(info.st_mode)!=0o600): raise RuntimeError("PUBLISHER_LEDGER_UNAVAILABLE")
+    connection=sqlite3.connect(f"file:{ledger_path}?mode=ro",uri=True,timeout=2)
+    try:
+        if connection.execute("SELECT 1").fetchone()!=(1,): raise RuntimeError("PUBLISHER_LEDGER_UNAVAILABLE")
+    finally: connection.close()
+    return str(commit),binding_hash
+
+
+def _selected_executor_generation()->str:
+    from .operational_market_executor import ExecutorStore,plan_identity
+    from .operational_market_executor_installer import INSTALL_ROOT,resolve_selected_state_root,validate_installed
+    validate_installed(INSTALL_ROOT); selected=resolve_selected_state_root(INSTALL_ROOT)
+    store=ExecutorStore(selected); rows,state=store.read_plan(),store.read()
+    if state.get("plan_identity")!=plan_identity(rows): raise RuntimeError("PUBLISHER_EXECUTOR_GENERATION_INVALID")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}",selected.name): raise RuntimeError("PUBLISHER_EXECUTOR_GENERATION_INVALID")
+    return selected.name
 
 
 def operational_service_root() -> Path:
@@ -122,8 +174,9 @@ def _operational_service() -> PublisherService:
     if not state_root.exists(): raise RuntimeError("PUBLISHER_STATE_ROOT_MISSING")
     bindings = load_binding_manifest()
     builder = EnvelopeSnapshotBuilder(operational_input_root(), bindings)
-    release_commit=_active_release_commit()
-    return PublisherService(builder, GovernedProjectionPublisher(reviewed_projection_root(),release_commit=release_commit),
+    release_commit,ledger_contract=_active_release_contract()
+    return PublisherService(builder, GovernedProjectionPublisher(reviewed_projection_root(),release_commit=release_commit,
+        executor_generation_reader=_selected_executor_generation,ledger_path_contract_hash=ledger_contract),
         SingleFlightLock(state_root / "publisher.lock"), BoundedStatusLog(state_root / "publisher-status.jsonl"))
 
 

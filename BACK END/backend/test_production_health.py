@@ -19,10 +19,20 @@ class AliveThread:
 
 def evidence(**updates):
     value=production_health.RuntimeReadinessEvidence(
-        COMMIT,11,12,COMMIT,DIGEST,COMMIT,DIGEST,GENERATION,DIGEST,DIGEST,
-        NOW-timedelta(seconds=30),NOW+timedelta(seconds=30),COMMIT,DIGEST,DIGEST,
-        GENERATION,DIGEST,DIGEST,DIGEST,GENERATION,NOW-timedelta(seconds=20),COMMIT,DIGEST,
-        GENERATION,DIGEST,DIGEST,{key:False for key in production_health.AUTHORITY_FIELDS})
+        expected_release=COMMIT,supervisor_pid=11,publisher_pid=12,
+        supervisor_release=COMMIT,supervisor_manifest_hash=DIGEST,
+        executor_release=COMMIT,executor_manifest_hash=DIGEST,selected_generation=GENERATION,
+        plan_identity=DIGEST,executor_state_hash=DIGEST,
+        heartbeat_at=NOW-timedelta(seconds=30),heartbeat_next_wake=NOW+timedelta(seconds=30),
+        heartbeat_release=COMMIT,heartbeat_supervisor_manifest_hash=DIGEST,
+        heartbeat_executor_manifest_hash=DIGEST,heartbeat_generation=GENERATION,
+        heartbeat_plan_identity=DIGEST,heartbeat_executor_state_hash=DIGEST,
+        heartbeat_projection_hash=DIGEST,heartbeat_projection_executor_generation=GENERATION,
+        heartbeat_ledger_path_contract_hash=DIGEST,
+        projection_at=NOW-timedelta(seconds=20),projection_release=COMMIT,projection_hash=DIGEST,
+        projection_executor_generation=GENERATION,projection_ledger_path_contract_hash=DIGEST,
+        ledger_identity=DIGEST,heartbeat_ledger_identity=DIGEST,ledger_path_contract_hash=DIGEST,
+        authorities={key:False for key in production_health.AUTHORITY_FIELDS})
     return replace(value,**updates)
 
 class ProductionHealthTests(unittest.TestCase):
@@ -38,7 +48,7 @@ class ProductionHealthTests(unittest.TestCase):
     def probe(self,runtime):
         with tempfile.TemporaryDirectory() as raw:
             db=Path(raw)/"ledger.db"; connection=sqlite3.connect(db)
-            connection.execute("CREATE TABLE probe (id INTEGER)"); connection.close()
+            connection.execute("CREATE TABLE probe (id INTEGER)"); connection.close(); db.chmod(0o600)
             with patch.dict(sys.modules,self.modules(db)):
                 return production_health.ready_probe(runtime_probe=lambda **_:runtime,now=NOW)
 
@@ -72,6 +82,14 @@ class ProductionHealthTests(unittest.TestCase):
         ready,result=self.probe(evidence(heartbeat_generation="other-generation"))
         self.assertFalse(ready); self.assertEqual(result["checks"]["runtime_reconciliation"],"UNAVAILABLE")
 
+    def test_projection_executor_generation_mismatch_fails_closed(self):
+        ready,result=self.probe(evidence(projection_executor_generation="other-generation"))
+        self.assertFalse(ready); self.assertEqual(result["checks"]["runtime_reconciliation"],"UNAVAILABLE")
+
+    def test_ledger_path_contract_mismatch_fails_closed(self):
+        ready,result=self.probe(evidence(projection_ledger_path_contract_hash="c"*64))
+        self.assertFalse(ready); self.assertEqual(result["checks"]["runtime_reconciliation"],"UNAVAILABLE")
+
     def test_dead_projection_publisher_fails_closed(self):
         ready,result=self.probe(evidence(publisher_pid=0))
         self.assertFalse(ready); self.assertEqual(result["checks"]["projection_publisher"],"UNAVAILABLE")
@@ -92,7 +110,7 @@ class ProductionHealthTests(unittest.TestCase):
     def test_runtime_probe_exception_fails_all_operational_checks(self):
         def broken(**_): raise RuntimeError("CORRUPT")
         with tempfile.TemporaryDirectory() as raw:
-            db=Path(raw)/"ledger.db"; connection=sqlite3.connect(db); connection.execute("CREATE TABLE x (id INTEGER)"); connection.close()
+            db=Path(raw)/"ledger.db"; connection=sqlite3.connect(db); connection.execute("CREATE TABLE x (id INTEGER)"); connection.close(); db.chmod(0o600)
             with patch.dict(sys.modules,self.modules(db)):
                 ready,result=production_health.ready_probe(runtime_probe=broken,now=NOW)
         self.assertFalse(ready); self.assertEqual(result["checks"]["runtime_reconciliation"],"UNAVAILABLE")

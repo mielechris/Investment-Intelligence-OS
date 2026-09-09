@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "iios-multi-asset-read-only-projection-v1"
+EXECUTOR_BOUND_SCHEMA_VERSION = "iios-multi-asset-read-only-projection-v2"
 MAX_PAYLOAD_BYTES = 65_536
 STATES = {"CURRENT", "AVAILABLE", "AVAILABLE_EMPTY", "STALE", "INCOMPLETE", "UNAVAILABLE", "FAILED_CLOSED"}
 LANES = {"us_equities", "equity_etfs", "treasury_rates", "bond_proxies", "commodity_proxies",
@@ -23,6 +24,7 @@ TOP_FIELDS = {"schema_version","activation_state","source_generated_at","source_
     "projection_generated_at","evidence_freshness_state","market_session_state","lane_states",
     "candidate_conveyor","professional_observatory","scoreboard","paper_research_sleeves",
     "provider","queue","consolidated_paper_nav","last_trustworthy_hash","authority","projection_hash"}
+EXECUTOR_BOUND_TOP_FIELDS = TOP_FIELDS | {"executor_generation"}
 
 
 def _canonical(value: Any) -> bytes:
@@ -47,8 +49,10 @@ def build_projection(*, source_generated_at: str, source_cycle_id: str | None,
                      scoreboard: dict[str,Any], paper_research_sleeves: dict[str,Any],
                      provider: dict[str,Any], queue: dict[str,Any], authoritative_paper_nav: float,
                      last_trustworthy_hash: str | None, enabled: bool=False,
-                     validation_clock: datetime | None=None) -> dict[str,Any]:
-    projection={"schema_version":SCHEMA_VERSION,"activation_state":"ENABLED_READ_ONLY" if enabled else "DISABLED",
+                     validation_clock: datetime | None=None,
+                     executor_generation: str | None=None) -> dict[str,Any]:
+    projection={"schema_version":EXECUTOR_BOUND_SCHEMA_VERSION if executor_generation is not None else SCHEMA_VERSION,
+        "activation_state":"ENABLED_READ_ONLY" if enabled else "DISABLED",
         "source_generated_at":source_generated_at,"source_cycle_id":source_cycle_id,
         "projection_generated_at":projection_generated_at,"evidence_freshness_state":evidence_freshness_state,
         "market_session_state":market_session_state,"lane_states":lane_states,
@@ -56,13 +60,16 @@ def build_projection(*, source_generated_at: str, source_cycle_id: str | None,
         "scoreboard":scoreboard,"paper_research_sleeves":paper_research_sleeves,"provider":provider,"queue":queue,
         "consolidated_paper_nav":authoritative_paper_nav,"last_trustworthy_hash":last_trustworthy_hash,
         "authority":AUTHORITY.copy()}
+    if executor_generation is not None: projection["executor_generation"]=executor_generation
     projection["projection_hash"]=hashlib.sha256(_canonical(projection)).hexdigest()
     validate_projection(projection,now=validation_clock)
     return projection
 
 
 def validate_projection(value: Any, *, now: datetime | None=None) -> None:
-    if not isinstance(value,dict) or set(value)!=TOP_FIELDS or value.get("schema_version")!=SCHEMA_VERSION:
+    schema=value.get("schema_version") if isinstance(value,dict) else None
+    fields=EXECUTOR_BOUND_TOP_FIELDS if schema==EXECUTOR_BOUND_SCHEMA_VERSION else TOP_FIELDS
+    if not isinstance(value,dict) or set(value)!=fields or schema not in {SCHEMA_VERSION,EXECUTOR_BOUND_SCHEMA_VERSION}:
         raise ValueError("PROJECTION_SCHEMA_INVALID")
     encoded=_canonical(value)
     if len(encoded)>MAX_PAYLOAD_BYTES: raise ValueError("PROJECTION_TOO_LARGE")
@@ -77,6 +84,9 @@ def validate_projection(value: Any, *, now: datetime | None=None) -> None:
     if (value["source_cycle_id"] is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,120}",str(value["source_cycle_id"]))) or (
             value["last_trustworthy_hash"] is not None and not re.fullmatch(r"[0-9a-f]{64}",str(value["last_trustworthy_hash"]))):
         raise ValueError("PROJECTION_LINEAGE_INVALID")
+    if schema==EXECUTOR_BOUND_SCHEMA_VERSION and (not isinstance(value["executor_generation"],str)
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}",value["executor_generation"])):
+        raise ValueError("PROJECTION_EXECUTOR_GENERATION_INVALID")
     if (value["activation_state"] not in {"DISABLED","ENABLED_READ_ONLY"} or
             value["evidence_freshness_state"] not in STATES or
             value["market_session_state"] not in {"PRE_MARKET","REGULAR_SESSION","POST_MARKET",

@@ -114,7 +114,7 @@ def inventory(root: Path, expected: tuple[str, ...] = ARTIFACT_NAMES) -> list[di
 
 def build_candidate(destination: Path, *, source_commit: str, source_root: Path = SOURCE_ROOT,
                     python: str = "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
-                    log_path: str | None = None) -> str:
+                    log_path: str | None = None,ledger_path: str | None = None) -> str:
     if not _commit(source_commit) or destination.exists():
         raise ValueError("SOURCE_COMMIT_MISMATCH" if not _commit(source_commit) else "CANDIDATE_INVENTORY_INVALID")
     destination.mkdir(mode=0o700, parents=False)
@@ -125,9 +125,14 @@ def build_candidate(destination: Path, *, source_commit: str, source_root: Path 
         if source.is_symlink() or not source.is_file():
             raise ValueError("CANDIDATE_INVENTORY_INVALID")
         target.write_bytes(source.read_bytes()); os.chmod(target, 0o600)
+    configured_ledger=ledger_path or os.environ.get("IIOS_DB_PATH")
+    if (not configured_ledger or not Path(configured_ledger).is_absolute()
+            or source_root.resolve() in Path(configured_ledger).resolve().parents):
+        raise ValueError("LEDGER_PATH_CONTRACT_INVALID")
     template = source_root/"config/com.iios.expansion-wing-unattended-tuesday.plist.template"
     raw = template.read_text().replace("__FIXED_PYTHON__", python).replace("__FIXED_WORKTREE__", str(source_root))
     raw = raw.replace("__OWNER_ONLY_LOG__", log_path or str(Path.home()/"Library/Logs/IIOS/UnattendedTuesday/unattended.log"))
+    raw = raw.replace("__OPERATIONAL_LEDGER_PATH__",configured_ledger)
     plistlib.loads(raw.encode("utf-8"))
     (destination/PLIST_IDENTITY).write_text(raw); os.chmod(destination/PLIST_IDENTITY, 0o600)
     inventory(destination)
@@ -244,7 +249,7 @@ def _copy_exact_tree(source: Path, destination: Path) -> None:
     _fsync_directory(destination)
 
 
-def _validated_plist(path: Path) -> bytes:
+def _validated_plist(path: Path,*,require_ledger:bool=True) -> bytes:
     raw=_read_owner_file(path)
     value=plistlib.loads(raw)
     arguments=value.get("ProgramArguments")
@@ -255,13 +260,30 @@ def _validated_plist(path: Path) -> bytes:
             or arguments[1:] != ["-m",ENTRYPOINT,"--operational-supervisor"]
             or not isinstance(arguments[0],str) or not arguments[0].endswith("python3")):
         raise ValueError("PLIST_INVALID")
-    if (not isinstance(working,str) or environment!={"PYTHONPATH":working}
+    expected_environment={"PYTHONPATH":working}
+    if require_ledger:
+        ledger=str(environment.get("IIOS_DB_PATH","")) if isinstance(environment,dict) else ""
+        if (not Path(ledger).is_absolute() or Path(working) in Path(ledger).parents
+                or environment.get("PYTHONDONTWRITEBYTECODE")!="1"):
+            raise ValueError("LEDGER_PATH_CONTRACT_INVALID")
+        expected_environment|={"IIOS_DB_PATH":ledger,"PYTHONDONTWRITEBYTECODE":"1"}
+    if (not isinstance(working,str) or environment!=expected_environment
             or value.get("RunAtLoad") is not True or value.get("KeepAlive")!={"SuccessfulExit":False}
             or value.get("ProcessType")!="Background" or value.get("ThrottleInterval")!=60
             or not isinstance(value.get("StandardOutPath"),str)
             or value.get("StandardErrorPath")!=value.get("StandardOutPath")):
         raise ValueError("PLIST_INVALID")
     return raw
+
+
+def _validated_existing_plist(path: Path) -> bytes:
+    """Accept a reviewed legacy plist or the ledger-bound replacement, never a hybrid."""
+    try:
+        return _validated_plist(path, require_ledger=True)
+    except ValueError as error:
+        if str(error) != "LEDGER_PATH_CONTRACT_INVALID":
+            raise
+        return _validated_plist(path, require_ledger=False)
 
 
 def _migration_document(*, legacy_commit:str, target_commit:str, phase:str,
@@ -292,7 +314,7 @@ def create_legacy_migration_backup(*, install_root:Path, launch_plist:Path, back
     if backup.exists(): raise ValueError("ROLLBACK_ALREADY_EXISTS")
     artifacts=install_root/"installed-artifacts"; manifest=install_root/MANIFEST_NAME
     value=json.loads(_read_owner_file(manifest)); validate_legacy_manifest(value,artifacts,expected_commit=legacy_commit)
-    plist_raw=_validated_plist(launch_plist)
+    plist_raw=_validated_plist(launch_plist,require_ledger=False)
     if plist_raw!=(artifacts/PLIST_IDENTITY).read_bytes(): raise ValueError("PLIST_INVALID")
     building=backup.parent/(backup.name+".building")
     if building.exists(): shutil.rmtree(building)
@@ -341,7 +363,7 @@ def migrate_legacy_layout(*, source_root:Path, install_root:Path, launch_plist:P
                           legacy_commit:str, target_commit:str, installed_at:datetime,
                           protected_state_root:Path|None=None, interrupt_at:str|None=None,
                           post_select_validator:Callable[[Path],None]|None=None,
-                          service_stopped:bool=False)->str:
+                          service_stopped:bool=False,ledger_path:str|None=None)->str:
     """Migrate a stopped supervisor's reviewed five-file layout; never selects a market generation."""
     if not service_stopped: raise ValueError("SERVICE_TEARDOWN_REQUIRED")
     state_before=_tree_records(protected_state_root) if protected_state_root and protected_state_root.exists() else []
@@ -372,9 +394,10 @@ def migrate_legacy_layout(*, source_root:Path, install_root:Path, launch_plist:P
     rehearse_legacy_restoration(backup)
     stage=install_root.parent/(install_root.name+".eight-artifact-stage")
     if stage.exists(): shutil.rmtree(stage)
+    legacy_plist=plistlib.loads(_validated_plist(launch_plist,require_ledger=False))
     build_candidate(stage,source_commit=target_commit,source_root=source_root,
-                    python=plistlib.loads(_validated_plist(launch_plist))["ProgramArguments"][0],
-                    log_path=plistlib.loads(_validated_plist(launch_plist)).get("StandardOutPath"))
+                    python=legacy_plist["ProgramArguments"][0],
+                    log_path=legacy_plist.get("StandardOutPath"),ledger_path=ledger_path)
     target=write_manifest(stage,source_commit=target_commit,installed_at=installed_at)
     validate_candidate(stage,expected_commit=target_commit)
     (stage/MANIFEST_NAME).unlink(); _fsync_directory(stage)
@@ -520,7 +543,7 @@ def build_operational_candidate(expected_commit: str) -> str:
     repository_gate(expected_commit)
     if CANDIDATE_ROOT.exists():
         raise ValueError("CANDIDATE_INVENTORY_INVALID")
-    build_candidate(CANDIDATE_ROOT,source_commit=expected_commit)
+    build_candidate(CANDIDATE_ROOT,source_commit=expected_commit,ledger_path=os.environ.get("IIOS_DB_PATH"))
     write_manifest(CANDIDATE_ROOT,source_commit=expected_commit,installed_at=datetime.now(timezone.utc))
     return validate_candidate(CANDIDATE_ROOT,expected_commit=expected_commit)
 
@@ -569,7 +592,7 @@ def _wait_absent(old_pid: int, timeout: int = 30) -> None:
 
 def upgrade_same_layout(*,source_root:Path,install_root:Path,launch_plist:Path,backup:Path,
         source_commit:str,target_commit:str,installed_at:datetime,service_stopped:bool=False,
-        post_select_validator:Callable[[Path],None]|None=None)->str:
+        post_select_validator:Callable[[Path],None]|None=None,ledger_path:str|None=None)->str:
     """Atomically replace one validated installation with the same artifact layout."""
     if not service_stopped: raise ValueError("SERVICE_TEARDOWN_REQUIRED")
     current=json.loads(_read_owner_file(install_root/MANIFEST_NAME)); validate_manifest(current,install_root/"installed-artifacts",expected_commit=source_commit)
@@ -579,7 +602,7 @@ def upgrade_same_layout(*,source_root:Path,install_root:Path,launch_plist:Path,b
         if receipt.get("source_commit")!=source_commit or receipt.get("target_commit")!=target_commit: raise ValueError("ROLLBACK_INVALID")
     else:
         backup.mkdir(mode=0o700,parents=True); saved=backup/"prior-installation"; _copy_exact_tree(install_root,saved)
-        _atomic(backup/"launch-agent.plist",_validated_plist(launch_plist)); rows=_tree_records(saved)
+        _atomic(backup/"launch-agent.plist",_validated_existing_plist(launch_plist)); rows=_tree_records(saved)
         body={"schema":"iios-unattended-supervisor-same-layout-rollback-v1","source_commit":source_commit,"target_commit":target_commit,"inventory":rows,"plist_sha256":_hash_bytes((backup/"launch-agent.plist").read_bytes()),"immutable":True}
         _atomic(backup/"rollback-receipt.json",_canonical(body|{"content_hash":_hash(body)}))
     with tempfile.TemporaryDirectory() as raw:
@@ -590,8 +613,9 @@ def upgrade_same_layout(*,source_root:Path,install_root:Path,launch_plist:Path,b
     for p in (stage,hold):
         if p.exists(): raise ValueError("SAME_LAYOUT_RESIDUAL_INVALID")
     stage.mkdir(mode=0o700); artifacts=stage/"installed-artifacts"
+    prior_plist=plistlib.loads(_validated_existing_plist(launch_plist))
     build_candidate(artifacts,source_commit=target_commit,source_root=source_root,
-        python=plistlib.loads(_validated_plist(launch_plist))["ProgramArguments"][0],log_path=plistlib.loads(_validated_plist(launch_plist)).get("StandardOutPath"))
+        python=prior_plist["ProgramArguments"][0],log_path=prior_plist.get("StandardOutPath"),ledger_path=ledger_path)
     target=write_manifest(artifacts,source_commit=target_commit,installed_at=installed_at)
     os.replace(artifacts/MANIFEST_NAME,stage/MANIFEST_NAME); _fsync_directory(stage)
     if set(row["relative_path"] for row in target["artifact_inventory"])!=set(row["relative_path"] for row in current["artifact_inventory"]): raise ValueError("SAME_LAYOUT_INVENTORY_INVALID")

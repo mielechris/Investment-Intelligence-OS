@@ -21,6 +21,7 @@ ROLLBACK_NAME = "rollback-manifest.json"
 INVENTORY = frozenset({PROJECTION_NAME, MANIFEST_NAME, ROLLBACK_NAME})
 MANIFEST_SCHEMA = "iios-multi-asset-projection-manifest-v1"
 RELEASE_MANIFEST_SCHEMA = "iios-multi-asset-projection-manifest-v2"
+EXECUTOR_BOUND_MANIFEST_SCHEMA = "iios-multi-asset-projection-manifest-v3"
 ROLLBACK_SCHEMA = "iios-multi-asset-projection-rollback-v1"
 MAX_MANIFEST_BYTES = 8_192
 
@@ -122,13 +123,20 @@ def _validate_manifest(value: Any, projection: bytes) -> None:
               "generated_at", "source_cycle_id", "root_identifier", "inventory"}
     schema=value.get("schema_version") if isinstance(value,dict) else None
     if schema==RELEASE_MANIFEST_SCHEMA: fields=fields|{"release_commit"}
-    if (not isinstance(value, dict) or set(value) != fields or schema not in {MANIFEST_SCHEMA,RELEASE_MANIFEST_SCHEMA} or
+    if schema==EXECUTOR_BOUND_MANIFEST_SCHEMA:
+        fields=fields|{"release_commit","executor_generation","ledger_path_contract_hash"}
+    if (not isinstance(value, dict) or set(value) != fields or schema not in
+            {MANIFEST_SCHEMA,RELEASE_MANIFEST_SCHEMA,EXECUTOR_BOUND_MANIFEST_SCHEMA} or
             value.get("root_identifier") != ROOT_IDENTIFIER or value.get("inventory") != sorted(INVENTORY) or
             not isinstance(value.get("sequence"), int) or isinstance(value.get("sequence"), bool) or value["sequence"] < 1 or
             value.get("projection_size_bytes") != len(projection) or value.get("projection_sha256") != _hash(projection) or
             not re.fullmatch(r"[0-9a-f]{64}", str(value.get("projection_sha256")))):
         raise RuntimeError("PROJECTION_MANIFEST_INVALID")
-    if schema==RELEASE_MANIFEST_SCHEMA and not re.fullmatch(r"[0-9a-f]{40}",str(value.get("release_commit"))):
+    if schema in {RELEASE_MANIFEST_SCHEMA,EXECUTOR_BOUND_MANIFEST_SCHEMA} and not re.fullmatch(r"[0-9a-f]{40}",str(value.get("release_commit"))):
+        raise RuntimeError("PROJECTION_MANIFEST_INVALID")
+    if schema==EXECUTOR_BOUND_MANIFEST_SCHEMA and (not isinstance(value.get("executor_generation"),str)
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}",value["executor_generation"])
+            or not re.fullmatch(r"[0-9a-f]{64}",str(value.get("ledger_path_contract_hash")))):
         raise RuntimeError("PROJECTION_MANIFEST_INVALID")
     _timestamp(value.get("generated_at"))
     cycle = value.get("source_cycle_id")
@@ -166,10 +174,18 @@ class ProjectionStore:
         _atomic_write(self.root, ROLLBACK_NAME, _canonical(rollback))
 
     def publish(self, projection: dict[str, Any], *, now: datetime | None = None,
-                release_commit: str | None = None) -> PublicationResult:
+                release_commit: str | None = None,
+                ledger_path_contract_hash: str | None = None) -> PublicationResult:
         validate_projection(projection, now=now)
         if release_commit is not None and not re.fullmatch(r"[0-9a-f]{40}",release_commit):
             raise RuntimeError("PROJECTION_RELEASE_INVALID")
+        executor_generation=projection.get("executor_generation")
+        if release_commit is not None and (not isinstance(executor_generation, str)
+                or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", executor_generation)
+                or not re.fullmatch(r"[0-9a-f]{64}",str(ledger_path_contract_hash))):
+            raise RuntimeError("PROJECTION_RUNTIME_BINDING_INVALID")
+        if release_commit is None and (executor_generation is not None or ledger_path_contract_hash is not None):
+            raise RuntimeError("PROJECTION_RUNTIME_BINDING_INVALID")
         _safe_root(self.root, expected_uid=self.expected_uid, create=False)
         if not (self.root / ROLLBACK_NAME).is_file():
             raise RuntimeError("ROLLBACK_MANIFEST_MISSING")
@@ -189,17 +205,23 @@ class ProjectionStore:
             _validate_manifest(previous_manifest, previous_projection)
             release_matches=(release_commit is None and "release_commit" not in previous_manifest
                              or release_commit is not None and previous_manifest.get("release_commit")==release_commit)
-            if _hash(previous_projection) == digest and release_matches:
+            binding_matches=(release_commit is None or
+                previous_manifest.get("executor_generation")==executor_generation and
+                previous_manifest.get("ledger_path_contract_hash")==ledger_path_contract_hash)
+            if _hash(previous_projection) == digest and release_matches and binding_matches:
                 return PublicationResult(False, previous_manifest["sequence"], digest, len(encoded))
             sequence = previous_manifest["sequence"] + 1
         elif (self.root / PROJECTION_NAME).exists():
             raise RuntimeError("PROJECTION_INVENTORY_UNSAFE")
-        manifest = {"schema_version": RELEASE_MANIFEST_SCHEMA if release_commit else MANIFEST_SCHEMA, "sequence": sequence,
+        manifest = {"schema_version": EXECUTOR_BOUND_MANIFEST_SCHEMA if release_commit else MANIFEST_SCHEMA, "sequence": sequence,
                     "projection_sha256": digest, "projection_size_bytes": len(encoded),
                     "generated_at": projection["projection_generated_at"],
                     "source_cycle_id": projection["source_cycle_id"], "root_identifier": ROOT_IDENTIFIER,
                     "inventory": sorted(INVENTORY)}
         if release_commit: manifest["release_commit"]=release_commit
+        if release_commit:
+            manifest["executor_generation"]=executor_generation
+            manifest["ledger_path_contract_hash"]=ledger_path_contract_hash
         _atomic_write(self.root, PROJECTION_NAME, encoded)
         _atomic_write(self.root, MANIFEST_NAME, _canonical(manifest))
         return PublicationResult(True, sequence, digest, len(encoded))
@@ -225,6 +247,8 @@ class ProjectionStore:
             # The embedded hash intentionally excludes itself; the manifest hashes the exact artifact.
             pass
         if projection["source_cycle_id"] != manifest["source_cycle_id"]:
+            raise RuntimeError("PROJECTION_MANIFEST_INVALID")
+        if manifest["schema_version"]==EXECUTOR_BOUND_MANIFEST_SCHEMA and projection.get("executor_generation")!=manifest["executor_generation"]:
             raise RuntimeError("PROJECTION_MANIFEST_INVALID")
         return projection, manifest
 

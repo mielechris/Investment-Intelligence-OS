@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from .multi_asset_projection import AUTHORITY, LANES
 from .projection_cadence import OBSERVATION_CADENCE_SECONDS, publication_decision
 from .projection_publisher import GovernedProjectionPublisher, publisher_health
+from . import projection_publisher_service
 from .projection_runtime import MANIFEST_NAME, PROJECTION_NAME, ProjectionStore
 from .projection_source_registry import (RegisteredSourceReader, SOURCE_ENVELOPE_SCHEMA, canonical,
                                          content_hash, source_registry, validate_envelope)
@@ -112,6 +115,35 @@ class PublisherCase(unittest.TestCase):
         restarted = GovernedProjectionPublisher(self.root).evaluate(envelopes(values), now=NOW)
         self.assertEqual((restarted.state, restarted.sequence), ("UNCHANGED", 2))
 
+    def test_release_bound_publisher_populates_dedicated_executor_generation(self) -> None:
+        publisher = GovernedProjectionPublisher(
+            self.root,
+            release_commit="a" * 40,
+            executor_generation_reader=lambda: "2026-09-09-shadow-generation",
+            ledger_path_contract_hash="b" * 64,
+        )
+        result = publisher.evaluate(envelopes(), now=NOW)
+        projection, manifest = self.read()
+        self.assertEqual(result.state, "PUBLISHED")
+        self.assertEqual(projection["source_cycle_id"], "cycle_17_1")
+        self.assertEqual(projection["executor_generation"], "2026-09-09-shadow-generation")
+        self.assertNotEqual(projection["source_cycle_id"], projection["executor_generation"])
+        self.assertEqual(manifest["executor_generation"], projection["executor_generation"])
+        self.assertEqual(manifest["ledger_path_contract_hash"], "b" * 64)
+
+    def test_release_bound_publisher_rejects_missing_or_malformed_generation(self) -> None:
+        missing = GovernedProjectionPublisher(
+            self.root, release_commit="a" * 40, ledger_path_contract_hash="b" * 64
+        )
+        self.assertEqual(missing.evaluate(envelopes(), now=NOW).state, "FAILED_CLOSED")
+        malformed = GovernedProjectionPublisher(
+            self.root,
+            release_commit="a" * 40,
+            executor_generation_reader=lambda: "generation with spaces",
+            ledger_path_contract_hash="b" * 64,
+        )
+        self.assertEqual(malformed.evaluate(envelopes(), now=NOW).state, "FAILED_CLOSED")
+
     def test_candidate_lineage_and_five_bound(self) -> None:
         values = payloads(); values["candidate_lineage"]["state"] = "AVAILABLE"
         values["candidate_lineage"]["candidates"] = [candidate()]
@@ -203,6 +235,31 @@ class PublisherCase(unittest.TestCase):
         self.assertEqual(health["market_session_date"], "2026-09-08")
         self.assertEqual(health["evaluated_at"], NOW.isoformat())
         self.assertIsNone(projection["provider"]["confirmed_credits"])
+
+    def test_active_release_contract_binds_external_ledger_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base=Path(raw); release=base/"release"; release.mkdir(mode=0o700)
+            release_manifest=release/"release-manifest.json"; release_manifest.write_text("{}\n")
+            ledger=base/"operational-ledger.db"; connection=sqlite3.connect(ledger)
+            connection.execute("CREATE TABLE probe (id INTEGER)"); connection.close(); ledger.chmod(0o600)
+            active=base/"active-release.json"
+            binding={"release_id":"test-release","git_commit":"a"*40,
+                "release_root":str(release),"operational_ledger_path":str(ledger)}
+            ledger_hash=__import__("hashlib").sha256((json.dumps(binding,sort_keys=True,
+                separators=(",",":"))+"\n").encode()).hexdigest()
+            body={"schema":"iios-active-immutable-release-v2",**binding,
+                "release_manifest_sha256":__import__("hashlib").sha256(release_manifest.read_bytes()).hexdigest(),
+                "ledger_path_contract_hash":ledger_hash}
+            active_hash=__import__("hashlib").sha256((json.dumps(body,sort_keys=True,
+                separators=(",",":"))+"\n").encode()).hexdigest()
+            active.write_bytes(canonical(body|{"content_hash":active_hash})); active.chmod(0o600)
+            with patch.object(projection_publisher_service,"ACTIVE_RELEASE_MANIFEST",active), \
+                    patch.dict(os.environ,{"IIOS_DB_PATH":str(ledger)}):
+                self.assertEqual(projection_publisher_service._active_release_contract(),("a"*40,ledger_hash))
+            with patch.object(projection_publisher_service,"ACTIVE_RELEASE_MANIFEST",active), \
+                    patch.dict(os.environ,{"IIOS_DB_PATH":str(base/"other.db")}):
+                with self.assertRaisesRegex(RuntimeError,"PUBLISHER_RELEASE_UNAVAILABLE"):
+                    projection_publisher_service._active_release_contract()
 
 
 class SourceContractCase(unittest.TestCase):
