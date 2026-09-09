@@ -13,6 +13,7 @@ from .operational_market_executor import (
     EndpointCertificationStore,
     ExecutorStore,
     OperationalMarketEvidenceCoordinator,
+    OperationalPreflightResult,
     SanitizedResponseError,
     _validate_response,
     endpoint_certification_plan,
@@ -51,12 +52,18 @@ class Superbatch31ContractTests(unittest.TestCase):
         rows=september_9_intraday_recovery_plan("2026-09-09T08:45:00-07:00")
         with tempfile.TemporaryDirectory() as raw:
             store=ExecutorStore(Path(raw)/"state"); store.initialize(rows,"SEPTEMBER_9_INTRADAY_RECOVERY")
-            observed=datetime.now(ZoneInfo("UTC")).isoformat().replace("+00:00","Z")
+            cycle=datetime(2026,9,9,8,46,tzinfo=ZoneInfo("America/Los_Angeles"))
+            observed=cycle.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00","Z")
             boundary=Boundary([response({"snapshot":{"ticker":row["ticker"],"price":100.0,
                 "timestamp":observed}}) for row in rows[:10]])
             coordinator=OperationalMarketEvidenceCoordinator(store,rows,boundary)
+            preflight=OperationalPreflightResult.from_verified_evidence(verified_at=cycle.astimezone(ZoneInfo("UTC")),
+                evidence_bindings=tuple(f"{number:064x}" for number in range(1,8)),immutable_policy="VALID",
+                executor="INSTALLED_VALID",credential_presence="AVAILABLE",tls_trust="READY",cost_contract="VALID",
+                request_plan="VALID",state_store="VALID",receipt_store="VALID")
+            self.assertEqual(coordinator.preflight(preflight),"EXECUTOR_READY")
             coordinator.release(39)
-            coordinator.scheduled_tick(datetime(2026,9,9,8,46,tzinfo=ZoneInfo("America/Los_Angeles")))
+            coordinator.scheduled_tick(cycle)
             state=store.read()
             self.assertEqual(state["dispatched"],10)
             self.assertEqual(len(boundary.rows),10)

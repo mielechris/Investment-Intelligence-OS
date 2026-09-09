@@ -2,23 +2,25 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import stat
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .financial_datasets import KEYCHAIN_SERVICE, SecurityFrameworkCredentialProvider
 from .financial_datasets_tls import FinancialDatasetsHTTPSTransport, TrustBundlePolicy
 from .keychain_adapter import KeychainAdapter, SecurityFrameworkAPI
-from .provider_readiness import (installed_readiness_projection, operational_cost_binding,
+from .provider_readiness import (READINESS_ROOT, CREDENTIAL_STATUS_NAME, installed_readiness_projection, operational_cost_binding,
     september_9_cost_evidence_document, september_9_request_plan,
     validate_september_9_cost_evidence)
 from .operational_market_executor import (
     CANARY_PLAN, POST_0930_PLAN, ExecutorStore, FinancialDatasetsOperationalBoundary,
-    OperationalMarketEvidenceCoordinator, EndpointCertificationCoordinator, SEPTEMBER_9_RECOVERY_PLAN,
+    OperationalMarketEvidenceCoordinator, OperationalPreflightResult, EndpointCertificationCoordinator, SEPTEMBER_9_RECOVERY_PLAN,
     EndpointCertificationStore, canary_plan, post_0930_plan, september_9_plan, september_9_intraday_recovery_plan,
+    plan_identity,
 )
 from .operational_market_executor_installer import (INSTALL_ROOT, install_disabled,
     authorize_september_9_market_open_50, create_and_select_intraday_recovery, authorize_intraday_recovery,
@@ -46,11 +48,47 @@ def production_coordinator()->OperationalMarketEvidenceCoordinator:
     if rows not in (canary_plan(),post_0930_plan(),september_9_plan()) and not (rows and rows[0].get("plan")==SEPTEMBER_9_RECOVERY_PLAN and rows==september_9_intraday_recovery_plan(rows[0]["activation_time"])): raise ValueError("REQUEST_PLAN_MISMATCH")
     adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
     boundary=FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
-    return OperationalMarketEvidenceCoordinator(store,rows,boundary)
+    coordinator=OperationalMarketEvidenceCoordinator(store,rows,boundary)
+    if coordinator.preflight(verified_operational_preflight(coordinator))!="EXECUTOR_READY":
+        raise ValueError("EXECUTOR_PREFLIGHT_FAILED_CLOSED")
+    return coordinator
 
 def production_boundary()->FinancialDatasetsOperationalBoundary:
     adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
     return FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
+
+def verified_operational_preflight(coordinator:OperationalMarketEvidenceCoordinator)->OperationalPreflightResult:
+    """Build proof states only after each independent runtime check succeeds."""
+    manifest=validate_installed()
+    state=coordinator.store.read(); rows=coordinator.store.read_plan()
+    coordinator.store.validate_root(); coordinator.boundary.validate()
+    readiness=installed_readiness_projection()
+    if readiness.get("credential_presence_state")!="AVAILABLE": raise ValueError("CREDENTIAL_PRESENCE_UNAVAILABLE")
+    if manifest.get("installed_source_commit") is None: raise ValueError("EXECUTOR_INSTALLATION_INVALID")
+    if state.get("plan_identity") != plan_identity(rows):
+        raise ValueError("REQUEST_PLAN_MISMATCH")
+    if not (coordinator.store.root/"receipts").is_dir(): raise ValueError("RECEIPT_STORE_INVALID")
+    if rows and rows[0].get("plan")==SEPTEMBER_9_RECOVERY_PLAN:
+        pricing=json.loads((coordinator.store.root/"recovery-pricing.json").read_text())
+        clean=dict(pricing); supplied=clean.pop("content_hash",None)
+        calculated=hashlib.sha256((json.dumps(clean,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+        if (supplied!=calculated or pricing.get("plan_identity")!=state["plan_identity"]
+                or pricing.get("exact_cost")!=len(rows) or pricing.get("retry")!=0):
+            raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
+        cost_hash=supplied
+    else:
+        binding=operational_cost_binding()
+        if binding.get("request_plan_identity")!=state["plan_identity"]: raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
+        cost_hash=binding["cost_contract_hash"]
+    receipt_info=(coordinator.store.root/"receipts").stat()
+    receipt_identity=hashlib.sha256(f"{receipt_info.st_dev}:{receipt_info.st_ino}:{stat.S_IMODE(receipt_info.st_mode)}".encode()).hexdigest()
+    credential_hash=hashlib.sha256((READINESS_ROOT/CREDENTIAL_STATUS_NAME).read_bytes()).hexdigest()
+    trust_hash=hashlib.sha256(TRUST_MANIFEST.read_bytes()).hexdigest()
+    manifest_hash=manifest.get("canonical_manifest_content_hash") or hashlib.sha256(json.dumps(manifest,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+    bindings=(manifest_hash,state["plan_identity"],state["content_hash"],cost_hash,credential_hash,trust_hash,receipt_identity)
+    states={"immutable_policy":"VALID","executor":"INSTALLED_VALID","credential_presence":"AVAILABLE",
+        "tls_trust":"READY","cost_contract":"VALID","request_plan":"VALID","state_store":"VALID","receipt_store":"VALID"}
+    return OperationalPreflightResult.from_verified_evidence(verified_at=datetime.now(timezone.utc),evidence_bindings=bindings,**states)
 
 def run_endpoint_certification(*,authorized_commit:str)->str:
     manifest=validate_installed()
@@ -62,8 +100,7 @@ def run_endpoint_certification(*,authorized_commit:str)->str:
 
 def run_canary()->str:
     coordinator=production_coordinator()
-    gates={key:True for key in {"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}}
-    if coordinator.preflight(gates)!="EXECUTOR_READY": raise ValueError("CANARY_PREFLIGHT_FAILED_CLOSED")
+    if coordinator.preflight(verified_operational_preflight(coordinator))!="EXECUTOR_READY": raise ValueError("CANARY_PREFLIGHT_FAILED_CLOSED")
     state=coordinator.store.read()
     if state["classification"]!=CANARY_PLAN or state["planned"]!=1 or state["confirmed_credits"]+state["ambiguous_credits"]>0:
         raise ValueError("CANARY_ALREADY_TERMINAL")
@@ -78,8 +115,7 @@ def transition_post_0930()->str:
     readiness=installed_readiness_projection(); binding=operational_cost_binding()
     if readiness.get("credential_presence_state")!="AVAILABLE" or binding.get("exact_planned_cost_credits")!=50:
         raise ValueError("POST_0930_PREFLIGHT_FAILED_CLOSED")
-    gates={key:True for key in {"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}}
-    if coordinator.preflight(gates)!="EXECUTOR_READY": raise ValueError("POST_0930_PREFLIGHT_FAILED_CLOSED")
+    if coordinator.preflight(verified_operational_preflight(coordinator))!="EXECUTOR_READY": raise ValueError("POST_0930_PREFLIGHT_FAILED_CLOSED")
     coordinator.migrate_canary_to_post_0930(now)
     coordinator.release(19)
     result=coordinator.scheduled_tick(now)

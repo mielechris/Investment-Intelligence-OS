@@ -27,6 +27,7 @@ from .september_9_canonical_plan import (PLAN_CLASSIFICATION as CANONICAL_SEPTEM
 
 SCHEMA = "iios-operational-market-executor-v1"
 RECEIPT_SCHEMA = "iios-operational-market-evidence-receipt-v1"
+FAILURE_RECEIPT_SCHEMA = "iios-operational-market-evidence-failure-v1"
 CERTIFICATION_SCHEMA = "iios-provider-endpoint-certification-v1"
 CERTIFICATION_RECEIPT_SCHEMA = "iios-provider-endpoint-certification-receipt-v1"
 PLAN_SCHEMA = "iios-operational-market-request-plan-v1"
@@ -157,6 +158,92 @@ class ProviderBoundary(Protocol):
     def validate(self) -> None: ...
     def request(self, row: dict[str, Any]) -> BoundaryResponse: ...
 
+class Clock(Protocol):
+    def now_utc(self) -> datetime: ...
+
+@dataclass(frozen=True)
+class SystemClock:
+    def now_utc(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+@dataclass(frozen=True)
+class FixedClock:
+    """Test clock. Production construction never reads it from configuration."""
+    value: datetime
+    def now_utc(self) -> datetime:
+        if self.value.tzinfo is None or self.value.utcoffset() != timedelta(0):
+            raise ValueError("CLOCK_INVALID")
+        return self.value
+
+@dataclass(frozen=True)
+class OperationalPreflightResult:
+    """Immutable proof summary; string states prevent truthy placeholder gates."""
+    verified_at: str
+    immutable_policy: str
+    executor: str
+    credential_presence: str
+    tls_trust: str
+    cost_contract: str
+    request_plan: str
+    state_store: str
+    receipt_store: str
+    evidence_bindings: tuple[str, ...]
+    evidence_digest: str
+
+    def validate(self) -> None:
+        expected = {
+            "immutable_policy": "VALID", "executor": "INSTALLED_VALID",
+            "credential_presence": "AVAILABLE", "tls_trust": "READY",
+            "cost_contract": "VALID", "request_plan": "VALID",
+            "state_store": "VALID", "receipt_store": "VALID",
+        }
+        actual = {key: getattr(self, key) for key in expected}
+        try:
+            stamp = datetime.fromisoformat(self.verified_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("OPERATIONAL_PREFLIGHT_INVALID") from None
+        material = {"verified_at": self.verified_at, **actual, "evidence_bindings": self.evidence_bindings}
+        if (actual != expected or stamp.tzinfo is None or stamp.utcoffset() != timedelta(0)
+                or len(self.evidence_bindings)!=7
+                or any(not re.fullmatch(r"[0-9a-f]{64}",value) for value in self.evidence_bindings)
+                or self.evidence_digest != _digest(material)):
+            raise ValueError("OPERATIONAL_PREFLIGHT_INVALID")
+
+    @classmethod
+    def from_verified_evidence(cls, *, verified_at: datetime, evidence_bindings: tuple[str,...], **states: str) -> "OperationalPreflightResult":
+        if verified_at.tzinfo is None or verified_at.utcoffset() != timedelta(0):
+            raise ValueError("OPERATIONAL_PREFLIGHT_INVALID")
+        stamp = verified_at.isoformat()
+        material = {"verified_at": stamp, **states, "evidence_bindings": evidence_bindings}
+        return cls(verified_at=stamp, evidence_bindings=evidence_bindings,evidence_digest=_digest(material), **states)
+
+@dataclass(frozen=True)
+class ProviderRatePolicy:
+    """One shared, persisted dispatch limit for every Financial Datasets plan."""
+    maximum_requests: int = 10
+    window_seconds: int = 60
+    maximum_concurrency: int = 1
+    automatic_retry: bool = False
+
+    def validate(self) -> None:
+        if ((self.maximum_requests, self.window_seconds, self.maximum_concurrency, self.automatic_retry)
+                != (10, 60, 1, False)):
+            raise ValueError("PROVIDER_RATE_POLICY_INVALID")
+
+    def remaining(self, history: list[str], now: datetime) -> int:
+        self.validate()
+        if now.tzinfo is None or now.utcoffset() != timedelta(0):
+            raise ValueError("CLOCK_INVALID")
+        floor = now - timedelta(seconds=self.window_seconds)
+        active = 0
+        for raw in history:
+            try: stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except (AttributeError, ValueError): raise ValueError("DISPATCH_HISTORY_INVALID") from None
+            if stamp.tzinfo is None or stamp.utcoffset() != timedelta(0) or stamp > now:
+                raise ValueError("DISPATCH_HISTORY_INVALID")
+            active += floor < stamp <= now
+        return max(0, self.maximum_requests - active)
+
 class FinancialDatasetsOperationalBoundary:
     """Credential bytes exist only for the duration of one exact header call."""
     def __init__(self, credentials: SecurityFrameworkCredentialProvider, transport: Any):
@@ -230,6 +317,19 @@ class ExecutorStore:
         if not re.fullmatch(r"market-evidence-[0-9a-f]{64}", identity): raise ValueError("REQUEST_IDENTITY_INVALID")
         _atomic_bytes(self.root/"evidence", identity+".json", raw)
         _atomic(self.root/"receipts", identity+".json", receipt)
+    def failure_receipt(self, identity: str, row: dict[str, Any], metadata: dict[str, Any], observed_at: datetime,
+                        *, lifecycle: str="AMBIGUOUS") -> None:
+        """Commit a sanitized terminal outcome before changing lifecycle state."""
+        if lifecycle not in {"AMBIGUOUS","FAILED_PRETRANSMISSION"}: raise ValueError("FAILURE_LIFECYCLE_INVALID")
+        allowed = {key: metadata.get(key) for key in (
+            "http_status", "content_type", "response_bytes", "envelope_classification",
+            "transmitted", "rejection_reason")}
+        record = {"schema_version": FAILURE_RECEIPT_SCHEMA, "request_identity": identity,
+            "ticker": row["ticker"], "endpoint": row["endpoint"], "window": row["window"],
+            "status": lifecycle, "credit_cost": 1 if lifecycle=="AMBIGUOUS" else 0, "observed_at": observed_at.isoformat(),
+            "sanitized_response": allowed, "content_hash": ""}
+        record["content_hash"] = _digest(record)
+        _atomic(self.root/"receipts", identity+".json", record)
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(_read_bytes(path))
@@ -255,23 +355,33 @@ def validate_state(s: Any) -> dict[str, Any]:
     if not isinstance(s,dict) or s.get("schema_version")!=SCHEMA or s.get("content_hash")!=_digest(s): raise ValueError("EXECUTOR_STATE_INVALID")
     if s.get("authority")!=LOCKED_AUTHORITY or any(s.get(k)!="LOCKED" for k in ("stage_b","stage_c")): raise ValueError("EXECUTOR_AUTHORITY_INVALID")
     if not isinstance(s.get("keychain_accesses"),int) or s["keychain_accesses"]<0: raise ValueError("EXECUTOR_ACCOUNTING_INVALID")
+    if not isinstance(s.get("dispatch_history", []), list): raise ValueError("EXECUTOR_ACCOUNTING_INVALID")
     req=s.get("requests")
     if not isinstance(req,dict) or len(req)!=s.get("planned") or any(v.get("lifecycle") not in LIFECYCLES for v in req.values()): raise ValueError("EXECUTOR_REQUEST_STATE_INVALID")
     confirmed=sum(v["lifecycle"]=="CONFIRMED" for v in req.values()); ambiguous=sum(v["lifecycle"]=="AMBIGUOUS" for v in req.values())
+    failed=sum(v["lifecycle"]=="FAILED_PRETRANSMISSION" for v in req.values())
     dispatched=sum(v["lifecycle"] in {"DISPATCH_STARTED","CONFIRMED","AMBIGUOUS"} for v in req.values())
-    if (s.get("completed")!=confirmed or s.get("ambiguous")!=ambiguous or s.get("dispatched")!=dispatched or
+    if (s.get("completed")!=confirmed or s.get("ambiguous")!=ambiguous or s.get("failed")!=failed or s.get("dispatched")!=dispatched or
         s.get("confirmed_credits")!=confirmed or s.get("ambiguous_credits")!=ambiguous): raise ValueError("EXECUTOR_ACCOUNTING_INVALID")
     return s
 
 class OperationalMarketEvidenceCoordinator:
-    def __init__(self, store: ExecutorStore, rows: tuple[dict[str,Any],...], boundary: ProviderBoundary): self.store,self.rows,self.boundary=store,rows,boundary
-    def preflight(self, gates: dict[str,bool]) -> str:
-        required={"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}
-        if set(gates)!=required or not all(gates.values()) or len(self.rows)>50 or any(r["cost"]!=1 for r in self.rows): return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
+    def __init__(self, store: ExecutorStore, rows: tuple[dict[str,Any],...], boundary: ProviderBoundary,
+                 *, clock: Clock|None=None, rate_policy: ProviderRatePolicy|None=None):
+        self.store,self.rows,self.boundary=store,rows,boundary
+        self.clock=clock or SystemClock(); self.rate_policy=rate_policy or ProviderRatePolicy()
+        self._preflight_verified=False
+    def preflight(self, result: OperationalPreflightResult) -> str:
+        if not isinstance(result, OperationalPreflightResult): return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
+        try: result.validate(); self.rate_policy.validate()
+        except ValueError: return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
+        if len(self.rows)>50 or any(r["cost"]!=1 for r in self.rows): return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
         self.boundary.validate(); s=self.store.read()
         if s["plan_identity"]!=plan_identity(self.rows) or self.store.read_plan()!=self.rows: raise ValueError("REQUEST_PLAN_MISMATCH")
+        self._preflight_verified=True
         return "EXECUTOR_READY"
     def release(self, credits: int) -> None:
+        if not self._preflight_verified: raise ValueError("OPERATIONAL_PREFLIGHT_REQUIRED")
         s=self.store.read()
         allowed=s["phase"]=="EXECUTOR_READY_DISABLED" and credits==len(self.rows)
         allowed=allowed or (s["phase"]=="POST_0930_PARTIAL_READY" and credits==s["planned"]-s["completed"]-s["ambiguous"])
@@ -308,39 +418,57 @@ class OperationalMarketEvidenceCoordinator:
                 receipt=self.store.root/"receipts"/(identity+".json")
                 if receipt.exists():
                     documented=_read_json(receipt)
-                    if documented.get("schema_version")!=RECEIPT_SCHEMA or documented.get("request_identity")!=identity or documented.get("content_hash")!=_digest(documented): raise ValueError("RECEIPT_INVALID")
-                    evidence=self.store.root/"evidence"/(identity+".json")
-                    if hashlib.sha256(_read_bytes(evidence)).hexdigest()!=documented.get("evidence_hash"): raise ValueError("EVIDENCE_INVALID")
-                    value["lifecycle"]="CONFIRMED"
+                    if documented.get("request_identity")!=identity or documented.get("content_hash")!=_digest(documented): raise ValueError("RECEIPT_INVALID")
+                    if documented.get("schema_version")==RECEIPT_SCHEMA:
+                        evidence=self.store.root/"evidence"/(identity+".json")
+                        if hashlib.sha256(_read_bytes(evidence)).hexdigest()!=documented.get("evidence_hash"): raise ValueError("EVIDENCE_INVALID")
+                        value["lifecycle"]="CONFIRMED"
+                    elif (documented.get("schema_version")==FAILURE_RECEIPT_SCHEMA
+                          and documented.get("status") in {"AMBIGUOUS","FAILED_PRETRANSMISSION"}):
+                        value["lifecycle"]=documented["status"]
+                    else: raise ValueError("RECEIPT_INVALID")
                 else: value["lifecycle"]="AMBIGUOUS"
                 changed=True
             elif value["lifecycle"]=="RESERVED": value["lifecycle"]="PLANNED"; changed=True
         if changed: self._recount(s); self._write(s)
         return s
-    def execute(self, identity: str) -> str:
+    def execute(self, identity: str, *, cycle_time: datetime|None=None) -> str:
+        if not self._preflight_verified: return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
         row=next((r for r in self.rows if r["identity"]==identity),None)
         if row is None: raise ValueError("REQUEST_IDENTITY_INVALID")
         lock=self.store.lock()
         try:
             s=self.recover(); life=s["requests"][identity]["lifecycle"]
             if life in TERMINAL: return "DUPLICATE_SUPPRESSED"
+            moment = cycle_time or self.clock.now_utc()
+            if moment.tzinfo is None or moment.utcoffset()!=timedelta(0): raise ValueError("CLOCK_INVALID")
             if s["stage_a"]!="RUNNING" or s["released_credits"]<1: return "REQUEST_BLOCKED"
+            if self.rate_policy.remaining(s.get("dispatch_history", []), moment)<1: return "RATE_LIMIT_BOUNDED_WAIT"
             s["requests"][identity]["lifecycle"]="RESERVED"; self._write(s)
-            s["requests"][identity]["lifecycle"]="DISPATCH_STARTED"; self._recount(s); self._write(s)
+            s["requests"][identity]["lifecycle"]="DISPATCH_STARTED"; s.setdefault("dispatch_history",[]).append(moment.isoformat()); self._recount(s); self._write(s)
             before=int(getattr(self.boundary,"credential_accesses",0))
             try: response=self.boundary.request(row)
             except Exception as exc:
-                s=self.store.read(); s["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before); transmitted=getattr(exc,"transmitted",getattr(exc,"request_started",True))
-                s["requests"][identity]["lifecycle"]="AMBIGUOUS" if transmitted else "FAILED_PRETRANSMISSION"
-                if not transmitted: s["failed"]+=1
+                transmitted=bool(getattr(exc,"transmitted",getattr(exc,"request_started",True)))
+                lifecycle="AMBIGUOUS" if transmitted else "FAILED_PRETRANSMISSION"
+                self.store.failure_receipt(identity,row,{"http_status":None,"content_type":"UNAVAILABLE",
+                    "response_bytes":None,"envelope_classification":"TRANSPORT_FAILURE","transmitted":transmitted,
+                    "rejection_reason":"PROVIDER_BOUNDARY_FAILED"},moment,lifecycle=lifecycle)
+                s=self.store.read(); s["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before)
+                s["requests"][identity]["lifecycle"]=lifecycle
                 self._recount(s); self._terminalize(s,"PROVIDER_BOUNDARY_FAILED"); return s["requests"][identity]["lifecycle"]
             s=self.store.read(); s["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before); self._write(s)
-            try: clean=_validate_response(row,response)
+            try: clean=_validate_response(row,response,observed_at=moment)
             except Exception as exc:
+                metadata = exc.metadata if isinstance(exc, SanitizedResponseError) else {
+                    "http_status": None, "content_type": "UNAVAILABLE", "response_bytes": None,
+                    "envelope_classification": "VALIDATION_EXCEPTION", "transmitted": True,
+                    "rejection_reason": _safe_category(exc,"PROVIDER_RESPONSE_REJECTED")}
+                self.store.failure_receipt(identity,row,metadata,moment)
                 s=self.store.read(); s["requests"][identity]["lifecycle"]="AMBIGUOUS"
                 self._recount(s); self._terminalize(s,_safe_category(exc,"PROVIDER_RESPONSE_REJECTED")); return "AMBIGUOUS"
             receipt={"schema_version":RECEIPT_SCHEMA,"request_identity":identity,"ticker":row["ticker"],"endpoint":row["endpoint"],
-                     "window":row["window"],"status":"CONFIRMED","credit_cost":1,"observed_at":datetime.now(timezone.utc).isoformat(),
+                     "window":row["window"],"status":"CONFIRMED","credit_cost":1,"observed_at":moment.isoformat(),
                      "response_bytes":len(response.body),"latency_ms":response.latency_ms,"evidence_hash":hashlib.sha256(response.body).hexdigest(),
                      "provider_timestamp":clean["provider_timestamp"],"freshness":clean["freshness"],
                      "normalized_hash":_digest(clean),"content_hash":""}
@@ -352,6 +480,7 @@ class OperationalMarketEvidenceCoordinator:
         finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
     def scheduled_tick(self, now_local: datetime) -> str:
         """Run only identities in the current immutable window; never releases allowance."""
+        if not self._preflight_verified: return "EXECUTOR_PREFLIGHT_FAILED_CLOSED"
         expected_date = SEPTEMBER_9_SESSION_DATE if self.rows and self.rows[0]["plan"] in {SEPTEMBER_9_PLAN,SEPTEMBER_9_RECOVERY_PLAN} else "2026-09-08"
         state=self.store.read()
         authorized_at=state.get("authorized_at")
@@ -373,13 +502,11 @@ class OperationalMarketEvidenceCoordinator:
         if state["stage_a"]!="RUNNING": return "STAGE_A_LOCKED"
         eligible=[row for row in self.rows if row["window"] in windows and
                   state["requests"][row["identity"]]["lifecycle"]=="PLANNED"]
-        # The reviewed Financial Datasets contract permits at most ten standard
-        # requests per minute.  Recovery can make several windows concurrent,
-        # so one supervisor cycle must never drain the whole eligible set.
-        cycle_limit=10 if self.rows and self.rows[0]["plan"]==SEPTEMBER_9_RECOVERY_PLAN else len(eligible)
+        cycle_time=now_local.astimezone(timezone.utc)
+        cycle_limit=self.rate_policy.remaining(state.get("dispatch_history",[]),cycle_time)
         for row in eligible[:cycle_limit]:
             if self.store.read()["stage_a"]!="RUNNING": break
-            self.execute(row["identity"])
+            self.execute(row["identity"],cycle_time=cycle_time)
         current=self.store.read()
         if self.rows and self.rows[0]["plan"] in {POST_0930_PLAN,SEPTEMBER_9_PLAN,SEPTEMBER_9_RECOVERY_PLAN} and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
             self.close(); return "SESSION_CLOSED"
@@ -392,7 +519,7 @@ class OperationalMarketEvidenceCoordinator:
         s=self.store.read(); result={k:s[k] for k in ("schema_version","generation","classification","phase","next_gate","planned","dispatched","completed","failed","ambiguous","confirmed_credits","ambiguous_credits","released_credits","keychain_accesses","stage_a","stage_b","stage_c","authority")}
         result["remaining"]=s["planned"]-s["completed"]-s["ambiguous"]-s["failed"]; result["adopted_canary_count"]=s.get("adopted_canary_count",0); return result
     def _recount(self,s):
-        vals=list(s["requests"].values()); s["dispatched"]=sum(v["lifecycle"] in {"DISPATCH_STARTED","CONFIRMED","AMBIGUOUS"} for v in vals); s["completed"]=sum(v["lifecycle"]=="CONFIRMED" for v in vals); s["ambiguous"]=sum(v["lifecycle"]=="AMBIGUOUS" for v in vals); s["confirmed_credits"]=s["completed"]; s["ambiguous_credits"]=s["ambiguous"]
+        vals=list(s["requests"].values()); s["dispatched"]=sum(v["lifecycle"] in {"DISPATCH_STARTED","CONFIRMED","AMBIGUOUS"} for v in vals); s["completed"]=sum(v["lifecycle"]=="CONFIRMED" for v in vals); s["ambiguous"]=sum(v["lifecycle"]=="AMBIGUOUS" for v in vals); s["failed"]=sum(v["lifecycle"]=="FAILED_PRETRANSMISSION" for v in vals); s["confirmed_credits"]=s["completed"]; s["ambiguous_credits"]=s["ambiguous"]
     def _write(self,s): s["generation"]+=1; s["content_hash"]=_digest(s); self.store.write(s)
     def _terminalize(self,s,failure,*,phase="FAILED_CLOSED"):
         s["released_credits"]=0
@@ -428,7 +555,7 @@ def sanitized_response_metadata(response:BoundaryResponse)->dict[str,Any]:
 def _reject(category:str,response:BoundaryResponse)->None:
     raise SanitizedResponseError(category,sanitized_response_metadata(response)|{"rejection_reason":category})
 
-def _validate_response(row:dict[str,Any], response:BoundaryResponse)->dict[str,Any]:
+def _validate_response(row:dict[str,Any], response:BoundaryResponse, *, observed_at:datetime|None=None)->dict[str,Any]:
     metadata=sanitized_response_metadata(response)
     if not response.transmitted: _reject("RESPONSE_NOT_TRANSMITTED",response)
     if response.status in {401,403}: _reject("PROVIDER_AUTHENTICATION_REJECTED",response)
@@ -477,7 +604,9 @@ def _validate_response(row:dict[str,Any], response:BoundaryResponse)->dict[str,A
         try: parsed=datetime.fromisoformat(stamp.replace("Z","+00:00"))
         except ValueError: _reject("PROVIDER_TIMESTAMP_INVALID",response)
         if parsed.tzinfo is None or parsed.utcoffset()!=timedelta(0): _reject("PROVIDER_TIMESTAMP_INVALID",response)
-        age=(datetime.now(timezone.utc)-parsed).total_seconds()
+        now = observed_at or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset()!=timedelta(0): raise ValueError("CLOCK_INVALID")
+        age=(now-parsed).total_seconds()
         if age < -60: _reject("PROVIDER_TIMESTAMP_FUTURE",response)
         freshness="CURRENT" if age<=900 else "STALE"
     return {"ticker":row["ticker"],"provider_timestamp":stamp,"freshness":freshness,"field_count":len(rows[0])}
@@ -511,6 +640,7 @@ class EndpointCertificationStore:
         rows=endpoint_certification_plan(); plan={"schema_version":CERTIFICATION_SCHEMA,"rows":list(rows),"content_hash":""}; plan["content_hash"]=_digest(plan); _atomic(self.root,self.plan_path.name,plan)
         state={"schema_version":CERTIFICATION_SCHEMA,"phase":"CERTIFICATION_READY","planned":3,"dispatched":0,"completed":0,"ambiguous":0,"failed":0,
             "confirmed_credits":0,"ambiguous_credits":0,"released_credits":0,"keychain_accesses":0,
+            "dispatch_history":[],
             "requests":{r["identity"]:{"lifecycle":"PLANNED","cost":1} for r in rows},"authority":LOCKED_AUTHORITY.copy(),"content_hash":""}
         self.write(state); return state
     def validate_root(self)->None:
@@ -545,16 +675,22 @@ class EndpointCertificationStore:
             "sanitized_response":metadata,"content_hash":""}; record["content_hash"]=_digest(record); _atomic(self.root/"receipts",row["identity"]+".json",record)
 
 class EndpointCertificationCoordinator:
-    def __init__(self,store:EndpointCertificationStore,boundary:ProviderBoundary): self.store=store; self.boundary=boundary
+    def __init__(self,store:EndpointCertificationStore,boundary:ProviderBoundary,*,clock:Clock|None=None,
+                 rate_policy:ProviderRatePolicy|None=None):
+        self.store=store; self.boundary=boundary; self.clock=clock or SystemClock(); self.rate_policy=rate_policy or ProviderRatePolicy()
     def run(self)->dict[str,Any]:
-        self.boundary.validate(); state=self.store.read()
+        self.boundary.validate(); self.rate_policy.validate(); state=self.store.read()
         if state["phase"]!="CERTIFICATION_READY" or state["released_credits"]!=0 or state["dispatched"]!=0: raise ValueError("CERTIFICATION_NOT_READY")
         state["released_credits"]=3; state["phase"]="CERTIFICATION_RUNNING"; self.store.write(state)
         for row in endpoint_certification_plan():
             state=self.store.read(); life=state["requests"][row["identity"]]["lifecycle"]
             if life!="PLANNED": raise ValueError("CERTIFICATION_DUPLICATE_REJECTED")
+            moment=self.clock.now_utc()
+            if self.rate_policy.remaining(state.get("dispatch_history",[]),moment)<1:
+                self._stop(state,"PROVIDER_RATE_LIMIT_BOUNDED_WAIT"); return state
             state["requests"][row["identity"]]["lifecycle"]="RESERVED"; self.store.write(state)
-            state["requests"][row["identity"]]["lifecycle"]="DISPATCH_STARTED"; state["dispatched"]+=1; self.store.write(state)
+            state["requests"][row["identity"]]["lifecycle"]="DISPATCH_STARTED"; state["dispatched"]+=1
+            state.setdefault("dispatch_history",[]).append(moment.isoformat()); self.store.write(state)
             before=int(getattr(self.boundary,"credential_accesses",0))
             try: response=self.boundary.request(row)
             except Exception as exc:
@@ -565,7 +701,7 @@ class EndpointCertificationCoordinator:
                 if transmitted: state["ambiguous_credits"]+=1
                 self._stop(state,"PROVIDER_BOUNDARY_FAILED"); return state
             state=self.store.read(); state["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before); self.store.write(state)
-            try: clean=_validate_response(row,response)
+            try: clean=_validate_response(row,response,observed_at=moment)
             except SanitizedResponseError as exc:
                 self.store.persist_failure(row,exc.metadata); state=self.store.read(); state["requests"][row["identity"]]["lifecycle"]="AMBIGUOUS"; state["ambiguous"]+=1; state["ambiguous_credits"]+=1; self._stop(state,exc.category); return state
             self.store.persist_success(row,response,clean); state=self.store.read(); state["requests"][row["identity"]]["lifecycle"]="CONFIRMED"; state["completed"]+=1; state["confirmed_credits"]+=1; state["released_credits"]-=1; self.store.write(state)

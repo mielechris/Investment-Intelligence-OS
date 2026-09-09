@@ -9,7 +9,7 @@ from .provider_readiness import (ENDPOINT_PATHS, MAX_COST_EVIDENCE_AGE_SECONDS, 
     validate_september_9_cost_evidence)
 from .provider_readiness_service import (install_cost_contract, probe_credential_once,
     refresh_september_9_cost_contract, restore_prior_pricing, _backup_value, main)
-from .unattended_tuesday_service import supervise
+from .unattended_tuesday_service import SupervisorIncidentStore, supervise
 
 class Probe:
     def __init__(self,value): self.value=value; self.calls=0
@@ -81,6 +81,20 @@ class Superbatch28C(unittest.TestCase):
             self.assertEqual(supervise(root=root,iterations=1,clock=lambda:datetime(2026,9,9,8,tzinfo=timezone.utc),coordinator_factory=factory),0)
         self.assertEqual((len(factories),len(selected.ticks)),(1,1))
         self.assertEqual(selected.ticks[0].date().isoformat(),"2026-09-09")
+
+    def test_supervisor_persists_sanitized_incident_instead_of_silent_exit(self):
+        def broken():
+            raise ValueError("SELECTED_GENERATION_INVALID")
+        with tempfile.TemporaryDirectory() as raw:
+            base=Path(raw); root=base/"policy"; incidents=SupervisorIncidentStore(base/"incidents")
+            result=supervise(root=root,iterations=1,coordinator_factory=broken,incident_store=incidents,
+                clock=lambda:datetime(2026,9,9,8,tzinfo=timezone.utc))
+            record=json.loads((base/"incidents"/"latest-incident.json").read_text())
+            incident_mode=(base/"incidents").stat().st_mode&0o777
+        self.assertEqual(result,4); self.assertEqual(record["failure_category"],"SELECTED_GENERATION_INVALID")
+        self.assertEqual(record["phase"],"OPERATIONAL_COORDINATOR")
+        self.assertEqual(incident_mode,0o700)
+        self.assertNotIn("private",json.dumps(record).lower())
 
     def test_september_9_refresh_backup_reader_and_exact_restore(self):
         with tempfile.TemporaryDirectory() as raw:

@@ -18,9 +18,40 @@ from .provider_readiness import operational_cost_binding
 OPERATIONAL_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesday"
 SUPERVISOR_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor"
 SUPERVISOR_LOCK_NAME = "unattended-supervisor.lock"
+INCIDENT_NAME = "latest-incident.json"
 ROLLBACK_ROOT = Path.home()/"Library/Application Support/IIOS/Rollback/UnattendedTuesday"
 ROLLBACK_FILES = frozenset({POLICY_NAME, STATE_NAME, LKV_NAME})
 INSTALLATION_MANIFEST = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor/installation-manifest.json"
+
+class SupervisorIncidentStore:
+    """Bounded owner-only diagnostic state; never persists exception text."""
+    def __init__(self,root:Path): self.root=root
+    def record(self,exc:Exception,*,phase:str,observed_at:datetime)->None:
+        if observed_at.tzinfo is None or observed_at.utcoffset()!=timezone.utc.utcoffset(observed_at):
+            raise ValueError("INCIDENT_CLOCK_INVALID")
+        if self.root.exists():
+            info=self.root.lstat()
+            if self.root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid():
+                raise ValueError("INCIDENT_ROOT_INVALID")
+        else: self.root.mkdir(mode=0o700,parents=False)
+        prior=0
+        path=self.root/INCIDENT_NAME
+        if path.exists():
+            try:
+                info=path.lstat()
+                if path.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600 or info.st_uid!=os.getuid():
+                    raise ValueError("INCIDENT_FILE_INVALID")
+                value=json.loads(path.read_text()); supplied=value.get("content_hash")
+                if value.get("schema")!="iios-unattended-supervisor-incident-v1" or supplied!=_hash(value):
+                    raise ValueError("INCIDENT_FILE_INVALID")
+                prior=int(value.get("sequence",0))
+            except (OSError,json.JSONDecodeError): raise ValueError("INCIDENT_FILE_INVALID") from None
+        category=str(exc)
+        if not category.isupper() or len(category)>64: category="SUPERVISOR_OPERATION_FAILED_CLOSED"
+        value={"schema":"iios-unattended-supervisor-incident-v1","sequence":prior+1,
+            "observed_at":observed_at.astimezone(timezone.utc).isoformat(),"phase":phase,
+            "failure_category":category,"exit_code":4,"content_hash":""}
+        value["content_hash"]=_hash(value); _atomic(self.root,INCIDENT_NAME,value)
 
 def _installed_commit(path: Path = INSTALLATION_MANIFEST) -> str:
     info=path.lstat()
@@ -150,7 +181,8 @@ def tick(store:PolicyStore,now:datetime,*,readiness_root:Path|None=None)->str:
         return "TUESDAY_STAGE_A_RUNNING"
     return "NO_ELIGIBLE_TRANSITION"
 
-def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None,coordinator_factory=None)->int:
+def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None,coordinator_factory=None,
+              incident_store:SupervisorIncidentStore|None=None)->int:
     policy_root=OPERATIONAL_ROOT if root is None else root
     lock_root=SUPERVISOR_ROOT if root is None else root.parent/(root.name+"Supervisor")
     lock_root.mkdir(mode=0o700,parents=False,exist_ok=True); os.chmod(lock_root,0o700)
@@ -158,8 +190,11 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
     try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError: lock.close(); return 4
     store=PolicyStore(policy_root); now=clock or (lambda:datetime.now(timezone.utc)); wait=sleep or time.sleep; count=0
+    incidents=incident_store or SupervisorIncidentStore(lock_root/"incidents")
     try:
         while iterations is None or count<iterations:
+            cycle_now=now()
+            if cycle_now.tzinfo is None: raise ValueError("CLOCK_INVALID")
             # The installed executor is reconstructed from its persisted plan on
             # every supervisor cycle. Recovery is read/write-local only; canary
             # dispatch remains exclusive to the owner-authorized one-shot CLI.
@@ -175,11 +210,13 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
                         if (state.get("classification") in {"POST_0930_PARTIAL_SESSION","SEPTEMBER_9_MARKET_OPEN_50","SEPTEMBER_9_INTRADAY_RECOVERY"}
                                 and state.get("phase") in {"STAGE_A_RUNNING","PRE_SESSION_BOUNDED_WAIT"}):
                             from zoneinfo import ZoneInfo
-                            coordinator.scheduled_tick(now().astimezone(ZoneInfo("America/Los_Angeles")))
-                    except (OSError,ValueError,RuntimeError): return 4
+                            coordinator.scheduled_tick(cycle_now.astimezone(ZoneInfo("America/Los_Angeles")))
+                    except (OSError,ValueError,RuntimeError) as exc:
+                        incidents.record(exc,phase="OPERATIONAL_COORDINATOR",observed_at=cycle_now.astimezone(timezone.utc)); return 4
             if (policy_root/POLICY_NAME).exists():
-                try: tick(store,now())
-                except (OSError,ValueError): return 4
+                try: tick(store,cycle_now)
+                except (OSError,ValueError) as exc:
+                    incidents.record(exc,phase="POLICY_TICK",observed_at=cycle_now.astimezone(timezone.utc)); return 4
             count+=1
             if iterations is None or count<iterations: wait(60)
         return 0

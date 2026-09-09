@@ -1,12 +1,14 @@
 from __future__ import annotations
 import json, os, stat, tempfile, unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 from .operational_market_executor import *
 
 class Boundary:
-    def __init__(self): self.calls=[]; self.fail=None; self.clock=lambda: datetime.now(timezone.utc)
+    def __init__(self): self.calls=[]; self.fail=None; self.clock=lambda: datetime(2026,9,8,13,0,tzinfo=timezone.utc)
     def validate(self): return None
     def request(self,row):
         self.calls.append(row["identity"])
@@ -18,10 +20,19 @@ class Boundary:
 class Pre(Exception): transmitted=False
 class Amb(Exception): transmitted=True
 
+class AdvancingClock:
+    def __init__(self): self.value=datetime(2026,9,8,17,0,tzinfo=timezone.utc)
+    def now_utc(self):
+        value=self.value; self.value+=timedelta(seconds=61); return value
+
 class OperationalExecutorTests(unittest.TestCase):
     def make(self,rows=None):
-        td=tempfile.TemporaryDirectory(); root=Path(td.name)/"executor"; rows=rows or full_plan(); store=ExecutorStore(root); store.initialize(rows,rows[0]["plan"]); boundary=Boundary(); return td,store,boundary,OperationalMarketEvidenceCoordinator(store,rows,boundary),rows
-    def gates(self): return {k:True for k in {"immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store"}}
+        td=tempfile.TemporaryDirectory(); root=Path(td.name)/"executor"; rows=rows or full_plan(); store=ExecutorStore(root); store.initialize(rows,rows[0]["plan"]); boundary=Boundary(); return td,store,boundary,OperationalMarketEvidenceCoordinator(store,rows,boundary,clock=AdvancingClock()),rows
+    def gates(self):
+        return OperationalPreflightResult.from_verified_evidence(verified_at=datetime(2026,9,8,16,0,tzinfo=timezone.utc),
+            evidence_bindings=tuple(f"{number:064x}" for number in range(1,8)),
+            immutable_policy="VALID",executor="INSTALLED_VALID",credential_presence="AVAILABLE",tls_trust="READY",
+            cost_contract="VALID",request_plan="VALID",state_store="VALID",receipt_store="VALID")
     def test_exact_full_plan(self):
         rows=full_plan(); self.assertEqual((len(rows),len({r['identity'] for r in rows}),sum(r['cost'] for r in rows)),(50,50,50))
         self.assertEqual(sum(r['window']=="OPENING" for r in rows),10); self.assertEqual(sum(r['window']=="INTRADAY" for r in rows),10); self.assertEqual(sum(r['window']=="CLOSING" for r in rows),10)
@@ -38,8 +49,10 @@ class OperationalExecutorTests(unittest.TestCase):
         c.preflight(self.gates()); c.release(50); state=store.read(); state['authorized_at']='2026-09-09T06:00:00+00:00'; c._write(state); zone=ZoneInfo('America/Los_Angeles')
         c.scheduled_tick(datetime(2026,9,9,6,30,tzinfo=zone)); before=len(b.calls)
         restarted=OperationalMarketEvidenceCoordinator(store,store.read_plan(),b)
+        restarted.preflight(self.gates())
         restarted.scheduled_tick(datetime(2026,9,9,6,30,tzinfo=zone))
         self.assertEqual(len(b.calls),before)
+        restarted.scheduled_tick(datetime(2026,9,9,6,31,tzinfo=zone)); restarted.scheduled_tick(datetime(2026,9,9,6,32,tzinfo=zone))
         restarted.scheduled_tick(datetime(2026,9,9,9,30,tzinfo=zone))
         self.assertEqual(restarted.scheduled_tick(datetime(2026,9,9,12,55,tzinfo=zone)),'SESSION_CLOSED')
         state=store.read(); self.assertEqual((state['completed'],state['confirmed_credits'],state['released_credits'],state['stage_a']),(50,50,0,'LOCKED'))
@@ -54,28 +67,46 @@ class OperationalExecutorTests(unittest.TestCase):
     def test_full_session_real_coordinator_restart_and_close(self):
         td,store,boundary,c,rows=self.make(); self.addCleanup(td.cleanup); self.assertEqual(c.preflight(self.gates()),"EXECUTOR_READY"); c.release(50)
         for r in rows[:25]: self.assertEqual(c.execute(r["identity"]),"CONFIRMED")
-        recovered=OperationalMarketEvidenceCoordinator(store,rows,boundary)
+        recovered=OperationalMarketEvidenceCoordinator(store,rows,boundary,clock=c.clock)
+        recovered.preflight(self.gates())
         for r in rows[:25]: self.assertEqual(recovered.execute(r["identity"]),"DUPLICATE_SUPPRESSED")
         for r in rows[25:]: self.assertEqual(recovered.execute(r["identity"]),"CONFIRMED")
         self.assertEqual((len(boundary.calls),len(set(boundary.calls))),(50,50)); recovered.close(); s=store.read(); self.assertEqual((s["completed"],s["confirmed_credits"],s["released_credits"],s["phase"]),(50,50,0,"SESSION_CLOSED"))
         self.assertEqual(len(list((store.root/"receipts").iterdir())),50); self.assertEqual(len(list((store.root/"evidence").iterdir())),50)
     def test_compressed_clock_open_intraday_closing_and_automatic_close(self):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50); zone=ZoneInfo("America/Los_Angeles")
-        for hour,minute in ((6,30),(9,30),(12,55)): c.scheduled_tick(datetime(2026,9,8,hour,minute,tzinfo=zone))
+        for hour,minute in ((6,30),(6,31),(6,32),(9,30),(12,55)): c.scheduled_tick(datetime(2026,9,8,hour,minute,tzinfo=zone))
         self.assertEqual(c.scheduled_tick(datetime(2026,9,8,13,6,tzinfo=zone)),"SESSION_CLOSED")
         s=store.read(); self.assertEqual((s["completed"],s["released_credits"],s["stage_a"]),(50,0,"LOCKED"))
     def test_ambiguous_never_repeats_and_pretransmission_remains_unspent(self):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50)
         b.fail=Amb(); self.assertEqual(c.execute(rows[0]["identity"]),"AMBIGUOUS"); b.fail=None; self.assertEqual(c.execute(rows[0]["identity"]),"DUPLICATE_SUPPRESSED")
         s=store.read(); self.assertEqual((s["ambiguous_credits"],s["confirmed_credits"],s["released_credits"]),(1,0,0))
+        receipt=json.loads((store.root/"receipts"/(rows[0]["identity"]+".json")).read_text())
+        self.assertEqual((receipt["status"],receipt["credit_cost"]),("AMBIGUOUS",1))
         self.assertEqual(c.execute(rows[1]["identity"]),"REQUEST_BLOCKED")
     def test_crash_recovery_marks_dispatched_ambiguous(self):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50); s=store.read(); s["requests"][rows[0]["identity"]]["lifecycle"]="DISPATCH_STARTED"; c._recount(s); c._write(s)
         self.assertEqual(c.recover()["requests"][rows[0]["identity"]]["lifecycle"],"AMBIGUOUS"); self.assertEqual(c.execute(rows[0]["identity"]),"DUPLICATE_SUPPRESSED")
     def test_gates_tamper_permissions_and_projection(self):
-        td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); bad=self.gates(); bad["tls_trust"]=False; self.assertEqual(c.preflight(bad),"EXECUTOR_PREFLIGHT_FAILED_CLOSED")
+        td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); bad=replace(self.gates(),tls_trust="UNAVAILABLE"); self.assertEqual(c.preflight(bad),"EXECUTOR_PREFLIGHT_FAILED_CLOSED")
+        self.assertEqual(c.preflight({key:True for key in ("immutable_policy","executor","credential_presence","tls_trust","cost_contract","request_plan","state_store","receipt_store")}),"EXECUTOR_PREFLIGHT_FAILED_CLOSED")
         self.assertTrue(c.projection()["authority"]==LOCKED_AUTHORITY); store.state_path.chmod(0o644)
         with self.assertRaisesRegex(ValueError,"EXECUTOR_FILE_INVALID"): store.read()
+
+    def test_service_preflight_is_bound_to_independent_runtime_evidence(self):
+        from . import operational_market_executor_service as service
+        td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup)
+        evidence_root=Path(td.name)/"readiness"; evidence_root.mkdir()
+        (evidence_root/service.CREDENTIAL_STATUS_NAME).write_text("{}")
+        trust=Path(td.name)/"trust.json"; trust.write_text("{}")
+        with (patch.object(service,"validate_installed",return_value={"installed_source_commit":"a"*40,"canonical_manifest_content_hash":"b"*64}),
+              patch.object(service,"installed_readiness_projection",return_value={"credential_presence_state":"AVAILABLE"}),
+              patch.object(service,"operational_cost_binding",return_value={"request_plan_identity":plan_identity(rows),"cost_contract_hash":"c"*64}),
+              patch.object(service,"READINESS_ROOT",evidence_root),patch.object(service,"TRUST_MANIFEST",trust)):
+            result=service.verified_operational_preflight(c)
+        result.validate(); self.assertEqual(result.request_plan,"VALID")
+        self.assertEqual(len(result.evidence_bindings),7)
     def test_terminal_errors_lock_and_zero_allowance(self):
         td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50); c.close("EXECUTOR_UNAVAILABLE"); s=store.read(); self.assertEqual((s["released_credits"],s["stage_a"],s["stage_b"],s["stage_c"]),(0,"LOCKED","LOCKED","LOCKED"))
     def test_production_contract_is_fixed_and_inert(self):
@@ -90,6 +121,26 @@ class OperationalExecutorTests(unittest.TestCase):
         def bad(_): return BoundaryResponse(200,"application/json",b'{"data":[]}',1.0)
         b.request=bad; self.assertEqual(c.execute(rows[0]["identity"]),"AMBIGUOUS")
         s=store.read(); self.assertEqual((s["phase"],s["ambiguous_credits"],s["released_credits"],s["stage_a"]),("FAILED_CLOSED",1,0,"LOCKED"))
+        receipt=json.loads((store.root/"receipts"/(rows[0]["identity"]+".json")).read_text())
+        self.assertEqual(receipt["schema_version"],FAILURE_RECEIPT_SCHEMA); self.assertNotIn("data",json.dumps(receipt))
+        s=store.read(); s["requests"][rows[0]["identity"]]["lifecycle"]="DISPATCH_STARTED"; c._recount(s); c._write(s)
+        self.assertEqual(c.recover()["requests"][rows[0]["identity"]]["lifecycle"],"AMBIGUOUS")
+
+    def test_central_rate_policy_applies_to_full_plan_and_persists(self):
+        td,store,b,c,rows=self.make(); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(50)
+        cycle=datetime(2026,9,8,13,30,tzinfo=timezone.utc)
+        for row in rows[:10]: self.assertEqual(c.execute(row["identity"],cycle_time=cycle),"CONFIRMED")
+        self.assertEqual(c.execute(rows[10]["identity"],cycle_time=cycle),"RATE_LIMIT_BOUNDED_WAIT")
+        restarted=OperationalMarketEvidenceCoordinator(store,rows,b,clock=FixedClock(cycle+timedelta(seconds=61)))
+        restarted.preflight(self.gates())
+        self.assertEqual(restarted.execute(rows[10]["identity"]),"CONFIRMED")
+
+    def test_one_cycle_timestamp_drives_validation_and_receipt(self):
+        rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1)
+        moment=datetime(2026,9,8,17,0,tzinfo=timezone.utc); b.clock=lambda: moment
+        self.assertEqual(c.execute(rows[0]["identity"],cycle_time=moment),"CONFIRMED")
+        receipt=json.loads((store.root/"receipts"/(rows[0]["identity"]+".json")).read_text())
+        self.assertEqual(receipt["observed_at"],moment.isoformat())
     def test_post_0930_adopts_canary_and_completes_without_duplicate(self):
         rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1)
         now=datetime(2026,9,8,10,0,tzinfo=ZoneInfo("America/Los_Angeles")); b.clock=lambda: now.astimezone(timezone.utc)
@@ -101,6 +152,7 @@ class OperationalExecutorTests(unittest.TestCase):
         self.assertTrue(store.adoption_path.is_file()); self.assertEqual(len(list((store.root/"receipts").iterdir())),1)
         c.release(19); self.assertIn("INTRADAY",c.scheduled_tick(now)); self.assertEqual(store.read()["completed"],10)
         restarted=OperationalMarketEvidenceCoordinator(store,store.read_plan(),b)
+        restarted.preflight(self.gates())
         for row in store.read_plan():
             if row["window"]=="INTRADAY": self.assertEqual(restarted.execute(row["identity"]),"DUPLICATE_SUPPRESSED")
         self.assertEqual(c.scheduled_tick(now.replace(hour=12,minute=55)),"SESSION_CLOSED")

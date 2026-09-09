@@ -1,4 +1,5 @@
 import os
+from fastapi.responses import JSONResponse
 
 os.environ.setdefault(
     "IIOS_USER_AGENT",
@@ -84,6 +85,7 @@ from short_interest_fallback import install_short_interest_fallback
 from supply_inventory_primary_fallback import install_supply_inventory_primary_fallback
 from valuation_market_primary_fallback import install_valuation_market_primary_fallback
 from valuation_market_micron_filing_fallback import install_micron_valuation_filing_fallback
+from production_health import live_probe, ready_probe
 
 
 source_ingestion.FETCHERS["gdelt_news"] = fetch_gdelt_news
@@ -233,6 +235,17 @@ def stop_iios_monitoring() -> None:
     stop_opportunity_scheduler()
     stop_jesse_scheduler()
     stop_scheduler()
+
+
+@app.get("/health/live")
+def health_live():
+    return live_probe()
+
+
+@app.get("/health/ready")
+def health_ready():
+    ready, payload = ready_probe()
+    return payload if ready else JSONResponse(status_code=503, content=payload)
 
 
 @app.get("/system/status")
