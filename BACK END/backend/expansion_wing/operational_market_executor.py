@@ -21,6 +21,9 @@ from zoneinfo import ZoneInfo
 from .financial_datasets import API_HOST, AUTH_HEADER, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE, SecurityFrameworkCredentialProvider
 from .tuesday_market_evidence import PILOT_INSTRUMENTS
 from .tuesday_whole_factory import LOCKED_AUTHORITY
+from .september_9_canonical_plan import (PLAN_CLASSIFICATION as CANONICAL_SEPTEMBER_9_PLAN,
+    SESSION_DATE as CANONICAL_SEPTEMBER_9_DATE, canonical_plan_identity,
+    corrected_september_9_plan, validate_canonical_plan)
 
 SCHEMA = "iios-operational-market-executor-v1"
 RECEIPT_SCHEMA = "iios-operational-market-evidence-receipt-v1"
@@ -29,8 +32,8 @@ FULL_PLAN = "FULL_SESSION_50"
 LATE_PLAN = "PARTIAL_SESSION_LATE_START"
 CANARY_PLAN = "SPY_SNAPSHOT_CANARY_1"
 POST_0930_PLAN = "POST_0930_PARTIAL_SESSION"
-SEPTEMBER_9_PLAN = "SEPTEMBER_9_MARKET_OPEN_50"
-SEPTEMBER_9_SESSION_DATE = "2026-09-09"
+SEPTEMBER_9_PLAN = CANONICAL_SEPTEMBER_9_PLAN
+SEPTEMBER_9_SESSION_DATE = CANONICAL_SEPTEMBER_9_DATE
 ADOPTION_SCHEMA = "iios-operational-market-canary-adoption-v1"
 LIFECYCLES = {"PLANNED", "RESERVED", "DISPATCH_STARTED", "CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 TERMINAL = {"CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
@@ -79,18 +82,8 @@ def _dated_row(session_date: str, plan: str, window: str, endpoint: str, ticker:
             "cost": 1, "retry": False, "variant": variant}
 
 def september_9_plan() -> tuple[dict[str, Any], ...]:
-    """A separate immutable next-session plan; it never reuses September 8 rows."""
-    rows: list[dict[str, Any]] = []
-    for ticker in PILOTS:
-        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "OPENING", "MARKET_SNAPSHOT", ticker))
-        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "BASELINE", "HISTORICAL_OHLCV", ticker))
-        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "INTRADAY", "MARKET_SNAPSHOT", ticker))
-        rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "CLOSING", "MARKET_SNAPSHOT", ticker))
-    rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "BASELINE", "COMPANY_FACTS", "MU"))
-    for ticker in PILOTS:
-        if ticker != "MU":
-            rows.append(_dated_row(SEPTEMBER_9_SESSION_DATE, SEPTEMBER_9_PLAN, "BASELINE", "HISTORICAL_OHLCV", ticker, variant="FUND_BASELINE"))
-    return tuple(rows)
+    """The sole corrected, provider-bound September 9 operational plan."""
+    return validate_canonical_plan(corrected_september_9_plan())
 
 def partial_session_plan(now_local: datetime) -> tuple[dict[str, Any], ...]:
     if now_local.tzinfo is None or now_local.date().isoformat() != "2026-09-08": raise ValueError("LATE_START_CLOCK_INVALID")
@@ -116,6 +109,9 @@ def post_0930_plan() -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 def plan_identity(rows: tuple[dict[str, Any], ...]) -> str:
+    if rows and rows[0].get("session_date") == SEPTEMBER_9_SESSION_DATE and rows[0].get("provider"):
+        validate_canonical_plan(rows)
+        return canonical_plan_identity(rows)
     return hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 @dataclass(frozen=True)
@@ -140,7 +136,8 @@ class FinancialDatasetsOperationalBoundary:
         if row.get("path") not in PATHS.values() or row.get("cost")!=1: raise ValueError("ENDPOINT_NOT_ALLOWED")
         self.credential_accesses+=1; secret=self.credentials.retrieve()
         try:
-            status,content_type,body,latency=self.transport.operational_request(path=row["path"],ticker=row["ticker"],credential=secret)
+            status,content_type,body,latency=self.transport.operational_request(path=row["path"],ticker=row["ticker"],credential=secret,
+                start_date=row.get("start_date"),end_date=row.get("end_date"))
             return BoundaryResponse(status,content_type,body,latency,True)
         finally: secret=b""
 

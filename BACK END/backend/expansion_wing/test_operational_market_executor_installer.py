@@ -5,6 +5,7 @@ from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, ExecutorS
     _digest, canary_plan, plan_identity, post_0930_plan,
     september_9_plan)
 from .operational_market_executor_installer import *
+from .september_9_canonical_plan import obsolete_c40_plan
 
 class InstallerTests(unittest.TestCase):
     def setUp(self):
@@ -69,7 +70,7 @@ class InstallerTests(unittest.TestCase):
         store=self.closed_september_8(); source={str(p.relative_to(store.root)):p.read_bytes() for p in store.root.rglob('*') if p.is_file() and p.name!='executor.lock'}
         self.assertEqual(prepare_september_9_generation(self.root),"SEPTEMBER_9_GENERATION_SELECTED_LOCKED")
         selected=resolve_selected_state_root(self.root); self.assertEqual(selected,self.root/SESSIONS_NAME/"2026-09-09")
-        new=ExecutorStore(selected); self.assertEqual(new.read_plan(),september_9_plan())
+        new=ExecutorStore(selected); self.assertEqual(new.read_plan(),obsolete_c40_plan())
         state=new.read(); self.assertEqual((state['released_credits'],state['stage_a'],state['stage_b'],state['stage_c']),(0,'LOCKED','LOCKED','LOCKED'))
         archive=self.root/SESSIONS_NAME/"2026-09-08"
         for relative,payload in source.items(): self.assertEqual((archive/relative).read_bytes(),payload)
@@ -107,6 +108,6 @@ class InstallerTests(unittest.TestCase):
     def test_mixed_selected_session_artifact_is_rejected(self):
         self.closed_september_8(); prepare_september_9_generation(self.root); selected=resolve_selected_state_root(self.root)
         bogus=selected/'receipts'/('market-evidence-'+'0'*64+'.json'); bogus.write_text('{}'); bogus.chmod(0o600)
-        with self.assertRaisesRegex(ValueError,'SELECTED_SESSION_MIXED'): resolve_selected_state_root(self.root)
+        with self.assertRaisesRegex(ValueError,'SUPERSESSION_SAFETY_GATE_FAILED'): resolve_selected_state_root(self.root)
 
 if __name__=="__main__": unittest.main()

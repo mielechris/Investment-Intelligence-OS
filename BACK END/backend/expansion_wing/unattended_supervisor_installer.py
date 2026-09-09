@@ -31,7 +31,7 @@ BRANCH = "feature/iios-expansion-wing-dual-book-machinery"
 ENTRYPOINT = "expansion_wing.unattended_tuesday_service"
 STATE_ROOT_IDENTITY = "IIOS_UNATTENDED_TUESDAY"
 PLIST_IDENTITY = "com.iios.expansion-wing-unattended-tuesday.plist"
-MAX_FILES = 9
+MAX_FILES = 10
 MAX_FILE_BYTES = 1_048_576
 ARTIFACT_NAMES = (
     "expansion_wing/provider_readiness.py",
@@ -41,9 +41,12 @@ ARTIFACT_NAMES = (
     "expansion_wing/operational_market_executor.py",
     "expansion_wing/operational_market_executor_installer.py",
     "expansion_wing/operational_market_executor_service.py",
+    "expansion_wing/september_9_canonical_plan.py",
     PLIST_IDENTITY,
 )
 LEGACY_ARTIFACT_NAMES = ARTIFACT_NAMES[:4] + (PLIST_IDENTITY,)
+PRE_RECOVERY_COMMIT = "ef09d94c99ed4943dd623a8636c9148dc1c9dddc"
+PRE_RECOVERY_ARTIFACT_NAMES = tuple(name for name in ARTIFACT_NAMES if name != "expansion_wing/september_9_canonical_plan.py")
 MIGRATION_SCHEMA = "iios-unattended-supervisor-layout-migration-v1"
 MIGRATION_ROLLBACK_SCHEMA = "iios-unattended-supervisor-layout-rollback-v1"
 MIGRATION_JOURNAL = ".layout-migration.json"
@@ -195,10 +198,12 @@ def validate_legacy_manifest(value: Any, candidate: Path, *, expected_commit: st
     except (TypeError, ValueError): raise ValueError("LEGACY_MANIFEST_INVALID")
     if stamp.tzinfo != timezone.utc or stamp > datetime.now(timezone.utc): raise ValueError("LEGACY_MANIFEST_INVALID")
     rows = value.get("artifact_inventory")
-    if not isinstance(rows, list) or [row.get("relative_path") for row in rows if isinstance(row, dict)] != sorted(LEGACY_ARTIFACT_NAMES):
+    paths=[row.get("relative_path") for row in rows if isinstance(row,dict)] if isinstance(rows,list) else []
+    reviewed_predecessor = PRE_RECOVERY_ARTIFACT_NAMES if expected_commit==PRE_RECOVERY_COMMIT else LEGACY_ARTIFACT_NAMES
+    if paths != sorted(reviewed_predecessor):
         raise ValueError("LEGACY_LAYOUT_UNRECOGNIZED")
     if value.get("canonical_inventory_identity") != _hash(rows): raise ValueError("LEGACY_MANIFEST_INVALID")
-    if rows != inventory(candidate, LEGACY_ARTIFACT_NAMES): raise ValueError("LEGACY_INVENTORY_INVALID")
+    if rows != inventory(candidate, reviewed_predecessor): raise ValueError("LEGACY_INVENTORY_INVALID")
     return value
 
 

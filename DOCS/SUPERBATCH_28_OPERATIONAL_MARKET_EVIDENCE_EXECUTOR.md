@@ -41,3 +41,36 @@ The protected September 8 operational state root is hashed before and after the 
 The fixed non-spending administrator accepts only `iios-provider-endpoint-cost-contract-september-9-v1`, the fixed Financial Datasets public pricing URL, the reviewed snapshot/historical/company-facts endpoint identities, fifty unique identities, one credit per request, exact and maximum cost `50/50`, zero retries, and the canonical plan identity. Observation and expiration must be UTC-aware, current, no more than twenty-four hours apart, and cover `2026-09-09T20:05:00Z`. It accepts no account, API, credential, market-data, browser, provider-execution, allowance, or generation-selection input.
 
 Before replacement, the administrator authenticates the exact installed September 8 cost document even when its freshness has expired. It atomically creates an owner-only rollback directory containing the byte-exact predecessor and a hash-bound immutable receipt, writes the September 9 candidate as a sibling `0600` staging file, fsyncs and validates it, and atomically selects it. Restart finds either the authenticated predecessor or the fully authenticated successor; leftover owned staging is safely reconstructed. A post-selection failure restores the predecessor byte-for-byte. The operational reader accepts either exact schema but binds September 9 only to its date and canonical plan. Refresh never reads Keychain, contacts the provider, releases credits, changes a generation selector, or enables trading authority.
+# September 9 canonical-plan recovery
+
+The corrected September 9 contract uses one canonical row structure and one
+canonical identity in readiness, execution, installation, selection,
+supervision, and browser projection. Neither the former readiness identity
+`d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23`
+nor the incident executor identity
+`c40b4c241d114df4d95069e55e7c68a4fbc8e1c899c5faa6aa8e3767b97a626a`
+is accepted for corrected execution.
+
+The plan contains 50 one-credit, zero-retry rows. Opening snapshots run from
+06:30–07:00 PDT, all point-in-time OHLCV, prior-session baseline, and MU facts
+rows run from 06:30–09:30 PDT, intraday snapshots run from 09:30–12:55 PDT,
+and closing snapshots run from 12:55–13:05 PDT. Point-in-time OHLCV transmits
+`start_date=2026-09-08&end_date=2026-09-09`; the nine prior-session baselines
+transmit `start_date=2026-09-08&end_date=2026-09-08`. MU company facts carries
+no historical date range.
+
+The old `d082…` pricing document is retained byte-for-byte but is ineligible
+for the corrected plan. A fresh public-documentation observation is installed
+only through `--refresh-corrected-september-9-cost-contract`, with its own
+owner-only rollback package. This path has no provider, account, credential,
+credit, allowance, generation, or trading capability.
+
+The selected `c40…` generation may be superseded only when it has zero
+allowance, all stages locked, all rows still PLANNED, zero dispatches, zero
+receipts/evidence, zero credits, and zero Keychain accesses. Recovery writes a
+hash-bound inventory receipt, constructs a distinct
+`sessions/2026-09-09-canonical-v2` generation, validates corrected pricing,
+and atomically replaces the selector. The selector binds the September 8
+archive hash, supersession-receipt hash, and corrected canonical plan identity.
+Post-selection failure restores the original selector bytes; neither the
+incident generation nor the September 8 archive is rewritten or deleted.

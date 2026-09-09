@@ -149,6 +149,18 @@ class TransportTests(unittest.TestCase):
             response=self.invoke(self.transport(lambda *_: connection))
             self.assertEqual(response.status,status)
 
+    def test_operational_historical_request_transmits_exact_dates(self):
+        connection=FakeConnection(); transport=self.transport(lambda *_:connection)
+        with patch.object(ssl.SSLContext,"load_verify_locations",return_value=None):
+            transport.operational_request(path="/prices",ticker="SPY",credential=SYNTHETIC_CREDENTIAL,
+                start_date="2026-09-08",end_date="2026-09-09")
+        self.assertEqual(connection.request_args[0],("GET","/prices?ticker=SPY&start_date=2026-09-08&end_date=2026-09-09"))
+        with self.assertRaisesRegex(FinancialDatasetsTransportError,"HISTORICAL_DATE_RANGE_INVALID"):
+            transport.operational_request(path="/prices",ticker="SPY",credential=SYNTHETIC_CREDENTIAL)
+        with self.assertRaisesRegex(FinancialDatasetsTransportError,"HISTORICAL_DATE_RANGE_INVALID"):
+            transport.operational_request(path="/company/facts",ticker="MU",credential=SYNTHETIC_CREDENTIAL,
+                start_date="2026-09-08",end_date="2026-09-08")
+
     def test_browser_projection_is_scalar_and_path_free(self):
         value=browser_tls_readiness(); encoded=json.dumps(value,sort_keys=True)
         self.assertEqual((value["tls_transport"],value["trust_bundle"],value["minimum_tls"]),

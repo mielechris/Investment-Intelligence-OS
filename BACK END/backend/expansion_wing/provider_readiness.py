@@ -16,6 +16,8 @@ from typing import Any, Callable, Mapping, Protocol
 from .financial_datasets import API_HOST, AUTH_HEADER, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
 from .unattended_tuesday import DAILY_CEILING, STAGE_A_MAXIMUM
 from .tuesday_whole_factory import PILOT_BY_PRODUCT
+from .september_9_canonical_plan import (canonical_plan_identity,
+    corrected_september_9_plan, validate_canonical_plan)
 
 COST_SCHEMA = "iios-provider-endpoint-cost-contract-v1"
 BROWSER_SCHEMA = "iios-provider-stage-a-readiness-browser-v1"
@@ -35,6 +37,7 @@ SOURCE_CONTROLLED_SESSIONS = ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09
 SEPTEMBER_9_SESSION_DATE = "2026-09-09"
 SEPTEMBER_9_REQUIRED_COVERAGE_UTC = "2026-09-09T20:05:00+00:00"
 SEPTEMBER_9_COST_SCHEMA = "iios-provider-endpoint-cost-contract-september-9-v1"
+CORRECTED_SEPTEMBER_9_COST_SCHEMA = "iios-provider-endpoint-cost-contract-september-9-v2"
 RATE_LIMIT_PER_MINUTE = 10
 MAX_RESPONSE_BYTES = 1_048_576
 CONNECT_TIMEOUT_SECONDS = 5
@@ -181,7 +184,17 @@ def validate_cost_contract_document(value:Any,*,now:datetime)->dict[str,Any]:
 
 def validate_prior_cost_contract_for_refresh(value:Any)->dict[str,Any]:
     """Authenticate the exact installed predecessor without treating expiry as corruption."""
-    if value!=cost_contract_document(): raise ValueError("PRIOR_COST_CONTRACT_INVALID")
+    if value==cost_contract_document(): return value
+    # The d082 record is retained as authentic evidence of the superseded
+    # readiness-only plan, but it cannot authorize the corrected plan.
+    clean=dict(value) if isinstance(value,dict) else {}
+    document_hash=clean.pop("document_hash",None)
+    if (value.get("schema")!=SEPTEMBER_9_COST_SCHEMA
+            or value.get("request_plan_identity")!="d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23"
+            or value.get("planned_request_count")!=50 or value.get("unique_request_identity_count")!=50
+            or value.get("exact_planned_cost_credits")!=50 or value.get("worst_case_cost_credits")!=50
+            or value.get("automatic_retry_count")!=0 or document_hash!=_hash(clean)):
+        raise ValueError("PRIOR_COST_CONTRACT_INVALID")
     return value
 
 
@@ -202,7 +215,7 @@ def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=
         credential_status=_stored_credential_status(credential)
         if cost_document.get("schema")==COST_SCHEMA:
             validate_cost_contract_document(cost_document,now=current)
-        elif cost_document.get("schema")==SEPTEMBER_9_COST_SCHEMA:
+        elif cost_document.get("schema")==CORRECTED_SEPTEMBER_9_COST_SCHEMA:
             projection=_september_9_readiness(cost_document,credential_status,now=current)
             projection.update({"commissioning_state":"AUTHORIZED_WAITING" if policy_installed and projection["failure_category"]=="PROVIDER_READY" else "READY_FOR_OWNER_POLICY_AUTHORIZATION" if projection["failure_category"]=="PROVIDER_READY" else "FAILED_CLOSED","unattended_service_state":"INSTALLED_DISABLED","one_day_policy_state":"AUTHORIZED_WAITING" if policy_installed else "NOT_AUTHORIZED"})
             return projection
@@ -259,37 +272,12 @@ def revised_plan_identity() -> str:
 
 
 def september_9_request_plan() -> tuple[dict[str, Any], ...]:
-    """Separate 50-row readiness plan with September 9-bound identities."""
-    prior = prior_market_session(SEPTEMBER_9_SESSION_DATE)
-    windows = (
-        ("OPENING_SESSION", "MARKET_SNAPSHOT", "06:30", "07:00", None),
-        ("POINT_IN_TIME_OHLCV", "HISTORICAL_OHLCV", "06:30", "09:30", f"{prior}/{SEPTEMBER_9_SESSION_DATE}"),
-        ("APPLICABLE_FACTS", "APPLICABLE", "07:00", "10:00", None),
-        ("INTRADAY_MARK", "MARKET_SNAPSHOT", "09:30", "12:55", None),
-        ("CLOSING_MARK", "MARKET_SNAPSHOT", "12:55", "13:05", None),
-    )
-    result = []
-    for room, (instrument, _description) in PILOT_BY_PRODUCT.items():
-        for category, endpoint, earliest, latest, date_window in windows:
-            resolved_endpoint, resolved_category, resolved_window = endpoint, category, date_window
-            if endpoint == "APPLICABLE":
-                if instrument == "MU": resolved_endpoint = "COMPANY_FACTS"
-                else:
-                    resolved_endpoint, resolved_category = "HISTORICAL_OHLCV", "PRIOR_SESSION_BASELINE"
-                    resolved_window = f"{prior}/{prior}"
-            identity_payload = {
-                "provider": PROVIDER, "provider_contract": PROVIDER_CONTRACT,
-                "session_date": SEPTEMBER_9_SESSION_DATE, "instrument": instrument,
-                "endpoint": resolved_endpoint, "evidence_category": resolved_category,
-                "earliest": earliest, "latest": latest, "date_window": resolved_window,
-            }
-            result.append(identity_payload | {"product_room": room, "confirmed_cost": 1,
-                "retry": False, "request_identity": "stage-a-" + _hash(identity_payload)})
-    return tuple(result)
+    """Return the same canonical rows consumed by the executor."""
+    return validate_canonical_plan(corrected_september_9_plan())
 
 
 def september_9_plan_identity() -> str:
-    return _hash({"schema":"iios-stage-a-provider-plan-september-9-v1","requests":september_9_request_plan()})
+    return canonical_plan_identity(september_9_request_plan())
 
 
 def september_9_cost_evidence_document(*, observed_at: str, expires_at: str,
@@ -301,7 +289,7 @@ def september_9_cost_evidence_document(*, observed_at: str, expires_at: str,
             or expires <= observed or (expires-observed).total_seconds()>MAX_COST_EVIDENCE_AGE_SECONDS
             or expires < coverage):
         raise ValueError("SEPTEMBER_9_COST_EVIDENCE_INVALID")
-    value = {"schema":SEPTEMBER_9_COST_SCHEMA,"provider_identity":PROVIDER,
+    value = {"schema":CORRECTED_SEPTEMBER_9_COST_SCHEMA,"provider_identity":PROVIDER,
         "provider_contract_version":PROVIDER_CONTRACT,"pricing_observation_identity":observation_identity,
         "source_url_identity":"https://www.financialdatasets.ai/pricing",
         "documentation_observed_at":observed_at,"expiration_revalidation_time":expires_at,
@@ -323,7 +311,7 @@ def validate_september_9_cost_evidence(value: Any, *, now: datetime) -> dict[str
         "worst_case_cost_credits","rate_limit_per_minute","unique_request_identity_count",
         "automatic_retry_count","reviewed_endpoint_identities","confirmed_cost_per_request",
         "browser_refresh","provider_execution_refresh","request_plan_identity","document_hash"}
-    if not isinstance(value,dict) or set(value)!=expected_keys or value.get("schema")!=SEPTEMBER_9_COST_SCHEMA:
+    if not isinstance(value,dict) or set(value)!=expected_keys or value.get("schema")!=CORRECTED_SEPTEMBER_9_COST_SCHEMA:
         raise ValueError("SEPTEMBER_9_COST_EVIDENCE_INVALID")
     expected=september_9_cost_evidence_document(
         observed_at=value.get("documentation_observed_at"),
@@ -345,8 +333,8 @@ def _stored_credential_status(value:Any)->str:
 def _september_9_readiness(document:dict[str,Any],credential_status:str,*,now:datetime)->dict[str,Any]:
     validate_september_9_cost_evidence(document,now=now)
     rows=september_9_request_plan()
-    if (len(rows)!=50 or len({row["request_identity"] for row in rows})!=50
-            or any(row["retry"] is not False or row["confirmed_cost"]!=1 for row in rows)
+    if (len(rows)!=50 or len({row["identity"] for row in rows})!=50
+            or any(row["retry"] is not False or row["cost"]!=1 for row in rows)
             or document["request_plan_identity"]!=september_9_plan_identity()):
         raise ValueError("SEPTEMBER_9_PLAN_BINDING_INVALID")
     failure=None if credential_status=="AVAILABLE" else {
@@ -372,7 +360,7 @@ def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | Non
     if projection.get("provider_state") != "READY":
         raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
     document = json.loads((root / COST_CONTRACT_NAME).read_text())
-    september_9=document.get("schema")==SEPTEMBER_9_COST_SCHEMA
+    september_9=document.get("schema")==CORRECTED_SEPTEMBER_9_COST_SCHEMA
     expected = {
         "request_plan_identity": september_9_plan_identity() if september_9 else revised_plan_identity(),
         "planned_identity_count": 50,

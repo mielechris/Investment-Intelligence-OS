@@ -5,7 +5,8 @@ from pathlib import Path
 from .provider_readiness import (ENDPOINT_PATHS, MAX_COST_EVIDENCE_AGE_SECONDS, PRICING_EXPIRES_AT,
     PRICING_OBSERVED_AT, REQUIRED_SESSION_COVERAGE_UTC, READINESS_INVENTORY, FixedCredentialBoundary,
     EndpointCost, cost_contract_document, installed_readiness_projection, revised_plan_identity,
-    reviewed_cost_contracts, september_9_cost_evidence_document, validate_september_9_cost_evidence)
+    reviewed_cost_contracts, september_9_cost_evidence_document, september_9_plan_identity,
+    validate_september_9_cost_evidence)
 from .provider_readiness_service import (install_cost_contract, probe_credential_once,
     refresh_september_9_cost_contract, restore_prior_pricing, _backup_value, main)
 from .unattended_tuesday_service import supervise
@@ -91,7 +92,7 @@ class Superbatch28C(unittest.TestCase):
             self.assertEqual((rollback/"prior-provider-cost-contract.json").read_bytes(),old)
             projected=installed_readiness_projection(root=root,now=datetime(2026,9,9,13,tzinfo=timezone.utc))
             self.assertEqual((projected["provider_state"],projected["request_plan_identity"],projected["planned_identity_count"]),
-                ("READY","d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23",50))
+                ("READY",september_9_plan_identity(),50))
             self.assertEqual(refresh_september_9_cost_contract(document=doc,root=root,rollback=rollback,
                 now=datetime(2026,9,9,13,tzinfo=timezone.utc)),"SEPTEMBER_9_COST_CONTRACT_ALREADY_INSTALLED")
             self.assertEqual(restore_prior_pricing(root=root,rollback=rollback),"PRIOR_PRICING_RESTORED")

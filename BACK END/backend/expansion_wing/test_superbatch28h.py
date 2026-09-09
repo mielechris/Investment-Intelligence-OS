@@ -167,7 +167,7 @@ class Superbatch28H(unittest.TestCase):
             self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
                 backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True),
                 "SUPERVISOR_LAYOUT_MIGRATED_DISABLED")
-            self.assertEqual(validate_candidate(install/"installed-artifacts",expected_commit="b"*40) if False else len(inventory(install/"installed-artifacts")),8)
+            self.assertEqual(validate_candidate(install/"installed-artifacts",expected_commit="b"*40) if False else len(inventory(install/"installed-artifacts")),9)
             self.assertEqual(before,_tree_records(state)); self.assertEqual(rehearse_legacy_restoration(backup),"LEGACY_RESTORATION_REHEARSED")
             self.assertEqual(migrate_legacy_layout(source_root=source,install_root=install,launch_plist=plist,
                 backup=backup,legacy_commit=COMMIT,target_commit="b"*40,installed_at=NOW,protected_state_root=state,service_stopped=True),

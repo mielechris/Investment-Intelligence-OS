@@ -18,7 +18,8 @@ TRUST_STATES = {"NOT_CONFIGURED", "BUNDLE_MISSING", "BUNDLE_UNSAFE", "BUNDLE_HAS
     "BUNDLE_INVALID", "READY", "TLS_VERIFICATION_FAILED", "CONTEXT_RESTRICTED"}
 TLS_FAILURES = {"DNS_FAILED", "TCP_FAILED", "TLS_TRUST_NOT_CONFIGURED", "TLS_TRUST_UNSAFE",
     "TLS_TRUST_HASH_MISMATCH", "TLS_CERTIFICATE_VERIFICATION_FAILED", "TLS_PROTOCOL_FAILED",
-    "TLS_HOSTNAME_FAILED", "TLS_TIMEOUT", "PROXY_CONTEXT_REJECTED", "ACCOUNTING_UNCERTAIN"}
+    "TLS_HOSTNAME_FAILED", "TLS_TIMEOUT", "PROXY_CONTEXT_REJECTED", "HISTORICAL_DATE_RANGE_INVALID",
+    "ACCOUNTING_UNCERTAIN"}
 _PEM_CERTIFICATE = re.compile(rb"-----BEGIN CERTIFICATE-----\r?\n.+?\r?\n-----END CERTIFICATE-----", re.S)
 _PROXY_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 
@@ -162,15 +163,26 @@ class FinancialDatasetsHTTPSTransport:
                 except Exception: pass
 
     def operational_request(self, *, path: str, ticker: str, credential: bytes,
+                            start_date: str | None = None, end_date: str | None = None,
                             connect_timeout: float = 5.0, response_timeout: float = 10.0):
         """Exact-host GET used only by the owner-authorized operational coordinator."""
         from urllib.parse import quote, urlencode
         allowed={"/prices/snapshot","/prices","/company/facts"}
         if path not in allowed or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}",ticker):
             raise FinancialDatasetsTransportError("ACCOUNTING_UNCERTAIN",request_started=False)
+        date_pattern=r"2026-09-(08|09)"
+        if path == "/prices":
+            if not (isinstance(start_date,str) and isinstance(end_date,str)
+                    and re.fullmatch(date_pattern,start_date) and re.fullmatch(date_pattern,end_date)
+                    and start_date <= end_date):
+                raise FinancialDatasetsTransportError("HISTORICAL_DATE_RANGE_INVALID",request_started=False)
+        elif start_date is not None or end_date is not None:
+            raise FinancialDatasetsTransportError("HISTORICAL_DATE_RANGE_INVALID",request_started=False)
         if self.trust_readiness()!="READY":
             raise FinancialDatasetsTransportError("TLS_TRUST_UNSAFE",request_started=False)
-        context=self.trust.build_context(); target=path+"?"+urlencode((("ticker",ticker),),quote_via=quote,safe="")
+        query=[("ticker",ticker)]
+        if path == "/prices": query.extend((("start_date",start_date),("end_date",end_date)))
+        context=self.trust.build_context(); target=path+"?"+urlencode(query,quote_via=quote,safe="")
         connection=None; started=self.clock(); request_started=False
         try:
             connection=self.connection_factory(API_HOST,443,context,min(connect_timeout,response_timeout)); request_started=True

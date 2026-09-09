@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from .keychain_adapter import SecurityCommandRunner
 from .provider_readiness import (COST_CONTRACT_NAME, CREDENTIAL_STATUS_NAME, READINESS_ROOT,
-    SEPTEMBER_9_COST_SCHEMA, cost_contract_document, installed_readiness_projection,
+    CORRECTED_SEPTEMBER_9_COST_SCHEMA, cost_contract_document, installed_readiness_projection,
     september_9_cost_evidence_document, validate_prior_cost_contract_for_refresh,
     validate_september_9_cost_evidence)
 
-REFRESH_ROLLBACK_ROOT=READINESS_ROOT.parent/"UnattendedTuesdayReadinessRollback"/"September9Pricing"
-REFRESH_SCHEMA="iios-provider-pricing-refresh-rollback-v1"
-STAGE_NAME=".provider-cost-contract.september-9.stage"
+REFRESH_ROLLBACK_ROOT=READINESS_ROOT.parent/"UnattendedTuesdayReadinessRollback"/"September9CorrectedPricing"
+REFRESH_SCHEMA="iios-provider-pricing-refresh-rollback-v2"
+STAGE_NAME=".provider-cost-contract.september-9-corrected.stage"
 
 def _atomic(root:Path,name:str,value:dict)->None:
     root.mkdir(mode=0o700,parents=False,exist_ok=True); os.chmod(root,0o700)
@@ -115,7 +115,7 @@ def refresh_september_9_cost_contract(*,document:dict,root:Path=READINESS_ROOT,
     _owner_root(root,exact_inventory={COST_CONTRACT_NAME,CREDENTIAL_STATUS_NAME})
     _owner_file(root/CREDENTIAL_STATUS_NAME)
     current_raw=_owner_file(root/COST_CONTRACT_NAME); current_doc=json.loads(current_raw)
-    if current_doc.get("schema")==SEPTEMBER_9_COST_SCHEMA:
+    if current_doc.get("schema")==CORRECTED_SEPTEMBER_9_COST_SCHEMA:
         validate_september_9_cost_evidence(current_doc,now=current)
         receipt=_backup_value(rollback)
         if current_doc!=document or receipt["target_document_hash"]!=document["document_hash"]:
@@ -168,6 +168,7 @@ def main(argv=None)->int:
     g.add_argument("--probe-credential-presence-once",action="store_true")
     g.add_argument("--readiness",action="store_true")
     g.add_argument("--refresh-september-9-cost-contract",action="store_true")
+    g.add_argument("--refresh-corrected-september-9-cost-contract",action="store_true")
     p.add_argument("--observed-at"); p.add_argument("--expires-at"); p.add_argument("--observation-identity")
     p.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
     a=p.parse_args(argv)
@@ -176,6 +177,8 @@ def main(argv=None)->int:
         if a.install_reviewed_cost_contract: status=install_cost_contract()
         elif a.probe_credential_presence_once: status=probe_credential_once()
         elif a.refresh_september_9_cost_contract:
+            raise ValueError("OBSOLETE_PRICING_REFRESH_PROHIBITED")
+        elif a.refresh_corrected_september_9_cost_contract:
             document=september_9_cost_evidence_document(observed_at=a.observed_at,expires_at=a.expires_at,
                 observation_identity=a.observation_identity)
             status=refresh_september_9_cost_contract(document=document)

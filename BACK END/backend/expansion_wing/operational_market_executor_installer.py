@@ -17,6 +17,8 @@ from typing import Any
 from .financial_datasets import API_HOST, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
 from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, SEPTEMBER_9_PLAN,
     ExecutorStore, canary_plan, plan_identity, post_0930_plan, september_9_plan)
+from .september_9_canonical_plan import (OBSOLETE_EXECUTOR_IDENTITY,
+    canonical_plan_identity, obsolete_c40_plan, validate_canonical_plan)
 
 INSTALL_SCHEMA="iios-operational-market-executor-installation-v1"
 INSTALL_ROOT=Path.home()/"Library/Application Support/IIOS/OperationalMarketExecutor"
@@ -30,11 +32,15 @@ SESSIONS_NAME="sessions"
 SELECTOR_NAME="selected-session.json"
 ARCHIVE_SCHEMA="iios-operational-market-session-archive-v1"
 SELECTOR_SCHEMA="iios-operational-market-session-selector-v1"
+CORRECTED_SELECTOR_SCHEMA="iios-operational-market-session-selector-v2"
+SUPERSESSION_SCHEMA="iios-operational-market-generation-supersession-v1"
+CORRECTED_GENERATION_NAME="2026-09-09-canonical-v2"
+SUPERSESSION_NAME="2026-09-09-c40-supersession.json"
 COORDINATOR="expansion_wing.operational_market_executor.OperationalMarketEvidenceCoordinator"
 APPROVED_ENDPOINTS=("/company/facts","/prices","/prices/snapshot")
 ARTIFACTS=("operational_market_executor.py","operational_market_executor_installer.py",
            "operational_market_executor_service.py","financial_datasets.py","financial_datasets_tls.py",
-           "keychain_adapter.py")
+           "keychain_adapter.py","september_9_canonical_plan.py")
 
 def _sha(path:Path)->str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -105,13 +111,69 @@ def _selector(archive:dict[str,Any])->dict[str,Any]:
         "september_8_archive_hash":archive["content_hash"],"content_hash":""}
     value["content_hash"]=_hash_document(value); return value
 
+def _obsolete_selector(archive:dict[str,Any])->dict[str,Any]:
+    value={"schema":SELECTOR_SCHEMA,"selected_session":"2026-09-09","selected_root":"sessions/2026-09-09",
+        "plan_classification":SEPTEMBER_9_PLAN,"plan_identity":OBSOLETE_EXECUTOR_IDENTITY,
+        "september_8_archive_hash":archive["content_hash"],"content_hash":""}
+    value["content_hash"]=_hash_document(value); return value
+
+def _generation_inventory(root:Path)->list[dict[str,Any]]:
+    rows=[]
+    for path in sorted(root.rglob("*")):
+        info=path.lstat(); relative=str(path.relative_to(root))
+        if path.is_symlink() or info.st_uid!=os.getuid(): raise ValueError("SUPERSESSION_INVENTORY_INVALID")
+        if path.is_dir():
+            if stat.S_IMODE(info.st_mode)!=0o700: raise ValueError("SUPERSESSION_INVENTORY_INVALID")
+            continue
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600: raise ValueError("SUPERSESSION_INVENTORY_INVALID")
+        rows.append({"path":relative,"bytes":info.st_size,"sha256":_sha(path)})
+    return rows
+
+def _validate_obsolete_generation(root:Path)->dict[str,Any]:
+    rows=ExecutorStore(root).read_plan(); state=ExecutorStore(root).read()
+    if (rows!=obsolete_c40_plan() or state.get("plan_identity")!=OBSOLETE_EXECUTOR_IDENTITY
+            or state.get("released_credits")!=0 or any(state.get(k)!="LOCKED" for k in ("stage_a","stage_b","stage_c"))
+            or any(state.get(k)!=0 for k in ("dispatched","completed","ambiguous","failed","confirmed_credits","ambiguous_credits","keychain_accesses"))
+            or any(item.get("lifecycle")!="PLANNED" for item in state.get("requests",{}).values())
+            or any(any((root/name).iterdir()) for name in ("receipts","evidence"))):
+        raise ValueError("SUPERSESSION_SAFETY_GATE_FAILED")
+    return state
+
+def _supersession_document(root:Path)->dict[str,Any]:
+    _validate_obsolete_generation(root)
+    body={"schema":SUPERSESSION_SCHEMA,"session_date":"2026-09-09",
+        "superseded_generation":"sessions/2026-09-09","superseded_plan_identity":OBSOLETE_EXECUTOR_IDENTITY,
+        "reason":"READINESS_EXECUTOR_IDENTITY_AND_SEMANTIC_CONTRACT_MISMATCH",
+        "inventory":_generation_inventory(root),"allowance_released":False,"provider_activity":False,
+        "immutable":True}
+    return body|{"content_hash":_hash_document(body)}
+
+def _validate_supersession(path:Path,root:Path)->dict[str,Any]:
+    _regular_owner_file(path); value=json.loads(path.read_text()); body=dict(value); content=body.pop("content_hash",None)
+    if value.get("schema")!=SUPERSESSION_SCHEMA or content!=_hash_document(body) or value!=_supersession_document(root):
+        raise ValueError("SUPERSESSION_RECEIPT_INVALID")
+    return value
+
+def _corrected_selector(archive:dict[str,Any],supersession:dict[str,Any])->dict[str,Any]:
+    value={"schema":CORRECTED_SELECTOR_SCHEMA,"selected_session":"2026-09-09",
+        "selected_root":f"sessions/{CORRECTED_GENERATION_NAME}","plan_classification":SEPTEMBER_9_PLAN,
+        "plan_identity":canonical_plan_identity(),"september_8_archive_hash":archive["content_hash"],
+        "supersession_receipt_hash":supersession["content_hash"],"content_hash":""}
+    value["content_hash"]=_hash_document(value); return value
+
 def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
     selector_path=root/SELECTOR_NAME
     if not selector_path.exists(): return root/"state"
     _regular_owner_file(selector_path); value=json.loads(selector_path.read_text())
     archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
-    if value!=_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
-    selected=root/SESSIONS_NAME/"2026-09-09"; rows=ExecutorStore(selected).read_plan(); state=ExecutorStore(selected).read()
+    if value.get("schema")==SELECTOR_SCHEMA:
+        if value!=_obsolete_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
+        selected=root/SESSIONS_NAME/"2026-09-09"; _validate_obsolete_generation(selected); return selected
+    if value.get("schema")!=CORRECTED_SELECTOR_SCHEMA: raise ValueError("SESSION_SELECTOR_INVALID")
+    receipt_path=root/"incidents"/SUPERSESSION_NAME
+    receipt=_validate_supersession(receipt_path,root/SESSIONS_NAME/"2026-09-09")
+    if value!=_corrected_selector(archive,receipt): raise ValueError("SESSION_SELECTOR_INVALID")
+    selected=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME; rows=ExecutorStore(selected).read_plan(); state=ExecutorStore(selected).read()
     identities={row["identity"]:row for row in rows}
     receipts={p.stem:p for p in (selected/"receipts").iterdir()}; evidence={p.stem:p for p in (selected/"evidence").iterdir()}
     if (rows!=september_9_plan() or state["classification"]!=SEPTEMBER_9_PLAN or state["plan_identity"]!=plan_identity(rows)
@@ -124,6 +186,53 @@ def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
                 or receipt.get("credit_cost")!=1 or receipt.get("evidence_hash")!=_sha(evidence[identity])):
             raise ValueError("SELECTED_SESSION_MIXED")
     return selected
+
+def reselect_corrected_september_9_generation(root:Path=INSTALL_ROOT,*,readiness_root:Path|None=None,
+        interrupt_after:str|None=None,post_select_validator=None)->str:
+    """Quarantine c40 and atomically select a distinct corrected locked generation."""
+    validate_installed(root); archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
+    current_selector=root/SELECTOR_NAME; _regular_owner_file(current_selector); original=current_selector.read_bytes()
+    if json.loads(original)!=_obsolete_selector(archive): raise ValueError("OBSOLETE_SELECTION_REQUIRED")
+    obsolete=root/SESSIONS_NAME/"2026-09-09"; _validate_obsolete_generation(obsolete)
+    from .provider_readiness import READINESS_ROOT,operational_cost_binding
+    binding=operational_cost_binding(root=READINESS_ROOT if readiness_root is None else readiness_root)
+    if binding.get("request_plan_identity")!=canonical_plan_identity(): raise ValueError("CORRECTED_PRICING_BINDING_REQUIRED")
+    incidents=root/"incidents"; incidents.mkdir(mode=0o700,exist_ok=True); os.chmod(incidents,0o700)
+    receipt_path=incidents/SUPERSESSION_NAME; expected=_supersession_document(obsolete)
+    if receipt_path.exists():
+        if _validate_supersession(receipt_path,obsolete)!=expected: raise ValueError("SUPERSESSION_RECEIPT_INVALID")
+    else: _write(receipt_path,expected)
+    if interrupt_after=="quarantine": raise RuntimeError("INTERRUPTED_QUARANTINE")
+    corrected=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME; stage=root/SESSIONS_NAME/("."+CORRECTED_GENERATION_NAME+".tmp")
+    if not corrected.exists():
+        if stage.exists(): shutil.rmtree(stage)
+        ExecutorStore(stage).initialize(september_9_plan(),SEPTEMBER_9_PLAN)
+        if interrupt_after=="generation": raise RuntimeError("INTERRUPTED_CORRECTED_GENERATION")
+        os.replace(stage,corrected)
+    rows=ExecutorStore(corrected).read_plan(); state=ExecutorStore(corrected).read(); validate_canonical_plan(rows)
+    if (state.get("plan_identity")!=canonical_plan_identity(rows) or state.get("released_credits")!=0
+            or any(state.get(k)!="LOCKED" for k in ("stage_a","stage_b","stage_c"))):
+        raise ValueError("CORRECTED_GENERATION_INVALID")
+    receipt=_validate_supersession(receipt_path,obsolete); candidate=_corrected_selector(archive,receipt)
+    temp=root/("."+SELECTOR_NAME+".corrected.tmp")
+    if temp.exists():
+        _regular_owner_file(temp)
+        if json.loads(temp.read_text())!=candidate: raise ValueError("CORRECTED_SELECTOR_STAGE_INVALID")
+        temp.unlink()
+    _write(temp,candidate)
+    if interrupt_after=="selection": raise RuntimeError("INTERRUPTED_CORRECTED_SELECTION")
+    try:
+        os.replace(temp,current_selector); dfd=os.open(root,os.O_RDONLY)
+        try: os.fsync(dfd)
+        finally: os.close(dfd)
+        if interrupt_after=="after_selection": raise RuntimeError("INTERRUPTED_AFTER_CORRECTED_SELECTION")
+        if resolve_selected_state_root(root)!=corrected: raise ValueError("CORRECTED_SELECTION_FAILED")
+        if post_select_validator: post_select_validator(root)
+    except Exception:
+        _write_bytes(current_selector,original)
+        if resolve_selected_state_root(root)!=obsolete: raise ValueError("OBSOLETE_SELECTION_RESTORE_FAILED")
+        raise
+    return "SEPTEMBER_9_CORRECTED_GENERATION_SELECTED_LOCKED"
 
 def prepare_september_9_generation(root:Path=INSTALL_ROOT,*,interrupt_after:str|None=None)->str:
     """Archive September 8 and atomically select a locked September 9 generation."""
@@ -144,12 +253,12 @@ def prepare_september_9_generation(root:Path=INSTALL_ROOT,*,interrupt_after:str|
     generation=sessions/"2026-09-09"; generation_stage=sessions/".2026-09-09.generation.tmp"
     if not generation.exists():
         if generation_stage.exists(): shutil.rmtree(generation_stage)
-        ExecutorStore(generation_stage).initialize(september_9_plan(),SEPTEMBER_9_PLAN)
+        ExecutorStore(generation_stage).initialize(obsolete_c40_plan(),SEPTEMBER_9_PLAN)
         if interrupt_after=="generation": raise RuntimeError("INTERRUPTED_GENERATION")
         os.replace(generation_stage,generation)
     store=ExecutorStore(generation)
-    if store.read_plan()!=september_9_plan() or store.read()["released_credits"]!=0: raise ValueError("SEPTEMBER_9_GENERATION_INVALID")
-    selector=_selector(document); selector_temp=root/("."+SELECTOR_NAME+".tmp"); _write(selector_temp,selector)
+    if store.read_plan()!=obsolete_c40_plan() or store.read()["released_credits"]!=0: raise ValueError("SEPTEMBER_9_GENERATION_INVALID")
+    selector=_obsolete_selector(document); selector_temp=root/("."+SELECTOR_NAME+".tmp"); _write(selector_temp,selector)
     if interrupt_after=="selection": raise RuntimeError("INTERRUPTED_SELECTION")
     os.replace(selector_temp,root/SELECTOR_NAME); dfd=os.open(root,os.O_RDONLY)
     try: os.fsync(dfd)
@@ -163,9 +272,9 @@ def recover_session_transition(root:Path=INSTALL_ROOT)->str:
     if selector_temp.exists():
         _regular_owner_file(selector_temp); value=json.loads(selector_temp.read_text())
         archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
-        if value!=_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
+        if value!=_obsolete_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
         selected=root/SESSIONS_NAME/"2026-09-09"
-        if ExecutorStore(selected).read_plan()!=september_9_plan(): raise ValueError("SELECTED_SESSION_MIXED")
+        if ExecutorStore(selected).read_plan()!=obsolete_c40_plan(): raise ValueError("SELECTED_SESSION_MIXED")
         os.replace(selector_temp,root/SELECTOR_NAME)
         resolve_selected_state_root(root); return "SESSION_SELECTION_RECOVERED"
     # Pre-selection interruptions remain safely on the untouched September 8 root.
@@ -206,7 +315,8 @@ def validate_installed(root:Path=INSTALL_ROOT)->dict[str,Any]:
     info=root.lstat()
     if root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("INSTALL_ROOT_INVALID")
     base={"installation-manifest.json","state","recovery","installed-artifacts"}; observed_root={p.name for p in root.iterdir()}
-    if not observed_root in (base,base|{SESSIONS_NAME},base|{SESSIONS_NAME,SELECTOR_NAME}): raise ValueError("INSTALL_INVENTORY_INVALID")
+    allowed=base|{SESSIONS_NAME,SELECTOR_NAME,"incidents","."+SELECTOR_NAME+".corrected.tmp"}
+    if not base<=observed_root or not observed_root<=allowed: raise ValueError("INSTALL_INVENTORY_INVALID")
     for directory in (STATE_ROOT if root==INSTALL_ROOT else root/"state",RECOVERY_ROOT if root==INSTALL_ROOT else root/"recovery",ARTIFACT_ROOT if root==INSTALL_ROOT else root/"installed-artifacts"):
         i=directory.lstat()
         if directory.is_symlink() or not stat.S_ISDIR(i.st_mode) or stat.S_IMODE(i.st_mode)!=0o700 or i.st_uid!=os.getuid(): raise ValueError("INSTALL_ROOT_INVALID")

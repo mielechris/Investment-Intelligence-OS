@@ -80,9 +80,7 @@ def validate_september_9_readiness(*,observed_at:str,expires_at:str,observation_
         observation_identity=observation_identity)
     validate_september_9_cost_evidence(document,now=command_time or datetime.now(ZoneInfo("UTC")))
     provider_rows=september_9_request_plan(); executor_rows=september_9_plan()
-    if (len(provider_rows),len(executor_rows))!=(50,50) or len({r["request_identity"] for r in provider_rows})!=50 or len({r["identity"] for r in executor_rows})!=50:
-        raise ValueError("SEPTEMBER_9_REQUEST_PLAN_INVALID")
-    if any(r["session_date"]!="2026-09-09" or r["retry"] is not False or r["confirmed_cost"]!=1 for r in provider_rows):
+    if (provider_rows!=executor_rows or len(provider_rows)!=50 or len({r["identity"] for r in provider_rows})!=50):
         raise ValueError("SEPTEMBER_9_REQUEST_PLAN_INVALID")
     if any(r["session_date"]!="2026-09-09" or r["retry"] is not False or r["cost"]!=1 for r in executor_rows):
         raise ValueError("SEPTEMBER_9_REQUEST_PLAN_INVALID")

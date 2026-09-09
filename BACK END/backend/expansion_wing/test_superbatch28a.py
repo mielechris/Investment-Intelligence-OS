@@ -55,16 +55,15 @@ class Superbatch28A(unittest.TestCase):
 
     def test_september_9_plan_and_cost_evidence_are_separate_and_nonspending(self):
         rows=september_9_request_plan()
-        self.assertEqual((len(rows),len({r['request_identity'] for r in rows}),sum(r['confirmed_cost'] for r in rows)),(50,50,50))
+        self.assertEqual((len(rows),len({r['identity'] for r in rows}),sum(r['cost'] for r in rows)),(50,50,50))
         self.assertTrue(all(r['session_date']=='2026-09-09' and r['retry'] is False for r in rows))
-        self.assertFalse({r['request_identity'] for r in rows}&{r['request_identity'] for r in revised_request_plan()})
+        self.assertFalse({r['identity'] for r in rows}&{r['request_identity'] for r in revised_request_plan()})
         observed='2026-09-09T12:00:00+00:00'; expires='2026-09-09T20:05:00+00:00'
         doc=september_9_cost_evidence_document(observed_at=observed,expires_at=expires,
             observation_identity='financial-datasets-pricing-2026-09-09-review-v1')
         self.assertEqual(validate_september_9_cost_evidence(doc,now=datetime(2026,9,9,13,tzinfo=timezone.utc)),doc)
         self.assertEqual(doc['request_plan_identity'],september_9_plan_identity())
-        self.assertEqual(doc['request_plan_identity'],'d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23')
-        self.assertNotEqual(doc['request_plan_identity'],'c40b4c241d114df4d95069e55e7c68a4fbc8e1c899c5faa6aa8e3767b97a626a')
+        self.assertNotIn(doc['request_plan_identity'],{'d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23','c40b4c241d114df4d95069e55e7c68a4fbc8e1c899c5faa6aa8e3767b97a626a'})
         self.assertEqual((doc['unique_request_identity_count'],doc['automatic_retry_count']),(50,0))
         self.assertEqual(doc['reviewed_endpoint_identities'],sorted(ENDPOINT_PATHS))
         self.assertEqual(doc['required_session_coverage_utc'],SEPTEMBER_9_REQUIRED_COVERAGE_UTC)
