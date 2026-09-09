@@ -78,3 +78,26 @@ incident generation nor the September 8 archive is rewritten or deleted.
 ### Owner-only September 9 authorization
 
 `--authorize-september-9-market-open-50 --owner-authorized --authorized-commit <exact-commit>` is the sole administrative release boundary. It validates the corrected selector, pricing, archive, supersession receipt, installed manifests, pristine generation, and authorization clock; writes byte-exact pre-authorization state backups and a hash-bound receipt; then releases exactly 50 credits without dispatch. Window enforcement remains exclusively in the supervisor. Repetition is idempotent; browser invocation, late authorization, prior activity, and inconsistent state fail closed.
+
+## Overnight bounded-wait recovery
+
+An owner-authorized future session is classified from `America/Los_Angeles`
+civil time as `PRE_SESSION_BOUNDED_WAIT`, `ACTIVE_SESSION_DATE`,
+`POST_SESSION_EXPIRED`, or `INVALID_SESSION_TIME`. The wait begins at the
+recorded authorization on the immediately preceding local date. It performs no
+dispatch or credential retrieval before the 06:30 opening boundary. Midnight,
+restart, and repeated supervisor ticks preserve that wait; 06:30 transitions
+to active-window processing. Past sessions, times before authorization,
+unbounded prior dates, malformed timestamps, and expired sessions fail closed.
+Missed windows are never caught up.
+
+The recovery never edits or reopens the generation failed solely with
+`SESSION_TIME_INVALID`. It binds that generation's complete inventory, its
+authorization receipt, zero operational activity, and failure category in an
+immutable supersession receipt. It creates the collision-free
+`2026-09-09-canonical-v3` successor from the same canonical plan with zero
+allowance and every stage locked. The atomic selector binds the September 8
+archive, the c40 incident receipt, and the time-failure receipt; a failed
+post-selection validation restores the previous selector. Reauthorization is
+a separate owner-only operation. Recovery itself never releases credits or
+contacts the provider.

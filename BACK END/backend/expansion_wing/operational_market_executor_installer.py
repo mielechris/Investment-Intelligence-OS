@@ -37,6 +37,9 @@ SELECTOR_SCHEMA="iios-operational-market-session-selector-v1"
 CORRECTED_SELECTOR_SCHEMA="iios-operational-market-session-selector-v2"
 SUPERSESSION_SCHEMA="iios-operational-market-generation-supersession-v1"
 CORRECTED_GENERATION_NAME="2026-09-09-canonical-v2"
+RECOVERY_GENERATION_NAME="2026-09-09-canonical-v3"
+RECOVERY_SELECTOR_SCHEMA="iios-operational-market-session-selector-v3"
+TIME_FAILURE_SUPERSESSION_NAME="2026-09-09-v2-time-failure-supersession.json"
 SUPERSESSION_NAME="2026-09-09-c40-supersession.json"
 AUTHORIZATION_SCHEMA="iios-september-9-market-open-authorization-v1"
 AUTHORIZATION_NAME="market-open-authorization.json"
@@ -175,6 +178,15 @@ def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
     if value.get("schema")==SELECTOR_SCHEMA:
         if value!=_obsolete_selector(archive): raise ValueError("SESSION_SELECTOR_INVALID")
         selected=root/SESSIONS_NAME/"2026-09-09"; _validate_obsolete_generation(selected); return selected
+    if value.get("schema")==RECOVERY_SELECTOR_SCHEMA:
+        receipt_path=root/"incidents"/TIME_FAILURE_SUPERSESSION_NAME; _regular_owner_file(receipt_path); receipt=json.loads(receipt_path.read_text())
+        body=dict(receipt); content=body.pop("content_hash",None)
+        selected=root/SESSIONS_NAME/RECOVERY_GENERATION_NAME
+        if (content!=_hash_document(body) or value.get("selected_root")!=f"sessions/{RECOVERY_GENERATION_NAME}"
+                or value.get("plan_identity")!=canonical_plan_identity() or value.get("failure_supersession_hash")!=content
+                or value.get("content_hash")!=_hash_document(value) or ExecutorStore(selected).read_plan()!=september_9_plan()):
+            raise ValueError("SESSION_SELECTOR_INVALID")
+        return selected
     if value.get("schema")!=CORRECTED_SELECTOR_SCHEMA: raise ValueError("SESSION_SELECTOR_INVALID")
     receipt_path=root/"incidents"/SUPERSESSION_NAME
     receipt=_validate_supersession(receipt_path,root/SESSIONS_NAME/"2026-09-09")
@@ -217,7 +229,7 @@ def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root
     if service_probe()!={"running":True,"supervisor_count":1,"lock_owned":True,"listeners":0,"children":0}:
         raise ValueError("SUPERVISOR_PROCESS_BINDING_INVALID")
     selected=resolve_selected_state_root(root)
-    if selected!=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME: raise ValueError("CORRECTED_SELECTION_REQUIRED")
+    if selected not in {root/SESSIONS_NAME/CORRECTED_GENERATION_NAME,root/SESSIONS_NAME/RECOVERY_GENERATION_NAME}: raise ValueError("CORRECTED_SELECTION_REQUIRED")
     archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
     supersession=_validate_supersession(root/"incidents"/SUPERSESSION_NAME,root/SESSIONS_NAME/"2026-09-09")
     store=ExecutorStore(selected); rows=store.read_plan(); state=store.read(); receipt_path=selected/AUTHORIZATION_NAME
@@ -242,10 +254,10 @@ def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root
         "supervisor_manifest_identity":supervisor_manifest_identity,
         "maximum_requests":50,"maximum_credits":50,"automatic_retries":0,
         "dispatch_windows":{"OPENING":["06:30","07:00"],"BASELINE":["06:30","09:30"],"INTRADAY":["09:30","12:55"],"CLOSING":["12:55","13:05"]},
-        "direct_dispatch":False,"trading_authority":{"broker":False,"paper_order":False,"automatic_promotion":False,"ledger_write":False,"live_execution":False}}
+        "authorized_at":current.isoformat(),"direct_dispatch":False,"trading_authority":{"broker":False,"paper_order":False,"automatic_promotion":False,"ledger_write":False,"live_execution":False}}
     _write(receipt_path,body|{"content_hash":_hash_document(body)})
     try:
-        updated=dict(state); updated.update({"released_credits":50,"stage_a":"RUNNING","phase":"STAGE_A_RUNNING","next_gate":"OPENING"})
+        updated=dict(state); updated.update({"released_credits":50,"stage_a":"RUNNING","phase":"PRE_SESSION_BOUNDED_WAIT","next_gate":"OPENING","authorized_at":current.isoformat()})
         updated["content_hash"]=""; updated["content_hash"]=_hash_document(updated); store.write(updated)
         final=store.read()
         if final["released_credits"]!=50 or final["stage_a"]!="RUNNING" or final["stage_b"]!="LOCKED" or final["stage_c"]!="LOCKED": raise ValueError("AUTHORIZATION_POST_VALIDATION_FAILED")
@@ -302,6 +314,61 @@ def reselect_corrected_september_9_generation(root:Path=INSTALL_ROOT,*,readiness
         if resolve_selected_state_root(root)!=obsolete: raise ValueError("OBSOLETE_SELECTION_RESTORE_FAILED")
         raise
     return "SEPTEMBER_9_CORRECTED_GENERATION_SELECTED_LOCKED"
+
+def recover_time_failed_september_9_generation(root:Path=INSTALL_ROOT,*,interrupt_after:str|None=None,post_select_validator=None)->str:
+    """Preserve the time-failed generation and select a new pristine successor."""
+    temp=root/("."+SELECTOR_NAME+".recovery.tmp")
+    if temp.exists():
+        _regular_owner_file(temp); staged=json.loads(temp.read_text())
+        if staged.get("schema")!=RECOVERY_SELECTOR_SCHEMA or staged.get("content_hash")!=_hash_document(staged):
+            raise ValueError("RECOVERY_SELECTOR_STAGE_INVALID")
+        temp.unlink()
+    validate_installed(root); failed=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME; successor=root/SESSIONS_NAME/RECOVERY_GENERATION_NAME
+    selected=resolve_selected_state_root(root)
+    if selected==successor: return "SEPTEMBER_9_TIME_FAILURE_ALREADY_RECOVERED_LOCKED"
+    if selected!=failed: raise ValueError("TIME_FAILED_SELECTION_REQUIRED")
+    store=ExecutorStore(failed); state=store.read(); rows=store.read_plan()
+    authorization_path=failed/AUTHORIZATION_NAME
+    _regular_owner_file(authorization_path); authorization=json.loads(authorization_path.read_text()); authorization_body=dict(authorization)
+    authorization_hash=authorization_body.pop("content_hash",None)
+    if (authorization.get("schema")!=AUTHORIZATION_SCHEMA or authorization_hash!=_hash_document(authorization_body)
+            or authorization.get("plan_identity")!=canonical_plan_identity() or authorization.get("maximum_requests")!=50
+            or authorization.get("maximum_credits")!=50 or authorization.get("automatic_retries")!=0):
+        raise ValueError("TIME_FAILED_AUTHORIZATION_INVALID")
+    if (rows!=september_9_plan() or state.get("phase")!="SESSION_FAILED_CLOSED" or state.get("failure_category")!="SESSION_TIME_INVALID"
+            or state.get("released_credits")!=0 or any(state.get(k)!="LOCKED" for k in ("stage_a","stage_b","stage_c"))
+            or any(state.get(k)!=0 for k in ("dispatched","completed","ambiguous","failed","confirmed_credits","ambiguous_credits","keychain_accesses"))
+            or any(any((failed/name).iterdir()) for name in ("receipts","evidence"))):
+        raise ValueError("TIME_FAILED_GENERATION_NOT_PRISTINE")
+    incidents=root/"incidents"; incidents.mkdir(mode=0o700,exist_ok=True); os.chmod(incidents,0o700); receipt_path=incidents/TIME_FAILURE_SUPERSESSION_NAME
+    body={"schema":"iios-september-9-time-failure-supersession-v1","failed_root":f"sessions/{CORRECTED_GENERATION_NAME}",
+        "failure":"SESSION_TIME_INVALID","plan_identity":canonical_plan_identity(),"inventory":_generation_inventory(failed),
+        "authorization_receipt_hash":authorization_hash,"source_manifest_identity":authorization["supervisor_manifest_identity"],
+        "operational_counts":{"dispatches":0,"receipts":0,"evidence":0,"confirmed_credits":0,"ambiguous_credits":0,"keychain_accesses":0},
+        "provider_activity":False,"immutable":True}
+    receipt=body|{"content_hash":_hash_document(body)}
+    if receipt_path.exists():
+        _regular_owner_file(receipt_path)
+        if json.loads(receipt_path.read_text())!=receipt: raise ValueError("TIME_FAILURE_RECEIPT_INVALID")
+    else: _write(receipt_path,receipt)
+    if not successor.exists(): ExecutorStore(successor).initialize(september_9_plan(),SEPTEMBER_9_PLAN)
+    successor_state=ExecutorStore(successor).read()
+    if successor_state["released_credits"]!=0 or any(successor_state[k]!="LOCKED" for k in ("stage_a","stage_b","stage_c")): raise ValueError("RECOVERY_GENERATION_INVALID")
+    archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08"); c40=_validate_supersession(root/"incidents"/SUPERSESSION_NAME,root/SESSIONS_NAME/"2026-09-09")
+    selector_body={"schema":RECOVERY_SELECTOR_SCHEMA,"selected_session":"2026-09-09","selected_root":f"sessions/{RECOVERY_GENERATION_NAME}",
+        "plan_classification":SEPTEMBER_9_PLAN,"plan_identity":canonical_plan_identity(),"september_8_archive_hash":archive["content_hash"],
+        "c40_supersession_hash":c40["content_hash"],"failure_supersession_hash":receipt["content_hash"]}
+    candidate=selector_body|{"content_hash":_hash_document(selector_body)}; selector=root/SELECTOR_NAME; original=selector.read_bytes()
+    _write(temp,candidate)
+    if interrupt_after=="before_selection": raise RuntimeError("INTERRUPTED_BEFORE_RECOVERY_SELECTION")
+    try:
+        os.replace(temp,selector); dfd=os.open(root,os.O_RDONLY); os.fsync(dfd); os.close(dfd)
+        if interrupt_after=="after_selection": raise SystemExit("INTERRUPTED_AFTER_RECOVERY_SELECTION")
+        if resolve_selected_state_root(root)!=successor: raise ValueError("RECOVERY_SELECTION_FAILED")
+        if post_select_validator: post_select_validator(root)
+    except Exception:
+        _write_bytes(selector,original); raise
+    return "SEPTEMBER_9_TIME_FAILURE_RECOVERED_LOCKED"
 
 def prepare_september_9_generation(root:Path=INSTALL_ROOT,*,interrupt_after:str|None=None)->str:
     """Archive September 8 and atomically select a locked September 9 generation."""

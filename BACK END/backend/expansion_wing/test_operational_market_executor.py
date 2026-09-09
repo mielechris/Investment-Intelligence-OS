@@ -33,7 +33,7 @@ class OperationalExecutorTests(unittest.TestCase):
         self.assertTrue(all(r['retry'] is False for r in rows))
     def test_september_9_restart_duplicate_suppression_and_automatic_close(self):
         rows=september_9_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup)
-        c.preflight(self.gates()); c.release(50); zone=ZoneInfo('America/Los_Angeles')
+        c.preflight(self.gates()); c.release(50); state=store.read(); state['authorized_at']='2026-09-09T06:00:00+00:00'; c._write(state); zone=ZoneInfo('America/Los_Angeles')
         c.scheduled_tick(datetime(2026,9,9,6,30,tzinfo=zone)); before=len(b.calls)
         restarted=OperationalMarketEvidenceCoordinator(store,store.read_plan(),b)
         restarted.scheduled_tick(datetime(2026,9,9,6,30,tzinfo=zone))

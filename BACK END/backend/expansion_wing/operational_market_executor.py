@@ -13,7 +13,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -322,10 +322,18 @@ class OperationalMarketEvidenceCoordinator:
     def scheduled_tick(self, now_local: datetime) -> str:
         """Run only identities in the current immutable window; never releases allowance."""
         expected_date = SEPTEMBER_9_SESSION_DATE if self.rows and self.rows[0]["plan"]==SEPTEMBER_9_PLAN else "2026-09-08"
-        if now_local.tzinfo is None or now_local.date().isoformat()!=expected_date:
+        state=self.store.read()
+        authorized_at=state.get("authorized_at")
+        if expected_date=="2026-09-08" and not authorized_at and now_local.date().isoformat()==expected_date:
+            classification="POST_SESSION_EXPIRED" if now_local.strftime("%H:%M")>"13:05" else "ACTIVE_SESSION_DATE"
+        else: classification=session_time_state(expected_date,authorized_at,now_local)
+        if classification=="PRE_SESSION_BOUNDED_WAIT": return classification
+        if classification=="POST_SESSION_EXPIRED": self.close(); return "SESSION_CLOSED"
+        if classification=="INVALID_SESSION_TIME":
             self.close("SESSION_TIME_INVALID"); return "SESSION_FAILED_CLOSED"
         hm=now_local.strftime("%H:%M")
-        if hm>"13:05": self.close(); return "SESSION_CLOSED"
+        if state["phase"]=="PRE_SESSION_BOUNDED_WAIT":
+            state["phase"]="STAGE_A_RUNNING"; self._write(state)
         windows=[name for name,(start,end) in WINDOWS.items() if start<=hm<end]
         if not windows: return "BOUNDED_WAIT"
         state=self.store.read()
@@ -354,6 +362,20 @@ class OperationalMarketEvidenceCoordinator:
 def _safe_category(exc:Exception,default:str)->str:
     value=str(exc)
     return value if re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}",value) else default
+
+def session_time_state(session_date:str,authorized_at:str|None,now:datetime)->str:
+    """Classify one session using civil time in America/Los_Angeles."""
+    zone=ZoneInfo("America/Los_Angeles")
+    if now.tzinfo is None or not authorized_at: return "INVALID_SESSION_TIME"
+    try: authorized=datetime.fromisoformat(authorized_at.replace("Z","+00:00")).astimezone(zone)
+    except ValueError: return "INVALID_SESSION_TIME"
+    local=now.astimezone(zone); session=datetime.fromisoformat(session_date).date()
+    opening=datetime.combine(session,datetime.min.time(),zone).replace(hour=6,minute=30)
+    expiry=datetime.combine(session,datetime.min.time(),zone).replace(hour=13,minute=5)
+    if authorized.date()!=session-timedelta(days=1) or authorized>=opening or local<authorized: return "INVALID_SESSION_TIME"
+    if local<opening: return "PRE_SESSION_BOUNDED_WAIT"
+    if local<expiry: return "ACTIVE_SESSION_DATE"
+    return "POST_SESSION_EXPIRED"
 
 def _validate_response(row:dict[str,Any], response:BoundaryResponse)->dict[str,Any]:
     if not response.transmitted or response.status!=200 or response.content_type.split(";",1)[0].strip().lower()!="application/json" or not 0<len(response.body)<=MAX_BODY: raise ValueError("PROVIDER_RESPONSE_REJECTED")
