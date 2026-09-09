@@ -43,6 +43,10 @@ ARTIFACT_NAMES = (
     "expansion_wing/operational_market_executor_service.py",
     PLIST_IDENTITY,
 )
+LEGACY_ARTIFACT_NAMES = ARTIFACT_NAMES[:4] + (PLIST_IDENTITY,)
+MIGRATION_SCHEMA = "iios-unattended-supervisor-layout-migration-v1"
+MIGRATION_ROLLBACK_SCHEMA = "iios-unattended-supervisor-layout-rollback-v1"
+MIGRATION_JOURNAL = ".layout-migration.json"
 INSTALL_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor"
 INSTALLED_ARTIFACTS = INSTALL_ROOT/"installed-artifacts"
 CANDIDATE_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisorCandidate"
@@ -169,6 +173,231 @@ def validate_manifest(value: Any, candidate: Path | None = None, *, expected_com
     if value["canonical_inventory_identity"] != _hash(rows): raise ValueError("MANIFEST_INVALID")
     if candidate is not None and rows != inventory(candidate): raise ValueError("INSTALLED_INVENTORY_INVALID")
     return value
+
+
+def validate_legacy_manifest(value: Any, candidate: Path, *, expected_commit: str) -> dict[str, Any]:
+    """Accept only the one reviewed five-artifact predecessor of this installer."""
+    keys = {"schema","installed_source_commit","installation_timestamp","service_label","state_root_identity",
+            "executable_module_entrypoint","plist_identity","artifact_inventory","canonical_inventory_identity",
+            "installer_version","immutable","canonical_manifest_content_hash"}
+    if not isinstance(value, dict) or set(value) != keys or value.get("schema") != SCHEMA:
+        raise ValueError("LEGACY_MANIFEST_INVALID")
+    body = {key:value[key] for key in value if key != "canonical_manifest_content_hash"}
+    if value["canonical_manifest_content_hash"] != _hash(body): raise ValueError("LEGACY_MANIFEST_INVALID")
+    fixed = (value.get("service_label"), value.get("state_root_identity"),
+             value.get("executable_module_entrypoint"), value.get("plist_identity"),
+             value.get("installer_version"), value.get("immutable"))
+    if fixed != (LABEL, STATE_ROOT_IDENTITY, ENTRYPOINT, PLIST_IDENTITY, INSTALLER_VERSION, True):
+        raise ValueError("LEGACY_MANIFEST_INVALID")
+    if value.get("installed_source_commit") != expected_commit or not _commit(expected_commit):
+        raise ValueError("SOURCE_COMMIT_MISMATCH")
+    try: stamp = datetime.fromisoformat(value["installation_timestamp"])
+    except (TypeError, ValueError): raise ValueError("LEGACY_MANIFEST_INVALID")
+    if stamp.tzinfo != timezone.utc or stamp > datetime.now(timezone.utc): raise ValueError("LEGACY_MANIFEST_INVALID")
+    rows = value.get("artifact_inventory")
+    if not isinstance(rows, list) or [row.get("relative_path") for row in rows if isinstance(row, dict)] != sorted(LEGACY_ARTIFACT_NAMES):
+        raise ValueError("LEGACY_LAYOUT_UNRECOGNIZED")
+    if value.get("canonical_inventory_identity") != _hash(rows): raise ValueError("LEGACY_MANIFEST_INVALID")
+    if rows != inventory(candidate, LEGACY_ARTIFACT_NAMES): raise ValueError("LEGACY_INVENTORY_INVALID")
+    return value
+
+
+def _tree_records(root: Path) -> list[dict[str, Any]]:
+    root_info = root.lstat()
+    if root.is_symlink() or not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != os.getuid():
+        raise ValueError("MIGRATION_INVENTORY_INVALID")
+    rows=[]
+    for path in sorted(root.rglob("*")):
+        info=path.lstat()
+        relative=path.relative_to(root).as_posix()
+        if path.is_symlink() or info.st_uid != os.getuid(): raise ValueError("MIGRATION_INVENTORY_INVALID")
+        if stat.S_ISDIR(info.st_mode):
+            if stat.S_IMODE(info.st_mode)!=0o700: raise ValueError("MIGRATION_PERMISSIONS_INVALID")
+            continue
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600:
+            raise ValueError("MIGRATION_PERMISSIONS_INVALID")
+        rows.append(_file_record(path,relative))
+    return rows
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor=os.open(path,os.O_RDONLY)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+
+
+def _copy_exact_tree(source: Path, destination: Path) -> None:
+    if destination.exists(): raise ValueError("MIGRATION_TARGET_EXISTS")
+    destination.mkdir(mode=0o700,parents=False)
+    for path in sorted(source.rglob("*")):
+        relative=path.relative_to(source); info=path.lstat(); target=destination/relative
+        if path.is_symlink() or info.st_uid!=os.getuid(): raise ValueError("MIGRATION_INVENTORY_INVALID")
+        if stat.S_ISDIR(info.st_mode): target.mkdir(mode=0o700)
+        elif stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode)==0o600:
+            target.parent.mkdir(mode=0o700,parents=True,exist_ok=True); target.write_bytes(path.read_bytes()); os.chmod(target,0o600)
+        else: raise ValueError("MIGRATION_PERMISSIONS_INVALID")
+    _fsync_directory(destination)
+
+
+def _validated_plist(path: Path) -> bytes:
+    raw=_read_owner_file(path)
+    value=plistlib.loads(raw)
+    arguments=value.get("ProgramArguments")
+    expected_keys={"Label","ProgramArguments","WorkingDirectory","EnvironmentVariables","RunAtLoad",
+                   "KeepAlive","ProcessType","StandardOutPath","StandardErrorPath","ThrottleInterval"}
+    working=value.get("WorkingDirectory"); environment=value.get("EnvironmentVariables")
+    if (not isinstance(value,dict) or set(value)!=expected_keys or value.get("Label") != LABEL or not isinstance(arguments,list)
+            or arguments[1:] != ["-m",ENTRYPOINT,"--operational-supervisor"]
+            or not isinstance(arguments[0],str) or not arguments[0].endswith("python3")):
+        raise ValueError("PLIST_INVALID")
+    if (not isinstance(working,str) or environment!={"PYTHONPATH":working}
+            or value.get("RunAtLoad") is not True or value.get("KeepAlive")!={"SuccessfulExit":False}
+            or value.get("ProcessType")!="Background" or value.get("ThrottleInterval")!=60
+            or not isinstance(value.get("StandardOutPath"),str)
+            or value.get("StandardErrorPath")!=value.get("StandardOutPath")):
+        raise ValueError("PLIST_INVALID")
+    return raw
+
+
+def _migration_document(*, legacy_commit:str, target_commit:str, phase:str,
+                        legacy_manifest_hash:str, target_manifest_hash:str|None) -> dict[str,Any]:
+    body={"schema":MIGRATION_SCHEMA,"legacy_source_commit":legacy_commit,"target_source_commit":target_commit,
+          "phase":phase,"legacy_manifest_hash":legacy_manifest_hash,"target_manifest_hash":target_manifest_hash,
+          "generation_selection_performed":False,"operational_authorization":False,"immutable":True}
+    return body|{"content_hash":_hash(body)}
+
+
+def _write_journal(root:Path, **values:Any)->None:
+    _atomic(root/MIGRATION_JOURNAL,_canonical(_migration_document(**values)))
+
+
+def _validate_migration_backup(backup:Path)->dict[str,Any]:
+    _validate_owner_root(backup)
+    raw=_read_owner_file(backup/"rollback-receipt.json"); value=json.loads(raw)
+    body={key:value[key] for key in value if key!="content_hash"}
+    if (value.get("schema")!=MIGRATION_ROLLBACK_SCHEMA or value.get("content_hash")!=_hash(body)
+            or set(body)!={"schema","legacy_source_commit","target_source_commit","inventory","immutable"}):
+        raise ValueError("ROLLBACK_INVALID")
+    if value["inventory"]!=_tree_records(backup/"legacy-installation"): raise ValueError("ROLLBACK_INVALID")
+    return value
+
+
+def create_legacy_migration_backup(*, install_root:Path, launch_plist:Path, backup:Path,
+                                   legacy_commit:str, target_commit:str)->dict[str,Any]:
+    if backup.exists(): raise ValueError("ROLLBACK_ALREADY_EXISTS")
+    artifacts=install_root/"installed-artifacts"; manifest=install_root/MANIFEST_NAME
+    value=json.loads(_read_owner_file(manifest)); validate_legacy_manifest(value,artifacts,expected_commit=legacy_commit)
+    plist_raw=_validated_plist(launch_plist)
+    if plist_raw!=(artifacts/PLIST_IDENTITY).read_bytes(): raise ValueError("PLIST_INVALID")
+    building=backup.parent/(backup.name+".building")
+    if building.exists(): shutil.rmtree(building)
+    building.mkdir(mode=0o700,parents=False); saved=building/"legacy-installation"; saved.mkdir(mode=0o700)
+    _copy_exact_tree(artifacts,saved/"installed-artifacts")
+    _atomic(saved/MANIFEST_NAME,_read_owner_file(manifest)); _atomic(saved/"launch-agent.plist",plist_raw)
+    inventory_rows=_tree_records(saved)
+    body={"schema":MIGRATION_ROLLBACK_SCHEMA,"legacy_source_commit":legacy_commit,
+          "target_source_commit":target_commit,"inventory":inventory_rows,"immutable":True}
+    _atomic(building/"rollback-receipt.json",_canonical(body|{"content_hash":_hash(body)}))
+    _validate_migration_backup(building)
+    os.replace(building,backup); _fsync_directory(backup.parent)
+    return _validate_migration_backup(backup)
+
+
+def rehearse_legacy_restoration(backup:Path)->str:
+    _validate_migration_backup(backup)
+    with tempfile.TemporaryDirectory() as raw:
+        restored=Path(raw)/"restored"; restored.mkdir(mode=0o700)
+        _copy_exact_tree(backup/"legacy-installation",restored/"legacy-installation")
+        if _tree_records(restored/"legacy-installation") != _tree_records(backup/"legacy-installation"):
+            raise ValueError("ROLLBACK_INVALID")
+    return "LEGACY_RESTORATION_REHEARSED"
+
+
+def _restore_legacy_from_backup(*, install_root:Path, launch_plist:Path, backup:Path)->None:
+    receipt=_validate_migration_backup(backup); saved=backup/"legacy-installation"
+    replacement=install_root.parent/(install_root.name+".legacy-restore")
+    if replacement.exists(): shutil.rmtree(replacement)
+    replacement.mkdir(mode=0o700); _copy_exact_tree(saved/"installed-artifacts",replacement/"installed-artifacts")
+    _atomic(replacement/MANIFEST_NAME,(saved/MANIFEST_NAME).read_bytes())
+    current=install_root.parent/(install_root.name+".failed-target")
+    if current.exists(): shutil.rmtree(current)
+    os.replace(install_root,current); os.replace(replacement,install_root); _fsync_directory(install_root.parent)
+    _atomic(launch_plist,(saved/"launch-agent.plist").read_bytes())
+    value=json.loads((install_root/MANIFEST_NAME).read_text())
+    validate_legacy_manifest(value,install_root/"installed-artifacts",expected_commit=receipt["legacy_source_commit"])
+    if _tree_records(saved)!=_tree_records(backup/"legacy-installation"): raise ValueError("ROLLBACK_INVALID")
+    for residual in (current,install_root.parent/(install_root.name+".legacy-artifacts-hold"),
+                     install_root.parent/(install_root.name+".eight-artifact-stage")):
+        if residual.exists(): shutil.rmtree(residual)
+    _fsync_directory(install_root.parent)
+
+
+def migrate_legacy_layout(*, source_root:Path, install_root:Path, launch_plist:Path, backup:Path,
+                          legacy_commit:str, target_commit:str, installed_at:datetime,
+                          protected_state_root:Path|None=None, interrupt_at:str|None=None,
+                          post_select_validator:Callable[[Path],None]|None=None,
+                          service_stopped:bool=False)->str:
+    """Migrate a stopped supervisor's reviewed five-file layout; never selects a market generation."""
+    if not service_stopped: raise ValueError("SERVICE_TEARDOWN_REQUIRED")
+    state_before=_tree_records(protected_state_root) if protected_state_root and protected_state_root.exists() else []
+    manifest_path=install_root/MANIFEST_NAME; artifacts=install_root/"installed-artifacts"
+    if manifest_path.exists():
+        current=json.loads(_read_owner_file(manifest_path))
+        try:
+            validate_manifest(current,artifacts,expected_commit=target_commit)
+            if backup.exists(): _validate_migration_backup(backup)
+            if state_before!=( _tree_records(protected_state_root) if protected_state_root and protected_state_root.exists() else []):
+                raise ValueError("PROTECTED_STATE_CHANGED")
+            for residual in (install_root.parent/(install_root.name+".legacy-artifacts-hold"),
+                             install_root.parent/(install_root.name+".eight-artifact-stage")):
+                if residual.exists(): shutil.rmtree(residual)
+            if (install_root/MIGRATION_JOURNAL).exists(): (install_root/MIGRATION_JOURNAL).unlink()
+            return "SUPERVISOR_LAYOUT_ALREADY_CURRENT"
+        except ValueError as exc:
+            if str(exc)=="PROTECTED_STATE_CHANGED": raise
+    legacy=json.loads(_read_owner_file(manifest_path)); validate_legacy_manifest(legacy,artifacts,expected_commit=legacy_commit)
+    if backup.exists():
+        receipt=_validate_migration_backup(backup)
+        if (receipt["legacy_source_commit"],receipt["target_source_commit"])!=(legacy_commit,target_commit):
+            raise ValueError("ROLLBACK_INVALID")
+    else:
+        create_legacy_migration_backup(install_root=install_root,launch_plist=launch_plist,backup=backup,
+                                       legacy_commit=legacy_commit,target_commit=target_commit)
+    if interrupt_at=="backup": raise RuntimeError("SIMULATED_INTERRUPTION")
+    rehearse_legacy_restoration(backup)
+    stage=install_root.parent/(install_root.name+".eight-artifact-stage")
+    if stage.exists(): shutil.rmtree(stage)
+    build_candidate(stage,source_commit=target_commit,source_root=source_root,
+                    python=plistlib.loads(_validated_plist(launch_plist))["ProgramArguments"][0],
+                    log_path=plistlib.loads(_validated_plist(launch_plist)).get("StandardOutPath"))
+    target=write_manifest(stage,source_commit=target_commit,installed_at=installed_at)
+    validate_candidate(stage,expected_commit=target_commit)
+    (stage/MANIFEST_NAME).unlink(); _fsync_directory(stage)
+    if interrupt_at=="staging": raise RuntimeError("SIMULATED_INTERRUPTION")
+    _write_journal(install_root,legacy_commit=legacy_commit,target_commit=target_commit,phase="STAGED",
+                   legacy_manifest_hash=legacy["canonical_manifest_content_hash"],target_manifest_hash=target["canonical_manifest_content_hash"])
+    if interrupt_at=="before_selection": raise RuntimeError("SIMULATED_INTERRUPTION")
+    hold=install_root.parent/(install_root.name+".legacy-artifacts-hold")
+    if hold.exists(): raise ValueError("MIGRATION_TARGET_EXISTS")
+    try:
+        os.replace(artifacts,hold); os.replace(stage,artifacts); _fsync_directory(install_root.parent)
+        _atomic(manifest_path,_canonical(target)); _atomic(launch_plist,(artifacts/PLIST_IDENTITY).read_bytes())
+        _write_journal(install_root,legacy_commit=legacy_commit,target_commit=target_commit,phase="SELECTED",
+                       legacy_manifest_hash=legacy["canonical_manifest_content_hash"],target_manifest_hash=target["canonical_manifest_content_hash"])
+        if interrupt_at=="after_selection": raise RuntimeError("SIMULATED_INTERRUPTION")
+        validate_installed_root(expected_commit=target_commit,root=install_root)
+        if post_select_validator: post_select_validator(install_root)
+        state_after=_tree_records(protected_state_root) if protected_state_root and protected_state_root.exists() else []
+        if state_before!=state_after: raise ValueError("PROTECTED_STATE_CHANGED")
+    except Exception:
+        if install_root.exists():
+            _restore_legacy_from_backup(install_root=install_root,launch_plist=launch_plist,backup=backup)
+        elif hold.exists():
+            os.replace(hold,artifacts); _fsync_directory(install_root.parent)
+        raise
+    if hold.exists(): shutil.rmtree(hold)
+    (install_root/MIGRATION_JOURNAL).unlink(); _fsync_directory(install_root)
+    return "SUPERVISOR_LAYOUT_MIGRATED_DISABLED"
 
 
 def _atomic(path: Path, data: bytes, mode: int = 0o600) -> None:
