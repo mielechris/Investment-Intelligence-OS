@@ -101,3 +101,18 @@ archive, the c40 incident receipt, and the time-failure receipt; a failed
 post-selection validation restores the previous selector. Reauthorization is
 a separate owner-only operation. Recovery itself never releases credits or
 contacts the provider.
+## Superbatch 31 provider endpoint certification
+
+The historical-prices contract is `GET /prices` with `ticker`, `interval=day`,
+`start_date`, and `end_date`. Historical success is the documented `prices`
+array with daily `time` values and numeric OHLCV fields. Company facts uses
+`GET /company/facts?ticker=MU` and the documented `company_facts` object.
+
+Provider errors are classified using sanitized status, media type, byte count,
+envelope class, and the exact rejecting predicate. Raw error bodies and private
+headers are never retained. A separate owner-only certification store contains
+three immutable one-shot MU identities: September 8–9 point-in-time OHLCV,
+September 8 prior-session OHLCV, and company facts. It has a three-credit hard
+limit, stops on the first failure or ambiguity, never retries, and always returns
+released allowance to zero. It does not share state, identities, evidence,
+receipts, or accounting with a market-session generation or the paper fund.

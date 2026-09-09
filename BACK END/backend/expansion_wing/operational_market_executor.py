@@ -27,6 +27,8 @@ from .september_9_canonical_plan import (PLAN_CLASSIFICATION as CANONICAL_SEPTEM
 
 SCHEMA = "iios-operational-market-executor-v1"
 RECEIPT_SCHEMA = "iios-operational-market-evidence-receipt-v1"
+CERTIFICATION_SCHEMA = "iios-provider-endpoint-certification-v1"
+CERTIFICATION_RECEIPT_SCHEMA = "iios-provider-endpoint-certification-receipt-v1"
 PLAN_SCHEMA = "iios-operational-market-request-plan-v1"
 FULL_PLAN = "FULL_SESSION_50"
 LATE_PLAN = "PARTIAL_SESSION_LATE_START"
@@ -122,6 +124,10 @@ class BoundaryResponse:
     latency_ms: float
     transmitted: bool = True
 
+class SanitizedResponseError(ValueError):
+    def __init__(self,category:str,metadata:dict[str,Any]):
+        super().__init__(category); self.category=category; self.metadata=metadata
+
 class ProviderBoundary(Protocol):
     def validate(self) -> None: ...
     def request(self, row: dict[str, Any]) -> BoundaryResponse: ...
@@ -137,7 +143,7 @@ class FinancialDatasetsOperationalBoundary:
         self.credential_accesses+=1; secret=self.credentials.retrieve()
         try:
             status,content_type,body,latency=self.transport.operational_request(path=row["path"],ticker=row["ticker"],credential=secret,
-                start_date=row.get("start_date"),end_date=row.get("end_date"))
+                start_date=row.get("start_date"),end_date=row.get("end_date"),interval=row.get("interval"))
             return BoundaryResponse(status,content_type,body,latency,True)
         finally: secret=b""
 
@@ -377,28 +383,161 @@ def session_time_state(session_date:str,authorized_at:str|None,now:datetime)->st
     if local<expiry: return "ACTIVE_SESSION_DATE"
     return "POST_SESSION_EXPIRED"
 
+def sanitized_response_metadata(response:BoundaryResponse)->dict[str,Any]:
+    media=response.content_type.split(";",1)[0].strip().lower()
+    status=response.status
+    classification=("AUTHENTICATION_RESPONSE" if status in {401,403} else "ENTITLEMENT_RESPONSE" if status==402
+        else "RATE_LIMIT_RESPONSE" if status==429 else "SUCCESS_RESPONSE" if status==200 else "HTTP_ERROR_RESPONSE")
+    return {"http_status":status,"content_type":media or "MISSING","response_bytes":len(response.body),
+        "envelope_classification":classification,"transmitted":response.transmitted}
+
+def _reject(category:str,response:BoundaryResponse)->None:
+    raise SanitizedResponseError(category,sanitized_response_metadata(response)|{"rejection_reason":category})
+
 def _validate_response(row:dict[str,Any], response:BoundaryResponse)->dict[str,Any]:
-    if not response.transmitted or response.status!=200 or response.content_type.split(";",1)[0].strip().lower()!="application/json" or not 0<len(response.body)<=MAX_BODY: raise ValueError("PROVIDER_RESPONSE_REJECTED")
+    metadata=sanitized_response_metadata(response)
+    if not response.transmitted: _reject("RESPONSE_NOT_TRANSMITTED",response)
+    if response.status in {401,403}: _reject("PROVIDER_AUTHENTICATION_REJECTED",response)
+    if response.status==402: _reject("PROVIDER_ENTITLEMENT_REJECTED",response)
+    if response.status==429: _reject("PROVIDER_RATE_LIMITED",response)
+    if response.status!=200: _reject("PROVIDER_HTTP_STATUS_REJECTED",response)
+    if metadata["content_type"]!="application/json": _reject("PROVIDER_CONTENT_TYPE_REJECTED",response)
+    if len(response.body)==0: _reject("PROVIDER_EMPTY_RESPONSE",response)
+    if len(response.body)>MAX_BODY: _reject("PROVIDER_RESPONSE_TOO_LARGE",response)
     try: value=json.loads(response.body)
-    except (UnicodeDecodeError,json.JSONDecodeError): raise ValueError("PROVIDER_SCHEMA_REJECTED") from None
-    if not isinstance(value,dict): raise ValueError("PROVIDER_SCHEMA_REJECTED")
+    except (UnicodeDecodeError,json.JSONDecodeError): _reject("PROVIDER_JSON_REJECTED",response)
+    if not isinstance(value,dict): _reject("PROVIDER_SCHEMA_REJECTED",response)
+    expected={"MARKET_SNAPSHOT":"snapshot","HISTORICAL_OHLCV":"prices","COMPANY_FACTS":"company_facts"}[row["endpoint"]]
+    if expected not in value and any(key in value for key in ("error","errors","detail","message")):
+        _reject("PROVIDER_ERROR_ENVELOPE",response)
     if row["endpoint"]=="MARKET_SNAPSHOT": rows=[value.get("snapshot")]
     elif row["endpoint"]=="COMPANY_FACTS": rows=[value.get("company_facts")]
-    else: rows=value.get("prices") or value.get("data")
-    if not isinstance(rows,list) or not rows or not isinstance(rows[0],dict) or rows[0].get("ticker")!=row["ticker"]: raise ValueError("PROVIDER_SCHEMA_REJECTED")
+    else: rows=value.get("prices")
+    if row["endpoint"]=="HISTORICAL_OHLCV" and isinstance(value.get("prices"),list) and not value["prices"]:
+        _reject("PROVIDER_EMPTY_VALID_DATA",response)
+    if not isinstance(rows,list) or not rows or any(not isinstance(item,dict) for item in rows): _reject("PROVIDER_SCHEMA_REJECTED",response)
+    if row["endpoint"]=="HISTORICAL_OHLCV":
+        envelope_ticker=value.get("ticker")
+        if envelope_ticker is not None and envelope_ticker!=row["ticker"]: _reject("PROVIDER_TICKER_REJECTED",response)
+        if any(item.get("ticker",envelope_ticker)!=row["ticker"] for item in rows): _reject("PROVIDER_TICKER_REJECTED",response)
+    elif rows[0].get("ticker")!=row["ticker"]: _reject("PROVIDER_TICKER_REJECTED",response)
     stamp=rows[0].get("time") or rows[0].get("timestamp")
-    if row["endpoint"]!="COMPANY_FACTS" and not isinstance(stamp,str): raise ValueError("PROVIDER_TIMESTAMP_MISSING")
+    if row["endpoint"]!="COMPANY_FACTS" and not isinstance(stamp,str): _reject("PROVIDER_TIMESTAMP_MISSING",response)
     if row["endpoint"]=="MARKET_SNAPSHOT" and (not isinstance(rows[0].get("price"),(int,float)) or isinstance(rows[0].get("price"),bool)):
-        raise ValueError("PROVIDER_SCHEMA_REJECTED")
+        _reject("PROVIDER_SCHEMA_REJECTED",response)
+    if row["endpoint"]=="HISTORICAL_OHLCV":
+        required=("open","high","low","close","volume")
+        if any(any(not isinstance(item.get(key),(int,float)) or isinstance(item.get(key),bool) for key in required) for item in rows): _reject("PROVIDER_SCHEMA_REJECTED",response)
     freshness="UNAVAILABLE"
-    if stamp is not None:
+    if stamp is not None and row["endpoint"]=="HISTORICAL_OHLCV":
+        dates=[]
+        for item in rows:
+            raw=item.get("time")
+            if not isinstance(raw,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}",raw): _reject("PROVIDER_TIMESTAMP_INVALID",response)
+            try: parsed_date=datetime.strptime(raw,"%Y-%m-%d").date()
+            except ValueError: _reject("PROVIDER_TIMESTAMP_INVALID",response)
+            if row.get("start_date") is not None and not row["start_date"]<=parsed_date.isoformat()<=row["end_date"]: _reject("PROVIDER_DATE_RANGE_REJECTED",response)
+            dates.append(raw)
+        stamp=max(dates); freshness="SESSION_BOUND"
+    elif stamp is not None:
         try: parsed=datetime.fromisoformat(stamp.replace("Z","+00:00"))
-        except ValueError: raise ValueError("PROVIDER_TIMESTAMP_INVALID") from None
-        if parsed.tzinfo is None or parsed.utcoffset()!=timezone.utc.utcoffset(parsed): raise ValueError("PROVIDER_TIMESTAMP_INVALID")
+        except ValueError: _reject("PROVIDER_TIMESTAMP_INVALID",response)
+        if parsed.tzinfo is None or parsed.utcoffset()!=timedelta(0): _reject("PROVIDER_TIMESTAMP_INVALID",response)
         age=(datetime.now(timezone.utc)-parsed).total_seconds()
-        if age < -60: raise ValueError("PROVIDER_TIMESTAMP_FUTURE")
+        if age < -60: _reject("PROVIDER_TIMESTAMP_FUTURE",response)
         freshness="CURRENT" if age<=900 else "STALE"
     return {"ticker":row["ticker"],"provider_timestamp":stamp,"freshness":freshness,"field_count":len(rows[0])}
+
+def endpoint_certification_plan()->tuple[dict[str,Any],...]:
+    """Three one-shot identities, separate from every market-session plan."""
+    specifications=(
+        ("POINT_IN_TIME_OHLCV","HISTORICAL_OHLCV","/prices","2026-09-08","2026-09-09","day"),
+        ("PRIOR_SESSION_OHLCV","HISTORICAL_OHLCV","/prices","2026-09-08","2026-09-08","day"),
+        ("MU_COMPANY_FACTS","COMPANY_FACTS","/company/facts",None,None,None),
+    )
+    rows=[]
+    for purpose,endpoint,path,start,end,interval in specifications:
+        material={"schema_version":"iios-provider-endpoint-certification-row-v1","provider":"FINANCIAL_DATASETS",
+            "purpose":purpose,"endpoint":endpoint,"path":path,"ticker":"MU","start_date":start,"end_date":end,
+            "interval":interval,"method":"GET","cost":1,"retry":False,"session_independent":True}
+        material["identity"]="provider-certification-"+hashlib.sha256(json.dumps(material,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        rows.append(material)
+    return tuple(rows)
+
+class EndpointCertificationStore:
+    """Owner-only state that cannot share lifecycle with an executor generation."""
+    def __init__(self,root:Path): self.root=root
+    @property
+    def state_path(self): return self.root/"certification-state.json"
+    @property
+    def plan_path(self): return self.root/"certification-plan.json"
+    def initialize(self)->dict[str,Any]:
+        if self.root.exists(): raise ValueError("CERTIFICATION_ALREADY_EXISTS")
+        self.root.mkdir(mode=0o700,parents=False); (self.root/"receipts").mkdir(mode=0o700); (self.root/"evidence").mkdir(mode=0o700)
+        rows=endpoint_certification_plan(); plan={"schema_version":CERTIFICATION_SCHEMA,"rows":list(rows),"content_hash":""}; plan["content_hash"]=_digest(plan); _atomic(self.root,self.plan_path.name,plan)
+        state={"schema_version":CERTIFICATION_SCHEMA,"phase":"CERTIFICATION_READY","planned":3,"dispatched":0,"completed":0,"ambiguous":0,"failed":0,
+            "confirmed_credits":0,"ambiguous_credits":0,"released_credits":0,"keychain_accesses":0,
+            "requests":{r["identity"]:{"lifecycle":"PLANNED","cost":1} for r in rows},"authority":LOCKED_AUTHORITY.copy(),"content_hash":""}
+        self.write(state); return state
+    def validate_root(self)->None:
+        info=self.root.lstat()
+        if self.root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("CERTIFICATION_ROOT_INVALID")
+        if {p.name for p in self.root.iterdir()}!={"certification-state.json","certification-plan.json","receipts","evidence"}: raise ValueError("CERTIFICATION_INVENTORY_INVALID")
+        for name in ("receipts","evidence"):
+            p=self.root/name; i=p.lstat()
+            if p.is_symlink() or not stat.S_ISDIR(i.st_mode) or stat.S_IMODE(i.st_mode)!=0o700 or i.st_uid!=os.getuid(): raise ValueError("CERTIFICATION_ROOT_INVALID")
+    def read(self)->dict[str,Any]:
+        self.validate_root(); value=_read_json(self.state_path)
+        requests=value.get("requests",{})
+        confirmed=sum(r.get("lifecycle")=="CONFIRMED" for r in requests.values()); ambiguous=sum(r.get("lifecycle")=="AMBIGUOUS" for r in requests.values())
+        failed=sum(r.get("lifecycle")=="FAILED_PRETRANSMISSION" for r in requests.values()); dispatched=sum(r.get("lifecycle") in {"DISPATCH_STARTED","CONFIRMED","AMBIGUOUS"} for r in requests.values())
+        if (value.get("schema_version")!=CERTIFICATION_SCHEMA or value.get("content_hash")!=_digest(value) or value.get("authority")!=LOCKED_AUTHORITY
+                or set(requests)!={r["identity"] for r in endpoint_certification_plan()} or value.get("planned")!=3
+                or (value.get("completed"),value.get("ambiguous"),value.get("failed"),value.get("dispatched"))!=(confirmed,ambiguous,failed,dispatched)
+                or value.get("confirmed_credits")!=confirmed or value.get("ambiguous_credits")!=ambiguous
+                or not isinstance(value.get("released_credits"),int) or not 0<=value["released_credits"]<=3): raise ValueError("CERTIFICATION_STATE_INVALID")
+        plan=_read_json(self.plan_path)
+        if plan.get("schema_version")!=CERTIFICATION_SCHEMA or plan.get("content_hash")!=_digest(plan) or tuple(plan.get("rows",()))!=endpoint_certification_plan(): raise ValueError("CERTIFICATION_PLAN_INVALID")
+        return value
+    def write(self,value:dict[str,Any])->None:
+        value["content_hash"]=_digest(value); _atomic(self.root,self.state_path.name,value)
+    def persist_success(self,row:dict[str,Any],response:BoundaryResponse,clean:dict[str,Any])->None:
+        receipt={"schema_version":CERTIFICATION_RECEIPT_SCHEMA,"request_identity":row["identity"],"purpose":row["purpose"],"ticker":"MU",
+            "endpoint":row["endpoint"],"status":"CONFIRMED","credit_cost":1,"response_bytes":len(response.body),"latency_ms":response.latency_ms,
+            "evidence_hash":hashlib.sha256(response.body).hexdigest(),"provider_timestamp":clean["provider_timestamp"],"normalized_hash":_digest(clean),"content_hash":""}
+        receipt["content_hash"]=_digest(receipt); _atomic_bytes(self.root/"evidence",row["identity"]+".json",response.body); _atomic(self.root/"receipts",row["identity"]+".json",receipt)
+    def persist_failure(self,row:dict[str,Any],metadata:dict[str,Any])->None:
+        record={"schema_version":"iios-provider-endpoint-certification-failure-v1","request_identity":row["identity"],"purpose":row["purpose"],
+            "sanitized_response":metadata,"content_hash":""}; record["content_hash"]=_digest(record); _atomic(self.root/"receipts",row["identity"]+".json",record)
+
+class EndpointCertificationCoordinator:
+    def __init__(self,store:EndpointCertificationStore,boundary:ProviderBoundary): self.store=store; self.boundary=boundary
+    def run(self)->dict[str,Any]:
+        self.boundary.validate(); state=self.store.read()
+        if state["phase"]!="CERTIFICATION_READY" or state["released_credits"]!=0 or state["dispatched"]!=0: raise ValueError("CERTIFICATION_NOT_READY")
+        state["released_credits"]=3; state["phase"]="CERTIFICATION_RUNNING"; self.store.write(state)
+        for row in endpoint_certification_plan():
+            state=self.store.read(); life=state["requests"][row["identity"]]["lifecycle"]
+            if life!="PLANNED": raise ValueError("CERTIFICATION_DUPLICATE_REJECTED")
+            state["requests"][row["identity"]]["lifecycle"]="RESERVED"; self.store.write(state)
+            state["requests"][row["identity"]]["lifecycle"]="DISPATCH_STARTED"; state["dispatched"]+=1; self.store.write(state)
+            before=int(getattr(self.boundary,"credential_accesses",0))
+            try: response=self.boundary.request(row)
+            except Exception as exc:
+                state=self.store.read(); state["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before)
+                transmitted=bool(getattr(exc,"transmitted",getattr(exc,"request_started",True)))
+                state["requests"][row["identity"]]["lifecycle"]="AMBIGUOUS" if transmitted else "FAILED_PRETRANSMISSION"
+                state["ambiguous" if transmitted else "failed"]+=1
+                if transmitted: state["ambiguous_credits"]+=1
+                self._stop(state,"PROVIDER_BOUNDARY_FAILED"); return state
+            state=self.store.read(); state["keychain_accesses"]+=max(0,int(getattr(self.boundary,"credential_accesses",before))-before); self.store.write(state)
+            try: clean=_validate_response(row,response)
+            except SanitizedResponseError as exc:
+                self.store.persist_failure(row,exc.metadata); state=self.store.read(); state["requests"][row["identity"]]["lifecycle"]="AMBIGUOUS"; state["ambiguous"]+=1; state["ambiguous_credits"]+=1; self._stop(state,exc.category); return state
+            self.store.persist_success(row,response,clean); state=self.store.read(); state["requests"][row["identity"]]["lifecycle"]="CONFIRMED"; state["completed"]+=1; state["confirmed_credits"]+=1; state["released_credits"]-=1; self.store.write(state)
+        state=self.store.read(); state["released_credits"]=0; state["phase"]="CERTIFICATION_CONFIRMED"; self.store.write(state); return state
+    def _stop(self,state:dict[str,Any],category:str)->None:
+        state["released_credits"]=0; state["phase"]="FAILED_CLOSED"; state["failure_category"]=category; self.store.write(state)
 
 def production_contract() -> dict[str,Any]:
     """Static contract only; construction performs no Keychain or network access."""

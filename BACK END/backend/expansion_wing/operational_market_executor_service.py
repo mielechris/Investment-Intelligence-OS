@@ -17,7 +17,8 @@ from .provider_readiness import (installed_readiness_projection, operational_cos
     validate_september_9_cost_evidence)
 from .operational_market_executor import (
     CANARY_PLAN, POST_0930_PLAN, ExecutorStore, FinancialDatasetsOperationalBoundary,
-    OperationalMarketEvidenceCoordinator, canary_plan, post_0930_plan, september_9_plan,
+    OperationalMarketEvidenceCoordinator, EndpointCertificationCoordinator,
+    EndpointCertificationStore, canary_plan, post_0930_plan, september_9_plan,
 )
 from .operational_market_executor_installer import (INSTALL_ROOT, install_disabled,
     authorize_september_9_market_open_50, resolve_selected_state_root, upgrade_disabled, validate_installed)
@@ -25,6 +26,7 @@ from .operational_market_executor_installer import (INSTALL_ROOT, install_disabl
 TRUST_ROOT=Path.home()/"Library/Application Support/IIOS/ExpansionWingFinancialDatasets"
 TRUST_BUNDLE=TRUST_ROOT/"cacert.pem"
 TRUST_MANIFEST=TRUST_ROOT/"trust-manifest.json"
+CERTIFICATION_ROOT=Path.home()/"Library/Application Support/IIOS/ProviderEndpointCertification31"
 
 def _trust_policy()->TrustBundlePolicy:
     info=TRUST_MANIFEST.lstat()
@@ -44,6 +46,18 @@ def production_coordinator()->OperationalMarketEvidenceCoordinator:
     adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
     boundary=FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
     return OperationalMarketEvidenceCoordinator(store,rows,boundary)
+
+def production_boundary()->FinancialDatasetsOperationalBoundary:
+    adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
+    return FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
+
+def run_endpoint_certification(*,authorized_commit:str)->str:
+    manifest=validate_installed()
+    if manifest.get("installed_source_commit")!=authorized_commit: raise ValueError("CERTIFICATION_COMMIT_MISMATCH")
+    store=EndpointCertificationStore(CERTIFICATION_ROOT)
+    store.initialize()
+    state=EndpointCertificationCoordinator(store,production_boundary()).run()
+    return state["phase"]
 
 def run_canary()->str:
     coordinator=production_coordinator()
@@ -95,6 +109,7 @@ def main(argv:list[str]|None=None)->int:
     group.add_argument("--transition-post-0930",action="store_true")
     group.add_argument("--validate-september-9-readiness",action="store_true")
     group.add_argument("--authorize-september-9-market-open-50",action="store_true")
+    group.add_argument("--run-provider-endpoint-certification",action="store_true")
     parser.add_argument("--source-root"); parser.add_argument("--authorized-commit")
     parser.add_argument("--supervisor-manifest-identity")
     parser.add_argument("--owner-authorized",action="store_true"); parser.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
@@ -121,6 +136,9 @@ def main(argv:list[str]|None=None)->int:
             from .unattended_supervisor_installer import INSTALL_ROOT as SUPERVISOR_ROOT,_service_probe
             status=authorize_september_9_market_open_50(expected_commit=args.authorized_commit or "",
                 supervisor_root=SUPERVISOR_ROOT,supervisor_manifest_identity=args.supervisor_manifest_identity,service_probe=_service_probe)
+        elif args.run_provider_endpoint_certification:
+            if not args.owner_authorized or not args.authorized_commit: raise ValueError("OWNER_CERTIFICATION_AUTHORIZATION_REQUIRED")
+            status=run_endpoint_certification(authorized_commit=args.authorized_commit)
         else:
             if not all((args.cost_observed_at,args.cost_expires_at,args.cost_observation_identity)):
                 raise ValueError("SEPTEMBER_9_COST_EVIDENCE_MISSING")

@@ -164,6 +164,7 @@ class FinancialDatasetsHTTPSTransport:
 
     def operational_request(self, *, path: str, ticker: str, credential: bytes,
                             start_date: str | None = None, end_date: str | None = None,
+                            interval: str | None = None,
                             connect_timeout: float = 5.0, response_timeout: float = 10.0):
         """Exact-host GET used only by the owner-authorized operational coordinator."""
         from urllib.parse import quote, urlencode
@@ -174,14 +175,14 @@ class FinancialDatasetsHTTPSTransport:
         if path == "/prices":
             if not (isinstance(start_date,str) and isinstance(end_date,str)
                     and re.fullmatch(date_pattern,start_date) and re.fullmatch(date_pattern,end_date)
-                    and start_date <= end_date):
+                    and start_date <= end_date and interval == "day"):
                 raise FinancialDatasetsTransportError("HISTORICAL_DATE_RANGE_INVALID",request_started=False)
-        elif start_date is not None or end_date is not None:
+        elif start_date is not None or end_date is not None or interval is not None:
             raise FinancialDatasetsTransportError("HISTORICAL_DATE_RANGE_INVALID",request_started=False)
         if self.trust_readiness()!="READY":
             raise FinancialDatasetsTransportError("TLS_TRUST_UNSAFE",request_started=False)
         query=[("ticker",ticker)]
-        if path == "/prices": query.extend((("start_date",start_date),("end_date",end_date)))
+        if path == "/prices": query.extend((("interval",interval),("start_date",start_date),("end_date",end_date)))
         context=self.trust.build_context(); target=path+"?"+urlencode(query,quote_via=quote,safe="")
         connection=None; started=self.clock(); request_started=False
         try:

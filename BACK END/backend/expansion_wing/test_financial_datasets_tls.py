@@ -153,8 +153,8 @@ class TransportTests(unittest.TestCase):
         connection=FakeConnection(); transport=self.transport(lambda *_:connection)
         with patch.object(ssl.SSLContext,"load_verify_locations",return_value=None):
             transport.operational_request(path="/prices",ticker="SPY",credential=SYNTHETIC_CREDENTIAL,
-                start_date="2026-09-08",end_date="2026-09-09")
-        self.assertEqual(connection.request_args[0],("GET","/prices?ticker=SPY&start_date=2026-09-08&end_date=2026-09-09"))
+                start_date="2026-09-08",end_date="2026-09-09",interval="day")
+        self.assertEqual(connection.request_args[0],("GET","/prices?ticker=SPY&interval=day&start_date=2026-09-08&end_date=2026-09-09"))
         with self.assertRaisesRegex(FinancialDatasetsTransportError,"HISTORICAL_DATE_RANGE_INVALID"):
             transport.operational_request(path="/prices",ticker="SPY",credential=SYNTHETIC_CREDENTIAL)
         with self.assertRaisesRegex(FinancialDatasetsTransportError,"HISTORICAL_DATE_RANGE_INVALID"):

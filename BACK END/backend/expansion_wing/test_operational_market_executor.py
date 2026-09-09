@@ -11,7 +11,9 @@ class Boundary:
     def request(self,row):
         self.calls.append(row["identity"])
         if self.fail: raise self.fail
-        stamp=self.clock().isoformat(); payload={"company_facts":{"ticker":row["ticker"]}} if row["endpoint"]=="COMPANY_FACTS" else ({"snapshot":{"ticker":row["ticker"],"time":stamp,"price":1}} if row["endpoint"]=="MARKET_SNAPSHOT" else {"prices":[{"ticker":row["ticker"],"time":stamp,"price":1}]})
+        stamp=self.clock().isoformat()
+        historical_time=row.get("start_date") or "2026-09-08"
+        payload={"company_facts":{"ticker":row["ticker"]}} if row["endpoint"]=="COMPANY_FACTS" else ({"snapshot":{"ticker":row["ticker"],"time":stamp,"price":1}} if row["endpoint"]=="MARKET_SNAPSHOT" else {"ticker":row["ticker"],"prices":[{"ticker":row["ticker"],"time":historical_time,"open":1,"high":2,"low":1,"close":2,"volume":10}]})
         return BoundaryResponse(200,"application/json",json.dumps(payload).encode(),1.0)
 class Pre(Exception): transmitted=False
 class Amb(Exception): transmitted=True
@@ -107,7 +109,7 @@ class OperationalExecutorTests(unittest.TestCase):
     def test_invalid_canary_receipt_cannot_migrate_or_change_plan(self):
         rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1); c.execute(rows[0]["identity"])
         receipt=store.root/"receipts"/(rows[0]["identity"]+".json"); value=json.loads(receipt.read_text()); value["ticker"]="NOPE"; receipt.write_text(json.dumps(value)); receipt.chmod(0o600)
-        with self.assertRaisesRegex(ValueError,"CANARY_ADOPTION_REJECTED"): c.migrate_canary_to_post_0930(datetime.now(ZoneInfo("America/Los_Angeles")).replace(hour=10))
+        with self.assertRaisesRegex(ValueError,"CANARY_ADOPTION_REJECTED"): c.migrate_canary_to_post_0930(datetime(2026,9,8,10,0,tzinfo=ZoneInfo("America/Los_Angeles")))
         self.assertEqual(store.read_plan(),rows); self.assertEqual(store.read()["classification"],CANARY_PLAN)
 
 if __name__=="__main__": unittest.main()
