@@ -6,12 +6,12 @@ from zoneinfo import ZoneInfo
 from .operational_market_executor import *
 
 class Boundary:
-    def __init__(self): self.calls=[]; self.fail=None
+    def __init__(self): self.calls=[]; self.fail=None; self.clock=lambda: datetime.now(timezone.utc)
     def validate(self): return None
     def request(self,row):
         self.calls.append(row["identity"])
         if self.fail: raise self.fail
-        stamp=datetime.now(timezone.utc).isoformat(); payload={"company_facts":{"ticker":row["ticker"]}} if row["endpoint"]=="COMPANY_FACTS" else ({"snapshot":{"ticker":row["ticker"],"time":stamp,"price":1}} if row["endpoint"]=="MARKET_SNAPSHOT" else {"prices":[{"ticker":row["ticker"],"time":stamp,"price":1}]})
+        stamp=self.clock().isoformat(); payload={"company_facts":{"ticker":row["ticker"]}} if row["endpoint"]=="COMPANY_FACTS" else ({"snapshot":{"ticker":row["ticker"],"time":stamp,"price":1}} if row["endpoint"]=="MARKET_SNAPSHOT" else {"prices":[{"ticker":row["ticker"],"time":stamp,"price":1}]})
         return BoundaryResponse(200,"application/json",json.dumps(payload).encode(),1.0)
 class Pre(Exception): transmitted=False
 class Amb(Exception): transmitted=True
@@ -90,7 +90,10 @@ class OperationalExecutorTests(unittest.TestCase):
         s=store.read(); self.assertEqual((s["phase"],s["ambiguous_credits"],s["released_credits"],s["stage_a"]),("FAILED_CLOSED",1,0,"LOCKED"))
     def test_post_0930_adopts_canary_and_completes_without_duplicate(self):
         rows=canary_plan(); td,store,b,c,_=self.make(rows); self.addCleanup(td.cleanup); c.preflight(self.gates()); c.release(1)
-        self.assertEqual(c.execute(rows[0]["identity"]),"CONFIRMED"); canary_calls=list(b.calls); now=datetime.now(ZoneInfo("America/Los_Angeles")).replace(hour=10,minute=0)
+        now=datetime(2026,9,8,10,0,tzinfo=ZoneInfo("America/Los_Angeles")); b.clock=lambda: now.astimezone(timezone.utc)
+        self.assertEqual(c.execute(rows[0]["identity"]),"CONFIRMED"); canary_calls=list(b.calls)
+        receipt=json.loads(next((store.root/"receipts").iterdir()).read_text()); provider_time=datetime.fromisoformat(receipt["provider_timestamp"]).astimezone(ZoneInfo("America/Los_Angeles"))
+        self.assertEqual(provider_time.date().isoformat(),"2026-09-08"); self.assertTrue(WINDOWS["INTRADAY"][0]<=provider_time.strftime("%H:%M")<WINDOWS["INTRADAY"][1])
         state=c.migrate_canary_to_post_0930(now); self.assertEqual((state["planned"],state["completed"],state["adopted_canary_count"]),(20,1,1))
         migrated=store.read_plan(); self.assertEqual({r["window"] for r in migrated},{"INTRADAY","CLOSING"}); self.assertTrue(all(r["endpoint"]=="MARKET_SNAPSHOT" for r in migrated))
         self.assertTrue(store.adoption_path.is_file()); self.assertEqual(len(list((store.root/"receipts").iterdir())),1)
