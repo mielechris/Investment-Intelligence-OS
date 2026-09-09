@@ -135,7 +135,8 @@ def post_0930_plan() -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 def plan_identity(rows: tuple[dict[str, Any], ...]) -> str:
-    if rows and rows[0].get("session_date") == SEPTEMBER_9_SESSION_DATE and rows[0].get("provider"):
+    if (rows and rows[0].get("session_date") == SEPTEMBER_9_SESSION_DATE
+            and rows[0].get("provider") and rows[0].get("plan") == SEPTEMBER_9_PLAN):
         validate_canonical_plan(rows)
         return canonical_plan_identity(rows)
     return hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

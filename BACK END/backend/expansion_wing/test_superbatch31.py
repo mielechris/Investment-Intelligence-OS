@@ -13,6 +13,7 @@ from .operational_market_executor import (
     _validate_response,
     endpoint_certification_plan,
     september_9_intraday_recovery_plan,
+    september_9_plan, plan_identity,
 )
 
 
@@ -39,6 +40,8 @@ class Superbatch31ContractTests(unittest.TestCase):
         self.assertFalse(any(r["ticker"]=="MU" and r["endpoint"]=="HISTORICAL_OHLCV" for r in rows))
         self.assertTrue(all(r["interval"]=="day" and r["start_date"] and r["end_date"] for r in rows if r["endpoint"]=="HISTORICAL_OHLCV"))
         self.assertTrue(all(r["retry"] is False and r["provider"]=="FINANCIAL_DATASETS" for r in rows))
+        self.assertEqual(plan_identity(september_9_plan()),"995fff0ea1d2b1487b95055f3a68031a7847fbc2d9b5441001b04948fc062b63")
+        self.assertNotEqual(plan_identity(rows),plan_identity(september_9_plan()))
     def test_plan_is_three_unique_one_shot_contracts(self):
         rows=endpoint_certification_plan()
         self.assertEqual([r["purpose"] for r in rows],["POINT_IN_TIME_OHLCV","PRIOR_SESSION_OHLCV","MU_COMPANY_FACTS"])
