@@ -82,6 +82,19 @@ def _canonical_symbol(value: Any) -> str:
 
 
 def _strict_universe() -> tuple[list[str], dict[str, str]]:
+    import os
+    if os.environ.get("IIOS_TRUTH_SPINE_CONFIG"):
+        from pathlib import Path
+        from truth_spine_service import configuration
+        from truth_spine_contract import universe
+        path = Path(os.environ["IIOS_TRUTH_SPINE_CONFIG"])
+        config, topology = configuration(path)
+        captured = universe((path.parent / "universe-source.json").read_bytes(), config["universe_hash"], topology, at=datetime.now(timezone.utc))
+        if captured["status"] != "CURRENT":
+            raise RuntimeError("STRICT_GOVERNED_UNIVERSE_STALE")
+        # The mirror classification remains in the canonical topology/projection;
+        # this isolated path supplies membership only, never market/trading authority.
+        return captured["symbols"], {_canonical_symbol(s): s for s in captured["symbols"]}
     governed = current_strict_governed_universe()
     if not isinstance(governed, dict):
         raise RuntimeError("STRICT_GOVERNED_UNIVERSE_UNAVAILABLE")

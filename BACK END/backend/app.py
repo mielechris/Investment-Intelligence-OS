@@ -1,4 +1,6 @@
 import os
+from truth_spine_isolation import enforce_offline
+enforce_offline()
 from fastapi.responses import JSONResponse
 
 os.environ.setdefault(
@@ -86,6 +88,23 @@ from supply_inventory_primary_fallback import install_supply_inventory_primary_f
 from valuation_market_primary_fallback import install_valuation_market_primary_fallback
 from valuation_market_micron_filing_fallback import install_micron_valuation_filing_fallback
 from production_health import live_probe, ready_probe
+
+
+def _truth_spine_config():
+    from pathlib import Path
+    value = os.environ.get("IIOS_TRUTH_SPINE_CONFIG")
+    return Path(value) if value else None
+
+
+@app.middleware("http")
+async def isolated_truth_spine_boundary(request, call_next):
+    if _truth_spine_config() is not None:
+        allowed = {"/health/live", "/health/ready", "/health/market-readiness", "/health/research-readiness", "/truth-spine/projection"}
+        if request.method not in {"GET", "HEAD"}:
+            return JSONResponse(status_code=405, content={"status": "READ_ONLY"})
+        if request.url.path not in allowed and not request.url.path.startswith("/review/"):
+            return JSONResponse(status_code=404, content={"status": "NOT_AVAILABLE_IN_ISOLATED_REPLAY"})
+    return await call_next(request)
 
 
 source_ingestion.FETCHERS["gdelt_news"] = fetch_gdelt_news
@@ -225,6 +244,14 @@ app.version = "0.20.0"
 
 @app.on_event("startup")
 def start_iios_monitoring() -> None:
+    if _truth_spine_config() is not None:
+        from truth_spine_service import configuration
+        from fastapi.staticfiles import StaticFiles
+        from pathlib import Path
+        _, topology = configuration(_truth_spine_config())
+        app.mount("/review", StaticFiles(directory=Path(topology.release_root) / "frontend", html=True), name="truth-spine-review")
+        # Real scheduler/publisher are separate service entry points. Never start legacy spending jobs.
+        return
     start_scheduler()
     start_opportunity_scheduler()
     start_jesse_scheduler()
@@ -232,6 +259,8 @@ def start_iios_monitoring() -> None:
 
 @app.on_event("shutdown")
 def stop_iios_monitoring() -> None:
+    if _truth_spine_config() is not None:
+        return
     stop_opportunity_scheduler()
     stop_jesse_scheduler()
     stop_scheduler()
@@ -239,13 +268,50 @@ def stop_iios_monitoring() -> None:
 
 @app.get("/health/live")
 def health_live():
+    if _truth_spine_config() is not None:
+        from truth_spine_service import health
+        status, payload = health(_truth_spine_config(), "live")
+        return JSONResponse(status_code=status, content=payload)
     return live_probe()
 
 
 @app.get("/health/ready")
 def health_ready():
+    if _truth_spine_config() is not None:
+        from truth_spine_service import health
+        status, payload = health(_truth_spine_config(), "ready")
+        return JSONResponse(status_code=status, content=payload)
     ready, payload = ready_probe()
     return payload if ready else JSONResponse(status_code=503, content=payload)
+
+
+@app.get("/health/market-readiness")
+def truth_market_readiness():
+    return _truth_readiness("market-readiness")
+
+
+@app.get("/health/research-readiness")
+def truth_research_readiness():
+    return _truth_readiness("research-readiness")
+
+
+def _truth_readiness(kind):
+    if _truth_spine_config() is None:
+        return JSONResponse(status_code=503, content={"status": "UNAVAILABLE", "reason_codes": ["CANONICAL_TOPOLOGY_NOT_CONFIGURED"]})
+    from truth_spine_service import health
+    status, payload = health(_truth_spine_config(), kind)
+    return JSONResponse(status_code=status, content=payload)
+
+
+@app.get("/truth-spine/projection")
+def truth_spine_projection():
+    from truth_spine_service import health, read
+    if _truth_spine_config() is None:
+        return JSONResponse(status_code=503, content={"status": "UNAVAILABLE"})
+    status, _ = health(_truth_spine_config(), "ready")
+    if status != 200:
+        return JSONResponse(status_code=503, content={"status": "UNAVAILABLE"})
+    return read(_truth_spine_config().parent / "projection.json")
 
 
 @app.get("/system/status")

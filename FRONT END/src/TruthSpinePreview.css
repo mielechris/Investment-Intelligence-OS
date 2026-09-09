@@ -1,0 +1,15 @@
+:root { color: #ede6d7; background: #171a20; font: 17px/1.55 system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1240px; padding: 24px; margin: auto; }
+header, section, details { background: #222833; border: 1px solid #657083; padding: 24px; border-radius: 10px; margin-bottom: 18px; min-width: 0; }
+header strong { color: #ffd58b; }
+h1, h2 { line-height: 1.2; }
+.truth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+dt { font-weight: 700; }
+dd { margin: 0 0 12px; }
+dd, li, p { overflow-wrap: anywhere; }
+ul, ol { padding-left: 22px; }
+summary { cursor: pointer; }
+:focus-visible { outline: 3px solid #ffd58b; outline-offset: 4px; }
+@media (max-width: 700px) { main { padding: 12px; } .truth-grid { grid-template-columns: minmax(0, 1fr); } header, section, details { padding: 18px; } }
