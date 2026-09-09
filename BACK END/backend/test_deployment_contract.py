@@ -91,11 +91,13 @@ class DeploymentContractTest(unittest.TestCase):
     def test_all_four_reviewed_templates_render_only_runtime_and_release_paths(self):
         with tempfile.TemporaryDirectory() as raw:
             base=Path(raw); release=Path("/opt/iios/releases/test"); runtime=Path("/opt/iios/runtimes/test")
+            ledger=Path("/Users/owner/GitHub/persistent-state/ledger.db")
             hashes=render_service_plists(source_root=Path(__file__).parents[2],destination=base/"deployment",
-                release_root=release,runtime_root=runtime,ledger_path=Path("/var/lib/iios/ledger.db"),log_root=Path("/var/log/iios"))
+                release_root=release,runtime_root=runtime,ledger_path=ledger,log_root=Path("/var/log/iios"))
             self.assertEqual(len(hashes),4)
             combined=b"".join(path.read_bytes() for path in (base/"deployment").iterdir())
-            self.assertNotIn(b"/GitHub/",combined); self.assertNotIn(b".venv",combined)
+            self.assertNotIn(b".venv",combined)
+            self.assertEqual(combined.count(str(ledger).encode()),5)
 
     def test_active_release_binds_runtime_release_ledger_and_migration(self):
         with tempfile.TemporaryDirectory() as raw:

@@ -217,7 +217,7 @@ def validate_service_plists(plists: Iterable[Path], *, release_root: Path, runti
         if (label not in expected_labels or arguments[:1] != [str(interpreter)]
                 or environment.get("IIOS_DB_PATH") != str(ledger_path)
                 or environment.get("PYTHONPATH") != str(release_root / "source/BACK END/backend")
-                or not all("/GitHub/" not in item for item in paths)
+                or not all(item == str(ledger_path) or "/GitHub/" not in item for item in paths)
                 or any(item != str(ledger_path) and not item.startswith(permitted_roots) for item in absolute_paths)):
             raise RuntimeError("SERVICE_DEPLOYMENT_INVALID")
         hashes[label] = file_hash(path)
