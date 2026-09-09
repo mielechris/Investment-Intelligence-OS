@@ -11,8 +11,10 @@ import os
 import shutil
 import stat
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .financial_datasets import API_HOST, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
 from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, SEPTEMBER_9_PLAN,
@@ -36,6 +38,10 @@ CORRECTED_SELECTOR_SCHEMA="iios-operational-market-session-selector-v2"
 SUPERSESSION_SCHEMA="iios-operational-market-generation-supersession-v1"
 CORRECTED_GENERATION_NAME="2026-09-09-canonical-v2"
 SUPERSESSION_NAME="2026-09-09-c40-supersession.json"
+AUTHORIZATION_SCHEMA="iios-september-9-market-open-authorization-v1"
+AUTHORIZATION_NAME="market-open-authorization.json"
+PRE_AUTH_STATE_NAME="pre-authorization-executor-state.json"
+PRE_AUTH_LKV_NAME="pre-authorization-executor-state.last-known-valid.json"
 COORDINATOR="expansion_wing.operational_market_executor.OperationalMarketEvidenceCoordinator"
 APPROVED_ENDPOINTS=("/company/facts","/prices","/prices/snapshot")
 ARTIFACTS=("operational_market_executor.py","operational_market_executor_installer.py",
@@ -186,6 +192,64 @@ def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
                 or receipt.get("credit_cost")!=1 or receipt.get("evidence_hash")!=_sha(evidence[identity])):
             raise ValueError("SELECTED_SESSION_MIXED")
     return selected
+
+def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root:Path|None=None,
+        supervisor_root:Path|None=None,expected_commit:str,now:datetime|None=None,
+        post_authorization_validator=None)->str:
+    """Atomically authorize the selected plan without dispatch or credential access."""
+    current=datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo!=timezone.utc: raise ValueError("AUTHORIZATION_CLOCK_INVALID")
+    local=current.astimezone(ZoneInfo("America/Los_Angeles"))
+    if not datetime(2026,9,8,0,0,tzinfo=ZoneInfo("America/Los_Angeles"))<=local<datetime(2026,9,9,7,0,tzinfo=ZoneInfo("America/Los_Angeles")):
+        raise ValueError("MARKET_OPEN_AUTHORIZATION_WINDOW_CLOSED")
+    manifest=validate_installed(root)
+    if manifest.get("installed_source_commit")!=expected_commit: raise ValueError("INSTALL_COMMIT_MISMATCH")
+    from .provider_readiness import READINESS_ROOT,operational_cost_binding
+    binding=operational_cost_binding(root=READINESS_ROOT if readiness_root is None else readiness_root,now=current)
+    if (binding.get("request_plan_identity")!=canonical_plan_identity() or binding.get("planned_identity_count")!=50
+            or binding.get("exact_planned_cost_credits")!=50 or binding.get("worst_case_cost_credits")!=50):
+        raise ValueError("CORRECTED_PRICING_BINDING_REQUIRED")
+    if supervisor_root is not None:
+        from .unattended_supervisor_installer import validate_installed_root
+        validate_installed_root(expected_commit=expected_commit,root=supervisor_root)
+    selected=resolve_selected_state_root(root)
+    if selected!=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME: raise ValueError("CORRECTED_SELECTION_REQUIRED")
+    archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
+    supersession=_validate_supersession(root/"incidents"/SUPERSESSION_NAME,root/SESSIONS_NAME/"2026-09-09")
+    store=ExecutorStore(selected); rows=store.read_plan(); state=store.read(); receipt_path=selected/AUTHORIZATION_NAME
+    if receipt_path.exists():
+        _regular_owner_file(receipt_path); receipt=json.loads(receipt_path.read_text())
+        if (receipt.get("schema")!=AUTHORIZATION_SCHEMA or receipt.get("content_hash")!=_hash_document(receipt)
+                or state.get("released_credits")!=50 or state.get("stage_a")!="RUNNING"):
+            raise ValueError("AUTHORIZATION_RECEIPT_INVALID")
+        return "SEPTEMBER_9_MARKET_OPEN_50_ALREADY_AUTHORIZED"
+    if (rows!=september_9_plan() or len(rows)!=50 or len({r["identity"] for r in rows})!=50
+            or any(r["cost"]!=1 or r["retry"] is not False for r in rows)
+            or state.get("plan_identity")!=canonical_plan_identity() or state.get("released_credits")!=0
+            or any(state.get(k)!="LOCKED" for k in ("stage_a","stage_b","stage_c"))
+            or any(state.get(k)!=0 for k in ("dispatched","completed","ambiguous","failed","confirmed_credits","ambiguous_credits","keychain_accesses"))
+            or any(any((selected/name).iterdir()) for name in ("receipts","evidence"))):
+        raise ValueError("AUTHORIZATION_PRISTINE_STATE_REQUIRED")
+    state_raw=store.state_path.read_bytes(); lkv_raw=store.lkv_path.read_bytes()
+    _write_bytes(selected/PRE_AUTH_STATE_NAME,state_raw); _write_bytes(selected/PRE_AUTH_LKV_NAME,lkv_raw)
+    body={"schema":AUTHORIZATION_SCHEMA,"session_date":"2026-09-09","plan_identity":canonical_plan_identity(),
+        "selector_hash":json.loads((root/SELECTOR_NAME).read_text())["content_hash"],"pricing_hash":binding["cost_contract_hash"],
+        "archive_hash":archive["content_hash"],"supersession_receipt_hash":supersession["content_hash"],
+        "maximum_requests":50,"maximum_credits":50,"automatic_retries":0,
+        "dispatch_windows":{"OPENING":["06:30","07:00"],"BASELINE":["06:30","09:30"],"INTRADAY":["09:30","12:55"],"CLOSING":["12:55","13:05"]},
+        "direct_dispatch":False,"trading_authority":{"broker":False,"paper_order":False,"automatic_promotion":False,"ledger_write":False,"live_execution":False}}
+    _write(receipt_path,body|{"content_hash":_hash_document(body)})
+    try:
+        updated=dict(state); updated.update({"released_credits":50,"stage_a":"RUNNING","phase":"STAGE_A_RUNNING","next_gate":"OPENING"})
+        updated["content_hash"]=""; updated["content_hash"]=_hash_document(updated); store.write(updated)
+        final=store.read()
+        if final["released_credits"]!=50 or final["stage_a"]!="RUNNING" or final["stage_b"]!="LOCKED" or final["stage_c"]!="LOCKED": raise ValueError("AUTHORIZATION_POST_VALIDATION_FAILED")
+        if post_authorization_validator: post_authorization_validator(root)
+    except Exception:
+        _write_bytes(store.state_path,state_raw); _write_bytes(store.lkv_path,lkv_raw)
+        if receipt_path.exists(): receipt_path.unlink()
+        raise
+    return "SEPTEMBER_9_MARKET_OPEN_50_AUTHORIZED"
 
 def reselect_corrected_september_9_generation(root:Path=INSTALL_ROOT,*,readiness_root:Path|None=None,
         interrupt_after:str|None=None,post_select_validator=None)->str:

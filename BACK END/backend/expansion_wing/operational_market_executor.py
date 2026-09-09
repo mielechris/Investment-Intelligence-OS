@@ -168,7 +168,8 @@ class ExecutorStore:
     def validate_root(self) -> None:
         info=self.root.lstat()
         if self.root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("EXECUTOR_ROOT_INVALID")
-        allowed={"executor-state.json","executor-state.last-known-valid.json","request-plan.json","canary-adoption.json","executor.lock","receipts","evidence"}
+        allowed={"executor-state.json","executor-state.last-known-valid.json","request-plan.json","canary-adoption.json","executor.lock","receipts","evidence",
+            "market-open-authorization.json","pre-authorization-executor-state.json","pre-authorization-executor-state.last-known-valid.json"}
         if {p.name for p in self.root.iterdir()}-allowed: raise ValueError("EXECUTOR_INVENTORY_INVALID")
         for dirname in ("receipts","evidence"):
             p=self.root/dirname; i=p.lstat()

@@ -74,3 +74,7 @@ and atomically replaces the selector. The selector binds the September 8
 archive hash, supersession-receipt hash, and corrected canonical plan identity.
 Post-selection failure restores the original selector bytes; neither the
 incident generation nor the September 8 archive is rewritten or deleted.
+
+### Owner-only September 9 authorization
+
+`--authorize-september-9-market-open-50 --owner-authorized --authorized-commit <exact-commit>` is the sole administrative release boundary. It validates the corrected selector, pricing, archive, supersession receipt, installed manifests, pristine generation, and authorization clock; writes byte-exact pre-authorization state backups and a hash-bound receipt; then releases exactly 50 credits without dispatch. Window enforcement remains exclusively in the supervisor. Repetition is idempotent; browser invocation, late authorization, prior activity, and inconsistent state fail closed.
