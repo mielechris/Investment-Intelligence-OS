@@ -172,7 +172,7 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
                             coordinator=production_coordinator()
                         else: coordinator=coordinator_factory()
                         state=coordinator.recover()
-                        if (state.get("classification") in {"POST_0930_PARTIAL_SESSION","SEPTEMBER_9_MARKET_OPEN_50"}
+                        if (state.get("classification") in {"POST_0930_PARTIAL_SESSION","SEPTEMBER_9_MARKET_OPEN_50","SEPTEMBER_9_INTRADAY_RECOVERY"}
                                 and state.get("phase") in {"STAGE_A_RUNNING","PRE_SESSION_BOUNDED_WAIT"}):
                             from zoneinfo import ZoneInfo
                             coordinator.scheduled_tick(now().astimezone(ZoneInfo("America/Los_Angeles")))

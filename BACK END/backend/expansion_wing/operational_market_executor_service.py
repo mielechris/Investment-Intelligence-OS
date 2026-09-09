@@ -17,11 +17,12 @@ from .provider_readiness import (installed_readiness_projection, operational_cos
     validate_september_9_cost_evidence)
 from .operational_market_executor import (
     CANARY_PLAN, POST_0930_PLAN, ExecutorStore, FinancialDatasetsOperationalBoundary,
-    OperationalMarketEvidenceCoordinator, EndpointCertificationCoordinator,
-    EndpointCertificationStore, canary_plan, post_0930_plan, september_9_plan,
+    OperationalMarketEvidenceCoordinator, EndpointCertificationCoordinator, SEPTEMBER_9_RECOVERY_PLAN,
+    EndpointCertificationStore, canary_plan, post_0930_plan, september_9_plan, september_9_intraday_recovery_plan,
 )
 from .operational_market_executor_installer import (INSTALL_ROOT, install_disabled,
-    authorize_september_9_market_open_50, resolve_selected_state_root, upgrade_disabled, validate_installed)
+    authorize_september_9_market_open_50, create_and_select_intraday_recovery, authorize_intraday_recovery,
+    resolve_selected_state_root, upgrade_disabled, validate_installed)
 
 TRUST_ROOT=Path.home()/"Library/Application Support/IIOS/ExpansionWingFinancialDatasets"
 TRUST_BUNDLE=TRUST_ROOT/"cacert.pem"
@@ -42,7 +43,7 @@ def _trust_policy()->TrustBundlePolicy:
 def production_coordinator()->OperationalMarketEvidenceCoordinator:
     validate_installed()
     store=ExecutorStore(resolve_selected_state_root()); rows=store.read_plan()
-    if rows not in (canary_plan(),post_0930_plan(),september_9_plan()): raise ValueError("REQUEST_PLAN_MISMATCH")
+    if rows not in (canary_plan(),post_0930_plan(),september_9_plan()) and not (rows and rows[0].get("plan")==SEPTEMBER_9_RECOVERY_PLAN and rows==september_9_intraday_recovery_plan(rows[0]["activation_time"])): raise ValueError("REQUEST_PLAN_MISMATCH")
     adapter=KeychainAdapter(SecurityFrameworkAPI(),service=KEYCHAIN_SERVICE)
     boundary=FinancialDatasetsOperationalBoundary(SecurityFrameworkCredentialProvider(adapter),FinancialDatasetsHTTPSTransport(_trust_policy()))
     return OperationalMarketEvidenceCoordinator(store,rows,boundary)
@@ -110,10 +111,13 @@ def main(argv:list[str]|None=None)->int:
     group.add_argument("--validate-september-9-readiness",action="store_true")
     group.add_argument("--authorize-september-9-market-open-50",action="store_true")
     group.add_argument("--run-provider-endpoint-certification",action="store_true")
+    group.add_argument("--create-intraday-recovery",action="store_true")
+    group.add_argument("--authorize-intraday-recovery",action="store_true")
     parser.add_argument("--source-root"); parser.add_argument("--authorized-commit")
     parser.add_argument("--supervisor-manifest-identity")
     parser.add_argument("--owner-authorized",action="store_true"); parser.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
     parser.add_argument("--cost-observed-at"); parser.add_argument("--cost-expires-at"); parser.add_argument("--cost-observation-identity")
+    parser.add_argument("--activation-time")
     args=parser.parse_args(argv)
     try:
         if args.browser: raise ValueError("BROWSER_INVOCATION_REJECTED")
@@ -139,6 +143,12 @@ def main(argv:list[str]|None=None)->int:
         elif args.run_provider_endpoint_certification:
             if not args.owner_authorized or not args.authorized_commit: raise ValueError("OWNER_CERTIFICATION_AUTHORIZATION_REQUIRED")
             status=run_endpoint_certification(authorized_commit=args.authorized_commit)
+        elif args.create_intraday_recovery:
+            if not args.owner_authorized or not args.authorized_commit or not args.activation_time: raise ValueError("OWNER_RECOVERY_AUTHORIZATION_REQUIRED")
+            status=create_and_select_intraday_recovery(activation_time=args.activation_time,authorized_commit=args.authorized_commit)
+        elif args.authorize_intraday_recovery:
+            if not args.owner_authorized: raise ValueError("OWNER_RECOVERY_AUTHORIZATION_REQUIRED")
+            status=authorize_intraday_recovery()
         else:
             if not all((args.cost_observed_at,args.cost_expires_at,args.cost_observation_identity)):
                 raise ValueError("SEPTEMBER_9_COST_EVIDENCE_MISSING")

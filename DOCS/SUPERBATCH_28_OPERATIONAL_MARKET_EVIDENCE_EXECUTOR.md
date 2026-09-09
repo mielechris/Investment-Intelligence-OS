@@ -116,3 +116,10 @@ September 8 prior-session OHLCV, and company facts. It has a three-credit hard
 limit, stops on the first failure or ambiguity, never retries, and always returns
 released allowance to zero. It does not share state, identities, evidence,
 receipts, or accounting with a market-session generation or the paper fund.
+
+`SEPTEMBER_9_INTRADAY_RECOVERY` is a separate 39-row incident generation: ten
+current snapshots, nineteen still-eligible historical/facts observations with
+the ambiguous MU historical identity excluded, and ten closing snapshots. Its
+identities bind activation time, provider contract, path, interval/date query,
+window, cost, and retry policy. Selection preserves the failed generation and
+authorization releases at most 39 credits with every trading authority locked.

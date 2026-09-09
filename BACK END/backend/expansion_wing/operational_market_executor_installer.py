@@ -17,8 +17,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .financial_datasets import API_HOST, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
-from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, SEPTEMBER_9_PLAN,
-    ExecutorStore, canary_plan, plan_identity, post_0930_plan, september_9_plan)
+from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, SEPTEMBER_9_PLAN, SEPTEMBER_9_RECOVERY_PLAN,
+    ExecutorStore, canary_plan, plan_identity, post_0930_plan, september_9_plan, september_9_intraday_recovery_plan)
 from .september_9_canonical_plan import (OBSOLETE_EXECUTOR_IDENTITY,
     canonical_plan_identity, obsolete_c40_plan, validate_canonical_plan)
 
@@ -39,6 +39,8 @@ SUPERSESSION_SCHEMA="iios-operational-market-generation-supersession-v1"
 CORRECTED_GENERATION_NAME="2026-09-09-canonical-v2"
 RECOVERY_GENERATION_NAME="2026-09-09-canonical-v3"
 RECOVERY_SELECTOR_SCHEMA="iios-operational-market-session-selector-v3"
+INTRADAY_RECOVERY_SELECTOR_SCHEMA="iios-operational-market-session-selector-v4"
+INTRADAY_RECOVERY_GENERATION_NAME="2026-09-09-intraday-recovery"
 TIME_FAILURE_SUPERSESSION_NAME="2026-09-09-v2-time-failure-supersession.json"
 SUPERSESSION_NAME="2026-09-09-c40-supersession.json"
 AUTHORIZATION_SCHEMA="iios-september-9-market-open-authorization-v1"
@@ -187,6 +189,12 @@ def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
                 or value.get("content_hash")!=_hash_document(value) or ExecutorStore(selected).read_plan()!=september_9_plan()):
             raise ValueError("SESSION_SELECTOR_INVALID")
         return selected
+    if value.get("schema")==INTRADAY_RECOVERY_SELECTOR_SCHEMA:
+        selected=root/SESSIONS_NAME/INTRADAY_RECOVERY_GENERATION_NAME; rows=ExecutorStore(selected).read_plan(); state=ExecutorStore(selected).read()
+        if (value.get("selected_root")!=f"sessions/{INTRADAY_RECOVERY_GENERATION_NAME}" or value.get("plan_identity")!=plan_identity(rows)
+                or value.get("content_hash")!=_hash_document(value) or state.get("classification")!=SEPTEMBER_9_RECOVERY_PLAN
+                or rows!=september_9_intraday_recovery_plan(rows[0]["activation_time"])): raise ValueError("SESSION_SELECTOR_INVALID")
+        return selected
     if value.get("schema")!=CORRECTED_SELECTOR_SCHEMA: raise ValueError("SESSION_SELECTOR_INVALID")
     receipt_path=root/"incidents"/SUPERSESSION_NAME
     receipt=_validate_supersession(receipt_path,root/SESSIONS_NAME/"2026-09-09")
@@ -204,6 +212,39 @@ def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
                 or receipt.get("credit_cost")!=1 or receipt.get("evidence_hash")!=_sha(evidence[identity])):
             raise ValueError("SELECTED_SESSION_MIXED")
     return selected
+
+def create_and_select_intraday_recovery(*,root:Path=INSTALL_ROOT,activation_time:str,authorized_commit:str)->str:
+    """Preserve the failed selection and atomically select a new locked recovery."""
+    manifest=validate_installed(root)
+    if manifest.get("installed_source_commit")!=authorized_commit: raise ValueError("INSTALL_COMMIT_MISMATCH")
+    failed=resolve_selected_state_root(root); failed_state=ExecutorStore(failed).read()
+    if (failed_state.get("phase")!="FAILED_CLOSED" or failed_state.get("released_credits")!=0
+            or any(failed_state.get(k)!="LOCKED" for k in ("stage_a","stage_b","stage_c"))): raise ValueError("FAILED_SESSION_NOT_LOCKED")
+    inventory=_generation_inventory(failed); failed_digest=hashlib.sha256((json.dumps(inventory,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+    rows=september_9_intraday_recovery_plan(activation_time); generation=root/SESSIONS_NAME/INTRADAY_RECOVERY_GENERATION_NAME
+    if generation.exists(): raise ValueError("RECOVERY_GENERATION_EXISTS")
+    stage=root/SESSIONS_NAME/("."+INTRADAY_RECOVERY_GENERATION_NAME+".tmp")
+    if stage.exists(): raise ValueError("RECOVERY_STAGE_EXISTS")
+    ExecutorStore(stage).initialize(rows,SEPTEMBER_9_RECOVERY_PLAN)
+    pricing={"schema":"iios-intraday-recovery-pricing-v1","plan_identity":plan_identity(rows),"identities":39,"exact_cost":39,"maximum_cost":39,"retry":0,"source":"OFFICIAL_FINANCIAL_DATASETS_STANDARD_PRICING","content_hash":""}
+    pricing["content_hash"]=_hash_document(pricing); _write(stage/"recovery-pricing.json",pricing)
+    os.replace(stage,generation)
+    body={"schema":INTRADAY_RECOVERY_SELECTOR_SCHEMA,"selected_session":"2026-09-09","selected_root":f"sessions/{INTRADAY_RECOVERY_GENERATION_NAME}",
+        "plan_classification":SEPTEMBER_9_RECOVERY_PLAN,"plan_identity":plan_identity(rows),"superseded_failed_root":str(failed.relative_to(root)),"superseded_failed_inventory_hash":failed_digest}
+    selector=body|{"content_hash":_hash_document(body)}; temp=root/("."+SELECTOR_NAME+".intraday.tmp"); _write(temp,selector)
+    original=(root/SELECTOR_NAME).read_bytes()
+    try:
+        os.replace(temp,root/SELECTOR_NAME); d=os.open(root,os.O_RDONLY); os.fsync(d); os.close(d)
+        if resolve_selected_state_root(root)!=generation: raise ValueError("RECOVERY_SELECTION_FAILED")
+    except Exception:
+        _write_bytes(root/SELECTOR_NAME,original); raise
+    return "SEPTEMBER_9_INTRADAY_RECOVERY_SELECTED_LOCKED"
+
+def authorize_intraday_recovery(*,root:Path=INSTALL_ROOT)->str:
+    selected=resolve_selected_state_root(root); store=ExecutorStore(selected); state=store.read(); rows=store.read_plan()
+    if state.get("classification")!=SEPTEMBER_9_RECOVERY_PLAN or state.get("phase")!="EXECUTOR_READY_DISABLED" or state.get("released_credits")!=0: raise ValueError("RECOVERY_AUTHORIZATION_REJECTED")
+    state.update({"released_credits":39,"stage_a":"RUNNING","stage_b":"LOCKED","stage_c":"LOCKED","phase":"STAGE_A_RUNNING","next_gate":"RECOVERY_BASELINE"}); state["content_hash"]=""; state["content_hash"]=_hash_document(state); store.write(state)
+    return "SEPTEMBER_9_INTRADAY_RECOVERY_AUTHORIZED"
 
 def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root:Path|None=None,
         supervisor_root:Path,supervisor_manifest_identity:str,service_probe,
@@ -480,7 +521,7 @@ def browser_projection(root:Path=INSTALL_ROOT)->dict[str,Any]:
         validate_installed(root); state=ExecutorStore(resolve_selected_state_root(root)).read()
         phases={"EXECUTOR_READY_DISABLED":"CANARY_READY","POST_0930_PARTIAL_READY":"POST_0930_PARTIAL_SESSION",
                 "CANARY_CONFIRMED":"CANARY_CONFIRMED","FAILED_CLOSED":"FAILED_CLOSED",
-                "SESSION_FAILED_CLOSED":"FAILED_CLOSED","SESSION_CLOSED":"INSTALLED_DISABLED"}
+                "SESSION_FAILED_CLOSED":"FAILED_CLOSED","SESSION_CLOSED":"INSTALLED_DISABLED","STAGE_A_RUNNING":"RECOVERY_ACTIVE"}
         phase="POST_0930_PARTIAL_SESSION" if state["classification"]=="POST_0930_PARTIAL_SESSION" and state["phase"]=="STAGE_A_RUNNING" else phases.get(state["phase"],"UNAVAILABLE")
         return {"schema_version":"iios-operational-market-executor-browser-v1","installed":True,
                 "phase":phase,"classification":state["classification"],

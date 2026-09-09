@@ -12,6 +12,7 @@ from .operational_market_executor import (
     SanitizedResponseError,
     _validate_response,
     endpoint_certification_plan,
+    september_9_intraday_recovery_plan,
 )
 
 
@@ -29,6 +30,15 @@ class Boundary:
 
 
 class Superbatch31ContractTests(unittest.TestCase):
+    def test_intraday_recovery_is_exact_independent_39_row_contract(self):
+        rows=september_9_intraday_recovery_plan("2026-09-09T08:45:00-07:00")
+        self.assertEqual((len(rows),len({r["identity"] for r in rows}),sum(r["cost"] for r in rows)),(39,39,39))
+        self.assertEqual(sum(r["purpose"]=="RECOVERY_INTRADAY" for r in rows),10)
+        self.assertEqual(sum(r["purpose"]=="RECOVERY_BASELINE" for r in rows),19)
+        self.assertEqual(sum(r["purpose"]=="CLOSING" for r in rows),10)
+        self.assertFalse(any(r["ticker"]=="MU" and r["endpoint"]=="HISTORICAL_OHLCV" for r in rows))
+        self.assertTrue(all(r["interval"]=="day" and r["start_date"] and r["end_date"] for r in rows if r["endpoint"]=="HISTORICAL_OHLCV"))
+        self.assertTrue(all(r["retry"] is False and r["provider"]=="FINANCIAL_DATASETS" for r in rows))
     def test_plan_is_three_unique_one_shot_contracts(self):
         rows=endpoint_certification_plan()
         self.assertEqual([r["purpose"] for r in rows],["POINT_IN_TIME_OHLCV","PRIOR_SESSION_OHLCV","MU_COMPANY_FACTS"])

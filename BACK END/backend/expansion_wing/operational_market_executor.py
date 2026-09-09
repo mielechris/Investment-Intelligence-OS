@@ -35,13 +35,15 @@ LATE_PLAN = "PARTIAL_SESSION_LATE_START"
 CANARY_PLAN = "SPY_SNAPSHOT_CANARY_1"
 POST_0930_PLAN = "POST_0930_PARTIAL_SESSION"
 SEPTEMBER_9_PLAN = CANONICAL_SEPTEMBER_9_PLAN
+SEPTEMBER_9_RECOVERY_PLAN = "SEPTEMBER_9_INTRADAY_RECOVERY"
 SEPTEMBER_9_SESSION_DATE = CANONICAL_SEPTEMBER_9_DATE
 ADOPTION_SCHEMA = "iios-operational-market-canary-adoption-v1"
 LIFECYCLES = {"PLANNED", "RESERVED", "DISPATCH_STARTED", "CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 TERMINAL = {"CONFIRMED", "AMBIGUOUS", "FAILED_PRETRANSMISSION"}
 PATHS = {"MARKET_SNAPSHOT": "/prices/snapshot", "HISTORICAL_OHLCV": "/prices", "COMPANY_FACTS": "/company/facts"}
 WINDOWS = {"CANARY": ("00:00", "23:59"), "OPENING": ("06:30", "07:00"), "BASELINE": ("06:30", "09:30"),
-           "INTRADAY": ("09:30", "12:55"), "CLOSING": ("12:55", "13:05")}
+           "INTRADAY": ("09:30", "12:55"), "RECOVERY_INTRADAY": ("00:00", "12:55"),
+           "RECOVERY_BASELINE": ("00:00", "09:30"), "CLOSING": ("12:55", "13:05")}
 MAX_BODY = 2_000_000
 PILOTS = tuple(row[0] for row in PILOT_INSTRUMENTS)
 
@@ -86,6 +88,28 @@ def _dated_row(session_date: str, plan: str, window: str, endpoint: str, ticker:
 def september_9_plan() -> tuple[dict[str, Any], ...]:
     """The sole corrected, provider-bound September 9 operational plan."""
     return validate_canonical_plan(corrected_september_9_plan())
+
+def september_9_intraday_recovery_plan(activation_time:str)->tuple[dict[str,Any],...]:
+    """Independent 39-row recovery; the failed MU PIT identity is excluded."""
+    if not re.fullmatch(r"2026-09-09T\d{2}:\d{2}:00-07:00",activation_time): raise ValueError("RECOVERY_ACTIVATION_TIME_INVALID")
+    minute=activation_time[11:16]
+    if not "07:00"<=minute<"12:55": raise ValueError("RECOVERY_WINDOW_INVALID")
+    rows=[]
+    def add(purpose,endpoint,ticker,earliest,latest,start=None,end=None):
+        material={"provider":"FINANCIAL_DATASETS","provider_contract":"fd-stage-a-standard-v1","plan":SEPTEMBER_9_RECOVERY_PLAN,
+            "session_date":"2026-09-09","activation_time":activation_time,"purpose":purpose,"window":purpose,"earliest":earliest,"latest":latest,
+            "endpoint":endpoint,"path":PATHS[endpoint],"ticker":ticker,"interval":"day" if endpoint=="HISTORICAL_OHLCV" else None,
+            "start_date":start,"end_date":end,"cost":1,"retry":False}
+        material["identity"]="market-evidence-"+hashlib.sha256((json.dumps(material,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest(); rows.append(material)
+    for ticker in PILOTS: add("RECOVERY_INTRADAY","MARKET_SNAPSHOT",ticker,minute,"12:55")
+    for ticker in PILOTS:
+        if ticker!="MU": add("RECOVERY_BASELINE","HISTORICAL_OHLCV",ticker,minute,"09:30","2026-09-08","2026-09-09")
+    for ticker in PILOTS:
+        if ticker!="MU": add("RECOVERY_BASELINE","HISTORICAL_OHLCV",ticker,minute,"09:30","2026-09-08","2026-09-08")
+    add("RECOVERY_BASELINE","COMPANY_FACTS","MU",minute,"09:30")
+    for ticker in PILOTS: add("CLOSING","MARKET_SNAPSHOT",ticker,"12:55","13:05")
+    if len(rows)!=39 or len({r["identity"] for r in rows})!=39: raise ValueError("RECOVERY_PLAN_INVALID")
+    return tuple(rows)
 
 def partial_session_plan(now_local: datetime) -> tuple[dict[str, Any], ...]:
     if now_local.tzinfo is None or now_local.date().isoformat() != "2026-09-08": raise ValueError("LATE_START_CLOCK_INVALID")
@@ -175,7 +199,7 @@ class ExecutorStore:
         info=self.root.lstat()
         if self.root.is_symlink() or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o700 or info.st_uid!=os.getuid(): raise ValueError("EXECUTOR_ROOT_INVALID")
         allowed={"executor-state.json","executor-state.last-known-valid.json","request-plan.json","canary-adoption.json","executor.lock","receipts","evidence",
-            "market-open-authorization.json","pre-authorization-executor-state.json","pre-authorization-executor-state.last-known-valid.json"}
+            "market-open-authorization.json","pre-authorization-executor-state.json","pre-authorization-executor-state.last-known-valid.json","recovery-pricing.json"}
         if {p.name for p in self.root.iterdir()}-allowed: raise ValueError("EXECUTOR_INVENTORY_INVALID")
         for dirname in ("receipts","evidence"):
             p=self.root/dirname; i=p.lstat()
@@ -192,7 +216,7 @@ class ExecutorStore:
                 or not isinstance(value.get("rows"),list)):
             raise ValueError("REQUEST_PLAN_INVALID")
         rows=tuple(value["rows"])
-        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN,POST_0930_PLAN,SEPTEMBER_9_PLAN}:
+        if value.get("plan_identity")!=plan_identity(rows) or value.get("classification") not in {FULL_PLAN,LATE_PLAN,CANARY_PLAN,POST_0930_PLAN,SEPTEMBER_9_PLAN,SEPTEMBER_9_RECOVERY_PLAN}:
             raise ValueError("REQUEST_PLAN_INVALID")
         return rows
     def write_plan(self,rows:tuple[dict[str,Any],...],classification:str)->None:
@@ -327,10 +351,12 @@ class OperationalMarketEvidenceCoordinator:
         finally: fcntl.flock(lock,fcntl.LOCK_UN); lock.close()
     def scheduled_tick(self, now_local: datetime) -> str:
         """Run only identities in the current immutable window; never releases allowance."""
-        expected_date = SEPTEMBER_9_SESSION_DATE if self.rows and self.rows[0]["plan"]==SEPTEMBER_9_PLAN else "2026-09-08"
+        expected_date = SEPTEMBER_9_SESSION_DATE if self.rows and self.rows[0]["plan"] in {SEPTEMBER_9_PLAN,SEPTEMBER_9_RECOVERY_PLAN} else "2026-09-08"
         state=self.store.read()
         authorized_at=state.get("authorized_at")
-        if expected_date=="2026-09-08" and not authorized_at and now_local.date().isoformat()==expected_date:
+        if self.rows and self.rows[0]["plan"]==SEPTEMBER_9_RECOVERY_PLAN:
+            hm=now_local.strftime("%H:%M"); classification="ACTIVE_SESSION_DATE" if now_local.date().isoformat()==expected_date and hm<"13:05" else "POST_SESSION_EXPIRED"
+        elif expected_date=="2026-09-08" and not authorized_at and now_local.date().isoformat()==expected_date:
             classification="POST_SESSION_EXPIRED" if now_local.strftime("%H:%M")>"13:05" else "ACTIVE_SESSION_DATE"
         else: classification=session_time_state(expected_date,authorized_at,now_local)
         if classification=="PRE_SESSION_BOUNDED_WAIT": return classification
@@ -347,9 +373,9 @@ class OperationalMarketEvidenceCoordinator:
         for row in self.rows:
             if row["window"] in windows: self.execute(row["identity"])
         current=self.store.read()
-        if self.rows and self.rows[0]["plan"] in {POST_0930_PLAN,SEPTEMBER_9_PLAN} and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
+        if self.rows and self.rows[0]["plan"] in {POST_0930_PLAN,SEPTEMBER_9_PLAN,SEPTEMBER_9_RECOVERY_PLAN} and "CLOSING" in windows and current["completed"]+current["ambiguous"]+current["failed"]==current["planned"]:
             self.close(); return "SESSION_CLOSED"
-        final=windows[-1]; state=self.store.read(); state["next_gate"]={"OPENING":"INTRADAY","BASELINE":"INTRADAY","INTRADAY":"CLOSE_READINESS","CLOSING":"SESSION_CLOSE"}[final]; self._write(state)
+        final=windows[-1]; state=self.store.read(); state["next_gate"]={"OPENING":"INTRADAY","BASELINE":"INTRADAY","INTRADAY":"CLOSE_READINESS","RECOVERY_BASELINE":"RECOVERY_INTRADAY","RECOVERY_INTRADAY":"CLOSE_READINESS","CLOSING":"SESSION_CLOSE"}[final]; self._write(state)
         return "+".join(windows)+"_OBSERVED"
     def close(self, failure: str|None=None) -> None:
         s=self.store.read(); s["released_credits"]=0; s["stage_a"]="LOCKED"; s["stage_b"]="LOCKED"; s["stage_c"]="LOCKED"
