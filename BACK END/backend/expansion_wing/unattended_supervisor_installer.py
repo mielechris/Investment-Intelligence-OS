@@ -567,6 +567,46 @@ def _wait_absent(old_pid: int, timeout: int = 30) -> None:
         time.sleep(1)
     raise ValueError("FAILED_CLOSED")
 
+def upgrade_same_layout(*,source_root:Path,install_root:Path,launch_plist:Path,backup:Path,
+        source_commit:str,target_commit:str,installed_at:datetime,service_stopped:bool=False,
+        post_select_validator:Callable[[Path],None]|None=None)->str:
+    """Atomically replace one validated installation with the same artifact layout."""
+    if not service_stopped: raise ValueError("SERVICE_TEARDOWN_REQUIRED")
+    current=json.loads(_read_owner_file(install_root/MANIFEST_NAME)); validate_manifest(current,install_root/"installed-artifacts",expected_commit=source_commit)
+    if tuple(row["relative_path"] for row in current["artifact_inventory"])!=tuple(sorted(ARTIFACT_NAMES)): raise ValueError("SAME_LAYOUT_INVENTORY_INVALID")
+    if backup.exists():
+        receipt=json.loads(_read_owner_file(backup/"rollback-receipt.json"))
+        if receipt.get("source_commit")!=source_commit or receipt.get("target_commit")!=target_commit: raise ValueError("ROLLBACK_INVALID")
+    else:
+        backup.mkdir(mode=0o700,parents=True); saved=backup/"prior-installation"; _copy_exact_tree(install_root,saved)
+        _atomic(backup/"launch-agent.plist",_validated_plist(launch_plist)); rows=_tree_records(saved)
+        body={"schema":"iios-unattended-supervisor-same-layout-rollback-v1","source_commit":source_commit,"target_commit":target_commit,"inventory":rows,"plist_sha256":_hash_bytes((backup/"launch-agent.plist").read_bytes()),"immutable":True}
+        _atomic(backup/"rollback-receipt.json",_canonical(body|{"content_hash":_hash(body)}))
+    with tempfile.TemporaryDirectory() as raw:
+        rehearsal=Path(raw)/"restore"; _copy_exact_tree(backup/"prior-installation",rehearsal)
+        if _tree_records(rehearsal)!=_tree_records(backup/"prior-installation"): raise ValueError("ROLLBACK_INVALID")
+    stage=install_root.parent/(install_root.name+".same-layout-stage")
+    hold=install_root.parent/(install_root.name+".same-layout-hold")
+    for p in (stage,hold):
+        if p.exists(): raise ValueError("SAME_LAYOUT_RESIDUAL_INVALID")
+    stage.mkdir(mode=0o700); artifacts=stage/"installed-artifacts"
+    build_candidate(artifacts,source_commit=target_commit,source_root=source_root,
+        python=plistlib.loads(_validated_plist(launch_plist))["ProgramArguments"][0],log_path=plistlib.loads(_validated_plist(launch_plist)).get("StandardOutPath"))
+    target=write_manifest(artifacts,source_commit=target_commit,installed_at=installed_at)
+    os.replace(artifacts/MANIFEST_NAME,stage/MANIFEST_NAME); _fsync_directory(stage)
+    if set(row["relative_path"] for row in target["artifact_inventory"])!=set(row["relative_path"] for row in current["artifact_inventory"]): raise ValueError("SAME_LAYOUT_INVENTORY_INVALID")
+    try:
+        os.replace(install_root,hold); os.replace(stage,install_root); _fsync_directory(install_root.parent)
+        _atomic(launch_plist,(install_root/"installed-artifacts"/PLIST_IDENTITY).read_bytes())
+        validate_installed_root(expected_commit=target_commit,root=install_root)
+        if post_select_validator: post_select_validator(install_root)
+    except Exception:
+        if install_root.exists(): shutil.rmtree(install_root)
+        if hold.exists(): os.replace(hold,install_root)
+        _atomic(launch_plist,(backup/"launch-agent.plist").read_bytes()); raise
+    if hold.exists(): shutil.rmtree(hold)
+    return "SUPERVISOR_SAME_LAYOUT_UPGRADED_DISABLED"
+
 
 def _backup_legacy(old_pid: int) -> None:
     if ROLLBACK_ROOT.exists(): raise ValueError("ROLLBACK_INVALID")

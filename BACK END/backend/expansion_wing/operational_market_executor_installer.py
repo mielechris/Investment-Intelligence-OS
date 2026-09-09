@@ -194,8 +194,8 @@ def resolve_selected_state_root(root:Path=INSTALL_ROOT)->Path:
     return selected
 
 def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root:Path|None=None,
-        supervisor_root:Path|None=None,expected_commit:str,now:datetime|None=None,
-        post_authorization_validator=None)->str:
+        supervisor_root:Path,supervisor_manifest_identity:str,service_probe,
+        expected_commit:str,now:datetime|None=None,post_authorization_validator=None)->str:
     """Atomically authorize the selected plan without dispatch or credential access."""
     current=datetime.now(timezone.utc) if now is None else now
     if current.tzinfo!=timezone.utc: raise ValueError("AUTHORIZATION_CLOCK_INVALID")
@@ -209,9 +209,13 @@ def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root
     if (binding.get("request_plan_identity")!=canonical_plan_identity() or binding.get("planned_identity_count")!=50
             or binding.get("exact_planned_cost_credits")!=50 or binding.get("worst_case_cost_credits")!=50):
         raise ValueError("CORRECTED_PRICING_BINDING_REQUIRED")
-    if supervisor_root is not None:
-        from .unattended_supervisor_installer import validate_installed_root
-        validate_installed_root(expected_commit=expected_commit,root=supervisor_root)
+    from .unattended_supervisor_installer import validate_installed_root
+    supervisor_status=validate_installed_root(expected_commit=expected_commit,root=supervisor_root)
+    supervisor_manifest=json.loads((supervisor_root/"installation-manifest.json").read_text())
+    if supervisor_status!="INSTALLED_VALID" or supervisor_manifest.get("canonical_manifest_content_hash")!=supervisor_manifest_identity:
+        raise ValueError("SUPERVISOR_MANIFEST_BINDING_INVALID")
+    if service_probe()!={"running":True,"supervisor_count":1,"lock_owned":True,"listeners":0,"children":0}:
+        raise ValueError("SUPERVISOR_PROCESS_BINDING_INVALID")
     selected=resolve_selected_state_root(root)
     if selected!=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME: raise ValueError("CORRECTED_SELECTION_REQUIRED")
     archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
@@ -235,6 +239,7 @@ def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root
     body={"schema":AUTHORIZATION_SCHEMA,"session_date":"2026-09-09","plan_identity":canonical_plan_identity(),
         "selector_hash":json.loads((root/SELECTOR_NAME).read_text())["content_hash"],"pricing_hash":binding["cost_contract_hash"],
         "archive_hash":archive["content_hash"],"supersession_receipt_hash":supersession["content_hash"],
+        "supervisor_manifest_identity":supervisor_manifest_identity,
         "maximum_requests":50,"maximum_credits":50,"automatic_retries":0,
         "dispatch_windows":{"OPENING":["06:30","07:00"],"BASELINE":["06:30","09:30"],"INTRADAY":["09:30","12:55"],"CLOSING":["12:55","13:05"]},
         "direct_dispatch":False,"trading_authority":{"broker":False,"paper_order":False,"automatic_promotion":False,"ledger_write":False,"live_execution":False}}

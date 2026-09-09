@@ -10,7 +10,7 @@ from .unattended_supervisor_installer import (
     validate_candidate, validate_manifest, write_manifest, main,
     supervisor_lock_path, supervisor_lock_state, SUPERVISOR_LOCK_NAME,
     create_legacy_migration_backup, rehearse_legacy_restoration, migrate_legacy_layout,
-    validate_legacy_manifest, _canonical, _hash, _tree_records,
+    validate_legacy_manifest, validate_installed_root, upgrade_same_layout, _canonical, _hash, _tree_records,
 )
 from .unattended_tuesday_service import SUPERVISOR_LOCK_NAME as SERVICE_LOCK_NAME
 from . import unattended_supervisor_installer as installer
@@ -19,6 +19,15 @@ COMMIT="a"*40
 NOW=datetime(2026,9,8,3,tzinfo=timezone.utc)
 
 class Superbatch28H(unittest.TestCase):
+    def test_same_layout_upgrade_and_byte_exact_rollback(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); source=self.source(root); old=root/'old'; build_candidate(old,source_commit=COMMIT,source_root=source,python='/usr/bin/python3',log_path='/tmp/log'); write_manifest(old,source_commit=COMMIT,installed_at=NOW)
+            install=root/'install'; install.mkdir(mode=0o700); old.rename(install/'installed-artifacts'); (install/'installed-artifacts'/MANIFEST_NAME).rename(install/MANIFEST_NAME)
+            plist=root/'launch.plist'; plist.write_bytes((install/'installed-artifacts'/ARTIFACT_NAMES[-1]).read_bytes()); plist.chmod(0o600)
+            target='b'*40; before=_tree_records(install)
+            self.assertEqual(upgrade_same_layout(source_root=source,install_root=install,launch_plist=plist,backup=root/'backup',source_commit=COMMIT,target_commit=target,installed_at=NOW,service_stopped=True),'SUPERVISOR_SAME_LAYOUT_UPGRADED_DISABLED')
+            self.assertEqual(validate_installed_root(expected_commit=target,root=install),'INSTALLED_VALID')
+            self.assertEqual(_tree_records(root/'backup'/'prior-installation'),before)
     def source(self, root:Path)->Path:
         source=root/"source"; (source/"BACK END/backend/expansion_wing").mkdir(parents=True)
         for name in ARTIFACT_NAMES[:-1]:

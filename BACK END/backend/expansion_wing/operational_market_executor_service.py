@@ -96,6 +96,7 @@ def main(argv:list[str]|None=None)->int:
     group.add_argument("--validate-september-9-readiness",action="store_true")
     group.add_argument("--authorize-september-9-market-open-50",action="store_true")
     parser.add_argument("--source-root"); parser.add_argument("--authorized-commit")
+    parser.add_argument("--supervisor-manifest-identity")
     parser.add_argument("--owner-authorized",action="store_true"); parser.add_argument("--browser",action="store_true",help=argparse.SUPPRESS)
     parser.add_argument("--cost-observed-at"); parser.add_argument("--cost-expires-at"); parser.add_argument("--cost-observation-identity")
     args=parser.parse_args(argv)
@@ -116,8 +117,10 @@ def main(argv:list[str]|None=None)->int:
             if not args.owner_authorized: raise ValueError("OWNER_PARTIAL_SESSION_AUTHORIZATION_REQUIRED")
             status=transition_post_0930()
         elif args.authorize_september_9_market_open_50:
-            if not args.owner_authorized: raise ValueError("OWNER_MARKET_OPEN_AUTHORIZATION_REQUIRED")
-            status=authorize_september_9_market_open_50(expected_commit=args.authorized_commit or "")
+            if not args.owner_authorized or not args.supervisor_manifest_identity: raise ValueError("OWNER_MARKET_OPEN_AUTHORIZATION_REQUIRED")
+            from .unattended_supervisor_installer import INSTALL_ROOT as SUPERVISOR_ROOT,_service_probe
+            status=authorize_september_9_market_open_50(expected_commit=args.authorized_commit or "",
+                supervisor_root=SUPERVISOR_ROOT,supervisor_manifest_identity=args.supervisor_manifest_identity,service_probe=_service_probe)
         else:
             if not all((args.cost_observed_at,args.cost_expires_at,args.cost_observation_identity)):
                 raise ValueError("SEPTEMBER_9_COST_EVIDENCE_MISSING")
