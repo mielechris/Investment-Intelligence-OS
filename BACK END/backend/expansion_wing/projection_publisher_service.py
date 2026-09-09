@@ -7,6 +7,7 @@ import os
 import signal
 import stat
 import sys
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,7 +107,9 @@ def _operational_service() -> PublisherService:
     if not state_root.exists(): raise RuntimeError("PUBLISHER_STATE_ROOT_MISSING")
     bindings = load_binding_manifest()
     builder = EnvelopeSnapshotBuilder(operational_input_root(), bindings)
-    return PublisherService(builder, GovernedProjectionPublisher(reviewed_projection_root()),
+    release_commit=os.getenv("IIOS_EXPECTED_RELEASE_COMMIT","")
+    if not re.fullmatch(r"[0-9a-f]{40}",release_commit): raise RuntimeError("PUBLISHER_RELEASE_UNAVAILABLE")
+    return PublisherService(builder, GovernedProjectionPublisher(reviewed_projection_root(),release_commit=release_commit),
         SingleFlightLock(state_root / "publisher.lock"), BoundedStatusLog(state_root / "publisher-status.jsonl"))
 
 

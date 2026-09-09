@@ -100,10 +100,11 @@ class EvaluationTimes:
 
 class GovernedProjectionPublisher:
     def __init__(self, root: Path, *, contracts: dict[str, SourceContract] | None = None,
-                 before_commit: Callable[[], None] | None = None) -> None:
+                 before_commit: Callable[[], None] | None = None,release_commit:str|None=None) -> None:
         self.store = ProjectionStore(root)
         self.contracts = contracts or source_registry()
         self.before_commit = before_commit
+        self.release_commit = release_commit
 
     def _receipts(self, envelopes: dict[str, Any], now: datetime) -> dict[str, dict[str, Any]]:
         unknown = set(envelopes) - set(self.contracts)
@@ -217,7 +218,8 @@ class GovernedProjectionPublisher:
                 previous_freshness=existing.get("evidence_freshness_state") if existing else None,
                 freshness=proposed_for_compare["evidence_freshness_state"],
                 failure_state=proposed_for_compare["candidate_conveyor"]["state"] == "FAILED_CLOSED")
-            if not decision.publish:
+            release_mismatch=bool(self.release_commit and manifest.get("release_commit")!=self.release_commit) if manifest else False
+            if not decision.publish and not release_mismatch:
                 return EvaluationResult("UNCHANGED", decision.category, False, manifest["sequence"],
                     manifest["projection_sha256"], semantic, now.isoformat(),
                     times.newest_source_generated_at.isoformat(), times.newest_evidence_effective_at.isoformat(),
@@ -226,7 +228,7 @@ class GovernedProjectionPublisher:
                 generated_at=times.publication_projection_generated_at.isoformat())
             if self.before_commit:
                 self.before_commit()
-            published = self.store.publish(projection, now=now)
+            published = self.store.publish(projection, now=now,release_commit=self.release_commit)
             return EvaluationResult("PUBLISHED", decision.category, published.changed, published.sequence,
                 published.projection_sha256, semantic, now.isoformat(),
                 times.newest_source_generated_at.isoformat(), times.newest_evidence_effective_at.isoformat(),

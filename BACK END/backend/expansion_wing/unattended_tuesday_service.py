@@ -5,7 +5,7 @@ therefore its production supervisor cannot spend and fails closed at the cost ga
 """
 from __future__ import annotations
 import argparse, fcntl, json, os, stat, time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .unattended_tuesday import (
@@ -19,6 +19,7 @@ OPERATIONAL_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesd
 SUPERVISOR_ROOT = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor"
 SUPERVISOR_LOCK_NAME = "unattended-supervisor.lock"
 INCIDENT_NAME = "latest-incident.json"
+HEARTBEAT_NAME = "supervisor-heartbeat.json"
 ROLLBACK_ROOT = Path.home()/"Library/Application Support/IIOS/Rollback/UnattendedTuesday"
 ROLLBACK_FILES = frozenset({POLICY_NAME, STATE_NAME, LKV_NAME})
 INSTALLATION_MANIFEST = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor/installation-manifest.json"
@@ -52,6 +53,47 @@ class SupervisorIncidentStore:
             "observed_at":observed_at.astimezone(timezone.utc).isoformat(),"phase":phase,
             "failure_category":category,"exit_code":4,"content_hash":""}
         value["content_hash"]=_hash(value); _atomic(self.root,INCIDENT_NAME,value)
+
+class SupervisorHeartbeatStore:
+    """Atomic, hash-bound evidence from one completed supervisor cycle."""
+    def __init__(self,root:Path): self.root=root
+    def record(self,evidence:dict,*,observed_at:datetime,next_wake_at:datetime,pid:int|None=None)->dict:
+        if (observed_at.tzinfo is None or observed_at.utcoffset()!=timezone.utc.utcoffset(observed_at)
+                or next_wake_at.tzinfo is None or next_wake_at.utcoffset()!=timezone.utc.utcoffset(next_wake_at)
+                or not observed_at<=next_wake_at<=observed_at+timedelta(seconds=180)):
+            raise ValueError("HEARTBEAT_CLOCK_INVALID")
+        required={"release_commit","supervisor_manifest_hash","executor_manifest_hash","selected_generation",
+                  "plan_identity","executor_state_hash","projection_hash","projection_generation","ledger_identity"}
+        if set(evidence)!=required or any(not isinstance(evidence[key],str) or not evidence[key] for key in required):
+            raise ValueError("HEARTBEAT_EVIDENCE_INVALID")
+        value={"schema":"iios-unattended-supervisor-heartbeat-v1",**evidence,
+            "observed_at":observed_at.isoformat(),"next_wake_at":next_wake_at.isoformat(),
+            "pid":os.getpid() if pid is None else pid,"content_hash":""}
+        value["content_hash"]=_hash(value); _atomic(self.root,HEARTBEAT_NAME,value); return value
+
+def _production_heartbeat_evidence()->dict:
+    """Read independent installed artifacts; never synthesizes a readiness boolean."""
+    import hashlib
+    from .operational_market_executor import ExecutorStore,plan_identity
+    from .operational_market_executor_installer import INSTALL_ROOT as executor_root,resolve_selected_state_root,validate_installed
+    from .projection_runtime import ProjectionStore,reviewed_projection_root
+    from .unattended_supervisor_installer import INSTALL_ROOT as supervisor_root,MANIFEST_NAME,validate_installed_root
+    import ledger
+    supervisor_manifest=json.loads((supervisor_root/MANIFEST_NAME).read_text())
+    release=supervisor_manifest["installed_source_commit"]
+    validate_installed_root(expected_commit=release,root=supervisor_root)
+    executor_manifest=validate_installed(executor_root)
+    if executor_manifest.get("installed_source_commit")!=release: raise ValueError("RUNTIME_RELEASE_MISMATCH")
+    selected=resolve_selected_state_root(executor_root); store=ExecutorStore(selected); rows,state=store.read_plan(),store.read()
+    if state["plan_identity"]!=plan_identity(rows): raise ValueError("REQUEST_PLAN_MISMATCH")
+    _,projection=ProjectionStore(reviewed_projection_root()).read()
+    ledger_info=ledger.DB_PATH.stat()
+    ledger_identity=hashlib.sha256(f"{ledger_info.st_dev}:{ledger_info.st_ino}:{ledger_info.st_size}:{ledger_info.st_mtime_ns}".encode()).hexdigest()
+    return {"release_commit":release,"supervisor_manifest_hash":supervisor_manifest["canonical_manifest_content_hash"],
+        "executor_manifest_hash":executor_manifest["content_hash"],"selected_generation":selected.name,
+        "plan_identity":state["plan_identity"],"executor_state_hash":state["content_hash"],
+        "projection_hash":projection["projection_sha256"],"projection_generation":str(projection["source_cycle_id"]),
+        "ledger_identity":ledger_identity}
 
 def _installed_commit(path: Path = INSTALLATION_MANIFEST) -> str:
     info=path.lstat()
@@ -182,7 +224,8 @@ def tick(store:PolicyStore,now:datetime,*,readiness_root:Path|None=None)->str:
     return "NO_ELIGIBLE_TRANSITION"
 
 def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=None,coordinator_factory=None,
-              incident_store:SupervisorIncidentStore|None=None)->int:
+              incident_store:SupervisorIncidentStore|None=None,heartbeat_store:SupervisorHeartbeatStore|None=None,
+              heartbeat_evidence_factory=None)->int:
     policy_root=OPERATIONAL_ROOT if root is None else root
     lock_root=SUPERVISOR_ROOT if root is None else root.parent/(root.name+"Supervisor")
     lock_root.mkdir(mode=0o700,parents=False,exist_ok=True); os.chmod(lock_root,0o700)
@@ -191,6 +234,7 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
     except BlockingIOError: lock.close(); return 4
     store=PolicyStore(policy_root); now=clock or (lambda:datetime.now(timezone.utc)); wait=sleep or time.sleep; count=0
     incidents=incident_store or SupervisorIncidentStore(lock_root/"incidents")
+    heartbeats=heartbeat_store or SupervisorHeartbeatStore(lock_root)
     try:
         while iterations is None or count<iterations:
             cycle_now=now()
@@ -217,6 +261,13 @@ def supervise(*,root:Path|None=None,clock=None,sleep=None,iterations:int|None=No
                 try: tick(store,cycle_now)
                 except (OSError,ValueError) as exc:
                     incidents.record(exc,phase="POLICY_TICK",observed_at=cycle_now.astimezone(timezone.utc)); return 4
+            if root is None or heartbeat_evidence_factory is not None:
+                try:
+                    evidence=(heartbeat_evidence_factory or _production_heartbeat_evidence)()
+                    observed=cycle_now.astimezone(timezone.utc)
+                    heartbeats.record(evidence,observed_at=observed,next_wake_at=observed+timedelta(seconds=60))
+                except (OSError,ValueError,RuntimeError,KeyError) as exc:
+                    incidents.record(exc,phase="RUNTIME_HEARTBEAT",observed_at=cycle_now.astimezone(timezone.utc))
             count+=1
             if iterations is None or count<iterations: wait(60)
         return 0

@@ -9,7 +9,7 @@ from .provider_readiness import (ENDPOINT_PATHS, MAX_COST_EVIDENCE_AGE_SECONDS, 
     validate_september_9_cost_evidence)
 from .provider_readiness_service import (install_cost_contract, probe_credential_once,
     refresh_september_9_cost_contract, restore_prior_pricing, _backup_value, main)
-from .unattended_tuesday_service import SupervisorIncidentStore, supervise
+from .unattended_tuesday_service import SupervisorHeartbeatStore, SupervisorIncidentStore, supervise
 
 class Probe:
     def __init__(self,value): self.value=value; self.calls=0
@@ -95,6 +95,24 @@ class Superbatch28C(unittest.TestCase):
         self.assertEqual(record["phase"],"OPERATIONAL_COORDINATOR")
         self.assertEqual(incident_mode,0o700)
         self.assertNotIn("private",json.dumps(record).lower())
+
+    def test_supervisor_persists_hash_bound_runtime_heartbeat(self):
+        digest="a"*64; commit="b"*40; generation="2026-09-09-shadow"
+        evidence={"release_commit":commit,"supervisor_manifest_hash":digest,"executor_manifest_hash":digest,
+            "selected_generation":generation,"plan_identity":digest,"executor_state_hash":digest,
+            "projection_hash":digest,"projection_generation":generation,"ledger_identity":digest}
+        observed=datetime(2026,9,9,17,tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as raw:
+            base=Path(raw); root=base/"policy"; heartbeat=SupervisorHeartbeatStore(base/"heartbeat")
+            (base/"heartbeat").mkdir(mode=0o700)
+            self.assertEqual(supervise(root=root,iterations=1,clock=lambda:observed,
+                heartbeat_store=heartbeat,heartbeat_evidence_factory=lambda:evidence),0)
+            value=json.loads((base/"heartbeat"/"supervisor-heartbeat.json").read_text())
+            mode=(base/"heartbeat"/"supervisor-heartbeat.json").stat().st_mode&0o777
+        self.assertEqual(value["schema"],"iios-unattended-supervisor-heartbeat-v1")
+        self.assertEqual(value["selected_generation"],generation); self.assertEqual(mode,0o600)
+        supplied=value.pop("content_hash"); self.assertEqual(supplied,__import__("hashlib").sha256(
+            (json.dumps(value,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest())
 
     def test_september_9_refresh_backup_reader_and_exact_restore(self):
         with tempfile.TemporaryDirectory() as raw:

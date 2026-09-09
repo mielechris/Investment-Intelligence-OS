@@ -20,6 +20,7 @@ MANIFEST_NAME = "projection-manifest.json"
 ROLLBACK_NAME = "rollback-manifest.json"
 INVENTORY = frozenset({PROJECTION_NAME, MANIFEST_NAME, ROLLBACK_NAME})
 MANIFEST_SCHEMA = "iios-multi-asset-projection-manifest-v1"
+RELEASE_MANIFEST_SCHEMA = "iios-multi-asset-projection-manifest-v2"
 ROLLBACK_SCHEMA = "iios-multi-asset-projection-rollback-v1"
 MAX_MANIFEST_BYTES = 8_192
 
@@ -119,11 +120,15 @@ def _descriptor_read(root: Path, name: str, *, expected_uid: int, maximum: int) 
 def _validate_manifest(value: Any, projection: bytes) -> None:
     fields = {"schema_version", "sequence", "projection_sha256", "projection_size_bytes",
               "generated_at", "source_cycle_id", "root_identifier", "inventory"}
-    if (not isinstance(value, dict) or set(value) != fields or value.get("schema_version") != MANIFEST_SCHEMA or
+    schema=value.get("schema_version") if isinstance(value,dict) else None
+    if schema==RELEASE_MANIFEST_SCHEMA: fields=fields|{"release_commit"}
+    if (not isinstance(value, dict) or set(value) != fields or schema not in {MANIFEST_SCHEMA,RELEASE_MANIFEST_SCHEMA} or
             value.get("root_identifier") != ROOT_IDENTIFIER or value.get("inventory") != sorted(INVENTORY) or
             not isinstance(value.get("sequence"), int) or isinstance(value.get("sequence"), bool) or value["sequence"] < 1 or
             value.get("projection_size_bytes") != len(projection) or value.get("projection_sha256") != _hash(projection) or
             not re.fullmatch(r"[0-9a-f]{64}", str(value.get("projection_sha256")))):
+        raise RuntimeError("PROJECTION_MANIFEST_INVALID")
+    if schema==RELEASE_MANIFEST_SCHEMA and not re.fullmatch(r"[0-9a-f]{40}",str(value.get("release_commit"))):
         raise RuntimeError("PROJECTION_MANIFEST_INVALID")
     _timestamp(value.get("generated_at"))
     cycle = value.get("source_cycle_id")
@@ -160,8 +165,11 @@ class ProjectionStore:
                     "created_at": generated_at, "prior_state": "ABSENT", "created_inventory": sorted(INVENTORY)}
         _atomic_write(self.root, ROLLBACK_NAME, _canonical(rollback))
 
-    def publish(self, projection: dict[str, Any], *, now: datetime | None = None) -> PublicationResult:
+    def publish(self, projection: dict[str, Any], *, now: datetime | None = None,
+                release_commit: str | None = None) -> PublicationResult:
         validate_projection(projection, now=now)
+        if release_commit is not None and not re.fullmatch(r"[0-9a-f]{40}",release_commit):
+            raise RuntimeError("PROJECTION_RELEASE_INVALID")
         _safe_root(self.root, expected_uid=self.expected_uid, create=False)
         if not (self.root / ROLLBACK_NAME).is_file():
             raise RuntimeError("ROLLBACK_MANIFEST_MISSING")
@@ -179,16 +187,19 @@ class ProjectionStore:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 raise RuntimeError("PROJECTION_MANIFEST_INVALID") from None
             _validate_manifest(previous_manifest, previous_projection)
-            if _hash(previous_projection) == digest:
+            release_matches=(release_commit is None and "release_commit" not in previous_manifest
+                             or release_commit is not None and previous_manifest.get("release_commit")==release_commit)
+            if _hash(previous_projection) == digest and release_matches:
                 return PublicationResult(False, previous_manifest["sequence"], digest, len(encoded))
             sequence = previous_manifest["sequence"] + 1
         elif (self.root / PROJECTION_NAME).exists():
             raise RuntimeError("PROJECTION_INVENTORY_UNSAFE")
-        manifest = {"schema_version": MANIFEST_SCHEMA, "sequence": sequence,
+        manifest = {"schema_version": RELEASE_MANIFEST_SCHEMA if release_commit else MANIFEST_SCHEMA, "sequence": sequence,
                     "projection_sha256": digest, "projection_size_bytes": len(encoded),
                     "generated_at": projection["projection_generated_at"],
                     "source_cycle_id": projection["source_cycle_id"], "root_identifier": ROOT_IDENTIFIER,
                     "inventory": sorted(INVENTORY)}
+        if release_commit: manifest["release_commit"]=release_commit
         _atomic_write(self.root, PROJECTION_NAME, encoded)
         _atomic_write(self.root, MANIFEST_NAME, _canonical(manifest))
         return PublicationResult(True, sequence, digest, len(encoded))

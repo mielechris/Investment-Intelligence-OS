@@ -79,6 +79,17 @@ class ProjectionStoreTests(unittest.TestCase):
         self.assertEqual(manifest["projection_sha256"], result.projection_sha256)
         self.assertFalse(any(item.name.startswith(".") for item in self.root.iterdir()))
 
+    def test_release_bound_projection_manifest_is_direct_and_strict(self):
+        commit="a"*40
+        legacy=self.store.publish(projection(),now=NOW)
+        upgraded=self.store.publish(projection(),now=NOW,release_commit=commit)
+        _,manifest=self.store.read(now=NOW)
+        self.assertTrue(upgraded.changed); self.assertEqual(upgraded.sequence,legacy.sequence+1)
+        self.assertEqual(manifest["schema_version"],"iios-multi-asset-projection-manifest-v2")
+        self.assertEqual(manifest["release_commit"],commit)
+        with self.assertRaisesRegex(RuntimeError,"PROJECTION_RELEASE_INVALID"):
+            self.store.publish(projection(),now=NOW,release_commit="not-a-commit")
+
     def test_identical_publication_is_idempotent_and_change_is_monotonic(self):
         first = self.store.publish(projection(), now=NOW); before = (self.root / PROJECTION_NAME).stat().st_mtime_ns
         second = self.store.publish(projection(), now=NOW)

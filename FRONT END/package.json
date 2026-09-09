@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "node scripts/eslint-baseline.mjs",
+    "lint:raw": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
