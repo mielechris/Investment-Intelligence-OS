@@ -63,6 +63,10 @@ class Superbatch28A(unittest.TestCase):
             observation_identity='financial-datasets-pricing-2026-09-09-review-v1')
         self.assertEqual(validate_september_9_cost_evidence(doc,now=datetime(2026,9,9,13,tzinfo=timezone.utc)),doc)
         self.assertEqual(doc['request_plan_identity'],september_9_plan_identity())
+        self.assertEqual(doc['request_plan_identity'],'d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23')
+        self.assertNotEqual(doc['request_plan_identity'],'c40b4c241d114df4d95069e55e7c68a4fbc8e1c899c5faa6aa8e3767b97a626a')
+        self.assertEqual((doc['unique_request_identity_count'],doc['automatic_retry_count']),(50,0))
+        self.assertEqual(doc['reviewed_endpoint_identities'],sorted(ENDPOINT_PATHS))
         self.assertEqual(doc['required_session_coverage_utc'],SEPTEMBER_9_REQUIRED_COVERAGE_UTC)
         self.assertFalse(doc['browser_refresh']); self.assertFalse(doc['provider_execution_refresh'])
         self.assertEqual(validate_september_9_readiness(observed_at=observed,expires_at=expires,

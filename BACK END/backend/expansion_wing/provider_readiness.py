@@ -179,6 +179,12 @@ def validate_cost_contract_document(value:Any,*,now:datetime)->dict[str,Any]:
     return value
 
 
+def validate_prior_cost_contract_for_refresh(value:Any)->dict[str,Any]:
+    """Authenticate the exact installed predecessor without treating expiry as corruption."""
+    if value!=cost_contract_document(): raise ValueError("PRIOR_COST_CONTRACT_INVALID")
+    return value
+
+
 def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=None,policy_installed:bool=False)->dict[str,Any]:
     """Read fixed owner-only metadata only; never reads Keychain or network."""
     current=datetime.now(timezone.utc) if now is None else now
@@ -191,13 +197,20 @@ def installed_readiness_projection(*,root:Path=READINESS_ROOT,now:datetime|None=
             path=root/name; item=path.lstat()
             if path.is_symlink() or not stat.S_ISREG(item.st_mode) or stat.S_IMODE(item.st_mode)!=0o600: raise ValueError("READINESS_FILE_INVALID")
             docs[name]=json.loads(path.read_text())
-        validate_cost_contract_document(docs[COST_CONTRACT_NAME],now=current)
+        cost_document=docs[COST_CONTRACT_NAME]
         credential=docs[CREDENTIAL_STATUS_NAME]
-        if set(credential)!={"schema","status","checked_at"} or credential.get("schema")!="iios-credential-presence-v1" or credential.get("status") not in {"AVAILABLE","UNAVAILABLE","AMBIGUOUS","ACCESS_DENIED"}: raise ValueError("CREDENTIAL_METADATA_INVALID")
+        credential_status=_stored_credential_status(credential)
+        if cost_document.get("schema")==COST_SCHEMA:
+            validate_cost_contract_document(cost_document,now=current)
+        elif cost_document.get("schema")==SEPTEMBER_9_COST_SCHEMA:
+            projection=_september_9_readiness(cost_document,credential_status,now=current)
+            projection.update({"commissioning_state":"AUTHORIZED_WAITING" if policy_installed and projection["failure_category"]=="PROVIDER_READY" else "READY_FOR_OWNER_POLICY_AUTHORIZATION" if projection["failure_category"]=="PROVIDER_READY" else "FAILED_CLOSED","unattended_service_state":"INSTALLED_DISABLED","one_day_policy_state":"AUTHORIZED_WAITING" if policy_installed else "NOT_AUTHORIZED"})
+            return projection
+        else: raise ValueError("COST_CONTRACT_SCHEMA_INVALID")
         class StoredProbe:
             def exists(self,**kwargs):
                 del kwargs
-                return True if credential["status"]=="AVAILABLE" else False if credential["status"]=="UNAVAILABLE" else None
+                return True if credential_status=="AVAILABLE" else False if credential_status=="UNAVAILABLE" else None
         projection=evaluate_readiness(reviewed_cost_contracts(),FixedCredentialBoundary(StoredProbe()),now=current)
         projection.update({"commissioning_state":"AUTHORIZED_WAITING" if policy_installed and projection["failure_category"]=="PROVIDER_READY" else "READY_FOR_OWNER_POLICY_AUTHORIZATION" if projection["failure_category"]=="PROVIDER_READY" else "FAILED_CLOSED","unattended_service_state":"INSTALLED_DISABLED","one_day_policy_state":"AUTHORIZED_WAITING" if policy_installed else "NOT_AUTHORIZED"})
         return projection
@@ -295,13 +308,22 @@ def september_9_cost_evidence_document(*, observed_at: str, expires_at: str,
         "required_session_coverage_utc":SEPTEMBER_9_REQUIRED_COVERAGE_UTC,
         "planned_request_count":50,"exact_planned_cost_credits":50,
         "worst_case_cost_credits":50,"rate_limit_per_minute":RATE_LIMIT_PER_MINUTE,
+        "unique_request_identity_count":50,"automatic_retry_count":0,
+        "reviewed_endpoint_identities":sorted(ENDPOINT_PATHS),
+        "confirmed_cost_per_request":1,
         "browser_refresh":False,"provider_execution_refresh":False,
         "request_plan_identity":september_9_plan_identity()}
     return value | {"document_hash":_hash(value)}
 
 
 def validate_september_9_cost_evidence(value: Any, *, now: datetime) -> dict[str, Any]:
-    if not isinstance(value,dict) or value.get("schema")!=SEPTEMBER_9_COST_SCHEMA:
+    expected_keys={"schema","provider_identity","provider_contract_version","pricing_observation_identity",
+        "source_url_identity","documentation_observed_at","expiration_revalidation_time",
+        "required_session_coverage_utc","planned_request_count","exact_planned_cost_credits",
+        "worst_case_cost_credits","rate_limit_per_minute","unique_request_identity_count",
+        "automatic_retry_count","reviewed_endpoint_identities","confirmed_cost_per_request",
+        "browser_refresh","provider_execution_refresh","request_plan_identity","document_hash"}
+    if not isinstance(value,dict) or set(value)!=expected_keys or value.get("schema")!=SEPTEMBER_9_COST_SCHEMA:
         raise ValueError("SEPTEMBER_9_COST_EVIDENCE_INVALID")
     expected=september_9_cost_evidence_document(
         observed_at=value.get("documentation_observed_at"),
@@ -312,14 +334,47 @@ def validate_september_9_cost_evidence(value: Any, *, now: datetime) -> dict[str
     return value
 
 
+def _stored_credential_status(value:Any)->str:
+    if (not isinstance(value,dict) or set(value)!={"schema","status","checked_at"}
+            or value.get("schema")!="iios-credential-presence-v1"
+            or value.get("status") not in {"AVAILABLE","UNAVAILABLE","AMBIGUOUS","ACCESS_DENIED"}):
+        raise ValueError("CREDENTIAL_METADATA_INVALID")
+    return value["status"]
+
+
+def _september_9_readiness(document:dict[str,Any],credential_status:str,*,now:datetime)->dict[str,Any]:
+    validate_september_9_cost_evidence(document,now=now)
+    rows=september_9_request_plan()
+    if (len(rows)!=50 or len({row["request_identity"] for row in rows})!=50
+            or any(row["retry"] is not False or row["confirmed_cost"]!=1 for row in rows)
+            or document["request_plan_identity"]!=september_9_plan_identity()):
+        raise ValueError("SEPTEMBER_9_PLAN_BINDING_INVALID")
+    failure=None if credential_status=="AVAILABLE" else {
+        "UNAVAILABLE":"CREDENTIAL_NOT_AVAILABLE","AMBIGUOUS":"CREDENTIAL_AMBIGUOUS",
+        "ACCESS_DENIED":"CREDENTIAL_ACCESS_DENIED"}.get(credential_status,"CREDENTIAL_AMBIGUOUS")
+    return {"schema_version":BROWSER_SCHEMA,"provider_state":"READY" if failure is None else "FAILED_CLOSED",
+        "provider_identity":PROVIDER,"request_plan_state":"VALID","cost_contract_state":"VALID",
+        "credential_presence_state":credential_status,"supported_costed_identity_count":50,
+        "unsupported_identity_count":0,"ambiguous_identity_count":0,"planned_identity_count":50,
+        "worst_case_stage_a_credits":50,"stage_a_authorized_allowance_credits":50,
+        "stage_a_maximum":STAGE_A_MAXIMUM,"stage_a_safety_margin":STAGE_A_MAXIMUM-50,
+        "daily_hard_ceiling":DAILY_CEILING,"stage_b_state":"LOCKED","stage_c_state":"LOCKED",
+        "stage_a_released_credits":0,"failure_category":failure or "PROVIDER_READY",
+        "network_enabled":False,"authority_locked":True,
+        "cost_contract_binding":"VALID" if failure is None else "UNAVAILABLE",
+        "session_date":SEPTEMBER_9_SESSION_DATE,"request_plan_identity":september_9_plan_identity()}
+
+
 def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | None = None) -> dict[str, Any]:
     """Validate the fixed installed cost document and its exact 50-row plan."""
     current = datetime.now(timezone.utc) if now is None else now
     projection = installed_readiness_projection(root=root, now=current)
     if projection.get("provider_state") != "READY":
         raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
+    document = json.loads((root / COST_CONTRACT_NAME).read_text())
+    september_9=document.get("schema")==SEPTEMBER_9_COST_SCHEMA
     expected = {
-        "request_plan_identity": revised_plan_identity(),
+        "request_plan_identity": september_9_plan_identity() if september_9 else revised_plan_identity(),
         "planned_identity_count": 50,
         "supported_costed_identity_count": 50,
         "blocked_identity_count": 0,
@@ -329,8 +384,8 @@ def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | Non
         "stage_a_maximum_credits": STAGE_A_MAXIMUM,
         "daily_hard_ceiling_credits": DAILY_CEILING,
     }
-    document = json.loads((root / COST_CONTRACT_NAME).read_text())
-    validate_cost_contract_document(document, now=current)
+    if september_9: validate_september_9_cost_evidence(document,now=current)
+    else: validate_cost_contract_document(document, now=current)
     return expected | {"cost_contract_hash": document["document_hash"]}
 
 

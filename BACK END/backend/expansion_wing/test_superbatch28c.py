@@ -2,8 +2,12 @@ from __future__ import annotations
 import json, plistlib, tempfile, threading, unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from .provider_readiness import MAX_COST_EVIDENCE_AGE_SECONDS, PRICING_EXPIRES_AT, PRICING_OBSERVED_AT, REQUIRED_SESSION_COVERAGE_UTC, READINESS_INVENTORY, FixedCredentialBoundary, EndpointCost, cost_contract_document, installed_readiness_projection, revised_plan_identity, reviewed_cost_contracts
-from .provider_readiness_service import install_cost_contract, probe_credential_once
+from .provider_readiness import (ENDPOINT_PATHS, MAX_COST_EVIDENCE_AGE_SECONDS, PRICING_EXPIRES_AT,
+    PRICING_OBSERVED_AT, REQUIRED_SESSION_COVERAGE_UTC, READINESS_INVENTORY, FixedCredentialBoundary,
+    EndpointCost, cost_contract_document, installed_readiness_projection, revised_plan_identity,
+    reviewed_cost_contracts, september_9_cost_evidence_document, validate_september_9_cost_evidence)
+from .provider_readiness_service import (install_cost_contract, probe_credential_once,
+    refresh_september_9_cost_contract, restore_prior_pricing, _backup_value, main)
 from .unattended_tuesday_service import supervise
 
 class Probe:
@@ -11,6 +15,15 @@ class Probe:
     def exists(self,**kwargs): self.calls+=1; return self.value
 
 class Superbatch28C(unittest.TestCase):
+    def readiness_root(self,raw):
+        root=Path(raw)/"ready"; install_cost_contract(root=root)
+        probe_credential_once(root=root,runner=Probe(True),clock=lambda:datetime(2026,9,9,12,tzinfo=timezone.utc))
+        return root
+
+    def september_9_document(self):
+        return september_9_cost_evidence_document(observed_at="2026-09-09T12:00:00+00:00",
+            expires_at="2026-09-09T20:05:00+00:00",
+            observation_identity="financial-datasets-pricing-2026-09-09-public-review-v1")
     def test_cost_window_is_bounded_and_covers_close(self):
         observed=datetime.fromisoformat(PRICING_OBSERVED_AT); expires=datetime.fromisoformat(PRICING_EXPIRES_AT)
         self.assertEqual((expires-observed).total_seconds(),MAX_COST_EVIDENCE_AGE_SECONDS)
@@ -67,5 +80,66 @@ class Superbatch28C(unittest.TestCase):
             self.assertEqual(supervise(root=root,iterations=1,clock=lambda:datetime(2026,9,9,8,tzinfo=timezone.utc),coordinator_factory=factory),0)
         self.assertEqual((len(factories),len(selected.ticks)),(1,1))
         self.assertEqual(selected.ticks[0].date().isoformat(),"2026-09-09")
+
+    def test_september_9_refresh_backup_reader_and_exact_restore(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=self.readiness_root(raw); rollback=Path(raw)/"rollback"; old=(root/"provider-cost-contract.json").read_bytes(); doc=self.september_9_document()
+            self.assertEqual(refresh_september_9_cost_contract(document=doc,root=root,rollback=rollback,
+                now=datetime(2026,9,9,13,tzinfo=timezone.utc)),"SEPTEMBER_9_COST_CONTRACT_INSTALLED")
+            receipt=_backup_value(rollback)
+            self.assertEqual(receipt["target_document_hash"],doc["document_hash"])
+            self.assertEqual((rollback/"prior-provider-cost-contract.json").read_bytes(),old)
+            projected=installed_readiness_projection(root=root,now=datetime(2026,9,9,13,tzinfo=timezone.utc))
+            self.assertEqual((projected["provider_state"],projected["request_plan_identity"],projected["planned_identity_count"]),
+                ("READY","d08262228104ee464d602688aae6e1c97e67db10e640233deff87a1231e63c23",50))
+            self.assertEqual(refresh_september_9_cost_contract(document=doc,root=root,rollback=rollback,
+                now=datetime(2026,9,9,13,tzinfo=timezone.utc)),"SEPTEMBER_9_COST_CONTRACT_ALREADY_INSTALLED")
+            self.assertEqual(restore_prior_pricing(root=root,rollback=rollback),"PRIOR_PRICING_RESTORED")
+            self.assertEqual((root/"provider-cost-contract.json").read_bytes(),old)
+
+    def test_september_9_refresh_rejects_time_and_contract_tampering(self):
+        valid=self.september_9_document(); now=datetime(2026,9,9,13,tzinfo=timezone.utc)
+        for changed in ({"request_plan_identity":"c40b4c241d114df4d95069e55e7c68a4fbc8e1c899c5faa6aa8e3767b97a626a"},
+                        {"planned_request_count":49},{"unique_request_identity_count":49},
+                        {"exact_planned_cost_credits":49},{"worst_case_cost_credits":51},
+                        {"automatic_retry_count":1},{"source_url_identity":"https://example.invalid"},
+                        {"reviewed_endpoint_identities":["MARKET_SNAPSHOT"]}):
+            with self.subTest(changed=changed),self.assertRaises(ValueError):
+                validate_september_9_cost_evidence(valid|changed,now=now)
+        with self.assertRaises(ValueError): validate_september_9_cost_evidence(valid,now=datetime(2026,9,9,21,tzinfo=timezone.utc))
+        future=september_9_cost_evidence_document(observed_at="2026-09-09T14:00:00+00:00",expires_at="2026-09-09T20:05:00+00:00",observation_identity="financial-datasets-pricing-2026-09-09-future-v1")
+        with self.assertRaises(ValueError): validate_september_9_cost_evidence(future,now=now)
+        for observed,expires in (("2026-09-08T12:00:00+00:00","2026-09-09T20:05:01+00:00"),
+                                 ("2026-09-09T12:00:00+00:00","2026-09-09T20:04:59+00:00")):
+            with self.assertRaises(ValueError): september_9_cost_evidence_document(observed_at=observed,expires_at=expires,observation_identity="financial-datasets-pricing-2026-09-09-invalid-v1")
+
+    def test_invalid_old_record_and_refresh_interruptions_fail_closed(self):
+        now=datetime(2026,9,9,13,tzinfo=timezone.utc); doc=self.september_9_document()
+        with tempfile.TemporaryDirectory() as raw:
+            root=self.readiness_root(raw); rollback=Path(raw)/"rollback"
+            (root/"provider-cost-contract.json").write_text("{}\n")
+            with self.assertRaises(ValueError): refresh_september_9_cost_contract(document=doc,root=root,rollback=rollback,now=now)
+            self.assertFalse(rollback.exists())
+        for phase in ("before_backup","backup","staging","selection","after_selection"):
+            with self.subTest(phase=phase),tempfile.TemporaryDirectory() as raw:
+                root=self.readiness_root(raw); rollback=Path(raw)/"rollback"; old=(root/"provider-cost-contract.json").read_bytes()
+                with self.assertRaises(RuntimeError): refresh_september_9_cost_contract(document=doc,root=root,rollback=rollback,now=now,interrupt_at=phase)
+                if phase=="after_selection": self.assertEqual((root/"provider-cost-contract.json").read_bytes(),old)
+                self.assertEqual(refresh_september_9_cost_contract(document=doc,root=root,rollback=rollback,now=now),"SEPTEMBER_9_COST_CONTRACT_INSTALLED")
+
+    def test_post_selection_failure_rolls_back_and_has_no_operational_surface(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=self.readiness_root(raw); rollback=Path(raw)/"rollback"; old=(root/"provider-cost-contract.json").read_bytes()
+            with self.assertRaisesRegex(ValueError,"POST_SELECTION_REJECTED"):
+                refresh_september_9_cost_contract(document=self.september_9_document(),root=root,rollback=rollback,
+                    now=datetime(2026,9,9,13,tzinfo=timezone.utc),
+                    post_select_validator=lambda _:(_ for _ in ()).throw(ValueError("POST_SELECTION_REJECTED")))
+            self.assertEqual((root/"provider-cost-contract.json").read_bytes(),old)
+        source=Path(__file__).with_name("provider_readiness_service.py").read_text().lower()
+        for forbidden in ("urlopen(","requests.get(","select_generation(","released_credits = 50","broker_authority = true"):
+            self.assertNotIn(forbidden,source)
+        self.assertEqual(main(["--refresh-september-9-cost-contract","--browser",
+            "--observed-at","2026-09-09T12:00:00+00:00","--expires-at","2026-09-09T20:05:00+00:00",
+            "--observation-identity","financial-datasets-pricing-2026-09-09-public-review-v1"]),5)
 
 if __name__=="__main__": unittest.main()
