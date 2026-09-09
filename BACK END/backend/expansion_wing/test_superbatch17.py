@@ -9,6 +9,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+from deployment_contract import canonical as deployment_canonical, digest as deployment_digest
 
 from .multi_asset_projection import AUTHORITY, LANES
 from .projection_cadence import OBSERVATION_CADENCE_SECONDS, publication_decision
@@ -244,6 +245,13 @@ class PublisherCase(unittest.TestCase):
             runtime_manifest=runtime/"runtime-manifest.json"; runtime_manifest.write_text("{}\n")
             ledger=base/"operational-ledger.db"; connection=sqlite3.connect(ledger)
             connection.execute("CREATE TABLE probe (id INTEGER)"); connection.close(); ledger.chmod(0o600)
+            info=ledger.stat(); receipt_body={"schema":"iios-ledger-permission-migration-v1","path":str(ledger),
+                "device":info.st_dev,"inode":info.st_ino,"owner_uid":info.st_uid,"group_gid":info.st_gid,
+                "size":info.st_size,"sha256":__import__("hashlib").sha256(ledger.read_bytes()).hexdigest(),
+                "sqlite_integrity":"ok","original_mode":0o644,"resulting_mode":0o600,
+                "rollback_disposition":"RESTORE_MODE_0644_ONLY_AFTER_HASH_AND_INODE_REVALIDATION"}
+            receipt_hash=deployment_digest(receipt_body)
+            receipt=base/"ledger-migration-receipt.json"; receipt.write_bytes(deployment_canonical(receipt_body|{"content_hash":receipt_hash})); receipt.chmod(0o600)
             active=base/"active-release.json"
             binding={"release_id":"test-release","git_commit":"a"*40,
                 "release_root":str(release),"runtime_id":"test-runtime","runtime_root":str(runtime),
@@ -253,7 +261,8 @@ class PublisherCase(unittest.TestCase):
             body={"schema":"iios-active-immutable-release-v3",**binding,
                 "release_manifest_sha256":__import__("hashlib").sha256(release_manifest.read_bytes()).hexdigest(),
                 "runtime_manifest_sha256":__import__("hashlib").sha256(runtime_manifest.read_bytes()).hexdigest(),
-                "ledger_path_contract_hash":ledger_hash,"ledger_migration_contract_hash":"b"*64}
+                "ledger_path_contract_hash":ledger_hash,"ledger_migration_receipt_path":str(receipt),
+                "ledger_migration_contract_hash":__import__("hashlib").sha256(receipt.read_bytes()).hexdigest()}
             active_hash=__import__("hashlib").sha256((json.dumps(body,sort_keys=True,
                 separators=(",",":"))+"\n").encode()).hexdigest()
             active.write_bytes(canonical(body|{"content_hash":active_hash})); active.chmod(0o600)

@@ -259,7 +259,8 @@ def validate_active_release(path: Path, *, configured_ledger: str | None = None)
     value = json.loads(path.read_bytes())
     required = {"schema", "release_id", "git_commit", "release_manifest_sha256", "release_root",
                 "runtime_id", "runtime_root", "runtime_manifest_sha256", "operational_ledger_path",
-                "ledger_path_contract_hash", "ledger_migration_contract_hash", "content_hash"}
+                "ledger_path_contract_hash", "ledger_migration_receipt_path",
+                "ledger_migration_contract_hash", "content_hash"}
     if set(value) != required or value.get("schema") != ACTIVE_RELEASE_SCHEMA or value.get("content_hash") != digest(value):
         raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
     release_root = Path(value["release_root"]); runtime_root = Path(value["runtime_root"]); ledger = Path(value["operational_ledger_path"])
@@ -274,6 +275,18 @@ def validate_active_release(path: Path, *, configured_ledger: str | None = None)
             raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
     runtime_manifest = json.loads((runtime_root / "runtime-manifest.json").read_bytes())
     validate_runtime_manifest(runtime_root, runtime_manifest, expected_release_commit=value["git_commit"])
+    receipt_path = Path(value.get("ledger_migration_receipt_path", ""))
+    _owner_regular(receipt_path, mode=0o600)
+    receipt = json.loads(receipt_path.read_bytes())
+    if (receipt.get("schema") != LEDGER_MIGRATION_SCHEMA or receipt.get("content_hash") != digest(receipt)
+            or file_hash(receipt_path) != value.get("ledger_migration_contract_hash")
+            or Path(receipt.get("path", "")) != ledger or receipt.get("original_mode") != 0o644
+            or receipt.get("resulting_mode") != 0o600):
+        raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
+    ledger_info = _owner_regular(ledger, mode=0o600)
+    if (ledger_info.st_uid != receipt.get("owner_uid") or ledger_info.st_gid != receipt.get("group_gid")
+            or ledger_info.st_dev != receipt.get("device") or ledger_info.st_ino != receipt.get("inode")):
+        raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
     binding = {"release_id": value["release_id"], "git_commit": value["git_commit"],
                "release_root": str(release_root), "runtime_id": value["runtime_id"],
                "runtime_root": str(runtime_root), "operational_ledger_path": str(ledger)}

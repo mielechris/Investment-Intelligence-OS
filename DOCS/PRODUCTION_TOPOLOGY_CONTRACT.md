@@ -13,8 +13,9 @@ The operational SQLite ledger is persistent state, not an immutable release arti
 the reviewed LaunchAgent configuration through `IIOS_DB_PATH`. The path must be identical for the supervisor,
 publisher, and backend; must resolve outside the immutable release root; and must identify the owner-only operational
 ledger. The active-release record binds the release ID, Git commit, durable release root, dedicated immutable Python
-runtime, ledger path, release/runtime manifest hashes, reviewed ledger migration contract, and a canonical
-`ledger_path_contract_hash`.
+runtime, ledger path, release/runtime manifest hashes, the owner-only migration receipt captured at promotion, and a
+canonical `ledger_path_contract_hash`. The release binds the immutable migration policy; it does not freeze a
+package-time content hash for a live SQLite file that may advance before cutover.
 
 Production deployment therefore requires:
 
@@ -37,7 +38,10 @@ authenticated SHA-256, and SQLite `quick_check`. It then verifies the same devic
 integrity after changing only the mode. Any discrepancy restores `0644` and fails closed. The rollback disposition may
 restore `0644` only after revalidating the recorded identity and content hash.
 
-Permanent promotion evidence records both modes and the migration receipt hash. Shadow acceptance exercises this
+Permanent promotion evidence records both modes and the migration receipt hash. The active-release record identifies
+that receipt, whose path, device, inode, owner, group, and resulting mode must still match the selected ledger. The
+receipt proves that bytes, size, identity, and database integrity were unchanged across `chmod`; later legitimate
+database growth does not invalidate that historical permission-transition proof. Shadow acceptance exercises this
 transition only against an isolated byte-identical ledger copy; development and packaging never change the operational
 ledger.
 

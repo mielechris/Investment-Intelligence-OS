@@ -103,11 +103,19 @@ class DeploymentContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw); release=root/"release"; runtime=root/"runtime"; release.mkdir(); runtime.mkdir()
             (release/"release-manifest.json").write_bytes(b"release\n"); (runtime/"runtime-manifest.json").write_bytes(b"{}\n")
-            ledger=root/"ledger.db"; ledger.touch()
+            ledger=root/"ledger.db"; ledger.touch(); ledger.chmod(0o600); info=ledger.stat()
+            receipt_body={"schema":LEDGER_MIGRATION_SCHEMA,"path":str(ledger),"device":info.st_dev,
+                "inode":info.st_ino,"owner_uid":info.st_uid,"group_gid":info.st_gid,"size":info.st_size,
+                "sha256":file_hash(ledger),"sqlite_integrity":"ok","original_mode":0o644,
+                "resulting_mode":0o600,"rollback_disposition":"RESTORE_MODE_0644_ONLY_AFTER_HASH_AND_INODE_REVALIDATION"}
+            receipt=receipt_body|{"content_hash":digest(receipt_body)}; receipt_path=root/"ledger-receipt.json"
+            receipt_path.write_bytes(canonical(receipt)); receipt_path.chmod(0o600)
             binding={"release_id":"release","git_commit":COMMIT,"release_root":str(release),"runtime_id":"runtime","runtime_root":str(runtime),"operational_ledger_path":str(ledger)}
             body={"schema":ACTIVE_RELEASE_SCHEMA,**binding,"release_manifest_sha256":file_hash(release/"release-manifest.json"),
                   "runtime_manifest_sha256":file_hash(runtime/"runtime-manifest.json"),
-                  "ledger_path_contract_hash":hashlib.sha256(canonical(binding)).hexdigest(),"ledger_migration_contract_hash":"b"*64}
+                  "ledger_path_contract_hash":hashlib.sha256(canonical(binding)).hexdigest(),
+                  "ledger_migration_receipt_path":str(receipt_path),
+                  "ledger_migration_contract_hash":file_hash(receipt_path)}
             path=root/"active.json"; path.write_bytes(canonical(body|{"content_hash":digest(body)})); path.chmod(0o600)
             with patch("deployment_contract.validate_runtime_manifest",return_value={}):
                 self.assertEqual(validate_active_release(path,configured_ledger=str(ledger))["runtime_id"],"runtime")
