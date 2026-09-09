@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.iios.v7living-truth-sidecar</string>
+  <key>ProgramArguments</key><array><string>__IMMUTABLE_PYTHON__</string><string>__IMMUTABLE_RELEASE__/source/scripts/iios_factory_browser_preview.py</string><string>--root</string><string>__IMMUTABLE_RELEASE__/frontend</string><string>--host</string><string>127.0.0.1</string><string>--port</string><string>5176</string><string>--ledger-path</string><string>__OPERATIONAL_LEDGER_PATH__</string><string>--enable-expansion-wing</string></array>
+  <key>WorkingDirectory</key><string>__IMMUTABLE_RELEASE__/source</string>
+  <key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>__IMMUTABLE_RELEASE__/source/BACK END/backend</string><key>IIOS_DB_PATH</key><string>__OPERATIONAL_LEDGER_PATH__</string><key>PYTHONDONTWRITEBYTECODE</key><string>1</string><key>PYTHONUNBUFFERED</key><string>1</string></dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>__OWNER_ONLY_MUSEUM_OUT__</string><key>StandardErrorPath</key><string>__OWNER_ONLY_MUSEUM_ERR__</string><key>ThrottleInterval</key><integer>10</integer>
+</dict></plist>

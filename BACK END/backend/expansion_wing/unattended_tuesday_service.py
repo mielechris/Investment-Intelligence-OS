@@ -24,7 +24,6 @@ ROLLBACK_ROOT = Path.home()/"Library/Application Support/IIOS/Rollback/Unattende
 ROLLBACK_FILES = frozenset({POLICY_NAME, STATE_NAME, LKV_NAME})
 INSTALLATION_MANIFEST = Path.home()/"Library/Application Support/IIOS/UnattendedTuesdaySupervisor/installation-manifest.json"
 ACTIVE_RELEASE_MANIFEST = Path.home()/"Library/Application Support/IIOS/Release/active-release.json"
-ACTIVE_RELEASE_SCHEMA = "iios-active-immutable-release-v2"
 
 class SupervisorIncidentStore:
     """Bounded owner-only diagnostic state; never persists exception text."""
@@ -95,29 +94,13 @@ def _production_heartbeat_evidence()->dict:
             or ledger_info.st_uid!=os.getuid() or stat.S_IMODE(ledger_info.st_mode)!=0o600):
         raise ValueError("RUNTIME_LEDGER_PATH_MISMATCH")
     ledger_identity=hashlib.sha256(f"{ledger_info.st_dev}:{ledger_info.st_ino}:{ledger_info.st_size}:{ledger_info.st_mtime_ns}".encode()).hexdigest()
-    active_info=ACTIVE_RELEASE_MANIFEST.lstat()
-    if (ACTIVE_RELEASE_MANIFEST.is_symlink() or not stat.S_ISREG(active_info.st_mode)
-            or active_info.st_uid!=os.getuid() or stat.S_IMODE(active_info.st_mode)!=0o600):
-        raise ValueError("RUNTIME_RELEASE_MISMATCH")
-    release_record=json.loads(ACTIVE_RELEASE_MANIFEST.read_text())
-    clean=dict(release_record); supplied=clean.pop("content_hash",None)
-    if supplied!=hashlib.sha256((json.dumps(clean,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest():
-        raise ValueError("RUNTIME_RELEASE_MISMATCH")
-    release_root=Path(str(release_record.get("release_root",""))); configured=os.environ.get("IIOS_DB_PATH")
-    ledger_path=Path(str(release_record.get("operational_ledger_path","")))
-    binding={"release_id":release_record.get("release_id"),"git_commit":release_record.get("git_commit"),
-        "release_root":str(release_root),"operational_ledger_path":str(ledger_path)}
-    ledger_contract=hashlib.sha256((json.dumps(binding,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
-    release_manifest=release_root/"release-manifest.json"
-    expected_release_keys={"schema","release_id","git_commit","release_manifest_sha256","release_root",
-        "operational_ledger_path","ledger_path_contract_hash","content_hash"}
-    if (set(release_record)!=expected_release_keys or release_record.get("schema")!=ACTIVE_RELEASE_SCHEMA
-            or release_record.get("git_commit")!=release or not release_root.is_absolute()
-            or not ledger_path.is_absolute() or release_root in ledger_path.parents or configured!=str(ledger_path)
-            or ledger.DB_PATH.resolve()!=ledger_path.resolve()
-            or release_record.get("ledger_path_contract_hash")!=ledger_contract
-            or not release_manifest.is_file() or release_manifest.is_symlink()
-            or hashlib.sha256(release_manifest.read_bytes()).hexdigest()!=release_record.get("release_manifest_sha256")):
+    from deployment_contract import validate_active_release
+    try: release_record=validate_active_release(ACTIVE_RELEASE_MANIFEST,configured_ledger=os.environ.get("IIOS_DB_PATH"))
+    except (OSError,RuntimeError,ValueError,json.JSONDecodeError) as error:
+        raise ValueError("RUNTIME_RELEASE_MISMATCH") from error
+    ledger_path=Path(release_record["operational_ledger_path"])
+    ledger_contract=release_record["ledger_path_contract_hash"]
+    if release_record["git_commit"]!=release or ledger.DB_PATH.resolve()!=ledger_path.resolve():
         raise ValueError("RUNTIME_LEDGER_PATH_MISMATCH")
     if (projection.get("release_commit")!=release
             or projection.get("executor_generation")!=selected.name

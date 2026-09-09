@@ -124,24 +124,9 @@ def _operational_runtime_probe(*,now:datetime,ledger_identity:str,ledger_path:Pa
         MANIFEST_NAME as SUPERVISOR_MANIFEST_NAME,validate_installed_root)
     from expansion_wing.unattended_tuesday_service import HEARTBEAT_NAME
 
-    release=_owner_json(ACTIVE_RELEASE_MANIFEST)
-    release_root=Path(str(release.get("release_root",""))); expected_ledger=Path(str(release.get("operational_ledger_path","")))
-    binding={"release_id":release.get("release_id"),"git_commit":release.get("git_commit"),
-        "release_root":str(release_root),"operational_ledger_path":str(expected_ledger)}
-    ledger_contract=hashlib.sha256(_canonical(binding)).hexdigest()
-    if (set(release)!={"schema","release_id","git_commit","release_manifest_sha256","release_root",
-            "operational_ledger_path","ledger_path_contract_hash","content_hash"}
-            or release.get("schema")!="iios-active-immutable-release-v2" or release.get("content_hash")!=_digest(release)
-            or not re.fullmatch(r"[0-9a-f]{40}",str(release.get("git_commit")))
-            or not re.fullmatch(r"[0-9a-f]{64}",str(release.get("release_manifest_sha256")))
-            or not release_root.is_absolute() or not release_root.is_dir() or not expected_ledger.is_absolute()
-            or release_root in expected_ledger.parents or ledger_path!=expected_ledger.resolve()
-            or release.get("ledger_path_contract_hash")!=ledger_contract):
-        raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
-    release_manifest=release_root/"release-manifest.json"
-    if (not release_manifest.is_file() or release_manifest.is_symlink()
-            or hashlib.sha256(release_manifest.read_bytes()).hexdigest()!=release["release_manifest_sha256"]):
-        raise RuntimeError("EXPECTED_RELEASE_UNAVAILABLE")
+    from deployment_contract import validate_active_release
+    release=validate_active_release(ACTIVE_RELEASE_MANIFEST,configured_ledger=str(ledger_path))
+    ledger_contract=release["ledger_path_contract_hash"]
     expected=release["git_commit"]
     supervisor_root=SUPERVISOR_ROOT; executor_root=EXECUTOR_ROOT; projection_root=reviewed_projection_root()
     supervisor_manifest=_owner_json(supervisor_root/SUPERVISOR_MANIFEST_NAME)

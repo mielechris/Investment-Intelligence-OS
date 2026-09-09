@@ -130,7 +130,9 @@ def build_candidate(destination: Path, *, source_commit: str, source_root: Path 
             or source_root.resolve() in Path(configured_ledger).resolve().parents):
         raise ValueError("LEDGER_PATH_CONTRACT_INVALID")
     template = source_root/"config/com.iios.expansion-wing-unattended-tuesday.plist.template"
-    raw = template.read_text().replace("__FIXED_PYTHON__", python).replace("__FIXED_WORKTREE__", str(source_root))
+    if "/GitHub/" in python or "/GitHub/" in str(source_root):
+        raise ValueError("IMMUTABLE_RUNTIME_REQUIRED")
+    raw = template.read_text().replace("__IMMUTABLE_PYTHON__", python).replace("__IMMUTABLE_RELEASE__", str(source_root))
     raw = raw.replace("__OWNER_ONLY_LOG__", log_path or str(Path.home()/"Library/Logs/IIOS/UnattendedTuesday/unattended.log"))
     raw = raw.replace("__OPERATIONAL_LEDGER_PATH__",configured_ledger)
     plistlib.loads(raw.encode("utf-8"))

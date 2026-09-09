@@ -35,9 +35,9 @@ class Superbatch28H(unittest.TestCase):
         (source/"config").mkdir()
         (source/"config/com.iios.expansion-wing-unattended-tuesday.plist.template").write_text(
             '<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>'+LABEL+'</string>'
-            '<key>ProgramArguments</key><array><string>__FIXED_PYTHON__</string><string>-m</string><string>expansion_wing.unattended_tuesday_service</string><string>--operational-supervisor</string></array>'
-            '<key>WorkingDirectory</key><string>__FIXED_WORKTREE__</string>'
-            '<key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>__FIXED_WORKTREE__</string><key>IIOS_DB_PATH</key><string>__OPERATIONAL_LEDGER_PATH__</string><key>PYTHONDONTWRITEBYTECODE</key><string>1</string></dict>'
+            '<key>ProgramArguments</key><array><string>__IMMUTABLE_PYTHON__</string><string>-m</string><string>expansion_wing.unattended_tuesday_service</string><string>--operational-supervisor</string></array>'
+            '<key>WorkingDirectory</key><string>__IMMUTABLE_RELEASE__</string>'
+            '<key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>__IMMUTABLE_RELEASE__</string><key>IIOS_DB_PATH</key><string>__OPERATIONAL_LEDGER_PATH__</string><key>PYTHONDONTWRITEBYTECODE</key><string>1</string></dict>'
             '<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>'
             '<key>ProcessType</key><string>Background</string><key>ThrottleInterval</key><integer>60</integer>'
             '<key>StandardOutPath</key><string>__OWNER_ONLY_LOG__</string><key>StandardErrorPath</key><string>__OWNER_ONLY_LOG__</string>'

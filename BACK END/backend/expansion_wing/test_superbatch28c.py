@@ -63,7 +63,7 @@ class Superbatch28C(unittest.TestCase):
 
     def test_reviewed_plist_is_fixed_and_disabled(self):
         path=Path(__file__).parents[3]/"config/com.iios.expansion-wing-unattended-tuesday.plist.template"
-        value=plistlib.loads(path.read_bytes().replace(b"__FIXED_PYTHON__",b"/usr/bin/python3").replace(b"__FIXED_WORKTREE__",b"/tmp/work").replace(b"__OWNER_ONLY_LOG__",b"/tmp/log").replace(b"__OPERATIONAL_LEDGER_PATH__",b"/tmp/operational-ledger.db"))
+        value=plistlib.loads(path.read_bytes().replace(b"__IMMUTABLE_PYTHON__",b"/opt/iios/runtime/bin/python3.14").replace(b"__IMMUTABLE_RELEASE__",b"/opt/iios/release").replace(b"__OWNER_ONLY_LOG__",b"/tmp/log").replace(b"__OPERATIONAL_LEDGER_PATH__",b"/tmp/operational-ledger.db"))
         self.assertEqual(value["Label"],"com.iios.expansion-wing-unattended-tuesday")
         self.assertEqual(value["ProgramArguments"][-1],"--operational-supervisor")
         forbidden=" ".join(value["ProgramArguments"])
@@ -75,13 +75,13 @@ class Superbatch28C(unittest.TestCase):
         release_root=Path("/opt/iios/releases/release-1")
         ledger_path=Path("/var/lib/iios/operational-ledger.db")
         value=plistlib.loads(render_publisher_launch_plist(
-            release_root=release_root,ledger_path=ledger_path,python="/usr/bin/python3"))
+            release_root=release_root,ledger_path=ledger_path,python="/opt/iios/runtime/bin/python3.14"))
         self.assertEqual(value["EnvironmentVariables"]["IIOS_DB_PATH"],str(ledger_path))
         self.assertEqual(value["EnvironmentVariables"]["PYTHONPATH"],str(release_root/"source/BACK END/backend"))
         self.assertEqual(value["ProgramArguments"][-1],"--operational")
         with self.assertRaisesRegex(ValueError,"PUBLISHER_DEPLOYMENT_CONTRACT_INVALID"):
             render_publisher_launch_plist(release_root=release_root,
-                ledger_path=release_root/"state/ledger.db",python="/usr/bin/python3")
+                ledger_path=release_root/"state/ledger.db",python="/opt/iios/runtime/bin/python3.14")
 
     def test_supervisor_schedules_selected_september_9_generation_only(self):
         class Coordinator:

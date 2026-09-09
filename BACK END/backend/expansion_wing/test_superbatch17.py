@@ -240,23 +240,29 @@ class PublisherCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base=Path(raw); release=base/"release"; release.mkdir(mode=0o700)
             release_manifest=release/"release-manifest.json"; release_manifest.write_text("{}\n")
+            runtime=base/"runtime"; runtime.mkdir(mode=0o700)
+            runtime_manifest=runtime/"runtime-manifest.json"; runtime_manifest.write_text("{}\n")
             ledger=base/"operational-ledger.db"; connection=sqlite3.connect(ledger)
             connection.execute("CREATE TABLE probe (id INTEGER)"); connection.close(); ledger.chmod(0o600)
             active=base/"active-release.json"
             binding={"release_id":"test-release","git_commit":"a"*40,
-                "release_root":str(release),"operational_ledger_path":str(ledger)}
+                "release_root":str(release),"runtime_id":"test-runtime","runtime_root":str(runtime),
+                "operational_ledger_path":str(ledger)}
             ledger_hash=__import__("hashlib").sha256((json.dumps(binding,sort_keys=True,
                 separators=(",",":"))+"\n").encode()).hexdigest()
-            body={"schema":"iios-active-immutable-release-v2",**binding,
+            body={"schema":"iios-active-immutable-release-v3",**binding,
                 "release_manifest_sha256":__import__("hashlib").sha256(release_manifest.read_bytes()).hexdigest(),
-                "ledger_path_contract_hash":ledger_hash}
+                "runtime_manifest_sha256":__import__("hashlib").sha256(runtime_manifest.read_bytes()).hexdigest(),
+                "ledger_path_contract_hash":ledger_hash,"ledger_migration_contract_hash":"b"*64}
             active_hash=__import__("hashlib").sha256((json.dumps(body,sort_keys=True,
                 separators=(",",":"))+"\n").encode()).hexdigest()
             active.write_bytes(canonical(body|{"content_hash":active_hash})); active.chmod(0o600)
-            with patch.object(projection_publisher_service,"ACTIVE_RELEASE_MANIFEST",active), \
+            with patch("deployment_contract.validate_runtime_manifest",return_value={}), \
+                    patch.object(projection_publisher_service,"ACTIVE_RELEASE_MANIFEST",active), \
                     patch.dict(os.environ,{"IIOS_DB_PATH":str(ledger)}):
                 self.assertEqual(projection_publisher_service._active_release_contract(),("a"*40,ledger_hash))
-            with patch.object(projection_publisher_service,"ACTIVE_RELEASE_MANIFEST",active), \
+            with patch("deployment_contract.validate_runtime_manifest",return_value={}), \
+                    patch.object(projection_publisher_service,"ACTIVE_RELEASE_MANIFEST",active), \
                     patch.dict(os.environ,{"IIOS_DB_PATH":str(base/"other.db")}):
                 with self.assertRaisesRegex(RuntimeError,"PUBLISHER_RELEASE_UNAVAILABLE"):
                     projection_publisher_service._active_release_contract()
