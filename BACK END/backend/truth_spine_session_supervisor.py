@@ -74,10 +74,11 @@ def health(kind, *, lifecycle, session, authority, authority_hash, release, owne
 
 class SessionSupervisor:
     def __init__(self, *, session, store, children, authority, approved_authority_hash,
-                 release, owners, start_child, probe_runtime, clock=None):
+                 release, owners, topology_hash, start_child, probe_runtime, clock=None):
         self.session, self.store, self.children = session, store, children
         self.authority, self.authority_hash, self.release, self.owners = authority, approved_authority_hash, release, owners
         self.start_child, self.probe_runtime = start_child, probe_runtime
+        self.topology_hash = topology_hash
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         entries = store.entries()
         states = [r["value"] for r in entries if r["kind"] == "LIFECYCLE"]
@@ -163,9 +164,16 @@ class SessionSupervisor:
                     self.lifecycle._save(); self.persist(now)
             if self.lifecycle.capture_due(now):
                 try:
+                    # Complete only a recent committed capture after an interrupted
+                    # receipt publication. Never skip a parent or refresh old time.
+                    if self.store.selected():
+                        self.store.issue_source_cycle(self.session, topology_hash=self.topology_hash,
+                            authority_hash=self.authority_hash, owners=self.owners, now=self.clock(), permit=self.permit_capture)
                     capture = self.store.capture(clock=self.clock, permit=self.permit_capture)
                     if not self.authority_current(self.clock()):
                         raise PermissionError("AUTHORITY_EXPIRED_DURING_CAPTURE")
+                    self.store.issue_source_cycle(self.session, topology_hash=self.topology_hash,
+                        authority_hash=self.authority_hash, owners=self.owners, now=self.clock(), permit=self.permit_capture)
                     self.lifecycle.captured(self.clock(), capture["content_hash"])
                 except PermissionError:
                     raise

@@ -42,6 +42,9 @@ def installation_template():
             "directories": list(DIRECTORIES), "files": list(FILES),
             "dir_mode": "0700", "file_mode": "0600", "immutable_release_file_mode": "0400",
             "launch_agents": False, "review_url": "http://127.0.0.1:5291/review/truth-integration.html?fullSession=1",
+            "source_cycle_schema": "iios-shadow-capture-source-cycle-v1",
+            "source_cycle_store": "session-journal.db:source_cycles",
+            "source_cycle_producer": "capture_scheduler", "source_cycle_max_age_seconds": 900,
             "maximum_authority_seconds": 86400, "restart_per_role": 1, "restart_total": 3,
             "restart_cooldown_seconds": 60, "loop_seconds": 5, "cleanup_seconds": 300,
             "installation_authorized_by_template": False}
@@ -233,14 +236,11 @@ class RuntimeProbeReader:
             raise ValueError("SESSION_PROJECTION_NOT_DERIVED")
         # The cycle source must be captured and hash-bound independently; using
         # the projection's own cycle value as its proof is prohibited.
-        cycle = captured_cycle(self.root, generation)
-        if cycle["source_cycle_id"] != p["source_cycle"]:
+        cycle = captured_cycle(self.root, generation, store=self.store, session=self.session, now=now)
+        if (cycle["source_cycle_id"] != p["source_cycle"] or cycle["admitted_watermark"] != watermark
+                or cycle["phase"] != states[-1]["phase"] or cycle["phase"] != self.session.phase_at(now)):
             raise ValueError("SOURCE_CYCLE_UNAUTHENTICATED")
-        # This is the upstream publisher's own clock, not the snapshot time.
-        # A new capture cannot freshen a stopped source-cycle publisher.
-        if not 0 <= (now-utc(cycle["generated_at"])).total_seconds() <= 900:
-            raise ValueError("SOURCE_CYCLE_STALE")
-        evidence.update(projection=p["content_hash"], source_cycle=digest(cycle))
+        evidence.update(projection=p["content_hash"], source_cycle=cycle["source_cycle_id"])
         if set(evidence) != REQUIRED_PROBES:
             raise ValueError("PROBE_INVENTORY_INVALID")
         return {key: seal({"schema": "iios-shadow-runtime-probe-v1", "kind": key,
@@ -250,17 +250,19 @@ class RuntimeProbeReader:
                            "evidence_hash": value}) for key,value in evidence.items()}
 
 
-def captured_cycle(root, generation):
-    rows = [r for r in generation["files"] if r["kind"] == "source_cycle"]
-    if len(rows) != 1:
-        raise ValueError("SOURCE_CYCLE_CAPTURE_REQUIRED")
-    f = rows[0]
-    if Path(f["file"]).name != f["file"]:
-        raise ValueError("SOURCE_CYCLE_PATH_INVALID")
-    path = root/"captures"/generation["identity"]/f["file"]
-    owner_path(path, root)
-    value = json.loads(file_bytes(path, f["sha256"]))
-    if value.get("schema_version") != "iios-multi-asset-projection-manifest-v1":
-        raise ValueError("SOURCE_CYCLE_SCHEMA_INVALID")
-    utc(value["generated_at"])
+def captured_cycle(root, generation, *, store, session, now, require_fresh=True):
+    """Consume a capture-owner receipt, NEVER the retained permanent manifest.
+
+    Topology/authority/owner bindings are independently package-pinned. This
+    function has no write or issuance path; publisher stores are readonly.
+    """
+    owner_path(root/"topology.json", root)
+    topology = verified(json.loads(file_bytes(root/"topology.json")))
+    if (topology["session_hash"] != digest(session.record())
+            or topology["registry_hash"] != store.registry["content_hash"]):
+        raise ValueError("SOURCE_CYCLE_TOPOLOGY_INVALID")
+    value = store.source_cycle(session, topology_hash=topology["content_hash"],
+        authority_hash=topology["authority_hash"], owners=topology["owners"], now=now, require_fresh=require_fresh)
+    if value["generation"] != generation["content_hash"]:
+        raise ValueError("SOURCE_CYCLE_CAPTURE_MISMATCH")
     return value

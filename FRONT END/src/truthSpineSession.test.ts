@@ -58,3 +58,12 @@ test('full-session browser is one read-only poll owner and normal-flow responsiv
   assert.match(css, /minmax\(0, 1fr\)/); assert.match(css, /overflow-wrap: anywhere/);
   assert.match(css, /max-width: 700px/); assert.doesNotMatch(css, /position:\s*(fixed|absolute)|white-space:\s*nowrap/);
 });
+test('full-session route is explicit and historical route never silently switches API', () => {
+  const source = readFileSync(new URL('./TruthSpineIntegrationPreview.tsx', import.meta.url), 'utf8');
+  assert.match(source, /new URLSearchParams\(window.location.search\).get\('fullSession'\) === '1'/);
+  assert.match(source, /fullSession \? await fetch\('\/truth-spine\/full-session', options\) : await fetch\('\/truth-spine\/museum', options\)/);
+  for (const query of ['', '?fullSession=0', '?fullSession=true']) {
+    assert.equal(new URLSearchParams(query).get('fullSession') === '1', false);
+  }
+  assert.equal(new URLSearchParams('?fullSession=1').get('fullSession') === '1', true);
+});

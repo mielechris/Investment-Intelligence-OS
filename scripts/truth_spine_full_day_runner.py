@@ -100,7 +100,7 @@ def run(root, topology_pin, *, owner_session):
             return evidence
         supervisor = SessionSupervisor(session=session, store=store, children=children, authority=authority,
             approved_authority_hash=c['authority_hash'], release=manifest['release'], owners=c['owners'],
-            start_child=start, probe_runtime=probes)
+            topology_hash=c['content_hash'], start_child=start, probe_runtime=probes)
         interrupted = False
         def stop(*_):
             nonlocal interrupted

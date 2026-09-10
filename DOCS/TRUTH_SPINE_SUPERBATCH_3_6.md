@@ -38,8 +38,9 @@ phases are disclosed; no historical refresh is manufactured to fill a gap.
 ## Immutable captures and canonical journal
 
 `truth_spine_generations.py` consumes an independently pinned source registry:
-exactly one L7 operational ledger, one L8 historical ledger, one source-cycle
-manifest for runtime wiring, and explicitly listed supported retained stores.
+exactly one L7 operational ledger, one L8 historical ledger, and explicitly
+listed supported retained stores. A permanent source-cycle manifest may be
+retained as historical input, but is not the shadow observation-cycle receipt.
 No source discovery, credentials or browser-supplied paths are accepted.
 
 Each refresh writes a unique `captures/capture-<uuid>/` with SQLite read-only
@@ -70,7 +71,7 @@ schedule; the publisher derives its projection from the selected capture and
 lifecycle journal. No harness assigns a projection generation to make it pass.
 `RuntimeProbeReader` reads package/runtime/frontend inventories, stabilized OS
 fingerprints, startup-receipt-bound heartbeats, the real publisher file and the
-captured source-cycle file. All probes bind session, release, generation and
+independently committed capture-owner source-cycle receipt. All probes bind session, release, generation and
 watermark; backend reads cannot trigger capture, renewal, repair or publication.
 
 - `/health/live`: process availability only.
@@ -80,8 +81,8 @@ watermark; backend reads cannot trigger capture, renewal, repair or publication.
 - `/truth-spine/full-session`: sanitized current/stale/failed metadata; no controls.
 
 Heartbeats/projection expire after 30 seconds; derived probes after 15 seconds.
-Captured upstream source-cycle publication must be at most 900 seconds old.
-A fresh snapshot or HTTP wrapper cannot renew that nested timestamp. Historical
+Shadow source-cycle publication AND capture completion must be at most 900 seconds old.
+A fresh HTTP wrapper cannot renew either nested timestamp. Historical
 case timestamps remain historical; they are exposed separately from capture
 freshness and do not become new market observations. Missing dependencies are
 not replaced by literal readiness flags.
@@ -181,3 +182,66 @@ Source/simulation GREEN permits a source checkpoint only. Actual full-day runtim
 long-duration disk/RSS behavior, live host sleep/wake and Safari interaction remain
 acceptance gates of a **separately authorized** rehearsal. Permanent promotion is
 not authorized by source test results.
+
+## Superbatch 3.6A — independent shadow observation cycle
+
+The permanent projection manifest was stale, correctly rejected by the original
+900-second gate. It must never be retimestamped, recopied as fresh market truth,
+or used as the shadow's own observation clock. The replacement measures a NEW
+read-only observation of existing stores, not new provider or market activity.
+Permanent inputs and all original evidence classifications/clocks stay unchanged.
+
+The capture/scheduler owner, not the projection publisher, appends one
+`iios-shadow-capture-source-cycle-v1` receipt to `session-journal.db:source_cycles`
+AFTER the read-only snapshot integrity/admission transaction commits. The table
+has unique capture/sequence keys and update/delete denial triggers; it is in the
+0700 isolated root, in the 0600 FULL-synchronous journal. Receipt commit and
+directory fsync complete before capture is marked CURRENT. No previous row is
+overwritten. Production publisher/backend open the journal read-only and cannot
+call the issuance path. The topology independently binds distinct capture/scheduler
+and publisher owner identities; receipts must match those exact owners and roles.
+These hashes are integrity/ownership bindings within the reviewed owner-only
+runtime, not cryptographic signatures against arbitrary malicious same-UID code.
+
+The complete receipt binds schema/version, sequence and previous receipt hash,
+session, phase, capture ID/hash, individual L7/L8 snapshot identities, source
+aliases/path bindings, database hashes, schema/integrity checks, per-store
+watermarks, admitted cumulative event watermark, original evidence clocks and
+classifications, capture start/end, publication time, topology/authority hashes,
+producer/consumer identities, and explicit non-global-simultaneity disclosure.
+`source_cycle_id` is SHA-256 of canonical sorted ASCII JSON with compact separators,
+`ensure_ascii=True`, `allow_nan=False`, and one trailing LF, excluding ONLY the
+`source_cycle_id` field. No additional mutable content-hash field is excluded.
+The first parent is the session/registry journal binding; later parents are exact
+prior source-cycle identities. Validation reconstructs each cumulative watermark
+from immutable snapshots, not a caller-supplied ready flag.
+
+Capture completion to receipt publication is bounded to 0–30 seconds. A restart
+after admission but before publication may finish only that recent pending
+receipt. Older pending captures fail closed; they cannot acquire a fresh clock.
+Repeated processing returns the exact existing receipt without writing. A gap,
+fork, changed ancestor, wrong session/phase/owner/topology/authority, snapshot or
+watermark mismatch is rejected. Consumers verify the complete chain and selected
+generation. Freshness requires both receipt age and capture-end age in [0,900]
+seconds. Touching, copying or reserializing old bytes never changes these clocks.
+Capture rejects reversed time or wall/monotonic elapsed disagreement over five
+seconds; the existing lifecycle handles between-cycle discontinuities.
+
+Post-close ordering is capture → integrity/admission commit → independent receipt
+commit → CURRENT lifecycle → independent publisher verification/projection →
+readiness/source-cycle/watermark equality → reconciliation → SESSION_COMPLETE →
+shutdown. Receipt/publication gaps return 503 and never self-issue upstream data.
+Expected publisher lag is bounded by the existing reconciliation deadline, not
+repaired with fabricated projections or renewed authority. Failed capture leaves
+the old receipt untouched and capture STALE. HTTP readiness revalidates the nested
+receipt even if the outer probe wrapper is still fresh.
+
+The authoritative future review URL, including generated templates/reports, is:
+`http://127.0.0.1:5291/review/truth-integration.html?fullSession=1`.
+It selects `/truth-spine/full-session`. Omitting the query continues to select the
+historical `/truth-spine/museum` API; no silent full-session fallback or alias is
+introduced. The full-day service does not serve that historical API.
+
+No full-day root, port binding, installation or permanent service change is
+authorized by this source-only correction. A new dated full-day authorization
+must bind the new source candidate, fresh builds, exact package and runtime pins.

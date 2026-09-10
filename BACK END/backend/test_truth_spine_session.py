@@ -292,7 +292,7 @@ class SupervisorTests(StoreTests):
         self.probe_modifier = lambda p: p
         self.supervisor = SessionSupervisor(session=self.session, store=self.store, children=self.children,
             authority=self.authority, approved_authority_hash=digest(self.authority), release="unit-release",
-            owners=OWNERS, start_child=self.children.start, probe_runtime=self.probes, clock=self.clock)
+            owners=OWNERS, topology_hash="a"*64, start_child=self.children.start, probe_runtime=self.probes, clock=self.clock)
 
     def probes(self, now, generation, watermark):
         # Simulation only. These are NOT runtime evidence or an installed acceptance.
@@ -388,7 +388,7 @@ class SupervisorTests(StoreTests):
         self.supervisor.cycle(); self.clock.advance(60)
         restored = SessionSupervisor(session=self.session, store=self.store, children=self.children,
             authority=self.authority, approved_authority_hash=digest(self.authority), release="unit-release",
-            owners=OWNERS, start_child=self.children.start, probe_runtime=self.probes, clock=self.clock)
+            owners=OWNERS, topology_hash="a"*64, start_child=self.children.start, probe_runtime=self.probes, clock=self.clock)
         restored.cycle()
         self.assertEqual(restored.lifecycle.state["restart_counts"]["scheduler"], 1)
         self.assertEqual(self.children.starts.count("scheduler"), 2)
@@ -465,7 +465,7 @@ class ProductionPathTests(unittest.TestCase):
         self.publish_enabled = True
         self.supervisor = SessionSupervisor(session=self.session, store=self.store, children=self.children,
             authority=self.authority, approved_authority_hash=digest(self.authority), release="unit-release", owners=OWNERS,
-            start_child=self.children.start, probe_runtime=self.actual_probes, clock=self.clock)
+            topology_hash=digest(self.config), start_child=self.children.start, probe_runtime=self.actual_probes, clock=self.clock)
 
     def write_cycle(self):
         from truth_spine_integration import atomic
@@ -516,12 +516,14 @@ class ProductionPathTests(unittest.TestCase):
         self.assertEqual(self.store.watermark()["count"], 2)
         self.assertFalse(self.children.active)
 
-    def test_fresh_capture_cannot_freshen_stale_source_cycle(self):
+    def test_new_capture_issues_independent_cycle_not_fresh_permanent_evidence(self):
+        original = self.cycle_path.read_bytes()
         self.supervisor.cycle(); self.clock.advance(901)
-        self.assertEqual(self.supervisor.cycle()["ready"], 503)
+        self.assertEqual(self.supervisor.cycle()["ready"], 200)
         self.assertEqual(self.supervisor.lifecycle.state["capture_status"], "CURRENT")
-        with self.assertRaisesRegex(ValueError, "SOURCE_CYCLE_STALE"):
-            self.reader.collect(self.clock(), self.store.selected(), self.store.watermark())
+        self.assertEqual(original, self.cycle_path.read_bytes())
+        self.assertNotEqual(json.loads(original)["source_cycle_id"],
+                            json.loads((self.root/"projections/current.json").read_bytes())["source_cycle"])
 
     def test_manually_resealed_projection_generation_is_rejected(self):
         from truth_spine_integration import atomic

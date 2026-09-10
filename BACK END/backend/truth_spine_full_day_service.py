@@ -60,8 +60,8 @@ def load_config(path, *, now=None, permit_expired=False):
     validate_session_authority(authority, session, manifest["release"], config["owners"], config["authority_hash"],
                                utc(authority["issued_at"]) if permit_expired else now or datetime.now(timezone.utc))
     registry = read("sources.json", config["registry_hash"])
-    if sum(s["kind"] == "source_cycle" for s in registry["sources"]) != 1:
-        raise ValueError("EXACT_SOURCE_CYCLE_REQUIRED")
+    # Optional permanent cycle inputs remain retained evidence, never the
+    # independent shadow receipt or its freshness authority.
     return config, session, manifest, authority, registry
 
 
@@ -84,7 +84,10 @@ def publish_once(root, session, manifest, registry, at):
     generation = store.selected()
     if generation is None:
         raise ValueError("CAPTURE_UNAVAILABLE")
-    cycle = captured_cycle(root, generation)
+    cycle = captured_cycle(root, generation, store=store, session=session, now=at)
+    if (lifecycle["capture_status"] != "CURRENT" or lifecycle["phase"] != session.phase_at(at)
+            or cycle["phase"] != lifecycle["phase"]):
+        raise ValueError("SOURCE_CYCLE_LIFECYCLE_MISMATCH")
     projection = publish_payload(session=session.identity, release=manifest["release"], lifecycle=lifecycle,
                                  generation=generation, watermark=store.watermark(), at=at,
                                  source_cycle=cycle["source_cycle_id"])
@@ -107,6 +110,11 @@ def service_response(path, request, *, now=None):
             owner_path(path.parent/"runtime-probes.json", path.parent)
             report = verified(json.loads(file_bytes(path.parent/"runtime-probes.json")))
             probes = report["probes"]
+            cycle = captured_cycle(path.parent, store.selected(), store=store, session=session, now=now)
+            if (probes["source_cycle"]["evidence_hash"] != cycle["source_cycle_id"]
+                    or cycle["phase"] != lifecycle["phase"] or cycle["phase"] != session.phase_at(now)
+                    or cycle["admitted_watermark"] != store.watermark()):
+                raise ValueError("SOURCE_CYCLE_PROBE_MISMATCH")
         except (OSError, ValueError, KeyError):
             probes = {}
         kind = request.removeprefix("/health/") if request.startswith("/health/") else "ready"
@@ -120,9 +128,14 @@ def service_response(path, request, *, now=None):
             view = browser_contract(lifecycle, store.selected(), store.watermark(), code,
                                     {k: p["evidence_hash"] for k,p in probes.items() if k.endswith("_owner")})
             view["published_at"] = now.isoformat()
-            cycle = captured_cycle(path.parent, store.selected()) if store.selected() else None
+            try:
+                cycle = captured_cycle(path.parent, store.selected(), store=store, session=session,
+                                       now=now, require_fresh=False) if store.selected() else None
+            except (OSError, ValueError, KeyError, TypeError):
+                cycle = None
+                view["readiness"] = 503
             view["source_cycle"] = cycle["source_cycle_id"] if cycle else None
-            view["source_cycle_generated_at"] = cycle["generated_at"] if cycle else None
+            view["source_cycle_generated_at"] = cycle["published_at"] if cycle else None
             view["sources"] = [{"store": f["store"], "records": f["records"], "capture_end": f["capture_end"],
                                 "classifications": f["classifications"],
                                 **{k: max(v) if v else None for k,v in f["clocks"].items()}}
@@ -198,7 +211,16 @@ def main():
             store, lifecycle = read_state(root, session, registry)
             generation = store.selected()
             if args.role == "publisher" and generation:
-                publish_once(root, session, manifest, registry, at)
+                try:
+                    publish_once(root, session, manifest, registry, at)
+                except ValueError as exc:
+                    # Selection/admission precedes the independent receipt. A
+                    # bounded publication lag must stay 503, not kill/restart a
+                    # healthy publisher or issue replacement upstream evidence.
+                    if str(exc) not in {"SOURCE_CYCLE_CAPTURE_REQUIRED", "CAPTURE_CHANGED_DURING_READ",
+                                        "SOURCE_CYCLE_CAPTURE_MISMATCH", "SOURCE_CYCLE_LIFECYCLE_MISMATCH",
+                                        "SOURCE_CYCLE_STALE", "SESSION_PROJECTION_BINDING_INVALID"}:
+                        raise
             atomic(root/(args.role+"-session-heartbeat.json"), seal({"session": session.identity,
                    "release": manifest["release"], "generation": generation["content_hash"] if generation else None,
                    "startup_receipt_hash": receipt["content_hash"], "at": at.isoformat(),

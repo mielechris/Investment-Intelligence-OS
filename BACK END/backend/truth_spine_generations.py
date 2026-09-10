@@ -24,6 +24,37 @@ from truth_spine_contract import canonical, digest, seal, utc, verified
 
 KINDS = {"operational", "historical", "research", "event_reconstruction", "macro_regime",
          "validation_9h", "shadow_9i", "outcomes_9j", "universe", "source_cycle"}
+SOURCE_CYCLE_MAX_AGE_SECONDS = 900
+
+
+def cycle_identity(value):
+    """SHA-256 of canonical ASCII JSON + LF, excluding ONLY source_cycle_id."""
+    return hashlib.sha256(canonical({k: v for k, v in value.items() if k != "source_cycle_id"})).hexdigest()
+
+
+def source_cycle_record(generation, watermark, *, sequence, parent, phase, topology_hash,
+                        authority_hash, owners, published_at):
+    if (set(owners) != {"scheduler", "publisher"} or owners["scheduler"] == owners["publisher"]
+            or not all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,180}", v) for v in owners.values())
+            or not all(re.fullmatch("[0-9a-f]{64}", v) for v in (topology_hash, authority_hash))):
+        raise ValueError("SOURCE_CYCLE_OWNER_BINDING_INVALID")
+    value = {"schema": "iios-shadow-capture-source-cycle-v1", "contract_version": 1,
+             "sequence": sequence, "previous_source_cycle": parent,
+             "session": generation["session"], "phase": phase,
+             "generation": generation["content_hash"], "capture_identity": generation["identity"],
+             "capture_start": generation["start"], "capture_end": generation["end"],
+             "globally_simultaneous": False,
+             "simultaneity_disclosure": "INDIVIDUALLY_CONSISTENT_NOT_GLOBALLY_SIMULTANEOUS",
+             "stores": generation["files"], "admitted_watermark": watermark,
+             "producer_role": "capture_scheduler", "producer_identity": owners["scheduler"],
+             "consumer_identity": owners["publisher"], "topology_hash": topology_hash,
+             "authority_hash": authority_hash, "published_at": published_at}
+    value["ledger_captures"] = {f["kind"]: {"capture_identity": generation["identity"],
+        "store": f["store"], "snapshot_sha256": f["sha256"], "source_identity": f["source_path_binding"]}
+        for f in generation["files"] if f["kind"] in {"operational", "historical"}}
+    if set(value["ledger_captures"]) != {"operational", "historical"}:
+        raise ValueError("SOURCE_CYCLE_LEDGERS_REQUIRED")
+    return {**value, "source_cycle_id": cycle_identity(value)}
 
 
 def owner_path(path: Path, root: Path, *, directory=False):
@@ -106,6 +137,9 @@ class GenerationStore:
                 CREATE TABLE IF NOT EXISTS captures (seq INTEGER PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS journal (seq INTEGER PRIMARY KEY, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS source_cycles (seq INTEGER PRIMARY KEY, capture TEXT UNIQUE NOT NULL, payload TEXT NOT NULL);
+                CREATE TRIGGER IF NOT EXISTS cycle_no_update BEFORE UPDATE ON source_cycles BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END;
+                CREATE TRIGGER IF NOT EXISTS cycle_no_delete BEFORE DELETE ON source_cycles BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END;
                 CREATE TRIGGER IF NOT EXISTS event_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END;
                 CREATE TRIGGER IF NOT EXISTS event_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END;
                 CREATE TRIGGER IF NOT EXISTS capture_no_update BEFORE UPDATE ON captures BEGIN SELECT RAISE(ABORT,'IMMUTABLE'); END;
@@ -212,7 +246,8 @@ class GenerationStore:
         capture_id = "capture-" + uuid.uuid4().hex
         directory = self.captures/capture_id
         directory.mkdir(mode=0o700); fsync_dir(self.captures)
-        deadline = time.monotonic() + timeout_seconds
+        monotonic_start = time.monotonic()
+        deadline = monotonic_start + timeout_seconds
         manifests, all_events, universes = [], [], []
         for index, spec in enumerate(self.registry["sources"]):
             if permit is not None:
@@ -272,7 +307,9 @@ class GenerationStore:
                                          for k in ("observation_time", "event_time", "publication_time")},
                               "classifications": sorted({e["classification"] for e in events})})
         end = clock(); utc(end.isoformat())
-        if end < started or time.monotonic() >= deadline:
+        elapsed = time.monotonic() - monotonic_start
+        if (end < started or time.monotonic() >= deadline
+                or abs((end-started).total_seconds() - elapsed) > 5):
             raise ValueError("CAPTURE_TIME_INVALID")
         prior = self.selected()
         generation = seal({"schema": "iios-shadow-capture-v1", "identity": capture_id,
@@ -302,13 +339,96 @@ class GenerationStore:
         fsync_dir(self.root)
         return generation
 
+    def issue_source_cycle(self, session, *, topology_hash, authority_hash, owners, now, permit=None):
+        """Capture-owner only, AFTER admission commit. Consumers open readonly.
+
+        The FULL-synchronous append-only SQLite row is the immutable receipt.
+        A crash after admission leaves a selected capture WITHOUT readiness;
+        restart may complete its receipt within 30s, never freshen an old capture.
+        """
+        if self.readonly:
+            raise PermissionError("SOURCE_CYCLE_READER_CANNOT_ISSUE")
+        if permit is not None:
+            permit()
+        self.validate()
+        with closing(self.connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            captures = [verified(json.loads(p)) for p, in db.execute("SELECT payload FROM captures ORDER BY seq")]
+            if not captures:
+                raise ValueError("SOURCE_CYCLE_CAPTURE_REQUIRED")
+            cycles = self._cycle_chain(db, captures, session=session, topology_hash=topology_hash,
+                                       authority_hash=authority_hash, owners=owners)
+            if len(cycles) == len(captures):
+                return cycles[-1]  # Never overwrite or retimestamp, even if stale.
+            if len(cycles) != len(captures)-1:
+                raise ValueError("SOURCE_CYCLE_PARENT_MISSING")
+            generation = captures[-1]
+            if not 0 <= (now-utc(generation["end"])).total_seconds() <= 30:
+                raise ValueError("SOURCE_CYCLE_PUBLICATION_WINDOW_INVALID")
+            phase = session.phase_at(utc(generation["end"]))
+            if phase != session.phase_at(now):
+                raise ValueError("SOURCE_CYCLE_PHASE_MISMATCH")
+            value = source_cycle_record(generation, self._capture_watermarks[generation["content_hash"]],
+                sequence=len(captures), parent=cycles[-1]["source_cycle_id"] if cycles else self.binding,
+                phase=phase, topology_hash=topology_hash, authority_hash=authority_hash,
+                owners=owners, published_at=now.isoformat())
+            if permit is not None:
+                permit()
+            db.execute("INSERT INTO source_cycles VALUES (?,?,?)",
+                       (len(captures), generation["content_hash"], canonical(value).decode()))
+        fsync_dir(self.root)
+        return value
+
+    def _cycle_chain(self, db, captures, *, session=None, topology_hash=None, authority_hash=None, owners=None):
+        cycles, parent = [], self.binding
+        for index, (seq, capture, raw) in enumerate(db.execute("SELECT seq,capture,payload FROM source_cycles ORDER BY seq"), 1):
+            value = json.loads(raw)
+            if (index > len(captures) or seq != index or value.get("source_cycle_id") != cycle_identity(value)):
+                raise ValueError("SOURCE_CYCLE_CHAIN_INVALID")
+            generation = captures[index-1]
+            if capture not in self._capture_watermarks:
+                raise ValueError("CAPTURE_CHANGED_DURING_READ")
+            if (capture != generation["content_hash"] or value["session"] != self.session
+                    or not 0 <= (utc(value["published_at"])-utc(generation["end"])).total_seconds() <= 30):
+                raise ValueError("SOURCE_CYCLE_CAPTURE_MISMATCH")
+            expected = source_cycle_record(generation, self._capture_watermarks[capture],
+                sequence=index, parent=parent,
+                phase=session.phase_at(utc(generation["end"])) if session else value["phase"],
+                topology_hash=topology_hash or value["topology_hash"], authority_hash=authority_hash or value["authority_hash"],
+                owners=owners or {"scheduler": value["producer_identity"], "publisher": value["consumer_identity"]},
+                published_at=value["published_at"])
+            if canonical(value) != canonical(expected) or (session and session.identity != self.session):
+                raise ValueError("SOURCE_CYCLE_BINDING_INVALID")
+            if cycles and utc(value["published_at"]) < utc(cycles[-1]["published_at"]):
+                raise ValueError("SOURCE_CYCLE_CLOCK_REGRESSION")
+            cycles.append(value); parent = value["source_cycle_id"]
+        return cycles
+
+    def source_cycle(self, session, *, topology_hash, authority_hash, owners, now, require_fresh=True):
+        self.validate()
+        with closing(self.connect(readonly=True)) as db:
+            db.execute("BEGIN")
+            captures = [verified(json.loads(p)) for p, in db.execute("SELECT payload FROM captures ORDER BY seq")]
+            cycles = self._cycle_chain(db, captures, session=session, topology_hash=topology_hash,
+                                       authority_hash=authority_hash, owners=owners)
+        if not captures or len(cycles) != len(captures):
+            raise ValueError("SOURCE_CYCLE_CAPTURE_REQUIRED")
+        value = cycles[-1]
+        if require_fresh and (not 0 <= (now-utc(value["published_at"])).total_seconds() <= SOURCE_CYCLE_MAX_AGE_SECONDS
+                              or not 0 <= (now-utc(value["capture_end"])).total_seconds() <= SOURCE_CYCLE_MAX_AGE_SECONDS):
+            raise ValueError("SOURCE_CYCLE_STALE")
+        return value
+
     def validate(self):
         db = self.connect(readonly=True)
         try:
+            db.execute("BEGIN")
             if db.execute("PRAGMA quick_check").fetchall() != [("ok",)] or db.execute("SELECT id FROM binding").fetchall() != [(self.binding,)]:
                 raise ValueError("JOURNAL_INTEGRITY_INVALID")
             generations = db.execute("SELECT seq,payload FROM captures ORDER BY seq").fetchall()
             expected_events, parent = {}, self.binding
+            self._capture_watermarks = {}
+            capture_records = []
             for index, (seq, raw) in enumerate(generations, 1):
                 row = verified(json.loads(raw))
                 if (seq != index or row["parent"] != parent or row["session"] != self.session
@@ -371,9 +491,13 @@ class GenerationStore:
                 if universes != row["universes"]:
                     raise ValueError("UNIVERSE_CAPTURE_BINDING_INVALID")
                 parent = row["content_hash"]
+                capture_records.append(row)
+                self._capture_watermarks[parent] = {"count": len(expected_events), "identity": digest({
+                    "rows": [[i, e["content_hash"]] for i, e in sorted(expected_events.items())]})}
             actual = {i: verified(json.loads(p)) for i,p in db.execute("SELECT id,payload FROM events")}
             if actual != expected_events:
                 raise ValueError("CANONICAL_LEDGER_PROVENANCE_INVALID")
+            self._cycle_chain(db, capture_records)
             parent = self.binding
             for index, (i, raw) in enumerate(db.execute("SELECT seq,payload FROM journal ORDER BY seq"), 1):
                 row = verified(json.loads(raw))
