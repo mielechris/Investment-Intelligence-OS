@@ -294,6 +294,8 @@ Return ONLY JSON with exactly these fields:
 
 
 def run_eight_agent_orchestration(case_id: str) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     case = get_object(case_id)
     if not case or not str(case_id).startswith("case_"):
         raise ValueError("Unknown case_id")

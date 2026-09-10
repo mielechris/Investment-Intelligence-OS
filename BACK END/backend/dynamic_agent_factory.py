@@ -114,6 +114,8 @@ def normalize_agent_proposal(raw: dict[str, Any], *, interview_id: str, source_j
 
 
 def propose_agents(interview_id: str, max_agents: int = MAX_PROPOSALS_PER_INTERVIEW) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     interview = _require_interview(interview_id)
     judgments = eligible_source_judgments(_judgments_for_interview(interview_id))
     if not judgments:
@@ -234,6 +236,8 @@ def normalize_agent_output(value: Any) -> dict[str, Any]:
 
 
 def run_agent(agent_id: str, request: dict[str, Any]) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     agent = _require_agent(agent_id)
     if agent.get("status") != "APPROVED" or agent.get("human_approved") is not True:
         raise HTTPException(status_code=403, detail="Dynamic agent must be human-approved before it can run")

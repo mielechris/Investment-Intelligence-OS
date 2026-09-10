@@ -116,6 +116,8 @@ def _ticker_for_case(case_id: str) -> str | None:
 
 
 def reconcile_governed_executions() -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     ensure_account()
 
     executions = _rows_by_type("governed_paper_execution")

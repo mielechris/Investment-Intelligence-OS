@@ -609,6 +609,8 @@ def prepare_paper_authorization(
     case_id: str,
 ):
     # Preparation always refreshes the market gate first.
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     state = _current_state(
         case_id,
         refresh_market=True,

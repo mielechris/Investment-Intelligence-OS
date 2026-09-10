@@ -191,6 +191,8 @@ def ingest_authorized_research_inbox(inbox: Path | None = None, processed: Path 
 
 
 def _fetch_json_url(url: str) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     request = Request(url, headers={"User-Agent": GENERIC_USER_AGENT, "Accept": "application/json"})
     with urlopen(request, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))

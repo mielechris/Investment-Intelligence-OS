@@ -41,10 +41,16 @@ class Transport:
 class CanonicalRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.base=Path(self.temp.name); self.source=self.base/"source"
+        self.base=Path(self.temp.name).resolve(); self.source=self.base/"source"
         artifacts=self.source/"BACK END/backend/expansion_wing"; artifacts.mkdir(parents=True)
         for name in ARTIFACTS: (artifacts/name).write_text(name+"\n")
         self.root=self.base/"executor"; self.rollback=self.base/"install-rollback"
+
+    def _reselect(self, *args, **kwargs):
+        from .operational_market_executor import FixedClock
+        return reselect_corrected_september_9_generation(*args, **kwargs,
+            clock=FixedClock(datetime(2026,9,9,3,tzinfo=timezone.utc)),
+            evaluation_classification='REPLAY')
 
     def _closed_and_incident_selected(self):
         install_disabled(self.source,"a"*40,self.root,self.rollback,observed_commit="a"*40)
@@ -119,7 +125,7 @@ class CanonicalRecoveryTests(unittest.TestCase):
     def test_quarantine_and_atomic_corrected_reselection_preserve_incident(self):
         obsolete=self._closed_and_incident_selected(); before={str(p.relative_to(obsolete)):p.read_bytes() for p in obsolete.rglob('*') if p.is_file()}
         archive=self.root/SESSIONS_NAME/'2026-09-08'; archive_before={str(p.relative_to(archive)):p.read_bytes() for p in archive.rglob('*') if p.is_file()}
-        self.assertEqual(reselect_corrected_september_9_generation(self.root,readiness_root=self._readiness()),"SEPTEMBER_9_CORRECTED_GENERATION_SELECTED_LOCKED")
+        self.assertEqual(self._reselect(self.root,readiness_root=self._readiness()),"SEPTEMBER_9_CORRECTED_GENERATION_SELECTED_LOCKED")
         self.assertEqual(before,{str(p.relative_to(obsolete)):p.read_bytes() for p in obsolete.rglob('*') if p.is_file()})
         self.assertEqual(archive_before,{str(p.relative_to(archive)):p.read_bytes() for p in archive.rglob('*') if p.is_file()})
         self.assertTrue((self.root/'incidents'/SUPERSESSION_NAME).is_file())
@@ -132,7 +138,7 @@ class CanonicalRecoveryTests(unittest.TestCase):
     def test_reselection_refuses_any_activity_or_unlocked_state(self):
         for key,value in [('released_credits',1),('stage_a','RUNNING'),('dispatched',1),('confirmed_credits',1),('keychain_accesses',1)]:
             with self.subTest(key=key):
-                self.base=Path(self.temp.name)/key; self.base.mkdir()
+                self.base=Path(self.temp.name).resolve()/key; self.base.mkdir()
                 self.root=self.base/'executor'; self.rollback=self.base/'install-rollback'
                 obsolete=self._closed_and_incident_selected(); store=ExecutorStore(obsolete); state=store.read(); state[key]=value
                 identity=next(iter(state['requests']))
@@ -141,17 +147,17 @@ class CanonicalRecoveryTests(unittest.TestCase):
                     state['requests'][identity]['lifecycle']='CONFIRMED'; state['dispatched']=1; state['completed']=1
                 state['content_hash']=_digest(state); store.write(state)
                 with self.assertRaisesRegex(ValueError,'SUPERSESSION_SAFETY_GATE_FAILED'):
-                    reselect_corrected_september_9_generation(self.root,readiness_root=self._readiness())
+                    self._reselect(self.root,readiness_root=self._readiness())
 
     def test_reselection_refuses_receipt_and_evidence(self):
         for directory in ('receipts','evidence'):
             with self.subTest(directory=directory):
-                self.base=Path(self.temp.name)/directory; self.base.mkdir()
+                self.base=Path(self.temp.name).resolve()/directory; self.base.mkdir()
                 self.root=self.base/'executor'; self.rollback=self.base/'install-rollback'
                 obsolete=self._closed_and_incident_selected(); artifact=obsolete/directory/'unexpected.json'
                 artifact.write_text('{}\n'); artifact.chmod(0o600)
                 with self.assertRaisesRegex(ValueError,'SUPERSESSION_SAFETY_GATE_FAILED'):
-                    reselect_corrected_september_9_generation(self.root,readiness_root=self._readiness())
+                    self._reselect(self.root,readiness_root=self._readiness())
 
     def test_interruption_before_selection_retains_obsolete_selection(self):
         obsolete=self._closed_and_incident_selected(); ready=self._readiness()
@@ -160,13 +166,13 @@ class CanonicalRecoveryTests(unittest.TestCase):
                 # Earlier durable products are valid and reused without mutation.
                 pass
             with self.assertRaises(RuntimeError):
-                reselect_corrected_september_9_generation(self.root,readiness_root=ready,interrupt_after=phase)
+                self._reselect(self.root,readiness_root=ready,interrupt_after=phase)
             self.assertEqual(resolve_selected_state_root(self.root),obsolete)
 
     def test_post_selection_failure_restores_obsolete_selector(self):
         obsolete=self._closed_and_incident_selected(); original=(self.root/SELECTOR_NAME).read_bytes()
         with self.assertRaisesRegex(ValueError,'POST_SELECT'):
-            reselect_corrected_september_9_generation(self.root,readiness_root=self._readiness(),
+            self._reselect(self.root,readiness_root=self._readiness(),
                 post_select_validator=lambda _root:(_ for _ in ()).throw(ValueError('POST_SELECT')))
         self.assertEqual((self.root/SELECTOR_NAME).read_bytes(),original)
         self.assertEqual(resolve_selected_state_root(self.root),obsolete)
@@ -174,10 +180,10 @@ class CanonicalRecoveryTests(unittest.TestCase):
     def test_corrupt_supersession_receipt_fails_closed(self):
         self._closed_and_incident_selected(); ready=self._readiness()
         with self.assertRaises(RuntimeError):
-            reselect_corrected_september_9_generation(self.root,readiness_root=ready,interrupt_after='quarantine')
+            self._reselect(self.root,readiness_root=ready,interrupt_after='quarantine')
         receipt=self.root/'incidents'/SUPERSESSION_NAME; receipt.write_text('{}\n'); receipt.chmod(0o600)
         with self.assertRaisesRegex(ValueError,'SUPERSESSION_RECEIPT_INVALID'):
-            reselect_corrected_september_9_generation(self.root,readiness_root=ready)
+            self._reselect(self.root,readiness_root=ready)
 
 
 if __name__ == '__main__': unittest.main()

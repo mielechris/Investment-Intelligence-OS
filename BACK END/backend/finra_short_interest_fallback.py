@@ -105,6 +105,8 @@ def parse_finra_short_interest(payload: Any, symbol: str) -> dict[str, Any] | No
 
 
 def _fetch_finra(symbol: str) -> tuple[dict[str, Any], str, str]:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     payload = {
         "limit": 25,
         "compareFilters": [

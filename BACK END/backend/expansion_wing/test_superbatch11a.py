@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import base64
 import secrets
@@ -51,6 +52,7 @@ class EncodingTests(unittest.TestCase):
 
 
 class FrameworkAdapterTests(unittest.TestCase):
+    @offline_boundary("credential_access")
     def test_exact_lifecycle_rotation_duplicate_ambiguity_and_idempotent_delete(self):
         api = MemoryAPI(); adapter = KeychainAdapter(api, service="com.iios.disposable")
         first, second = secrets.token_bytes(32), secrets.token_bytes(32)
@@ -66,6 +68,7 @@ class FrameworkAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.delete("one", human_authorized=True), "ALREADY_ABSENT")
         with self.assertRaisesRegex(RuntimeError, "MISSING"): adapter.retrieve("missing")
 
+    @offline_boundary("credential_access")
     def test_nonzero_and_authorization_fail_closed_with_fixed_categories(self):
         api = MemoryAPI(); api.fail = -1; adapter = KeychainAdapter(api, service="com.iios.disposable")
         for operation in (lambda: adapter.create("one", secrets.token_bytes(32)), lambda: adapter.retrieve("one")):

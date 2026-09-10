@@ -11,6 +11,7 @@ import os
 import shutil
 import stat
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from .financial_datasets import API_HOST, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE
 from .operational_market_executor import (CANARY_PLAN, POST_0930_PLAN, SEPTEMBER_9_PLAN, SEPTEMBER_9_RECOVERY_PLAN,
-    ExecutorStore, canary_plan, plan_identity, post_0930_plan, september_9_plan, september_9_intraday_recovery_plan)
+    Clock, SystemClock, ExecutorStore, canary_plan, plan_identity, post_0930_plan, september_9_plan, september_9_intraday_recovery_plan)
 from .september_9_canonical_plan import (OBSOLETE_EXECUTOR_IDENTITY,
     canonical_plan_identity, obsolete_c40_plan, validate_canonical_plan)
 
@@ -150,18 +151,34 @@ def _validate_obsolete_generation(root:Path)->dict[str,Any]:
         raise ValueError("SUPERSESSION_SAFETY_GATE_FAILED")
     return state
 
-def _supersession_document(root:Path)->dict[str,Any]:
+def _supersession_document(root:Path, *, cost_evaluation:dict|None=None)->dict[str,Any]:
     _validate_obsolete_generation(root)
     body={"schema":SUPERSESSION_SCHEMA,"session_date":"2026-09-09",
         "superseded_generation":"sessions/2026-09-09","superseded_plan_identity":OBSOLETE_EXECUTOR_IDENTITY,
         "reason":"READINESS_EXECUTOR_IDENTITY_AND_SEMANTIC_CONTRACT_MISMATCH",
         "inventory":_generation_inventory(root),"allowance_released":False,"provider_activity":False,
         "immutable":True}
+    if cost_evaluation is not None:
+        body['schema']='iios-operational-market-generation-supersession-v2'
+        body['cost_evaluation']=cost_evaluation
     return body|{"content_hash":_hash_document(body)}
 
 def _validate_supersession(path:Path,root:Path)->dict[str,Any]:
     _regular_owner_file(path); value=json.loads(path.read_text()); body=dict(value); content=body.pop("content_hash",None)
-    if value.get("schema")!=SUPERSESSION_SCHEMA or content!=_hash_document(body) or value!=_supersession_document(root):
+    evaluation=value.get('cost_evaluation')
+    if evaluation is not None:
+        from .provider_readiness import _utc
+        required={'evaluated_at','evaluation_classification','cost_contract_hash','request_plan_identity','observed_at','expires_at'}
+        if (not isinstance(evaluation,dict) or set(evaluation)!=required
+                or evaluation['evaluation_classification'] not in {'OPERATIONAL','REPLAY','HISTORICAL'}
+                or evaluation['request_plan_identity']!=canonical_plan_identity()
+                or not isinstance(evaluation['cost_contract_hash'],str) or len(evaluation['cost_contract_hash'])!=64
+                or not _utc(evaluation['observed_at'])<=_utc(evaluation['evaluated_at'])<=_utc(evaluation['expires_at'])):
+            raise ValueError('SUPERSESSION_EVALUATION_INVALID')
+        if evaluation['evaluation_classification']!='OPERATIONAL':
+            _require_isolated_replay_root(root)
+    expected=_supersession_document(root,cost_evaluation=evaluation)
+    if content!=_hash_document(body) or value!=expected:
         raise ValueError("SUPERSESSION_RECEIPT_INVALID")
     return value
 
@@ -309,20 +326,41 @@ def authorize_september_9_market_open_50(*,root:Path=INSTALL_ROOT,readiness_root
         raise
     return "SEPTEMBER_9_MARKET_OPEN_50_AUTHORIZED"
 
+def _require_isolated_replay_root(root:Path)->None:
+    resolved=root.resolve()
+    if (resolved!=root or root==INSTALL_ROOT or any(p.is_symlink() for p in (root,*root.parents))
+            or not any(resolved.is_relative_to(p) for p in (Path('/private/tmp'),Path(tempfile.gettempdir()).resolve()))):
+        raise ValueError('ISOLATED_REPLAY_ROOT_REQUIRED')
+
+
 def reselect_corrected_september_9_generation(root:Path=INSTALL_ROOT,*,readiness_root:Path|None=None,
-        interrupt_after:str|None=None,post_select_validator=None)->str:
+        interrupt_after:str|None=None,post_select_validator=None,clock:Clock|None=None,
+        evaluation_classification:str='OPERATIONAL')->str:
     """Quarantine c40 and atomically select a distinct corrected locked generation."""
+    selected_clock=clock or SystemClock()
+    if evaluation_classification not in {'OPERATIONAL','REPLAY','HISTORICAL'}:
+        raise ValueError('COST_EVALUATION_CLASSIFICATION_INVALID')
+    if evaluation_classification=='OPERATIONAL':
+        if type(selected_clock) is not SystemClock: raise ValueError('PRODUCTION_SYSTEM_CLOCK_REQUIRED')
+    else:
+        _require_isolated_replay_root(root)
+    evaluated_at=selected_clock.now_utc()
     validate_installed(root); archive=_validate_archive(root/SESSIONS_NAME/"2026-09-08")
     current_selector=root/SELECTOR_NAME; _regular_owner_file(current_selector); original=current_selector.read_bytes()
     if json.loads(original)!=_obsolete_selector(archive): raise ValueError("OBSOLETE_SELECTION_REQUIRED")
     obsolete=root/SESSIONS_NAME/"2026-09-09"; _validate_obsolete_generation(obsolete)
     from .provider_readiness import READINESS_ROOT,operational_cost_binding
-    binding=operational_cost_binding(root=READINESS_ROOT if readiness_root is None else readiness_root)
+    binding=operational_cost_binding(root=READINESS_ROOT if readiness_root is None else readiness_root,
+        now=evaluated_at,evaluation_classification=evaluation_classification)
     if binding.get("request_plan_identity")!=canonical_plan_identity(): raise ValueError("CORRECTED_PRICING_BINDING_REQUIRED")
     incidents=root/"incidents"; incidents.mkdir(mode=0o700,exist_ok=True); os.chmod(incidents,0o700)
-    receipt_path=incidents/SUPERSESSION_NAME; expected=_supersession_document(obsolete)
+    evaluation={key:binding[key] for key in ('evaluated_at','evaluation_classification','cost_contract_hash',
+                                           'request_plan_identity','observed_at','expires_at')}
+    receipt_path=incidents/SUPERSESSION_NAME; expected=_supersession_document(obsolete,cost_evaluation=evaluation)
     if receipt_path.exists():
-        if _validate_supersession(receipt_path,obsolete)!=expected: raise ValueError("SUPERSESSION_RECEIPT_INVALID")
+        retained=_validate_supersession(receipt_path,obsolete)
+        if retained.get('cost_evaluation',evaluation)['cost_contract_hash']!=binding['cost_contract_hash']:
+            raise ValueError('SUPERSESSION_EVALUATION_INVALID')
     else: _write(receipt_path,expected)
     if interrupt_after=="quarantine": raise RuntimeError("INTERRUPTED_QUARANTINE")
     corrected=root/SESSIONS_NAME/CORRECTED_GENERATION_NAME; stage=root/SESSIONS_NAME/("."+CORRECTED_GENERATION_NAME+".tmp")

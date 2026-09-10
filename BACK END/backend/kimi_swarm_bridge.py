@@ -70,6 +70,8 @@ def _call(
     *,
     timeout: int = 60,
 ) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     url = server_url()
     token = server_token()
     if not url or not token:

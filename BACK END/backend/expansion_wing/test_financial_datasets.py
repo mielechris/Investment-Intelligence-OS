@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import json
 import socket
@@ -66,6 +67,7 @@ class IdentityCredentialTests(unittest.TestCase):
             ("com.iios.expansion-wing.financial-datasets", "financial-datasets-api-key"))
         self.assertNotEqual((KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT), (FMP_SERVICE, FMP_ACCOUNT))
 
+    @offline_boundary("credential_access")
     def test_security_framework_provider_exact_selector_and_failures(self):
         class Adapter:
             service = KEYCHAIN_SERVICE.encode()
@@ -99,6 +101,7 @@ class IdentityCredentialTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "^CREDENTIAL_INVALID$"):
             validate_credential("non-ascii-credential-é")
 
+    @offline_boundary("credential_access")
     def test_opaque_keychain_path_preserves_exact_bytes_and_archive_key_path_stays_32(self):
         class API:
             def __init__(self): self.values={}
@@ -125,6 +128,7 @@ class IdentityCredentialTests(unittest.TestCase):
             repr(SecurityFrameworkCredentialProvider))
         self.assertTrue(all(secret.decode() not in output for output in outputs))
 
+    @offline_boundary("provider_requests")
     def test_missing_ambiguous_inaccessible_context_are_sanitized(self):
         for category in ("KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY", "other"):
             adapter = FinancialDatasetsAdapter(policy(), credentials=Credentials(error=category), transport=Transport({}))
@@ -153,17 +157,22 @@ class EndpointCapabilityTests(unittest.TestCase):
         for url in rejected:
             with self.subTest(url=url), self.assertRaises(ValueError):
                 validate_origin(url,expected_path="/company/facts")
-        blocked = FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=Transport({})).fetch(
-            FDCapability.SEC_FILING_ITEM_METADATA, ("MU",))
-        self.assertEqual(blocked.failure, "ENDPOINT_NOT_ALLOWED")
+        # Invocation without canonical authority is denied before endpoint evaluation.
+        with self.assertRaisesRegex(PermissionError, 'AUTHORITY_MISSING'):
+            FinancialDatasetsAdapter(policy(), credentials=Credentials(), transport=Transport({})).fetch(
+                FDCapability.SEC_FILING_ITEM_METADATA, ("MU",))
 
     def test_default_discovery_performs_zero_provider_or_credential_calls(self):
         credentials=Credentials(); transport=Transport({})
-        result = FinancialDatasetsAdapter(credentials=credentials, transport=transport).fetch(FDCapability.COMPANY_FACTS, ("MU",))
-        self.assertEqual(result.failure, "DISABLED"); self.assertEqual((credentials.calls, transport.calls), (0, 0))
+        adapter = FinancialDatasetsAdapter(credentials=credentials, transport=transport)
+        self.assertTrue(adapter.capabilities())  # Read-only discovery requires no authority.
+        with self.assertRaisesRegex(PermissionError, 'AUTHORITY_MISSING'):
+            adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",))
+        self.assertEqual((credentials.calls, transport.calls), (0, 0))
 
 
 class CreditTests(unittest.TestCase):
+    @offline_boundary("provider_requests")
     def test_standard_premium_unknown_balance_and_unknown_cost(self):
         standard, _ = adapter_for(FDCapability.COMPANY_FACTS, "company_facts")
         result = standard.fetch(FDCapability.COMPANY_FACTS, ("MU",))
@@ -184,6 +193,7 @@ class CreditTests(unittest.TestCase):
         ledger.authorize_attempt(8)
         with self.assertRaises(RuntimeError): ledger.authorize_attempt(1)
 
+    @offline_boundary("provider_requests")
     def test_cache_and_singleflight_consume_no_additional_credit(self):
         entered=threading.Event(); release=threading.Event()
         def block(): entered.set(); release.wait(2)
@@ -198,6 +208,7 @@ class CreditTests(unittest.TestCase):
         cached=adapter.fetch(FDCapability.COMPANY_FACTS, ("MU",))
         self.assertTrue(cached.cache_hit); self.assertEqual(adapter.credits.consumed,1)
 
+    @offline_boundary("provider_requests")
     def test_no_automatic_retry_and_terminal_response_is_charged_once(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         transient=Transport({}, status=500, final_url=f"{API_ORIGIN}{spec.path}")
@@ -228,6 +239,7 @@ class TransportLifecycleTests(unittest.TestCase):
             "terminal_status_category","latency_ms","response_size_bytes","cache_state","retry_count",
             "accounting_state","lifecycle_state"})
 
+    @offline_boundary("provider_requests")
     def test_failure_before_transport_releases_reservation(self):
         transport=Transport({}); adapter=FinancialDatasetsAdapter(policy(),credentials=Credentials(error="KEY_RECORD_MISSING"),transport=transport)
         result=adapter.fetch(FDCapability.COMPANY_FACTS,("MU",))
@@ -235,6 +247,7 @@ class TransportLifecycleTests(unittest.TestCase):
         self.assert_sanitized_complete(result,started=False,observed=False,lifecycle="TRANSPORT_FAILED",
             accounting="RELEASED_BEFORE_TRANSPORT")
 
+    @offline_boundary("provider_requests")
     def test_invoked_failures_remain_ambiguously_charged(self):
         cases=((RuntimeError("private transport detail"),"ACCOUNTING_UNCERTAIN","TRANSPORT_FAILED"),
             (socket.gaierror("private dns detail"),"DNS_FAILED","DNS_FAILED"),
@@ -257,6 +270,7 @@ class TransportLifecycleTests(unittest.TestCase):
         self.assert_sanitized_complete(result,started=True,observed=False,lifecycle="TRANSPORT_FAILED",
             accounting="AMBIGUOUS_RESERVED")
 
+    @offline_boundary("provider_requests")
     def test_confirmed_terminal_responses_charge_once(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         cases=((b"",200,"EMPTY_RESPONSE"),(b"{}",401,"AUTHENTICATION_FAILED"),
@@ -269,6 +283,7 @@ class TransportLifecycleTests(unittest.TestCase):
                 self.assert_sanitized_complete(result,started=True,observed=True,lifecycle="RESPONSE_OBSERVED",
                     accounting="CONFIRMED_CONSUMED")
 
+    @offline_boundary("provider_requests")
     def test_redirect_is_not_followed_or_used_to_correct_path(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         transport=Transport(b"{}",status=301,final_url=f"{API_ORIGIN}{spec.path}/",
@@ -278,6 +293,7 @@ class TransportLifecycleTests(unittest.TestCase):
         self.assert_sanitized_complete(result,started=True,observed=True,lifecycle="REDIRECT_REJECTED",
             accounting="CONFIRMED_CONSUMED")
 
+    @offline_boundary("provider_requests")
     def test_metric_callback_failure_is_sanitized_without_unhandled_access(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         def broken(_record): raise RuntimeError("private callback detail")
@@ -288,6 +304,7 @@ class TransportLifecycleTests(unittest.TestCase):
             ("METRIC_CALLBACK_FAILED",1,1))
         self.assertEqual(result.attempts[0].terminal_status_category,"METRIC_CALLBACK_FAILED")
 
+    @offline_boundary("provider_requests")
     def test_prior_ambiguous_credit_and_cache_zero_cost(self):
         adapter,transport=adapter_for(FDCapability.COMPANY_FACTS,"company_facts")
         adapter=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=transport,utcnow=lambda:NOW,
@@ -298,6 +315,7 @@ class TransportLifecycleTests(unittest.TestCase):
         self.assertTrue(cached.cache_hit); self.assertEqual(cached.attempts[0].projected_credit_cost,0)
         self.assertEqual(cached.attempts[0].accounting_state,"ZERO_CREDIT")
 
+    @offline_boundary("provider_requests")
     def test_runner_defaults_disabled_and_mu_failure_stops_amd(self):
         disabled=FinancialDatasetsAdapter(credentials=Credentials(),transport=Transport({}))
         self.assertEqual(BoundedLiveAcceptanceRunner(disabled).run()["status"],"NOT_AUTHORIZED")
@@ -310,6 +328,7 @@ class TransportLifecycleTests(unittest.TestCase):
 
 
 class FixtureNormalizationTests(unittest.TestCase):
+    @offline_boundary("provider_requests")
     def test_mu_amd_facts_schema_provenance_ignored_fields_and_secret_containment(self):
         records=[]
         for ticker in ("MU","AMD"):
@@ -323,6 +342,7 @@ class FixtureNormalizationTests(unittest.TestCase):
             self.assertEqual(transport.header_names,[(AUTH_HEADER,)])
         self.assertEqual({r.ticker for r in records},{"MU","AMD"})
 
+    @offline_boundary("provider_requests")
     def test_statement_price_filing_and_earnings_classifications_remain_distinct(self):
         cases=((FDCapability.INCOME_STATEMENTS,"income_statements","PROVIDER_NORMALIZED_FACT"),
             (FDCapability.REAL_TIME_PRICE_SNAPSHOT,"price_snapshot","TECHNICAL_OBSERVATION"),
@@ -333,6 +353,7 @@ class FixtureNormalizationTests(unittest.TestCase):
                 adapter,_=adapter_for(capability,key); result=adapter.fetch(capability,("MU","AMD"))
                 self.assertEqual({record.data_classification for record in result.records},{classification})
 
+    @offline_boundary("provider_requests")
     def test_stale_future_schema_oversize_timeout_and_redirect_fail_closed(self):
         spec=ENDPOINTS[FDCapability.COMPANY_FACTS]
         stale=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=Transport(
@@ -348,6 +369,7 @@ class FixtureNormalizationTests(unittest.TestCase):
         redirect=FinancialDatasetsAdapter(policy(),credentials=Credentials(),transport=Transport({},final_url="https://other.example/company/facts/"))
         self.assertEqual(redirect.fetch(FDCapability.COMPANY_FACTS,("MU",)).failure,"REDIRECT_REJECTED")
 
+    @offline_boundary("provider_requests")
     def test_batch_limit_partial_outage_no_substitution_and_primary_gate(self):
         adapter,_=adapter_for(FDCapability.COMPANY_FACTS,"company_facts")
         self.assertEqual(adapter.fetch(FDCapability.COMPANY_FACTS,tuple(f"X{i}" for i in range(51))).failure,"BATCH_LIMIT")

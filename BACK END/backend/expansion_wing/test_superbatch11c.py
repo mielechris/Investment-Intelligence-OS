@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import os
 import base64
@@ -13,6 +14,7 @@ from expansion_wing.keychain_adapter import (
 
 
 class SecItemContractTests(unittest.TestCase):
+    @offline_boundary("credential_access")
     def test_exact_selector_bytes_and_err_sec_param_category(self):
         api = Mock()
         api.find.return_value = (ERR_PARAM, ())
@@ -25,6 +27,7 @@ class SecItemContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^KEY_SIZE_INVALID$"):
             KeychainAdapter(api, service="diagnostic.service").create("diagnostic-account", bytes(31))
 
+    @offline_boundary("credential_access")
     def test_missing_is_not_invalid_query(self):
         api = Mock(); api.find.return_value = (ERR_ITEM_NOT_FOUND, ())
         with self.assertRaisesRegex(RuntimeError, "^KEY_RECORD_MISSING$"):

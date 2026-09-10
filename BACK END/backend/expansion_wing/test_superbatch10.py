@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import json
 import secrets
@@ -74,6 +75,7 @@ class KeychainTests(unittest.TestCase):
             self.calls.append(("delete", service, account, None))
             return 0 if self.values.pop((service, account), None) is not None else ERR_ITEM_NOT_FOUND
 
+    @offline_boundary("credential_access")
     def test_mocked_create_retrieve_rotate_delete_never_puts_secret_in_args_or_env(self):
         secret = secrets.token_bytes(32); rotated_secret = secrets.token_bytes(32)
         api = self.API(); adapter = KeychainAdapter(api, service="com.iios.fixture")
@@ -82,6 +84,7 @@ class KeychainTests(unittest.TestCase):
         self.assertEqual(adapter.delete("k1", human_authorized=True), "DELETED")
         self.assertNotIn(secret, [value for call in api.calls for value in call[1:3]])
 
+    @offline_boundary("credential_access")
     def test_duplicate_missing_ambiguous_lost_key_and_unauthorized_delete(self):
         api = self.API(); adapter = KeychainAdapter(api, service="s"); adapter.create("k", secrets.token_bytes(32))
         with self.assertRaisesRegex(RuntimeError, "DUPLICATE"): adapter.create("k", secrets.token_bytes(32))

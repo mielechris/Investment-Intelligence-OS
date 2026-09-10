@@ -33,6 +33,8 @@ def create_governed_paper_exit(
     human_approved: bool = False,
 ) -> dict[str, Any]:
 
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     if human_approved is not True:
         return {
             "status": "BLOCKED",

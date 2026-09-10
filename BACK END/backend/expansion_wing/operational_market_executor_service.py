@@ -43,6 +43,8 @@ def _trust_policy()->TrustBundlePolicy:
     return TrustBundlePolicy(TRUST_BUNDLE,value.get("ca_bundle_sha256"))
 
 def production_coordinator()->OperationalMarketEvidenceCoordinator:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     validate_installed()
     store=ExecutorStore(resolve_selected_state_root()); rows=store.read_plan()
     if rows not in (canary_plan(),post_0930_plan(),september_9_plan()) and not (rows and rows[0].get("plan")==SEPTEMBER_9_RECOVERY_PLAN and rows==september_9_intraday_recovery_plan(rows[0]["activation_time"])): raise ValueError("REQUEST_PLAN_MISMATCH")

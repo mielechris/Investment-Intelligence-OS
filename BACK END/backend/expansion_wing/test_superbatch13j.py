@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import json
 import unittest
@@ -31,6 +32,7 @@ def fetch(payload: object, tickers: tuple[str, ...] = ("MU",)):
 
 
 class CompanyFactsV2ContractTests(unittest.TestCase):
+    @offline_boundary("provider_requests")
     def test_official_wrapper_without_provider_timestamp_is_accepted(self):
         result, transport = fetch({"company_facts": {"ticker": "MU", "name": "Synthetic",
             "cik": "0000000001", "exchange": "NASDAQ", "is_active": True}})
@@ -41,10 +43,12 @@ class CompanyFactsV2ContractTests(unittest.TestCase):
         self.assertEqual(record.freshness, "UNKNOWN")
         self.assertEqual((result.consumed_credits, result.remaining_credits), (4, 996))
 
+    @offline_boundary("provider_requests")
     def test_documented_optional_fields_may_be_absent(self):
         result, _ = fetch({"company_facts": {"ticker": "MU"}})
         self.assertEqual(result.state, "AVAILABLE")
 
+    @offline_boundary("provider_requests")
     def test_unknown_nested_values_are_observed_only_by_name_and_type(self):
         result, _ = fetch({"company_facts": {"ticker": "MU", "future_field": "private-value"}})
         self.assertEqual((result.state, result.ignored_field_count), ("AVAILABLE", 1))
@@ -53,6 +57,7 @@ class CompanyFactsV2ContractTests(unittest.TestCase):
         self.assertNotIn("future_field", encoded); self.assertNotIn("private-value", encoded)
         self.assertNotIn("private-value", json.dumps(result.schema_observation))
 
+    @offline_boundary("provider_requests")
     def test_ticker_envelope_and_cardinality_fail_closed(self):
         cases = (({"company_facts": {"ticker": "AMD"}}, ("MU",)),
             ({"company_facts": {"ticker": "MU"}, "extra": 1}, ("MU",)),
@@ -64,6 +69,7 @@ class CompanyFactsV2ContractTests(unittest.TestCase):
         result, transport = fetch({"company_facts": {"ticker": "MU"}}, ("MU", "AMD"))
         self.assertEqual((result.failure, transport.calls, result.consumed_credits), ("BATCH_LIMIT", 0, 3))
 
+    @offline_boundary("provider_requests")
     def test_documented_types_and_sec_url_are_bounded(self):
         cases = ({"company_facts": {"ticker": "MU", "is_active": "true"}},
             {"company_facts": {"ticker": "MU", "name": None}},

@@ -16,7 +16,7 @@ class OwnerAuthorizationTests(CanonicalRecoveryTests):
         return authorize_september_9_market_open_50(supervisor_root=self.supervisor,supervisor_manifest_identity=self.manifest_identity,
             service_probe=lambda:{'running':True,'supervisor_count':1,'lock_owned':True,'listeners':0,'children':0},**kwargs)
     def _ready_selected(self):
-        self._closed_and_incident_selected(); ready=self._readiness(); reselect_corrected_september_9_generation(self.root,readiness_root=ready)
+        self._closed_and_incident_selected(); ready=self._readiness(); self._reselect(self.root,readiness_root=ready)
         return ready,self.root/SESSIONS_NAME/'2026-09-09-canonical-v2'
     def test_authorizes_once_without_dispatch(self):
         ready,selected=self._ready_selected(); now=datetime(2026,9,9,4,tzinfo=timezone.utc)
@@ -27,7 +27,7 @@ class OwnerAuthorizationTests(CanonicalRecoveryTests):
     def test_clock_boundaries_fail_closed(self):
         for now in (datetime(2026,9,7,23,59,tzinfo=timezone.utc),datetime(2026,9,9,14,tzinfo=timezone.utc)):
             with self.subTest(now=now):
-                self.base=Path(self.temp.name)/str(now.timestamp()); self.base.mkdir(); self.root=self.base/'executor'; self.rollback=self.base/'rollback'; ready,_=self._ready_selected()
+                self.base=Path(self.temp.name).resolve()/str(now.timestamp()); self.base.mkdir(); self.root=self.base/'executor'; self.rollback=self.base/'rollback'; ready,_=self._ready_selected()
                 with self.assertRaisesRegex(ValueError,'MARKET_OPEN_AUTHORIZATION_WINDOW_CLOSED'): self._auth(root=self.root,readiness_root=ready,expected_commit='a'*40,now=now)
     def test_prior_activity_rejected_and_postcheck_rolls_back(self):
         ready,selected=self._ready_selected(); store=ExecutorStore(selected); state=store.read(); state['released_credits']=1; state['content_hash']=''; state['content_hash']=_digest(state); store.write(state)

@@ -226,6 +226,8 @@ def run_governed_paper_trading_cycle(
     authorization state. It can only invoke the already-governed modules and
     consumes at most one valid paper authorization per cycle.
     """
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     from paper_portfolio_core import (
         build_performance_history,
         build_portfolio_state,

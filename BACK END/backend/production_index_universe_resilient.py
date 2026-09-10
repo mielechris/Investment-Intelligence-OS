@@ -159,6 +159,8 @@ def _validate_host(url: str) -> None:
 
 
 def _fetch(url: str, *, referer: str | None = None) -> tuple[bytes, str | None, str]:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     _validate_host(url)
     headers = {
         "User-Agent": BROWSER_USER_AGENT,

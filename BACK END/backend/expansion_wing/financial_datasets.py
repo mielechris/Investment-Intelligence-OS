@@ -190,6 +190,8 @@ class SecurityFrameworkCredentialProvider:
         self.adapter = adapter
 
     def retrieve(self) -> bytes:
+        from truth_spine_authority import require_capability
+        require_capability('credential_access')
         try:
             value = self.adapter.retrieve_opaque(KEYCHAIN_ACCOUNT, minimum_bytes=CREDENTIAL_MIN_BYTES,
                 maximum_bytes=CREDENTIAL_MAX_BYTES)
@@ -394,7 +396,12 @@ class FinancialDatasetsAdapter:
 
     def capabilities(self) -> dict[str, str]: return {key.value: value.state for key, value in ENDPOINTS.items()}
 
-    def fetch(self, capability: FDCapability, tickers: tuple[str, ...]) -> FDResult:
+    def fetch(self, capability: FDCapability, tickers: tuple[str, ...], *,
+              authority: dict | None = None, authority_binding: str = '',
+              authority_release: str = '', authority_owners: dict | None = None) -> FDResult:
+        from truth_spine_authority import require_capability
+        require_capability('provider_requests', document=authority, binding=authority_binding,
+                           release=authority_release, owners=authority_owners)
         spec = ENDPOINTS.get(capability)
         cost = spec.credit_cost if spec else None
         if not self.policy.enabled: return self._fail(capability, "DISABLED", cost)
@@ -439,6 +446,8 @@ class FinancialDatasetsAdapter:
             with self._condition: self._inflight.discard(key); self._condition.notify_all()
 
     def _request(self, spec: EndpointSpec, tickers: tuple[str, ...]) -> FDResult:
+        from truth_spine_authority import require_capability
+        require_capability('provider_requests')
         readiness = getattr(self.transport, "trust_readiness", None)
         if callable(readiness):
             try: trust_state = readiness()

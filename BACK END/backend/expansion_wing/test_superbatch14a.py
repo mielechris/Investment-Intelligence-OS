@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import json
 import unittest
@@ -52,6 +53,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
         self.assertEqual((result.state, source.transport.calls, result.ending_conservative_credits),
             ("NOT_ACTIVATED", 0, 5))
 
+    @offline_boundary("provider_requests")
     def test_fixture_batch_deduplicates_tickers_and_routes_to_primary_review(self):
         source = provider(); bridge = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True))
         result = bridge.run(candidates(), explicitly_authorized=True)
@@ -63,6 +65,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
         self.assertEqual(result.primary_review_queue_count, 3)
         self.assertEqual(len({item.normalized_hash for item in result.evidence}), 2)
 
+    @offline_boundary("provider_requests")
     def test_existing_cache_is_checked_before_paid_request(self):
         source = provider(); source.fetch(FDCapability.COMPANY_FACTS, ("MU",))
         result = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True)).run(
@@ -83,6 +86,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
             "CANDIDATE_CONTRACT_INVALID")
         self.assertEqual(source.transport.calls, 0)
 
+    @offline_boundary("provider_requests")
     def test_provider_failure_stops_remaining_work_and_exposes_no_partial_evidence(self):
         transport = Transport(fail_ticker="AMD"); source = provider(transport)
         result = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True)).run(
@@ -91,6 +95,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
             ("STOPPED_FAIL_CLOSED", 2, "PROVIDER_UNAVAILABLE"))
         self.assertEqual(result.evidence, ())
 
+    @offline_boundary("provider_requests")
     def test_browser_projection_is_scalar_counts_only_and_authority_false(self):
         source = provider(); result = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True)).run(
             candidates(), explicitly_authorized=True)
@@ -101,6 +106,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
         self.assertTrue(all(value is False for value in projection["authority"].values()))
         validate_browser_projection(projection)
 
+    @offline_boundary("provider_requests")
     def test_compositor_projects_counts_without_enabling_provider(self):
         source = provider(); projection = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True)).run(
             candidates(), explicitly_authorized=True).browser_safe()
@@ -115,6 +121,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
         self.assertFalse(governor["data"]["network_enabled"] or governor["data"]["provider_enabled"] or
             governor["data"]["authority_granted"])
 
+    @offline_boundary("provider_requests")
     def test_downstream_gate_never_creates_operational_authority(self):
         source = provider(); evidence = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True)).run(
             candidates()[:1], explicitly_authorized=True).evidence[0]
@@ -127,6 +134,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
                 result["pattern_laboratory"] or result["paper_order"] or result["automatic_action"])
             self.assertEqual(result["authority"], AUTHORITY)
 
+    @offline_boundary("provider_requests")
     def test_credit_baseline_and_policy_bounds(self):
         source = provider(); self.assertEqual(source.credits.snapshot(),
             {"consumed": 5, "confirmed": 3, "ambiguous": 2, "remaining": 995})

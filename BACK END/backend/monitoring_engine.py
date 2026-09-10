@@ -129,6 +129,8 @@ def configure_profile(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _falsifier_review(case_id: str, evidence_items: list[dict[str, Any]], analysis_mode: str) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     agents = list_objects(case_id, "agent_result")
     falsifiers = [
         {"agent_key": item.get("agent_key"), "falsifier": item.get("falsifier")}

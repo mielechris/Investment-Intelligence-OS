@@ -64,6 +64,8 @@ def _request_bytes(
     retries: int = 2,
     cache_ttl_seconds: int = 0,
 ) -> bytes:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     if cache_ttl_seconds > 0:
         with _CACHE_LOCK:
             cached = _CACHE.get(url)

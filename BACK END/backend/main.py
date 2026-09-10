@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
@@ -19,8 +18,6 @@ from ledger import (
     record_event,
     record_object,
 )
-
-load_dotenv()
 
 app = FastAPI(title="Investment Intelligence OS", version="0.4.0")
 
@@ -112,6 +109,8 @@ def evidence_prompt(evidence: list[dict[str, Any]]) -> str:
 
 
 def run_specialist(agent_key: str, topic: str, evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     config = AGENT_CONFIGS.get(agent_key)
     if not config:
         raise HTTPException(status_code=404, detail="Unknown agent")
@@ -200,6 +199,8 @@ def run_skeptic_agent(request: dict = Body(...)):
 
 
 def build_committee(case: dict[str, Any]) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     specialist_results = {key: run_specialist(key, case["topic"], case["evidence"]) for key in AGENT_CONFIGS}
     for key, result in specialist_results.items():
         result_id = f"agent_{uuid4().hex}"
@@ -326,6 +327,8 @@ def evaluate_risk(request: dict = Body(...)):
 
 @app.post("/paper-execution/submit")
 def submit_paper_order(request: dict = Body(...)):
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     authorization_id = str(request.get("risk_authorization_id", "")).strip()
     authorization = get_object(authorization_id) if authorization_id else latest_object("risk_authorization", topic=str(request.get("topic", "")).strip())
     if not authorization:

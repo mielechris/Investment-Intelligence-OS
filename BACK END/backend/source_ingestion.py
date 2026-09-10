@@ -55,6 +55,8 @@ def utc_now() -> str:
 
 
 def _request(url: str, *, accept: str = "application/json") -> bytes:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     request = Request(
         url,
         headers={

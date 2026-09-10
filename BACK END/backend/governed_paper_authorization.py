@@ -264,6 +264,8 @@ def create_paper_authorization(
     sizing: dict[str, Any],
 ) -> dict[str, Any]:
 
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     checks = {
         "qualified_buy_candidate": (
             qualification.get(
@@ -806,6 +808,8 @@ def consume_verified_paper_authorization(
     current_binding: dict[str, Any],
 ) -> dict[str, Any]:
 
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     verification = (
         verify_paper_authorization(
             authorization_id=

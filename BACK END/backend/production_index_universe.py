@@ -302,6 +302,8 @@ def _validate_host(url: str) -> None:
 
 
 def _fetch_url(url: str) -> tuple[bytes, str | None]:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     _validate_host(url)
     request = Request(
         url,

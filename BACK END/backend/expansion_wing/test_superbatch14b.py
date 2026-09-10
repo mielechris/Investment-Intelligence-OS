@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import json
 import os
@@ -54,6 +55,7 @@ class CandidateFlowAcceptanceTests(unittest.TestCase):
         bridge = CandidateEnrichmentBridge(source, BridgePolicy(enabled=True))
         return CandidateFlowAcceptance(bridge, self.store, enabled=True, fixture_only=True, **kwargs), source
 
+    @offline_boundary("provider_requests")
     def test_complete_fixture_flow_persists_restart_safe_accounting(self):
         runner, source = self.runner(); result = runner.run(BATCH, explicitly_authorized=True)
         self.assertEqual((result.state, result.candidate_count, result.unique_ticker_count), ("COMPLETE", 3, 2))
@@ -63,6 +65,7 @@ class CandidateFlowAcceptanceTests(unittest.TestCase):
         self.assertEqual((restarted.confirmed, restarted.ambiguous, restarted.consumed), (5, 2, 7))
         self.assertEqual(restarted.last_batch_id, BATCH["batch_id"])
 
+    @offline_boundary("provider_requests")
     def test_replay_is_rejected_before_provider_work(self):
         runner, source = self.runner(); runner.run(BATCH, explicitly_authorized=True)
         first_calls = source.transport.calls
@@ -76,6 +79,7 @@ class CandidateFlowAcceptanceTests(unittest.TestCase):
         self.assertEqual((result.state, result.failure_category, source.transport.calls),
             ("REJECTED", "CREDIT_CHECKPOINT_MISMATCH", 0))
 
+    @offline_boundary("provider_requests")
     def test_provider_failure_still_persists_confirmed_accounting(self):
         source = provider(Transport(fail="AMD")); runner, _ = self.runner(source)
         result = runner.run(BATCH, explicitly_authorized=True)
@@ -84,6 +88,7 @@ class CandidateFlowAcceptanceTests(unittest.TestCase):
         checkpoint = self.store.load()
         self.assertEqual((checkpoint.confirmed, checkpoint.ambiguous, checkpoint.consumed), (5, 2, 7))
 
+    @offline_boundary("provider_requests")
     def test_existing_cache_prevents_duplicate_paid_transport(self):
         source = provider(); source.fetch(FDCapability.COMPANY_FACTS, ("MU",))
         self.store.path.unlink(); self.store.initialize(genesis_checkpoint(confirmed=4, ambiguous=2))
@@ -116,6 +121,7 @@ class CandidateFlowAcceptanceTests(unittest.TestCase):
         self.store.path.chmod(0o644)
         with self.assertRaisesRegex(RuntimeError, "CREDIT_CHECKPOINT_UNAVAILABLE"): self.store.load()
 
+    @offline_boundary("provider_requests")
     def test_browser_projection_contains_counts_only_and_no_authority(self):
         runner, _ = self.runner(); result = runner.run(BATCH, explicitly_authorized=True)
         projection = result.browser_safe(); encoded = json.dumps(projection, sort_keys=True)
@@ -124,6 +130,7 @@ class CandidateFlowAcceptanceTests(unittest.TestCase):
         self.assertFalse(projection["scheduled"] or projection["provider_enabled"])
         self.assertTrue(all(value is False for value in projection["authority"].values()))
 
+    @offline_boundary("provider_requests")
     def test_credit_checkpoint_contains_no_provider_data(self):
         runner, _ = self.runner(); runner.run(BATCH, explicitly_authorized=True)
         encoded = self.store.path.read_text()

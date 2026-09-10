@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
   }
   const selectedApp = resolve(process.cwd(), unified ? 'src/LivingWallApp.tsx' : app ? 'src/ExpansionWing.tsx' : 'src/PaperFundOperationsShell.tsx')
   return {
-  ...(env.VITE_TRUTH_SPINE_PREVIEW === '1' ? { base: '/review/', build: { rollupOptions: { input: resolve(process.cwd(), 'truth-spine.html') } } } : {}),
+  ...(env.VITE_TRUTH_SPINE_PREVIEW === '1' || env.VITE_TRUTH_INTEGRATION_PREVIEW === '1' ? { base: '/review/', build: { rollupOptions: { input: resolve(process.cwd(), env.VITE_TRUTH_INTEGRATION_PREVIEW === '1' ? 'truth-integration.html' : 'truth-spine.html') } } } : {}),
   plugins: [{
     name: 'iios-selected-app',
     resolveId(id) { return id === 'virtual:iios-selected-app' ? '\0virtual:iios-selected-app' : null },

@@ -97,6 +97,8 @@ def update_transcript(interview_id: str, request: dict[str, Any]) -> dict[str, A
 
 
 def extract_insights(interview_id: str) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     interview = _require_interview(interview_id)
     transcript = str(interview.get("transcript") or "").strip()
     if not transcript:

@@ -76,6 +76,8 @@ def _auth_headers() -> dict[str, str]:
 
 
 def _fetch_json(url: str) -> Any:
+    from truth_spine_authority import require_capability
+    require_capability('provider_requests')
     if not _approved_host(url):
         raise ValueError("FedWatch URL must use an official cmegroup.com host")
 

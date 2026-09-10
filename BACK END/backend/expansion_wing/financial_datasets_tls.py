@@ -123,6 +123,8 @@ class FinancialDatasetsHTTPSTransport:
 
     def __call__(self, base_url: str, headers: dict[str, bytes], tickers: tuple[str, ...],
                  connect_timeout: float, response_timeout: float) -> FDResponse:
+        from truth_spine_authority import require_capability
+        require_capability('provider_requests')
         if any(name in self.environment for name in _PROXY_NAMES):
             raise FinancialDatasetsTransportError("PROXY_CONTEXT_REJECTED", request_started=False)
         if base_url != f"{API_ORIGIN}/company/facts" or len(tickers) != 1 or tuple(headers) != (AUTH_HEADER,):
@@ -167,6 +169,8 @@ class FinancialDatasetsHTTPSTransport:
                             interval: str | None = None,
                             connect_timeout: float = 5.0, response_timeout: float = 10.0):
         """Exact-host GET used only by the owner-authorized operational coordinator."""
+        from truth_spine_authority import require_capability
+        require_capability('provider_requests')
         from urllib.parse import quote, urlencode
         allowed={"/prices/snapshot","/prices","/company/facts"}
         if path not in allowed or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}",ticker):

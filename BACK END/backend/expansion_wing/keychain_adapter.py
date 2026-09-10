@@ -147,6 +147,8 @@ class KeychainAdapter:
         return self.retrieve_opaque(key_id, minimum_bytes=32, maximum_bytes=32)
 
     def retrieve_opaque(self, key_id: str, *, minimum_bytes: int, maximum_bytes: int) -> bytes:
+        from truth_spine_authority import require_capability
+        require_capability('credential_access')
         if not 1 <= minimum_bytes <= maximum_bytes: raise ValueError("KEY_SIZE_INVALID")
         status, matches = self.api.find(self.service, self._account(key_id))
         if status == ERR_ITEM_NOT_FOUND: raise RuntimeError("KEY_RECORD_MISSING")

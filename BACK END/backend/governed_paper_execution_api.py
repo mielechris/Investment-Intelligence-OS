@@ -673,6 +673,8 @@ def submit_governed_paper_order(
       - submits live capital.
     """
 
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     try:
         authorization_id = (
             _authorization_id(

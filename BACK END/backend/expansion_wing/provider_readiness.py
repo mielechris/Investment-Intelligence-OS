@@ -19,6 +19,16 @@ from .tuesday_whole_factory import PILOT_BY_PRODUCT
 from .september_9_canonical_plan import (canonical_plan_identity,
     corrected_september_9_plan, validate_canonical_plan)
 
+
+class CostClock(Protocol):
+    def now_utc(self) -> datetime: ...
+
+
+@dataclass(frozen=True)
+class SystemCostClock:
+    def now_utc(self) -> datetime:
+        return datetime.now(timezone.utc)
+
 COST_SCHEMA = "iios-provider-endpoint-cost-contract-v1"
 BROWSER_SCHEMA = "iios-provider-stage-a-readiness-browser-v1"
 PROVIDER = "FINANCIAL_DATASETS"
@@ -353,9 +363,18 @@ def _september_9_readiness(document:dict[str,Any],credential_status:str,*,now:da
         "session_date":SEPTEMBER_9_SESSION_DATE,"request_plan_identity":september_9_plan_identity()}
 
 
-def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | None = None) -> dict[str, Any]:
+def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | None = None,
+        clock: CostClock | None = None, evaluation_classification: str = 'OPERATIONAL') -> dict[str, Any]:
     """Validate the fixed installed cost document and its exact 50-row plan."""
-    current = datetime.now(timezone.utc) if now is None else now
+    if now is not None and clock is not None:
+        raise ValueError('COST_CLOCK_AMBIGUOUS')
+    if evaluation_classification not in {'OPERATIONAL','REPLAY','HISTORICAL'}:
+        raise ValueError('COST_EVALUATION_CLASSIFICATION_INVALID')
+    if clock is not None and type(clock) is not SystemCostClock and evaluation_classification == 'OPERATIONAL':
+        raise ValueError('PRODUCTION_SYSTEM_CLOCK_REQUIRED')
+    current = (clock or SystemCostClock()).now_utc() if now is None else now
+    if current.tzinfo is None or current.utcoffset() != timezone.utc.utcoffset(current):
+        raise ValueError('COST_CLOCK_INVALID')
     projection = installed_readiness_projection(root=root, now=current)
     if projection.get("provider_state") != "READY":
         raise ValueError("OPERATIONAL_COST_BINDING_UNAVAILABLE")
@@ -374,7 +393,12 @@ def operational_cost_binding(*, root: Path = READINESS_ROOT, now: datetime | Non
     }
     if september_9: validate_september_9_cost_evidence(document,now=current)
     else: validate_cost_contract_document(document, now=current)
-    return expected | {"cost_contract_hash": document["document_hash"]}
+    return expected | {"cost_contract_hash": document["document_hash"],
+        'evaluated_at':current.isoformat(),'evaluation_classification':evaluation_classification,
+        'observed_at':document['documentation_observed_at'] if september_9 else max(
+            document['contracts'], key=lambda row: _utc(row['documentation_observed_at']))['documentation_observed_at'],
+        'expires_at':document['expiration_revalidation_time'] if september_9 else min(
+            document['contracts'], key=lambda row: _utc(row['expiration_revalidation_time']))['expiration_revalidation_time']}
 
 
 def classify_identity(row: Mapping[str, Any]) -> str:

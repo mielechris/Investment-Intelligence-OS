@@ -102,6 +102,8 @@ def record_object(
     parent_id: str | None = None,
     topic: str | None = None,
 ) -> None:
+    from truth_spine_authority import require_capability
+    require_capability('operational_ledger_write')
     created_at = str(payload.get("created_at") or utc_now())
     encoded = json.dumps(payload, default=str, separators=(",", ":"))
     with _connect() as db:
@@ -141,6 +143,8 @@ def record_event(
     entity_id: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('operational_ledger_write')
     event = {
         "event_id": f"event_{uuid4().hex}",
         "case_id": case_id,
@@ -221,6 +225,8 @@ def list_objects(case_id: str, object_type: str | None = None) -> list[dict[str,
 
 def consume_authorization(authorization_id: str) -> bool:
     """Atomically consume a risk authorization. Returns False if missing/already used."""
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     with _connect() as db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
@@ -251,6 +257,8 @@ def consume_paper_authorization(
     Separate from legacy risk_authorization consumption.
     Paper Execution does not use this token yet.
     """
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     with _connect() as db:
         db.execute("BEGIN IMMEDIATE")
 

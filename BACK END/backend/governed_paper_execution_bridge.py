@@ -72,6 +72,8 @@ def create_governed_paper_order(
     sizing: dict[str, Any],
 ) -> dict[str, Any]:
 
+    from truth_spine_authority import require_capability
+    require_capability('paper_order')
     if not str(
         authorization_id or ""
     ).startswith("paper_auth_"):

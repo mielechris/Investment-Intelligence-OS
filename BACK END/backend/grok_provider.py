@@ -23,6 +23,8 @@ def _env(*names: str) -> str:
 
 
 def api_key() -> str:
+    from truth_spine_authority import require_capability
+    require_capability('credential_access')
     return _env("IIOS_GROK_API_KEY", "XAI_API_KEY")
 
 
@@ -81,6 +83,8 @@ def _request(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     retries: int = 2,
 ) -> dict[str, Any]:
+    from truth_spine_authority import require_capability
+    require_capability('paid_model_requests')
     key = api_key()
     if not key:
         raise RuntimeError("GROK_PROVIDER_NOT_CONFIGURED")

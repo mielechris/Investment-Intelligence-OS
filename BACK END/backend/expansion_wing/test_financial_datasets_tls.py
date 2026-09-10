@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .test_authority_fixtures import offline_boundary
 
 import hashlib
 import json
@@ -100,6 +101,7 @@ class TransportTests(unittest.TestCase):
         with patch.object(ssl.SSLContext,"load_verify_locations",return_value=None):
             return transport(API_ORIGIN+"/company/facts",{AUTH_HEADER:SYNTHETIC_CREDENTIAL},("MU",),5,10)
 
+    @offline_boundary("provider_requests")
     def test_exact_host_sni_port_path_and_secure_context(self):
         captured={}; connection=FakeConnection()
         def factory(host,port,context,timeout): captured.update(host=host,port=port,context=context,timeout=timeout); return connection
@@ -110,6 +112,7 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(captured["context"].verify_mode,ssl.CERT_REQUIRED); self.assertTrue(captured["context"].check_hostname)
         self.assertEqual(captured["context"].minimum_version,ssl.TLSVersion.TLSv1_2); self.assertEqual(result.status,200)
 
+    @offline_boundary("provider_requests")
     def test_alternate_target_and_proxy_context_rejected_before_connection(self):
         for base in ("http://api.financialdatasets.ai/company/facts","https://127.0.0.1/company/facts",
                 "https://api.financialdatasets.ai:444/company/facts","https://other.example/company/facts"):
@@ -120,6 +123,7 @@ class TransportTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialDatasetsTransportError,"^PROXY_CONTEXT_REJECTED$"):
             proxy(API_ORIGIN+"/company/facts",{AUTH_HEADER:SYNTHETIC_CREDENTIAL},("MU",),5,10)
 
+    @offline_boundary("provider_requests")
     def test_fixed_tls_dns_tcp_timeout_and_unknown_classification(self):
         class HostnameFailure(ssl.SSLCertVerificationError): verify_code=62
         cases=((socket.gaierror(),"DNS_FAILED"),(ConnectionRefusedError(),"TCP_FAILED"),
@@ -133,6 +137,7 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual((raised.exception.category,raised.exception.request_started),(category,True))
                 self.assertNotIn("private",str(raised.exception))
 
+    @offline_boundary("provider_requests")
     def test_missing_trust_stops_before_keychain_network_and_credit(self):
         credentials=Credentials(); calls=[]
         transport=FinancialDatasetsHTTPSTransport(TrustBundlePolicy(),connection_factory=lambda *_: calls.append(1),environment={})
@@ -141,6 +146,7 @@ class TransportTests(unittest.TestCase):
         self.assertEqual((result.failure,credentials.calls,calls,adapter.credits.consumed),
             ("TLS_TRUST_NOT_CONFIGURED",0,[],0))
 
+    @offline_boundary("provider_requests")
     def test_http_status_is_returned_not_misclassified_as_tls(self):
         class HTTPFailure(FakeResponse):
             def __init__(self,status): self.status=status
@@ -149,6 +155,7 @@ class TransportTests(unittest.TestCase):
             response=self.invoke(self.transport(lambda *_: connection))
             self.assertEqual(response.status,status)
 
+    @offline_boundary("provider_requests")
     def test_operational_historical_request_transmits_exact_dates(self):
         connection=FakeConnection(); transport=self.transport(lambda *_:connection)
         with patch.object(ssl.SSLContext,"load_verify_locations",return_value=None):
