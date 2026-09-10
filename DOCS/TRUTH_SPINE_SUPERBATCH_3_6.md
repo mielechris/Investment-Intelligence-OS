@@ -1,0 +1,183 @@
+# Superbatch 3.6 — source-only full-session observer
+
+Base: `a3215517fe8245e1384326f5a91a953eceaf2feb`. This checkpoint implements
+and tests a future **deny-only observer**, not a full-day installation or run.
+Permanent production remains YELLOW. No permission to bind 5291, start a
+full-day shadow, load a LaunchAgent, spend, trade, or promote follows from this
+document or its template. Retained Superbatch 3.5C evidence is not rewritten.
+
+## Calendar, clock and authority
+
+`truth_spine_session.py` implements PREMARKET_PREPARATION, PREMARKET_READY,
+OPENING_OBSERVATION, REGULAR_SESSION, CLOSING_OBSERVATION,
+POST_CLOSE_RECONCILIATION, SESSION_COMPLETE, SHUTDOWN_COMPLETE and FAILED_CLOSED.
+The reviewed calendar is bounded to XNYS 2026, with explicit holiday and
+short-session tables from the [NYSE calendar](https://www.nyse.com/trade/hours-calendars).
+Other years are rejected, not guessed. Exchange times use America/New_York;
+Pacific display uses America/Los_Angeles. UTC-aware timestamps are persisted.
+DST, weekends, holidays and short sessions are tested independently of host TZ.
+
+Normal opening/closing is 06:30/13:00 Pacific daylight time; short sessions close
+10:00 Pacific. Preparation begins 90 minutes before opening. Premarket-ready
+begins 15 minutes before opening. Opening observation lasts 30 minutes; closing
+observation starts five minutes before close. Post-close reconciliation has
+15 minutes, followed by at most five minutes for shutdown. Authority is issued
+before startup, binds exactly one calendar/session, and never exceeds 24 hours.
+The runner requires an independently approved SHA-256 of topology bytes; that
+topology pins the deny-only authority content hash. Resealing an edited authority
+does not renew permission. Renewal requires new owner authorization and binding.
+
+All ten capabilities remain false, including provider, model, credential,
+paper-order, broker, execution, operational-ledger-write, promotion and operational
+scheduler/publisher authority. Shadow-local capture/publication does not grant
+operational publication. Production CLI accepts no clock override. Tests inject
+time directly into isolated objects. A monotonic runner deadline prevents a
+backwards wall-clock jump extending the approved session. Late startup and missed
+phases are disclosed; no historical refresh is manufactured to fill a gap.
+
+## Immutable captures and canonical journal
+
+`truth_spine_generations.py` consumes an independently pinned source registry:
+exactly one L7 operational ledger, one L8 historical ledger, one source-cycle
+manifest for runtime wiring, and explicitly listed supported retained stores.
+No source discovery, credentials or browser-supplied paths are accepted.
+
+Each refresh writes a unique `captures/capture-<uuid>/` with SQLite read-only
+backup-API snapshots and fixed retained-file copies. Every source binds its
+logical store, registry/path hash, capture start/end, schema, integrity result,
+bytes, SHA-256, record watermark, original clocks and evidence classifications.
+L7 and L8 are consistent independently, **not globally simultaneous**.
+Capture manifests are hash-chained. Selection and canonical event admission
+commit in one FULL-synchronous SQLite transaction. Event identity uses logical
+source store plus original object ID, not capture-file hash. Changed content
+under an existing identity aborts admission. Prior generations and abandoned
+unselected captures are retained. No in-place repair or snapshot reuse exists.
+
+Refresh cadence is 900 seconds in preparation/ready/regular phases and 300
+seconds during opening/closing/post-close. This bounds database copying while
+showing faster transition evidence. The parent checks lifecycle/children every
+five seconds, not every-source copying every five seconds. A failed capture
+retains the prior selected bytes but marks them STALE and fails readiness.
+Validation reconstructs event provenance from snapshots, checks schema/integrity,
+and verifies the journal hash chain. Immutable-input hash caching is invalidated
+by device, inode, size, mtime, ctime or expected hash changes.
+
+## Real service, projection and readiness paths
+
+`truth_spine_full_day_service.py` is the fixed future child module. The parent
+owns capture and scheduling; the scheduler child attests to that persisted
+schedule; the publisher derives its projection from the selected capture and
+lifecycle journal. No harness assigns a projection generation to make it pass.
+`RuntimeProbeReader` reads package/runtime/frontend inventories, stabilized OS
+fingerprints, startup-receipt-bound heartbeats, the real publisher file and the
+captured source-cycle file. All probes bind session, release, generation and
+watermark; backend reads cannot trigger capture, renewal, repair or publication.
+
+- `/health/live`: process availability only.
+- `/health/ready`: 200 only with all required current bindings; otherwise 503.
+- `/health/market-readiness`: always 503 in this deny-only observer.
+- `/health/research-readiness`: SHADOW_OBSERVATION_READY, not live research.
+- `/truth-spine/full-session`: sanitized current/stale/failed metadata; no controls.
+
+Heartbeats/projection expire after 30 seconds; derived probes after 15 seconds.
+Captured upstream source-cycle publication must be at most 900 seconds old.
+A fresh snapshot or HTTP wrapper cannot renew that nested timestamp. Historical
+case timestamps remain historical; they are exposed separately from capture
+freshness and do not become new market observations. Missing dependencies are
+not replaced by literal readiness flags.
+
+Publisher lag after capture selection is expected to produce temporary 503.
+Post-close waits for a genuinely reconciled publisher inside its fixed window;
+subsequent stale readiness revokes that reconciliation. Missing reconciliation
+at the deadline fails closed. It never extends the deadline to obtain success.
+
+## Supervision, checkpoints and cleanup
+
+`truth_spine_full_day_runner.py` reuses the reviewed OwnedChildren fingerprint
+acquisition and reverse shutdown checks. Only the service module allowlist was
+extended; PID/start/PPID/argv/cwd/executable/startup-receipt checks are unchanged.
+One backend, scheduler and publisher are allowed. Each role has one restart,
+three total, with 60-second cooldown reserved in the journal **before** launch.
+Restart cannot reset the budget or duplicate canonical event IDs. Expiry stops
+new work, but never cancels verified cleanup authority. An unverified child is
+never signaled; cleanup continues for the other verified children and reports RED.
+
+A crashed parent's surviving children are not adopted. Runner/child locks must
+all be free before a subsequent runner starts. If children survive, independent
+owner-reviewed cleanup is required; automatic safe adoption is not claimed.
+Logs are capped at 1 MiB each. Disk preflight reserves 110 captures at twice the
+current source size plus 64 MiB for journal growth; concurrent disk consumption
+can still fail a later write, which triggers safe cleanup. No permanent paths
+are written as a fallback.
+
+Append-only checkpoints cover startup, premarket-ready, open, 15-minute regular
+intervals, before close, close, post-close reconciliation and shutdown. They bind
+session/phase, selected capture, canonical watermark, actual verified projection
+hash/generation (or null), child fingerprints, authority hash/lifetime, readiness,
+incidents and observer-scoped zero activity counters. They do not claim retained
+operational history has zero credits. Shutdown retains the journal, original
+startup receipts, runner incident report, acceptance report and sealed shutdown
+receipt. Failure to persist diagnostics is itself RED, never fabricated success.
+
+## Browser contract
+
+The existing preview's `?fullSession=1` selects a same-origin read-only metadata
+endpoint; it does not infer evidence provenance or grant authority. One bounded
+poll owner is canceled on unmount. The view displays phase, capture status,
+generation, source cycle, watermark, source-qualified records and original
+clocks/classifications, separate universe identities/counts, owners, all false
+capabilities, observer counters and incidents. SESSION_CLOSED and INSTALLED_DISABLED
+remain different concepts. MAX/dialogue is NARRATIVE only; Day Trading ABSTAINED.
+Unknown schema, malformed labels, stale wrapper, nonzero observer counters or
+any authority violation fails closed. Layout uses normal flow, wrapping and
+responsive minmax columns. Source tests are not a Safari-rendered full-day claim.
+
+## Future package allowlist and procedure — NOT executed here
+
+`config/truth-spine-full-day-shadow.json.template` is uninstalled and contains
+placeholders, not an executable authorization. Proposed port is **127.0.0.1:5291**;
+future preflight must recheck its absence and the full protected port/PID map.
+Root must be a new explicitly authorized `/private/tmp/iios-truth-spine-full-day-<session>`.
+No LaunchAgent is produced. The fixed backend allowlist is `BACKEND_FILES` in
+`truth_spine_session_package.py`: eleven named Truth Spine modules plus the two
+reviewed runner scripts, copied to `release/backend/`. No legacy application,
+provider implementation or mixed checkout belongs in that directory.
+
+1. Obtain separate owner approval for date/calendar, root, duration and port.
+2. Verify clean synchronized source, retained-input pins, runtime and permanent
+   baseline. Build frontend twice using the committed reproducibility procedure;
+   require identical input/output inventories and six-file provenance-valid output.
+3. Under the separately approved root create only the template's directories and
+   files. Copy fixed source files, six frontend files and the completely verified
+   runtime. Bind exact bytes/modes in `iios-full-day-shadow-package-v1`, including
+   clean source commit, session, registry, authority, runtime and frontend pins.
+   Package directories are owner-only; data 0600, code 0400, executables 0500.
+4. Use the pure `deployment_documents` constructor; it performs no installation.
+   Independently approve the resulting topology-byte hash. No manual field repair.
+5. Verify package file graph, nested runtime inventory, inherited platform hashes,
+   selector/session/calendar binding, source ownership, available disk, empty locks
+   and free port. Retain pre-copy manifests and read-only input baselines.
+6. Only under the later execution authorization invoke the package-local Python
+   and runner with `--root`, `--owner-topology-sha256`, `--owner-session-identity`.
+   The source checkout runner rejects execution as a mixed runtime.
+7. Review `/review/truth-integration.html?fullSession=1` at desktop/medium/narrow,
+   monitor checkpoints, and verify final reverse cleanup and port clearance.
+8. Rehearse rollback using a consistent journal backup and immutable captures in
+   another explicitly authorized isolated copy. Never overwrite the original.
+   On failure retain the entire root; do not touch permanent services or snapshots.
+
+## Validation boundary
+
+Offline tests use temporary SQLite stores, a compressed clock and fake OS child
+boundaries, while exercising real capture, publisher, readiness and browser
+handlers. Tests cover normal/short/holiday/DST sessions, late start, clock jumps,
+stale source/publisher, post-close lag/failure, dead children, restart limits,
+authority expiry, persistence failure, hashes, schema, identity mutation and
+rollback-copy preservation. The independent frontend-build test uses a disposable
+committed snapshot of candidate source with byte-verified locked dependencies;
+production clean-source/provenance rejection remains unchanged.
+
+Source/simulation GREEN permits a source checkpoint only. Actual full-day runtime,
+long-duration disk/RSS behavior, live host sleep/wake and Safari interaction remain
+acceptance gates of a **separately authorized** rehearsal. Permanent promotion is
+not authorized by source test results.

@@ -217,10 +217,33 @@ class ProvenanceTests(unittest.TestCase):
 
 class IndependentBuildTests(unittest.TestCase):
     def test_two_clean_builds_and_readonly_verification(self):
-        source = Path(__file__).resolve().parents[2]
+        checkout = Path(__file__).resolve().parents[2]
+        # Source-development tests cannot require committing the real checkout
+        # before validation. Commit an exact candidate snapshot in a disposable
+        # fixture repo instead; never bypass the production clean-source guard.
+        fixture = tempfile.TemporaryDirectory(prefix='iios-frontend-source-unit-')
+        self.addCleanup(fixture.cleanup)
+        source = Path(fixture.name).resolve()
+        names = sorted(set(filter(None, p.git(checkout, 'ls-files', '-z', '--cached', '--others',
+                                             '--exclude-standard', '--', 'FRONT END').split('\0'))))
+        for name in names:
+            original = checkout/name
+            self.assertFalse(original.is_symlink())
+            target = source/name; target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(original, target)
+        deps = p.toolchain(checkout/'FRONT END')['dependency_inventory']
+        shutil.copytree(checkout/'FRONT END/node_modules', source/'FRONT END/node_modules', symlinks=False,
+                       ignore=lambda directory, entries: [name for name in entries if p.environment_cache(name)])
+        self.assertEqual(p.inventory(source/'FRONT END/node_modules', dependency=True), deps)
+        p.git(source, 'init', '--quiet')
+        p.git(source, 'add', '--', *names)
+        p.git(source, '-c', 'user.name=Offline Fixture', '-c', 'user.email=fixture@example.invalid',
+              '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Isolated source fixture')
+        # Ignore only the verified environmental dependency tree in this fixture.
+        (source/'.git/info/exclude').write_text('FRONT END/node_modules/\n')
         commit = p.git(source, 'rev-parse', 'HEAD').strip()
         roots = [Path('/private/tmp')/('iios-frontend-build-unit-'+uuid.uuid4().hex) for _ in range(2)]
-        retained = source/'FRONT END/dist'
+        retained = checkout/'FRONT END/dist'
         before = p.inventory(retained) if retained.exists() else None
         try:
             with patch.dict(os.environ, {'TZ':'Pacific/Honolulu', 'LANG':'en_US.UTF-8'}):

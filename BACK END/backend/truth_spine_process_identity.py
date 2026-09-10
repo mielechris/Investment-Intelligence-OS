@@ -130,7 +130,7 @@ def safe(value, root):
 
 def safe_arg(value, root):
     fixed = {'-B', '-m', '--config', '--role', '--port', '--instance-id', '--runner-id', '--created-at',
-             'truth_spine_integration_service', 'scheduler', 'publisher', 'backend'}
+             'truth_spine_integration_service', 'truth_spine_full_day_service', 'scheduler', 'publisher', 'backend'}
     if (value in fixed or re.fullmatch(r'shadow-(?:child|runner)-[0-9a-f]{32}', value)
             or re.fullmatch(r'\d{4}-\d{2}-\d{2}T[0-9:.]+\+00:00', value)
             or re.fullmatch(r'\d{4,5}', value)):

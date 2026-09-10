@@ -93,10 +93,14 @@ class OwnedChildren:
     """
     def __init__(self, root, *, inspector=inspect_macos, writer=atomic_evidence,
                  port_clear=None, timeout=30, parent_pid=None, receipt_reader=read_receipt,
-                 monotonic=time.monotonic, pause=time.sleep, stabilization_seconds=10):
+                 monotonic=time.monotonic, pause=time.sleep, stabilization_seconds=10,
+                 service_module='truth_spine_integration_service'):
         if not 0 < timeout <= 30:
             raise ValueError('STOP_TIMEOUT_INVALID')
         self.root = Path(root)
+        if service_module not in {'truth_spine_integration_service', 'truth_spine_full_day_service'}:
+            raise ValueError('CHILD_SERVICE_MODULE_INVALID')
+        self.service_module = service_module
         self.inspector, self.writer, self.timeout = inspector, writer, timeout
         self.parent_pid = os.getpid() if parent_pid is None else parent_pid
         self.port_clear = port_clear or (lambda: False)
@@ -115,7 +119,7 @@ class OwnedChildren:
         instance = 'shadow-child-'+uuid.uuid4().hex
         created = datetime.now(timezone.utc).isoformat()
         values = binding(self.root, instance, self.identity, role, port, created)
-        expected = [argv[0], '-B', '-m', 'truth_spine_integration_service', '--config',
+        expected = [argv[0], '-B', '-m', self.service_module, '--config',
                     str(self.root/'topology.json'), '--role', role]
         if port is not None:
             expected += ['--port', str(port)]
