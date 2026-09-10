@@ -426,3 +426,117 @@ authority semantics or permanent service configuration are modified.
 
 This is source-only reconciliation: no historical shadow root, port-5290
 rehearsal, full-day operation, deployment or promotion. Permanent remains YELLOW.
+
+## Superbatch 3.5C: stabilized child ownership and mismatch evidence
+
+This source-only repair follows the RED rehearsal whose acceptance SHA-256 is
+92f15903d0bf47f83b8e2c155b785523cf9e7b1a44f57f0f0038906db148ea2f.
+The failed package is immutable incident evidence, never a repair target.
+
+### Forensic evidence and limitation
+
+The old runner immediately froze a raw OS observation and later required exact
+dataclass equality. Its scheduler observation contains the Python launcher
+hash 81c87d90892fe12428ee3b78a675c57c62d6c479236fb359ad5b2d7f07c38b2c;
+publisher/backend observations already contain the Framework executable hash
+d090220f9e29eff12f2cb4e878b25db98b9a6fbc8ac9e77c2df21bc457d9ca0d.
+The first duplicate check verifies the original owner before spawning a
+contender: the scheduler failed there, not because a contender disturbed it.
+
+Six self-expiring, no-network ephemeral children reproduced the acquisition
+race with the pinned interpreter. One was observed first as launcher, then four
+times as Framework, preserving PID, parent, start time and cwd. The other five
+were already Framework at first observation. All six exited naturally with
+status zero; no signal was sent. The observed transition changes executable,
+executable hash and command argv[0], which necessarily fails the old equality
+predicate. This proves the acquisition defect and explains the recorded role
+asymmetry. The original failing OS observation was omitted by the old runner:
+its exact differing fields cannot be retrospectively recovered or asserted.
+
+### Launch, receipt and stabilization
+
+Before Popen, a frozen Launch binds a random per-child instance ID, runner ID,
+UTC creation time, role, root hash, topology-file hash, authority-file hash,
+exact argv boundaries, optional port and manifest-pinned executables. Neither
+instance ID nor startup receipt grants authority. Only backend receives a port;
+scheduler/publisher bind an explicit null port.
+
+The service validates its deny-only topology, performs fixed self-only OS
+probes, and atomically publishes an owner-only iios-shadow-startup-v1 receipt.
+The receipt binds normalized PID/PPID/start time/argv/executable/hash/cwd plus
+the complete launch binding. Exclusive 0600 staging, file fsync, atomic hard-link
+publication without replacement and directory fsync prevent receipt overwrite.
+The root must be owner-owned 0700. The irreversible I/O guard is installed
+before any service loop/backend work. Scheduler/publisher heartbeat binds the
+startup instance and receipt hash; readiness cross-checks that receipt.
+
+The parent independently probes OS identity and reconciles the child receipt.
+It accepts ownership only after three consecutive identical final observations
+and an agreeing receipt, with a ten-second monotonic acquisition deadline and
+50ms observation intervals. Fixed subprocess probes each have a one-second
+timeout; an in-progress bounded probe may overrun the acquisition deadline,
+but cannot be accepted afterward. Sleep alone is never proof. Pending children
+remain tracked but unowned and cannot receive a signal.
+
+Only the manifest-pinned launcher-to-final-executable transition is permitted.
+PID, PPID and start time must remain unchanged; no PPID alias is approved.
+Once the final executable is observed, reverting is rejected as oscillation.
+Resolved symlink paths and UTC/C ps second precision are canonical. Kernel
+KERN_PROCARGS2 supplies argc-delimited argv; argument whitespace/boundaries are
+not collapsed. Only argc arguments are decoded; the environment tail is never
+decoded, returned, logged or persisted. argv[0] is pinned independently and
+represented canonically by the observed executable. Different scripts, roles,
+roots, ports, instances, start times, executable hashes or config hashes fail.
+
+### Shutdown and diagnostics
+
+Every terminate and force-stop repeats independent OS, stabilized fingerprint,
+startup receipt and current topology/authority verification. Later mismatch
+means no signal. Tracking persists until confirmed exit; cleanup continues for
+other owned children, closes logs independently and verifies port clearance.
+Fast duplicate contenders are waited/reaped, never accepted as owners or
+blindly killed. A live contender must satisfy the same full identity contract.
+
+Atomic runner incidents include launch records, the complete sanitized
+observation sequence and exact per-field mismatches. For example a forged
+receipt PID records field=pid, expected=900001, observed=900002,
+source=STARTUP_RECEIPT, a UTC observation timestamp,
+normalization=UTC_SECONDS_RESOLVED_PATHS_EXACT_ARGV_NO_PPID_ALIAS, and
+classification=PROCESS_IDENTITY_MISMATCH. Invalid normalization also retains
+the sanitized observation and identifies command/start_time explicitly.
+Paths use {SHADOW}/{PYTHON_FRAMEWORK} aliases or hashes; unrestricted command
+and unknown argv values are hashed. No environment/provider body is emitted.
+Incident persistence failures preserve the existing emergency fallback.
+
+### Source-only validation and next gate
+
+Focused coverage includes all roles, approved transition, timeout, oscillation,
+exit, PID reuse, exact argv, forged/missing/stale receipts, OS disagreement,
+config mutation, shutdown reinspection, persistence failure and cleanup.
+Adversarial signaling uses fake children only. The opt-in macOS integration
+test uses one self-expiring owned child, actual OS probes and an actual startup
+receipt, with no listener or service launch. Isolated readiness exercises
+200 -> 503 -> 200 under a new instance, while market readiness stays 503 and
+the old identity cannot control the replacement; canonical counts stay fixed.
+
+After a source checkpoint, rebuild frontend provenance for the new commit and
+recalculate the complete prospective backend/runtime/frontend manifest. Do not
+reuse earlier prospective package hashes as installed facts. Recommended next
+root basename: iios-truth-spine-3-acceptance-sb35c; do not create it in this batch.
+Repeating the bounded historical rehearsal requires separate authorization,
+fresh preflight and the repaired runner. No permanent readiness or promotion
+is implied by these source tests.
+
+Final source validation: 235 focused Truth Spine/package/authority/memory tests
+pass, including 83 identity/runner tests (35 new process-identity tests) and the
+real macOS own-child receipt test. Expansion Wing runs 776 tests: 775 pass and
+one existing opt-in Keychain test is skipped. Complete backend discovery finds
+1,520 tests with zero import errors; this is discovery, not a claim that every
+backend test was executed. Python 3.14 compilation, exact source inventory,
+diff/whitespace and scoped safety scans pass. Frontend source is unchanged;
+the focused provenance suite nevertheless repeats its actual deterministic
+build checks. The preserved failed root's 4,137 files and acceptance hash remain
+byte-identical, as do 37 permanent service configurations, five pinned protected
+state/configuration files and 202 executor files. Seven protected PID/start-time
+records are unchanged and port 5290 is clear. No operational provider, model,
+credential, broker or paper activity was initiated by this batch.

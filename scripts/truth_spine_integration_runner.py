@@ -20,6 +20,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'BACK END/backend'))
+from truth_spine_process_identity import (IdentityFailure, ProcessObservation, binding,
+    digest, inspect_macos, normalized, read_receipt, safe)
 
 ROLES = ('scheduler', 'publisher', 'backend')
 
@@ -29,14 +32,12 @@ class RunnerFailure(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ProcessObservation:
-    pid: int
-    parent_pid: int
-    start_time: str
-    command: str
-    executable: str
-    executable_hash: str
-    cwd: str
+class Launch:
+    role: str
+    argv: tuple[str, ...]
+    values: tuple[tuple[str, object], ...]
+    executable_hashes: tuple[tuple[str, str], ...]
+    final_executable: str
 
 
 @dataclass(frozen=True)
@@ -49,41 +50,9 @@ class ProcessFingerprint:
     port: int | None
     created_at: str
     runner_identity: str
-
-
-def inspect_macos(pid: int) -> ProcessObservation | None:
-    """Bounded OS inspection; no shell, environment dump or process signals.
-
-    ps start time is OS-observed, not the runner creation timestamp. Command,
-    parent, executable bytes and cwd are independent additional bindings.
-    Inspection failures are not interpreted as permission to terminate.
-    """
-    env = {'PATH': '/usr/bin:/bin:/usr/sbin', 'LC_ALL': 'C', 'TZ': 'UTC'}
-
-    def read(argv):
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=3, env=env)
-        if len(r.stdout) > 65536:
-            raise RunnerFailure('PROCESS_INSPECTION_OVERSIZE')
-        return r.returncode, r.stdout.strip()
-
-    code, stamp = read(['/bin/ps', '-ww', '-p', str(pid), '-o', 'lstart='])
-    if code == 1 and not stamp:
-        return None
-    if code != 0 or not stamp:
-        raise RunnerFailure('PROCESS_INSPECTION_FAILED')
-    values = []
-    for field in ('ppid=', 'command=', 'comm='):
-        code, value = read(['/bin/ps', '-ww', '-p', str(pid), '-o', field])
-        if code != 0 or not value:
-            raise RunnerFailure('PROCESS_INSPECTION_FAILED')
-        values.append(value)
-    code, paths = read(['/usr/sbin/lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'])
-    cwd = [line[1:] for line in paths.splitlines() if line.startswith('n')]
-    executable = Path(values[2])
-    if code != 0 or len(cwd) != 1 or not executable.is_absolute():
-        raise RunnerFailure('PROCESS_INSPECTION_FAILED')
-    return ProcessObservation(pid, int(values[0]), stamp, values[1], str(executable),
-                              hashlib.sha256(executable.read_bytes()).hexdigest(), cwd[0])
+    instance_id: str
+    startup_receipt_hash: str
+    launch: Launch
 
 
 def atomic_evidence(root: Path, name: str, value: dict) -> None:
@@ -123,7 +92,8 @@ class OwnedChildren:
     through production CLI/environment. A mismatch never permits a signal.
     """
     def __init__(self, root, *, inspector=inspect_macos, writer=atomic_evidence,
-                 port_clear=None, timeout=30, parent_pid=None):
+                 port_clear=None, timeout=30, parent_pid=None, receipt_reader=read_receipt,
+                 monotonic=time.monotonic, pause=time.sleep, stabilization_seconds=10):
         if not 0 < timeout <= 30:
             raise ValueError('STOP_TIMEOUT_INVALID')
         self.root = Path(root)
@@ -134,6 +104,111 @@ class OwnedChildren:
         self.active, self.completed, self.fingerprints = {}, [], []
         self.attempts, self.errors, self.logs, self.log_results = [], [], [], []
         self.finished = None
+        if not 0 < stabilization_seconds <= 10:
+            raise ValueError('STABILIZATION_BOUND_INVALID')
+        self.receipt_reader = receipt_reader
+        self.monotonic, self.pause, self.stabilization_seconds = monotonic, pause, stabilization_seconds
+        self.launches, self.observation_sequences, self.diagnostics, self.launch_records = {}, [], [], []
+
+    def prepare_launch(self, role, argv, *, executable_hashes, port=None, final_executable=None):
+        """Must run before Popen. An instance is identification, never authority."""
+        instance = 'shadow-child-'+uuid.uuid4().hex
+        created = datetime.now(timezone.utc).isoformat()
+        values = binding(self.root, instance, self.identity, role, port, created)
+        expected = [argv[0], '-B', '-m', 'truth_spine_integration_service', '--config',
+                    str(self.root/'topology.json'), '--role', role]
+        if port is not None:
+            expected += ['--port', str(port)]
+        if list(argv) != expected:
+            raise RunnerFailure('CHILD_COMMAND_INVALID')
+        hashes = {str(Path(k).resolve()):v for k,v in executable_hashes.items()}
+        final = str(Path(final_executable or list(hashes)[-1]).resolve())
+        if not 1 <= len(hashes) <= 2 or final not in hashes or str(Path(argv[0]).resolve()) not in hashes:
+            raise RunnerFailure('EXECUTABLE_PINS_INVALID')
+        argv = tuple(argv)+('--instance-id', instance, '--runner-id', self.identity, '--created-at', created)
+        launch = Launch(role, argv, tuple(sorted(values.items())), tuple(hashes.items()), final)
+        self.launches[instance] = launch
+        return launch
+
+    def diagnostic(self, role, field, expected, observed, category, source='OS'):
+        if field == 'command':
+            expected, observed = {'sanitized_sha256': digest(expected)}, {'sanitized_sha256': digest(observed)}
+        self.diagnostics.append({'role': role, 'field': field, 'expected': safe(expected, self.root),
+            'observed': safe(observed, self.root), 'observed_at': datetime.now(timezone.utc).isoformat(),
+            'source': source, 'normalization': 'UTC_SECONDS_RESOLVED_PATHS_EXACT_ARGV_NO_PPID_ALIAS',
+            'classification': category})
+
+    def require_fields(self, role, expected, observed, source='OS'):
+        differences = [key for key in expected if expected[key] != observed.get(key)]
+        differences += [key for key in observed if key not in expected]
+        for key in differences:
+            self.diagnostic(role, key, expected.get(key), observed.get(key), 'PROCESS_IDENTITY_MISMATCH', source)
+        if differences:
+            raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
+
+    def persist_identity(self):
+        try:
+            self.writer(self.root, 'runner-incidents.json', {'runner_identity': self.identity,
+                'launch_records': self.launch_records,
+                'launch_observations': self.observation_sequences, 'identity_diagnostics': self.diagnostics})
+        except BaseException as exc:
+            self.error('ACCEPTANCE_PERSISTENCE_FAILED', error=exc)
+            raise RunnerFailure('IDENTITY_PERSISTENCE_FAILED') from None
+
+    def observe(self, entry, launch):
+        role = launch.role
+        try:
+            o = self.inspector(entry['child'].pid)
+            if o is None:
+                self.diagnostic(role, 'process_present', True, False, 'PROCESS_EXITED')
+                raise RunnerFailure('PROCESS_EXITED')
+            try:
+                n = normalized(o, self.root)
+            except (IdentityFailure, ValueError):
+                self.observation_sequences.append({'instance_id': dict(launch.values)['instance_id'],
+                    'at': datetime.now(timezone.utc).isoformat(), 'source': 'OS',
+                    'normalization_failed': True, 'observation': safe(asdict(o), self.root)})
+                if not o.argv or o.command != ' '.join(o.argv):
+                    self.diagnostic(role, 'command', ' '.join(o.argv), o.command, 'ARGV_BOUNDARIES_INVALID')
+                else:
+                    self.diagnostic(role, 'start_time', 'VALID_UTC_OS_START_TIME', o.start_time, 'START_TIME_INVALID')
+                raise RunnerFailure('PROCESS_INSPECTION_FAILED') from None
+            self.observation_sequences.append({'instance_id': dict(launch.values)['instance_id'],
+                'at': datetime.now(timezone.utc).isoformat(), 'source': 'OS', 'observation': n})
+            hashes = dict(launch.executable_hashes)
+            exe = str(Path(o.executable).resolve())
+            expected = {'pid': entry['child'].pid, 'parent_pid': self.parent_pid,
+                        'cwd': str(self.root/'release/backend'), 'argv_tail': list(launch.argv[1:]),
+                        'executable_hash': hashes.get(exe), 'argv0_pinned': True, 'executable_pinned': True}
+            actual = {'pid': o.pid, 'parent_pid': o.parent_pid, 'cwd': str(Path(o.cwd).resolve()),
+                      'argv_tail': list(o.argv[1:]), 'executable_hash': o.executable_hash,
+                      'argv0_pinned': str(Path(o.argv[0]).resolve()) in hashes, 'executable_pinned': exe in hashes}
+            self.require_fields(role, expected, actual)
+            return o, n
+        except (RunnerFailure, KeyboardInterrupt):
+            raise
+        except BaseException as exc:
+            self.diagnostic(role, 'observation', 'VALID_OS_OBSERVATION', type(exc).__name__, 'OBSERVATION_FAILED')
+            raise RunnerFailure('PROCESS_INSPECTION_FAILED') from None
+
+    def reconcile_receipt(self, launch, n):
+        expected = dict(launch.values)
+        try:
+            receipt = self.receipt_reader(self.root, expected['instance_id'])
+        except Exception as exc:
+            self.diagnostic(launch.role, 'startup_receipt', 'HASH_VALID_OWNER_ONLY', type(exc).__name__, 'RECEIPT_INVALID', 'STARTUP_RECEIPT')
+            raise RunnerFailure('STARTUP_RECEIPT_INVALID') from None
+        if receipt is None:
+            return None
+        if not isinstance(receipt, dict) or not isinstance(receipt.get('observation'), dict):
+            self.diagnostic(launch.role, 'startup_receipt', 'STRICT_STARTUP_DOCUMENT', type(receipt).__name__, 'RECEIPT_INVALID', 'STARTUP_RECEIPT')
+            raise RunnerFailure('STARTUP_RECEIPT_INVALID')
+        desired = {**expected, 'observation': n}
+        desired['content_hash'] = digest(desired)
+        # Flatten observation fields so the exact OS/receipt discrepancy survives.
+        self.require_fields(launch.role, n, receipt.get('observation', {}), 'STARTUP_RECEIPT')
+        self.require_fields(launch.role, desired, receipt, 'STARTUP_RECEIPT')
+        return receipt['content_hash']
 
     def error(self, category, role=None, error=None):
         row = {'category': category, 'role': role}
@@ -142,48 +217,86 @@ class OwnedChildren:
         self.errors.append(row)
 
     def register(self, role, child, argv, cwd, port=None, *, executable_hashes,
-                 registry_key=None):
+                 registry_key=None, launch=None):
         key = role if registry_key is None else registry_key
         if role not in ROLES or key in self.active:
             raise RunnerFailure('CHILD_ROLE_ALREADY_TRACKED')
         entry = {'child': child, 'fingerprint': None, 'role': role}
         self.active[key] = entry  # Never lose a live child on failed verification.
+        self.launch_records.append(safe({'pid': child.pid, 'expected_parent_pid': self.parent_pid,
+            'role': role, 'launch': asdict(launch) if launch else None,
+            'initial_observation': None}, self.root))
+        launch_record = self.launch_records[-1]
         try:
-            o = self.inspector(child.pid)
-            if (o is None or o.pid != child.pid or o.parent_pid != self.parent_pid
-                    or not o.start_time or o.cwd != str(cwd)
-                    or Path(cwd) != self.root/'release/backend'
-                    or '--config' not in argv or argv[argv.index('--config')+1] != str(self.root/'topology.json')
-                    or '--role' not in argv or argv[argv.index('--role')+1] != role):
-                raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
-            hashes = executable_hashes
-            # macOS Python may report the verified framework executable instead
-            # of the venv launcher. Only manifest-pinned aliases are accepted.
-            commands = {' '.join((exe, *argv[1:])) for exe in hashes}
-            if (o.command not in commands or o.executable not in hashes
-                    or hashes[o.executable] != o.executable_hash
-                    or (role == 'backend' and ('--port' not in argv or int(argv[argv.index('--port')+1]) != port))):
-                raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
+            if (launch is None or self.launches.get(dict(launch.values)['instance_id']) != launch
+                    or launch.role != role or tuple(argv) != launch.argv
+                    or dict(launch.executable_hashes) != {str(Path(k).resolve()):v for k,v in executable_hashes.items()}
+                    or Path(cwd) != self.root/'release/backend' or dict(launch.values)['port'] != port):
+                self.diagnostic(role, 'launch', 'PRESPAWN_BOUND_LAUNCH', None, 'LAUNCH_INVALID')
+                raise RunnerFailure('LAUNCH_INVALID')
+            end = self.monotonic()+self.stabilization_seconds
+            anchor, previous, stable, final_seen = None, None, 0, False
+            while self.monotonic() < end:
+                if child.poll() is not None:
+                    self.diagnostic(role, 'process_present', True, False, 'PROCESS_EXITED')
+                    raise RunnerFailure('PROCESS_EXITED')
+                o, n = self.observe(entry, launch)
+                if anchor is None:
+                    launch_record['initial_observation'] = n
+                    anchor = {key:n[key] for key in ('pid', 'parent_pid', 'start_time', 'cwd')}
+                self.require_fields(role, anchor, {key:n[key] for key in anchor})
+                final = str(Path(o.executable).resolve()) == launch.final_executable
+                if final_seen and not final:
+                    self.diagnostic(role, 'executable', launch.final_executable, o.executable, 'OSCILLATING_IDENTITY')
+                    raise RunnerFailure('OSCILLATING_IDENTITY')
+                final_seen |= final
+                stable = stable+1 if final and n == previous else int(final)
+                previous = n
+                receipt_hash = self.reconcile_receipt(launch, n) if final else None
+                if stable >= 3 and receipt_hash is not None:
+                    break
+                self.pause(.05)
+            else:
+                self.diagnostic(role, 'stabilization', 'THREE_FINAL_OBSERVATIONS_AND_RECEIPT',
+                                {'consecutive': stable, 'final_seen': final_seen}, 'STABILIZATION_TIMEOUT')
+                raise RunnerFailure('STABILIZATION_TIMEOUT')
+            if self.monotonic() >= end:
+                self.diagnostic(role, 'stabilization_deadline', 'WITHIN_BOUND', 'EXCEEDED', 'STABILIZATION_TIMEOUT')
+                raise RunnerFailure('STABILIZATION_TIMEOUT')
             fp = ProcessFingerprint(role, o, tuple(argv), str(cwd), str(self.root), port,
-                                    datetime.now(timezone.utc).isoformat(), self.identity)
+                                    dict(launch.values)['created_at'], self.identity,
+                                    dict(launch.values)['instance_id'], receipt_hash, launch)
             entry['fingerprint'] = fp
             self.fingerprints.append(asdict(fp))
             self.verify(entry)
+            self.persist_identity()
             return fp
         except BaseException as exc:
             self.error('PROCESS_IDENTITY_MISMATCH', role, exc)
+            self.persist_identity()
             raise RunnerFailure('PROCESS_IDENTITY_MISMATCH') from None
 
     def verify(self, entry):
         fp = entry['fingerprint']
-        o = self.inspector(entry['child'].pid)
-        valid = (fp is not None and o == fp.observed and fp.role == entry['role']
-                 and fp.runner_identity == self.identity and fp.shadow_root == str(self.root)
-                 and fp.expected_cwd == str(self.root/'release/backend'))
-        self.attempts.append({'role': entry['role'], 'action': 'VERIFY', 'matched': valid})
-        if not valid:
-            raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
-        return fp
+        try:
+            if (fp is None or fp.role != entry['role'] or fp.runner_identity != self.identity
+                    or fp.shadow_root != str(self.root) or fp.expected_cwd != str(self.root/'release/backend')):
+                self.diagnostic(entry['role'], 'fingerprint', 'STABILIZED_BOUND_CHILD', None, 'FINGERPRINT_INVALID')
+                raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
+            _, n = self.observe(entry, fp.launch)
+            self.require_fields(fp.role, normalized(fp.observed, self.root), n)
+            expected_binding = binding(self.root, fp.instance_id, self.identity, fp.role, fp.port, fp.created_at)
+            self.require_fields(fp.role, dict(fp.launch.values), expected_binding, 'CONFIGURATION')
+            h = self.reconcile_receipt(fp.launch, n)
+            self.require_fields(fp.role, {'startup_receipt_hash': fp.startup_receipt_hash}, {'startup_receipt_hash': h}, 'STARTUP_RECEIPT')
+            self.attempts.append({'role': entry['role'], 'action': 'VERIFY', 'matched': True})
+            return fp
+        except BaseException as exc:
+            if not isinstance(exc, RunnerFailure):
+                self.diagnostic(entry['role'], 'verification', 'VALID_BOUND_IDENTITY', type(exc).__name__, 'VERIFICATION_FAILED')
+            self.attempts.append({'role': entry['role'], 'action': 'VERIFY', 'matched': False})
+            self.persist_identity()
+            raise
 
     def stop(self, role):
         entry = self.active[role]
@@ -256,6 +369,9 @@ class OwnedChildren:
                 clear = False
                 self.error('PORT_CHECK_FAILED', error=exc)
         report.update(runner_identity=self.identity, child_fingerprints=self.fingerprints,
+                      launch_records=self.launch_records,
+                      launch_observations=self.observation_sequences,
+                      identity_diagnostics=self.diagnostics,
                       completed_processes=self.completed, stop_attempts=self.attempts,
                       cleanup_errors=self.errors, unresolved_children=[
                           {'role': r, 'pid': e['child'].pid, 'fingerprint':
@@ -264,12 +380,16 @@ class OwnedChildren:
                       port_clear=clear)
         report['clean_shutdown'] = not self.active and clear and not self.errors
         report['result'] = 'GREEN' if report['clean_shutdown'] and primary is None else 'RED'
+        # Raw process output and private paths never enter incident files.
+        sanitized = safe(report, self.root)
+        report.clear(); report.update(sanitized)
         persistence_failed = False
         for name in ('runner-incidents.json', 'acceptance.json'):
             try:
                 self.writer(self.root, name, report)
             except BaseException as exc:
                 self.error('ACCEPTANCE_PERSISTENCE_FAILED', error=exc)
+                report['cleanup_errors'] = safe(self.errors, self.root)
                 report.update(result='RED', clean_shutdown=False)
                 persistence_failed = True
         if persistence_failed:
@@ -281,6 +401,7 @@ class OwnedChildren:
                     'port_clear': clear})
             except BaseException as emergency:
                 self.error('EMERGENCY_PERSISTENCE_FAILED', error=emergency)
+        report['cleanup_errors'] = safe(self.errors, self.root)
         self.finished = report
         return report
 
@@ -292,7 +413,7 @@ def get(port,path):
 
 
 def rejected_duplicate(role, owner, argv, *, spawn, counts, lock_bytes,
-                       executable_hashes, port=None, timeout=5):
+                       executable_hashes, port=None, timeout=5, final_executable=None):
     """A rejected contender is never an accepted owner. Never blindly kill it.
 
     Fast rejected children may exit before an OS fingerprint can be captured:
@@ -302,23 +423,26 @@ def rejected_duplicate(role, owner, argv, *, spawn, counts, lock_bytes,
     before = counts()
     lock = lock_bytes(role)
     owner.verify(owner.active[role])
-    child = spawn(argv)
+    launch = owner.prepare_launch(role, argv, executable_hashes=executable_hashes,
+                                  port=port, final_executable=final_executable)
+    child = spawn(launch.argv)
     key = 'duplicate-'+role
     # Fast rejected/reaped contenders are not accepted owners and are never
     # signaled. A still-live contender receives the same identity contract.
-    if child.poll() is None:
-        owner.register(role, child, argv, owner.root/'release/backend', port,
-                       executable_hashes=executable_hashes, registry_key=key)
     try:
         code = child.wait(timeout=timeout)
     except BaseException:
+        # A contender which exits needs no ownership or signal. A live one
+        # must meet the full startup contract before cleanup may signal it.
+        owner.register(role, child, launch.argv, owner.root/'release/backend', port,
+                       executable_hashes=executable_hashes, registry_key=key, launch=launch)
         raise RunnerFailure('DUPLICATE_DID_NOT_EXIT') from None
     if key in owner.active and not owner.stop(key):
         raise RunnerFailure('DUPLICATE_EXIT_NOT_CONFIRMED')
     owner.verify(owner.active[role])
     if code == 0 or counts() != before or lock_bytes(role) != lock:
         raise RunnerFailure('DUPLICATE_OWNER_ACCEPTED_OR_DISTURBED')
-    return {'role': role, 'pid': child.pid, 'argv': list(argv), 'returncode': code,
+    return {'role': role, 'pid': child.pid, 'argv': list(launch.argv), 'instance_id': dict(launch.values)['instance_id'], 'returncode': code,
             'rejected': True, 'owner_unchanged': True, 'events_unchanged': True,
             'lock_unchanged': True, 'termination_signal_sent': False,
             'classification': 'REJECTED_CONTENDER_EXIT_CONFIRMED_NOT_AN_OWNER'}
@@ -363,10 +487,13 @@ def main():
             raise RunnerFailure('EXECUTABLE_HASH_MISMATCH')
     def start(role):
         f=(root/(role+'.log')).open('ab');children.logs.append(f);os.chmod(f.name,0o600)
-        argv=command+['--role',role,'--port',str(a.port)]
-        p=subprocess.Popen(argv,cwd=backend,env=env,stdout=f,stderr=f)
-        children.register(role,p,argv,backend,a.port if role=='backend' else None,
-                          executable_hashes=executable_hashes)
+        argv=command+['--role',role]+(['--port',str(a.port)] if role=='backend' else [])
+        launch=children.prepare_launch(role,argv,executable_hashes=executable_hashes,
+                                       port=a.port if role=='backend' else None,
+                                       final_executable=runtime.get('process_executable',str(python)))
+        p=subprocess.Popen(launch.argv,cwd=backend,env=env,stdout=f,stderr=f)
+        children.register(role,p,launch.argv,backend,a.port if role=='backend' else None,
+                          executable_hashes=executable_hashes,launch=launch)
         print(json.dumps({'role':role,'pid':p.pid,'port':a.port if role=='backend' else None}),flush=True);return p
     def wait_ready():
         until=time.monotonic()+180
@@ -402,9 +529,10 @@ def main():
             return (root/(role+'.lock')).read_bytes() if role!='backend' else None
         for role in ROLES:
             report['duplicate_owner_tests'].append(rejected_duplicate(role,children,
-                command+['--role',role,'--port',str(a.port)],spawn=contender,
+                command+['--role',role]+(['--port',str(a.port)] if role=='backend' else []),spawn=contender,
                 counts=count,lock_bytes=lock_bytes,executable_hashes=executable_hashes,
-                port=a.port if role=='backend' else None))
+                port=a.port if role=='backend' else None,
+                final_executable=runtime.get('process_executable',str(python))))
         report['duplicate_owner_rejected']=True
         report['readiness_transitions'].append({'role':'scheduler','ready':200,'market':503})
         stop('scheduler')

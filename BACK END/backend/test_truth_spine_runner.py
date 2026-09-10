@@ -59,22 +59,31 @@ class RunnerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.observations, self.written = {}, {}
+        self.receipts = {}
+        (self.root/'topology.json').write_text('{}')
+        (self.root/'authority.json').write_text('{}')
         self.port = Mock(return_value=True)
         self.owner = runner.OwnedChildren(
             self.root, inspector=lambda pid: self.observations.get(pid),
             writer=lambda root, name, value: self.written.update({name: json.loads(json.dumps(value))}),
-            port_clear=self.port, parent_pid=900000, timeout=1)
+            port_clear=self.port, parent_pid=900000, timeout=1,
+            receipt_reader=lambda root, instance: self.receipts.get(instance), pause=lambda _: None)
         self.argv = lambda role: ['/isolated/python', '-B', '-m', 'truth_spine_integration_service',
-                                 '--config', str(self.root/'topology.json'), '--role', role, '--port', '45678']
+                                 '--config', str(self.root/'topology.json'), '--role', role]+(['--port', '45678'] if role=='backend' else [])
 
     def add(self, role='scheduler', **kwargs):
         child = Child(900001+len(self.observations), **kwargs)
+        port = 45678 if role == 'backend' else None
+        launch = self.owner.prepare_launch(role, self.argv(role), port=port,
+                                          executable_hashes={'/isolated/python': 'a'*64})
         self.observations[child.pid] = runner.ProcessObservation(
-            child.pid, 900000, 'Wed Sep 9 10:00:00 2026', ' '.join(self.argv(role)),
-            '/isolated/python', 'a'*64, str(self.root/'release/backend'))
-        fp = self.owner.register(role, child, self.argv(role), self.root/'release/backend',
-                                 45678 if role == 'backend' else None,
-                                 executable_hashes={'/isolated/python': 'a'*64})
+            child.pid, 900000, 'Wed Sep 9 10:00:00 2026', ' '.join(launch.argv),
+            '/isolated/python', 'a'*64, str(self.root/'release/backend'), launch.argv)
+        doc = {**dict(launch.values), 'observation': runner.normalized(self.observations[child.pid], self.root)}
+        doc['content_hash'] = runner.digest(doc)
+        self.receipts[dict(launch.values)['instance_id']] = doc
+        fp = self.owner.register(role, child, launch.argv, self.root/'release/backend', port,
+                                 executable_hashes={'/isolated/python': 'a'*64}, launch=launch)
         return child, fp
 
     def test_fingerprint_complete_frozen_and_independently_verified(self):
@@ -82,7 +91,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(fp.observed.pid, child.pid)
         self.assertEqual(fp.runner_identity, self.owner.identity)
         self.assertEqual(fp.shadow_root, str(self.root))
-        self.assertEqual(fp.argv, tuple(self.argv('scheduler')))
+        self.assertEqual(fp.argv, self.observations[child.pid].argv)
         self.assertTrue(datetime.fromisoformat(fp.created_at).tzinfo)
         with self.assertRaises(FrozenInstanceError):
             fp.role = 'publisher'
@@ -335,7 +344,7 @@ class RunnerTests(unittest.TestCase):
                 result = runner.rejected_duplicate(
                     role, self.owner, self.argv(role), spawn=lambda argv: duplicate,
                     counts=lambda: (8, 8), lock_bytes=lambda role: b'owner',
-                    executable_hashes={'/isolated/python': 'a'*64})
+                    executable_hashes={'/isolated/python': 'a'*64}, port=45678 if role=='backend' else None)
                 self.assertTrue(result['rejected'])
                 self.assertEqual(child.signals+duplicate.signals, [])
 
@@ -357,15 +366,21 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(result['rejected'])
         self.assertEqual(duplicate.signals, [])
         self.assertNotIn('duplicate-scheduler', self.owner.active)
-        self.assertEqual(len(self.owner.fingerprints), 2)
+        self.assertEqual(len(self.owner.fingerprints), 1)  # Reaped contender is never an owner.
 
     def test_live_duplicate_timeout_retained_for_verified_cleanup(self):
         child, _ = self.add()
         duplicate = Child(900010, waits=[subprocess.TimeoutExpired('fake', 1), 0])
-        self.observations[duplicate.pid] = replace(self.observations[child.pid], pid=duplicate.pid)
+        def spawn(argv):
+            self.observations[duplicate.pid] = replace(self.observations[child.pid], pid=duplicate.pid,
+                                                       argv=argv, command=' '.join(argv))
+            launch = self.owner.launches[argv[argv.index('--instance-id')+1]]
+            doc = {**dict(launch.values), 'observation': runner.normalized(self.observations[duplicate.pid],self.root)}
+            doc['content_hash'] = runner.digest(doc); self.receipts[doc['instance_id']] = doc
+            return duplicate
         with self.assertRaisesRegex(runner.RunnerFailure, 'DUPLICATE_DID_NOT_EXIT'):
             runner.rejected_duplicate('scheduler', self.owner, self.argv('scheduler'),
-                spawn=lambda argv: duplicate, counts=lambda: (8, 8), lock_bytes=lambda role: b'owner',
+                spawn=spawn, counts=lambda: (8, 8), lock_bytes=lambda role: b'owner',
                 executable_hashes={'/isolated/python': 'a'*64})
         self.assertIn('duplicate-scheduler', self.owner.active)
         result = self.owner.cleanup({}, runner.RunnerFailure('DUPLICATE_DID_NOT_EXIT'))
@@ -375,7 +390,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_unverified_duplicate_never_signaled(self):
         self.add()
-        duplicate = Child(900010)
+        duplicate = Child(900010, waits=[subprocess.TimeoutExpired('fake', 1)])
         with self.assertRaises(runner.RunnerFailure):
             runner.rejected_duplicate('scheduler', self.owner, self.argv('scheduler'),
                 spawn=lambda argv: duplicate, counts=lambda: (8, 8), lock_bytes=lambda role: b'owner',
@@ -410,16 +425,16 @@ class RunnerTests(unittest.TestCase):
 
     def test_macos_inspector_fixed_bounded_commands(self):
         executable = self.root/'interpreter'; executable.write_bytes(b'isolated')
-        outputs = ['Wed Sep 9 10:00:00 2026', '900000', '/isolated/python --role scheduler',
+        outputs = ['Wed Sep 9 10:00:00 2026', '900000',
                    str(executable), 'p900001\nn'+str(self.root/'release/backend')]
         run = Mock(side_effect=[subprocess.CompletedProcess([], 0, x, '') for x in outputs])
-        with patch.object(runner.subprocess, 'run', run):
+        with patch.object(runner.subprocess, 'run', run), patch('truth_spine_process_identity.kernel_argv',return_value=(str(executable),'--role','scheduler')):
             observed = runner.inspect_macos(900001)
         self.assertEqual(observed.pid, 900001)
         self.assertEqual(observed.executable_hash, hashlib.sha256(b'isolated').hexdigest())
-        self.assertEqual(run.call_count, 5)
+        self.assertEqual(run.call_count, 4)
         for call in run.call_args_list:
-            self.assertEqual(call.kwargs['timeout'], 3)
+            self.assertEqual(call.kwargs['timeout'], 1)
             self.assertEqual(call.kwargs['env']['TZ'], 'UTC')
             self.assertNotIn('shell', call.kwargs)
 
@@ -432,7 +447,7 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 runner.inspect_macos(900001)
         with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'x'*65537, '')):
-            with self.assertRaises(runner.RunnerFailure):
+            with self.assertRaises(runner.IdentityFailure):
                 runner.inspect_macos(900001)
 
     def test_port_inspection_errors_never_mistaken_for_clear(self):
@@ -489,8 +504,18 @@ class RunnerTests(unittest.TestCase):
             scheduler.close(); scheduler.fd = -1
         child, first = self.add(on_exit=stop_lease)
         old_entry = dict(self.owner.active['scheduler'])
+        def emit_scheduler(fp):
+            # OS lease/PID probes here use this test process; the adversarial
+            # signaling child remains fake. Production receipt creation is
+            # separately exercised by the self-expiring macOS integration test.
+            doc = {**dict(fp.launch.values), 'observation': {'pid': os.getpid()}}
+            doc['content_hash'] = runner.digest(doc)
+            path = self.root/('startup-'+fp.instance_id+'.json')
+            atomic(path, doc)
+            service.heartbeat(t, 'scheduler', datetime.now(timezone.utc), doc)
         for role in ('scheduler', 'publisher'):
             service.heartbeat(t, role, datetime.now(timezone.utc))
+        emit_scheduler(first)
         with ExitStack() as stack:
             stack.enter_context(patch.object(service, 'topology', return_value=(t, a)))
             stack.enter_context(patch.object(service, '__file__', str(backend/'truth_spine_integration_service.py')))
@@ -504,13 +529,15 @@ class RunnerTests(unittest.TestCase):
             failed = runner.readiness_failure(0, 'scheduler', request=request)
             ready.append(failed['ready']); market.append(failed['market'])
             scheduler = service.Lease(self.root, 'scheduler')
-            service.heartbeat(t, 'scheduler', datetime.now(timezone.utc))
             replacement, second = self.add(on_exit=stop_lease)
+            emit_scheduler(second)
             ready.append(request(0, '/health/ready')[0])
             market.append(request(0, '/health/market-readiness')[0])
             self.assertEqual(ready, [200, 503, 200])
             self.assertEqual(market, [503, 503, 503])
             self.assertNotEqual(first.observed.pid, second.observed.pid)
+            self.assertNotEqual(first.instance_id, second.instance_id)
+            self.assertEqual(json.loads((self.root/'scheduler-heartbeat.json').read_bytes())['instance_id'], second.instance_id)
             # Even simulated PID reuse cannot allow an old fingerprint to
             # control this new owner; no signal is sent on the failed verify.
             old_entry['child'] = replacement

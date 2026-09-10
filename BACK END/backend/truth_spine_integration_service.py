@@ -42,12 +42,13 @@ class Lease:
         fcntl.flock(self.fd,fcntl.LOCK_UN);os.close(self.fd)
 
 
-def heartbeat(t:dict,role:str,now:datetime):
+def heartbeat(t:dict,role:str,now:datetime,startup:dict | None=None):
     atomic(Path(t['root'])/(role+'-heartbeat.json'),seal({
         'schema':'iios-readonly-heartbeat-v1','role':role,'pid':os.getpid(),
         'owner':t['identities'][role+'_owner'],'topology_identity':t['content_hash'],
         'release':t['identities']['release'],'executor_generation':t['identities']['executor_generation'],
-        'source_cycle':t['identities']['source_cycle'],'observed_at':now.isoformat()}))
+        'source_cycle':t['identities']['source_cycle'],'observed_at':now.isoformat(),
+        **({'instance_id':startup['instance_id'],'startup_receipt_hash':startup['content_hash']} if startup else {})}))
 
 
 def probe(t:dict,role:str,now:datetime | None=None):
@@ -56,6 +57,14 @@ def probe(t:dict,role:str,now:datetime | None=None):
     # Timestamp after the atomic read: a publisher may advance while package
     # verification is in progress. Never compare a new record to an older probe.
     now=now or datetime.now(timezone.utc)
+    if 'instance_id' in h:
+        from truth_spine_process_identity import read_receipt
+        receipt=read_receipt(root,h['instance_id'])
+        if (receipt is None or receipt['content_hash']!=h.get('startup_receipt_hash')
+                or receipt['role']!=role or receipt['observation']['pid']!=h['pid']
+                or receipt['topology_hash']!=hashlib.sha256((root/'topology.json').read_bytes()).hexdigest()
+                or receipt['authority_hash']!=hashlib.sha256((root/'authority.json').read_bytes()).hexdigest()):
+            raise ValueError('STARTUP_HEARTBEAT_MISMATCH')
     if (h['owner']!=t['identities'][role+'_owner'] or h['topology_identity']!=t['content_hash']
             or h['release']!=t['identities']['release']
             or h['executor_generation']!=t['identities']['executor_generation']
@@ -143,7 +152,7 @@ def serve(path:Path,port:int):
     server.serve_forever()
 
 
-def run(path:Path,role:str):
+def run(path:Path,role:str,startup:dict | None=None):
     t,_=topology(path);lease=Lease(Path(t['root']),role);stop=False
     def done(*_):
         nonlocal stop
@@ -154,7 +163,7 @@ def run(path:Path,role:str):
         while not stop:
             t,a=topology(path);now=datetime.now(timezone.utc)
             if role=='publisher':atomic(Path(t['root'])/'projection.json',snapshot(t,a,now=now))
-            heartbeat(t,role,now)
+            heartbeat(t,role,now,startup)
             for _ in range(20):
                 if stop:break
                 time.sleep(.1)
@@ -164,9 +173,17 @@ def run(path:Path,role:str):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True)
     p.add_argument('--role',choices=['scheduler','publisher','backend'],required=True);p.add_argument('--port',type=int)
-    a=p.parse_args();deny_external_io()
+    p.add_argument('--instance-id',required=True);p.add_argument('--runner-id',required=True)
+    p.add_argument('--created-at',required=True)
+    a=p.parse_args()
+    # No legacy app startup. Validate deny-only topology before the fixed,
+    # self-only OS probes; install the irreversible guard before service work.
+    t,_=topology(a.config)
+    from truth_spine_process_identity import write_startup
+    startup=write_startup(Path(t['root']),a.instance_id,a.runner_id,a.role,a.port,a.created_at)
+    deny_external_io()
     if a.role=='backend':serve(a.config,a.port)
-    else:run(a.config,a.role)
+    else:run(a.config,a.role,startup)
 
 
 if __name__=='__main__':main()
