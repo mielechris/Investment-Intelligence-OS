@@ -31,7 +31,7 @@ BACKEND_FILES = tuple(name+".py" for name in (
     "truth_spine_adapters", "truth_spine_authority", "truth_spine_contract", "truth_spine_process_identity",
     "truth_spine_integration", "truth_spine_integration_service", "truth_spine_session", "truth_spine_generations",
     "truth_spine_session_supervisor", "truth_spine_session_package", "truth_spine_full_day_service",
-    "truth_spine_integration_runner", "truth_spine_full_day_runner", "truth_spine_factory_coverage"))
+    "truth_spine_integration_runner", "truth_spine_full_day_runner", "truth_spine_factory_coverage", "truth_spine_frontend_graph"))
 
 
 def installation_template():
@@ -42,7 +42,7 @@ def installation_template():
             "manifest_pin": "REQUIRED_BEFORE_CREATION", "authority_pin": "INDEPENDENT_OWNER_PIN_REQUIRED",
             "directories": list(DIRECTORIES), "files": list(FILES),
             "dir_mode": "0700", "file_mode": "0600", "immutable_release_file_mode": "0400",
-            "launch_agents": False, "review_url": "http://127.0.0.1:5291/review/truth-integration.html?fullSession=1",
+            "launch_agents": False, "review_url": "http://127.0.0.1:5291/review/northstar-session.html?fullSession=1",
             "source_cycle_schema": "iios-shadow-capture-source-cycle-v1",
             "source_cycle_store": "session-journal.db:source_cycles",
             "source_cycle_producer": "capture_scheduler", "source_cycle_max_age_seconds": 900,
@@ -135,6 +135,16 @@ def verify_artifacts(root, manifest, expected_hash):
         "frontend_provenance": p, "frontend_input_hash": p["input_hash"], "frontend_content_hash": p["output_hash"],
         "files": package_files, "source_inventory_hash": digest({"files": [r for r in package_files if r["path"].startswith("backend/")]})})
     frontend = {r["path"].removeprefix("frontend/") for r in package_files if r["path"].startswith("frontend/")}
+    if p['inputs']['policy'].get('entry') == 'northstar-session.html':
+        from truth_spine_frontend_graph import validate_northstar_graph
+        validate_northstar_graph({name: file_bytes(root/'release/frontend'/name) for name in frontend})
+    else:
+        verify_engineering_graph(root, frontend)
+    verify_runtime_graph(root, manifest)
+    return manifest
+
+
+def verify_engineering_graph(root, frontend):
     js = {name for name in frontend if re.fullmatch(r"assets/truth-integration-[A-Za-z0-9_-]+\.js", name)}
     css = {name for name in frontend if re.fullmatch(r"assets/truth-integration-[A-Za-z0-9_-]+\.css", name)}
     if (len(js) != 1 or len(css) != 1 or frontend != js | css |
@@ -146,6 +156,9 @@ def verify_artifacts(root, manifest, expected_hash):
     for name in js | css | {"truth-integration.html"}:
         if re.search(r"/Users/|/home/|/private/tmp/|sourceMappingURL|sourceURL", file_bytes(root/"release/frontend"/name).decode()):
             raise ValueError("SESSION_FRONTEND_LEAKAGE")
+
+
+def verify_runtime_graph(root, manifest):
     runtime = verified(json.loads(file_bytes(root/"runtime/runtime-manifest.json")))
     if runtime["runtime_id"] != manifest["runtime_identity"]:
         raise ValueError("SESSION_RUNTIME_IDENTITY_INVALID")

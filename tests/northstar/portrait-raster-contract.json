@@ -1,0 +1,30 @@
+{
+  "schema": "iios-two-portrait-raster-variance-v1",
+  "classification": "FONT_OR_ANTIALIAS_VARIANCE",
+  "reason": "Deterministic image-only raster resampling difference; text and geometry unchanged. Exact renderer kernel cause is not claimed.",
+  "project": "webkit",
+  "imageAsset": {
+    "path": "assets/max-BHnwB3MI.webp",
+    "sha256": "7d3f535fee44d1037c6058fd6238b13ae37d7c1fb432c32be9cc3fa2852e74f4"
+  },
+  "maximumChannelDelta": 26,
+  "maximumMeanAbsoluteChannelError": 1,
+  "maximumChangedImageFraction": 0.69,
+  "outsideImageTolerance": 0,
+  "cases": {
+    "1512-expansion": {
+      "baseline_sha256": "524f0464a4c0d58303745a224a3486a5fad7924a82ef71941b558d8a0a0b9a6e",
+      "observed_sha256": "1a628aa37820a2f65ab5b7a0efb85a0d55b730601cdf1a6e8e02444674568e58",
+      "viewport": [1512, 825],
+      "imageRect": {"x": 569, "y": 271, "width": 360, "height": 452.5},
+      "pixelRegion": {"x": 413, "y": 259, "width": 360, "height": 453}
+    },
+    "1020-control": {
+      "baseline_sha256": "16f35f45edf3b72894db9e1e6f59f29becce54f1db9f1c57d458a0d0de6f6655",
+      "observed_sha256": "bdeee96bcc7b66a5309f454f430226714cc5434e643d76540bcec505d9a0e7b3",
+      "viewport": [1020, 825],
+      "imageRect": {"x": 323, "y": 247.59375, "width": 360, "height": 452.5},
+      "pixelRegion": {"x": 311, "y": 235, "width": 360, "height": 454}
+    }
+  }
+}

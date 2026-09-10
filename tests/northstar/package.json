@@ -1,0 +1,13 @@
+{
+  "name": "iios-northstar-offline-acceptance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs",
+    "test:contracts": "node --test contract.test.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@axe-core/playwright": "4.13.0"
+  }
+}

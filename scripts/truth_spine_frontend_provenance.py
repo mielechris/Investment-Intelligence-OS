@@ -14,6 +14,9 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'BACK END/backend'))
+from truth_spine_frontend_graph import NORTHSTAR_ENV, ENTRY, validate_northstar_graph
 
 SCHEMA = 'iios-truth-frontend-build-v1'
 ENV = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'NODE_ENV': 'production',
@@ -66,12 +69,14 @@ def git(source, *args):
     return subprocess.check_output(['git', *args], cwd=source, text=True, timeout=30)
 
 
-def source_inputs(source, commit):
+def source_inputs(source, commit, *, review=False):
     source = Path(source).resolve()
     require(git(source, 'rev-parse', 'HEAD').strip() == commit, 'SOURCE_COMMIT_MISMATCH')
     names = sorted(filter(None, git(source, 'ls-files', '-z', 'FRONT END').split('\0')))
-    require(names and not git(source, 'diff', 'HEAD', '--', 'FRONT END'), 'FRONTEND_SOURCE_MODIFIED')
-    require(not git(source, 'ls-files', '--others', '--exclude-standard', '--', 'FRONT END'), 'FRONTEND_SOURCE_EXTRA')
+    require(names and (review or not git(source, 'diff', 'HEAD', '--', 'FRONT END')), 'FRONTEND_SOURCE_MODIFIED')
+    extra = git(source, 'ls-files', '--others', '--exclude-standard', '-z', '--', 'FRONT END')
+    require(review or not extra, 'FRONTEND_SOURCE_EXTRA')
+    if review: names = sorted(set(names) | set(filter(None, extra.split('\0'))))
     rows = []
     for name in names:
         p = source/name
@@ -113,25 +118,29 @@ def toolchain(frontend):
             'dependency_inventory_hash': digest(deps), 'packages': packages}
 
 
-def inputs(source, commit):
+def inputs(source, commit, *, northstar=False, review=False):
     source = Path(source).resolve()
-    rows = source_inputs(source, commit)
+    rows = source_inputs(source, commit, review=review)
     return {'source_commit': commit, 'source_root': str(source), 'source_inventory': rows,
             'source_inventory_hash': digest(rows), 'package_json_hash': sha(source/'FRONT END/package.json'),
             'lockfile_hash': sha(source/'FRONT END/package-lock.json'),
             'vite_config_hash': sha(source/'FRONT END/vite.config.ts'),
             'tsconfig_hashes': {r['path']: r['sha256'] for r in rows if r['path'].startswith('tsconfig')},
-            'policy': POLICY, 'toolchain': toolchain(source/'FRONT END'),
+            'policy': ({**POLICY, 'entry': ENTRY, 'environment': NORTHSTAR_ENV} if northstar else POLICY), 'toolchain': toolchain(source/'FRONT END'),
             'builder_hashes': {name: sha(Path(__file__).parent/name) for name in
-                               ('truth_spine_frontend_provenance.py', 'truth_spine_frontend_build.mjs')}}
+                               ('truth_spine_frontend_provenance.py', 'truth_spine_frontend_build.mjs',
+                                '../BACK END/backend/truth_spine_frontend_graph.py')}}
 
 
-def validate_outputs(dist, expected=None):
+def validate_outputs(dist, expected=None, *, northstar=False):
     dist = Path(dist)
     require(dist.is_dir() and not dist.is_symlink(), 'FRONTEND_DIST_INVALID')
     rows = inventory(dist)
     if expected is not None:
         require(rows == expected, 'FRONTEND_OUTPUT_MISMATCH')
+    if northstar:
+        validate_northstar_graph({r['path']: (dist/r['path']).read_bytes() for r in rows})
+        return rows
     paths = {r['path'] for r in rows}
     fixed = {'truth-integration.html', 'favicon.svg', 'icons.svg', 'fixtures/expansion-wing.json'}
     js = {p for p in paths if re.fullmatch(r'assets/truth-integration-[A-Za-z0-9_-]+\.js', p)}
@@ -160,18 +169,19 @@ def verify(build_root, source, commit):
     require(set(record) == {'schema', 'inputs', 'input_hash', 'outputs', 'output_hash', 'observation', 'content_hash'}, 'PROVENANCE_SCHEMA_INVALID')
     require(record['schema'] == SCHEMA, 'PROVENANCE_SCHEMA_INVALID')
     require(record['content_hash'] == digest({k:v for k,v in record.items() if k != 'content_hash'}), 'PROVENANCE_HASH_INVALID')
-    expected = inputs(source, commit)
+    northstar = record['inputs']['policy']['entry'] == ENTRY
+    expected = inputs(source, commit, northstar=True) if northstar else inputs(source, commit)
     require(record['inputs'] == expected and record['input_hash'] == digest(expected), 'BUILD_INPUT_BINDING_MISMATCH')
-    validate_outputs(root/'frontend/dist', record['outputs'])
+    validate_outputs(root/'frontend/dist', record['outputs'], northstar=northstar)
     require(record['output_hash'] == digest(record['outputs']), 'OUTPUT_HASH_INVALID')
     return record
 
 
-def build(source, destination, commit):
+def build(source, destination, commit, *, northstar=False, review=False):
     source, root = Path(source).resolve(), Path(destination).absolute()
     require(root.parent == Path('/private/tmp') and root.name.startswith('iios-frontend-build-')
             and not root.exists() and not root.is_symlink(), 'NEW_ISOLATED_BUILD_ROOT_REQUIRED')
-    before = inputs(source, commit)
+    before = inputs(source, commit, northstar=northstar, review=review)
     root.mkdir(mode=0o700)
     front = root/'frontend'; front.mkdir(mode=0o700)
     for row in before['source_inventory']:
@@ -182,20 +192,22 @@ def build(source, destination, commit):
     require(inventory(front/'node_modules', dependency=True) == before['toolchain']['dependency_inventory'], 'COPIED_DEPENDENCY_MISMATCH')
     require(not any(environment_cache(p.relative_to(front/'node_modules')) for p in (front/'node_modules').rglob('*')), 'COPIED_CACHE_REJECTED')
     driver = root/'build.mjs'; shutil.copyfile(Path(__file__).with_name('truth_spine_frontend_build.mjs'), driver)
-    env = {**ENV, 'TMPDIR': str(root)}
+    env = {**(NORTHSTAR_ENV if northstar else ENV), 'TMPDIR': str(root)}
     subprocess.run([str(NODE), str(driver)], cwd=front, env=env, timeout=180, check=True, capture_output=True)
-    require(inputs(source, commit) == before, 'BUILD_INPUT_CHANGED')
+    require(inputs(source, commit, northstar=northstar, review=review) == before, 'BUILD_INPUT_CHANGED')
     require(inventory(front/'node_modules', dependency=True) == before['toolchain']['dependency_inventory'], 'BUILD_MUTATED_DEPENDENCIES')
     require(not (source/'FRONT END').is_symlink(), 'SOURCE_ROOT_INVALID')
-    outputs = validate_outputs(front/'dist')
+    outputs = validate_outputs(front/'dist', northstar=northstar)
     observation = json.loads((front/'build-observation.json').read_bytes())
-    record = {'schema': SCHEMA, 'inputs': before, 'input_hash': digest(before),
+    record = {'schema': 'iios-source-review-build-NOT-INSTALLABLE' if review else SCHEMA, 'inputs': before, 'input_hash': digest(before),
               'outputs': outputs, 'output_hash': digest(outputs), 'observation': observation}
     record['content_hash'] = digest(record)
     with (root/'frontend-provenance.json').open('xb') as stream:
         os.fchmod(stream.fileno(), 0o400); stream.write(encoded(record)); stream.flush(); os.fsync(stream.fileno())
     for p in (front/'dist').rglob('*'):
         if p.is_file(): p.chmod(0o400)
+    for p in root.rglob('*'):
+        p.chmod(0o700 if p.is_dir() else 0o400)
     return record
 
 
@@ -205,8 +217,10 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--build-root', type=Path, required=True)
     parser.add_argument('--verify-only', action='store_true')
+    parser.add_argument('--northstar', action='store_true')
+    parser.add_argument('--source-review-only', action='store_true', help='Offline review only; production verification rejects this provenance schema')
     a = parser.parse_args()
-    record = verify(a.build_root, a.source, a.commit) if a.verify_only else build(a.source, a.build_root, a.commit)
+    record = verify(a.build_root, a.source, a.commit) if a.verify_only else build(a.source, a.build_root, a.commit, northstar=a.northstar, review=a.source_review_only)
     print(json.dumps({'input_hash': record['input_hash'], 'output_hash': record['output_hash'],
                       'manifest_hash': sha(a.build_root/'frontend-provenance.json'), 'outputs': record['outputs']}))
 

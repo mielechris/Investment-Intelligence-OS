@@ -198,7 +198,7 @@ class SourceCycleTests(unittest.TestCase):
 
     def test_correct_browser_route_and_no_implicit_historical_api_alias(self):
         self.assertEqual(installation_template()["review_url"],
-            "http://127.0.0.1:5291/review/truth-integration.html?fullSession=1")
+            "http://127.0.0.1:5291/review/northstar-session.html?fullSession=1")
         self.assertEqual(service_response(self.root/"topology.json", "/truth-spine/museum", now=self.clock())[0], 404)
 
     def test_fresh_probe_wrapper_cannot_hide_expired_nested_cycle(self):

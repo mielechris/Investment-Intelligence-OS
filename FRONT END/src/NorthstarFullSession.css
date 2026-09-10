@@ -1,0 +1,184 @@
+/* Isolated-only additions; the permanent stylesheet and build mode are unchanged. */
+.northstar-full-session { min-width: 0; overflow-wrap: anywhere; }
+.northstar-full-session .auction-nav { position: relative; }
+.northstar-full-session .northstar-session-status,
+.northstar-full-session .northstar-department { margin: 1rem auto; padding: clamp(1rem, 2vw, 2rem); border: 1px solid #705b3d; border-radius: .6rem; background: #181715; color: #eee3ce; max-width: 1480px; box-sizing: border-box; }
+.northstar-full-session .northstar-room-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.northstar-full-session article { min-width: 0; }
+.northstar-full-session .northstar-room-grid > article { border: 1px solid #5e513e; border-radius: .6rem; padding: 1rem; background: linear-gradient(135deg, #28231c, #141414); }
+.northstar-full-session .northstar-room-grid .cinematic-character-portrait { max-width: 180px; margin-inline: auto; }
+.northstar-full-session button { white-space: normal; overflow-wrap: anywhere; max-width: 100%; min-height: 36px; }
+.northstar-full-session dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.northstar-full-session dl > div { min-width: 0; }
+.northstar-full-session dt { font-size: .8rem; color: #cbbb9d; }
+.northstar-full-session dd { margin: .3rem 0; }
+.northstar-full-session details { margin-block: 1rem; }
+.northstar-full-session summary { cursor: pointer; padding: .75rem; }
+.northstar-full-session .northstar-selected { border-top: 2px solid #997751; margin-top: 1rem; padding-top: 1rem; scroll-margin-top: 1rem; }
+.northstar-full-session :focus-visible { outline: 3px solid #edc88b; outline-offset: 3px; }
+.northstar-full-session .northstar-floor-label { padding: 1rem; color: #eee3ce; background: #171614; }
+.northstar-full-session .auction-room-modal .northstar-detail { grid-column: 1 / -1; }
+/* The isolated floor has required evidence text, not a fixed-height miniature.
+   Keep decorations bounded, while sizing the complete card/floor from content. */
+.northstar-full-session .auction-factory { height: auto; min-height: 0; padding: 1rem; display: grid; gap: 1rem; overflow: clip; }
+.northstar-full-session .auction-house-mark,
+.northstar-full-session .auction-building,
+.northstar-full-session .auction-level,
+.northstar-full-session .auction-level__rooms,
+.northstar-full-session .auction-activity-legend,
+.northstar-full-session .auction-ambient-work,
+.northstar-full-session .auction-status-rail { position: relative; inset: auto; height: auto; min-width: 0; max-width: 100%; box-sizing: border-box; }
+.northstar-full-session .auction-building { padding: 1rem; display: grid; gap: 1rem; clip-path: none; isolation: isolate; }
+.northstar-full-session .auction-level { padding: .75rem; z-index: 1; isolation: isolate; }
+.northstar-full-session .auction-level__legend { position: relative; inset: auto; width: auto; display: flex; gap: .5rem; padding: .5rem; }
+.northstar-full-session .auction-level__legend b { writing-mode: horizontal-tb; }
+.northstar-full-session .auction-level__rooms { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; padding: .5rem; z-index: 1; }
+.northstar-full-session .auction-level .auction-room { height: auto !important; min-width: 0; display: flex; flex-direction: column; gap: .75rem; padding: 1rem; text-align: left; }
+.northstar-full-session .auction-room__identity,
+.northstar-full-session .auction-room__output { position: relative; inset: auto; width: 100%; min-width: 0; box-sizing: border-box; }
+.northstar-full-session .auction-room__identity { padding-right: 1rem; }
+.northstar-full-session .auction-level .auction-room__identity b { font-size: 1rem; line-height: 1.35; }
+.northstar-full-session .auction-level .auction-room__identity small { font-size: .8rem; line-height: 1.4; }
+.northstar-full-session .auction-room__output { display: grid; gap: .5rem; margin-top: auto; padding: .75rem; }
+.northstar-full-session .auction-room__output b { font-size: .8rem; line-height: 1.4; }
+.northstar-full-session .auction-room__output small { height: auto; min-height: 0; max-height: none; overflow: visible; font-size: .875rem; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.northstar-full-session .auction-level .auction-room:focus-visible { outline: 3px solid #edc88b; outline-offset: 3px; }
+/* C11: native keyboard and explicit post-dialog restoration only. The dark
+   backing extends beyond the gold ring; unavailable-card opacity/filter must
+   not dim this interactive indicator. Pointer-down/blur clears restoration. */
+.northstar-full-session .auction-level .auction-room:focus-visible,
+.northstar-full-session .auction-level .auction-room[data-northstar-restored-focus]:focus {
+  outline: 3px solid #edc88b; outline-offset: 3px;
+  box-shadow: 0 0 0 8px #100c08, inset 0 0 0 1px #edc88b;
+  opacity: 1; filter: none; scroll-margin-block: 12px;
+}
+.northstar-full-session .auction-max-walkway { position: relative; inset: auto; width: 100%; min-width: 0; height: 300px; max-width: 460px; justify-self: center; isolation: isolate; z-index: 1; }
+.northstar-full-session .auction-max-walkway .ccp { min-height: 0; }
+.northstar-full-session .auction-max-walkway > div:not(.auction-walkway-rail) { display: grid; }
+.northstar-full-session .auction-house-mark small { display: block; }
+/* Content-flow headings do not retain the cinematic offscreen parallax layer. */
+.northstar-full-session .auction-house-mark { position: static; transform: none !important; transition: none; }
+/* This local stacking context keeps the retained service shaft behind floors.
+   It is scenery only: it must neither paint above nor intercept room content. */
+.northstar-full-session .northstar-service-decoration { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: clip; }
+.northstar-full-session .northstar-service-decoration * { pointer-events: none; }
+.northstar-full-session .northstar-service-decoration .auction-service-core { z-index: auto; }
+.northstar-full-session .northstar-service-decoration .auction-evidence-spine { z-index: auto; }
+.northstar-full-session .auction-activity-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.northstar-full-session .auction-activity-legend span { display: flex; white-space: normal; }
+.northstar-full-session .auction-ambient-work span { display: block; }
+.northstar-full-session .auction-status-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); opacity: 1; }
+.northstar-full-session .auction-status-rail div:nth-child(2) { display: grid; }
+/* C8: all architectural scenery is contained by the building's local layer 0.
+   Floors and the walkway are sibling content layers; no route, foundation,
+   shaft, roof or connector can escape and cover a station or its focus ring. */
+.northstar-full-session .northstar-service-decoration .auction-route,
+.northstar-full-session .northstar-service-decoration .auction-roofline,
+.northstar-full-session .northstar-service-decoration .auction-foundation { z-index: auto; }
+/* Decorative semantics and generated ornament do not receive pointer input.
+   This does not suppress geometry checks: visible above-content paint fails. */
+.northstar-full-session [aria-hidden="true"],
+.northstar-full-session [aria-hidden="true"] *,
+.northstar-full-session *::before,
+.northstar-full-session *::after { pointer-events: none; }
+.northstar-full-session .auction-room { isolation: isolate; }
+.northstar-full-session .auction-room__set,
+.northstar-full-session .auction-room::before { z-index: 0; }
+.northstar-full-session .auction-room > em { position: relative; z-index: 7; }
+.northstar-full-session .auction-level::after { z-index: 0; }
+.northstar-full-session .auction-max-walkway::after,
+.northstar-full-session .auction-walkway-rail { z-index: 0; }
+.northstar-full-session .auction-max-walkway > :not(.auction-walkway-rail) { z-index: 1; }
+/* C9: one bounded Northstar modal, a non-scrolling heading/close row, and
+   exactly one content scrollport. Do not depend on main.tsx's global reset. */
+.northstar-full-session .northstar-station-backdrop {
+  box-sizing: border-box; overflow: clip; overscroll-behavior: contain;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+.northstar-full-session .auction-room-modal.northstar-station-backdrop > .northstar-station-dialog {
+  box-sizing: border-box; display: flex; flex-direction: column;
+  width: min(1200px, 100%); max-width: 100%; min-width: 0;
+  height: auto; min-height: 0; max-height: 100%; padding: 0;
+  overflow: visible; border: 1px solid #b58242;
+}
+.northstar-full-session .northstar-dialog-header {
+  box-sizing: border-box; position: relative; z-index: 2; flex: 0 0 auto;
+  display: flex; align-items: flex-start; gap: 1rem; padding: 1rem;
+  min-width: 0; background: #100c08; border-bottom: 1px solid #705b3d;
+}
+.northstar-full-session .northstar-dialog-header > div { min-width: 0; flex: 1; }
+.northstar-full-session .northstar-dialog-header h2 {
+  max-width: 100%; margin: .4rem 0 0; font-size: clamp(26px, 3vw, 42px);
+  line-height: 1.4; overflow-wrap: anywhere;
+}
+.northstar-full-session .northstar-dialog-header > div > span { font: 700 .75rem/1.4 ui-monospace, monospace; color: #edc88b; }
+.northstar-full-session .northstar-dialog-header .auction-close {
+  position: static; inset: auto; box-sizing: border-box; flex: 0 0 44px;
+  width: 44px; height: 44px; margin: 0;
+}
+.northstar-full-session .northstar-dialog-body {
+  box-sizing: border-box; position: relative; isolation: isolate; z-index: 1;
+  flex: 1 1 auto; min-width: 0; min-height: 0; margin: 8px; max-width: calc(100% - 16px);
+  overflow: auto; overflow-y: scroll; overscroll-behavior: contain; scrollbar-gutter: stable;
+  padding: clamp(1rem, 3vw, 2rem); scroll-padding-block: 1rem;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem;
+  grid-auto-rows: max-content; align-content: start;
+}
+.northstar-full-session .northstar-dialog-body > * { min-width: 0; max-width: 100%; grid-column: 1; grid-row: auto; }
+/* F3: explicit visible scroll geometry, independent of macOS automatic overlay
+   scrollbar presentation during native focus and screenshot acquisition. */
+.northstar-full-session .northstar-dialog-body::-webkit-scrollbar { width: 16px; height: 16px; }
+.northstar-full-session .northstar-dialog-body::-webkit-scrollbar-track { background: #100c08; }
+.northstar-full-session .northstar-dialog-body::-webkit-scrollbar-thumb {
+  background: #b58242; border: 3px solid #100c08; border-radius: 8px;
+}
+.northstar-full-session .northstar-dialog-body .auction-room-stage { box-sizing: border-box; grid-column: 1; grid-row: auto; }
+.northstar-full-session .northstar-dialog-body .auction-interior-heading { grid-row: auto; }
+.northstar-full-session .northstar-dialog-body .auction-interior-console { grid-row: auto; }
+/* F2: the dialog scrollport must not shrink a multi-cast cinema to zero.
+   Retain portrait geometry; names/roles and quiet evidence occupy flow rows. */
+.northstar-full-session .northstar-dialog-body .auction-room-stage.is-multi-cast {
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content;
+  height: auto; min-height: min-content; align-content: start; overflow: visible;
+}
+.northstar-full-session .northstar-dialog-body .auction-room-stage.is-multi-cast .auction-room-cinema {
+  grid-column: 1 / -1; grid-row: auto; height: auto; min-height: min-content;
+  align-self: start; overflow: visible;
+}
+.northstar-full-session .northstar-dialog-body .auction-room-stage.is-multi-cast .auction-room-cinema article {
+  height: auto; aspect-ratio: auto; overflow: visible;
+}
+.northstar-full-session .northstar-dialog-body .auction-room-stage.is-multi-cast .auction-evidence-stage {
+  grid-column: 1 / -1; grid-row: auto; justify-self: center; align-self: start;
+}
+/* C10: the governed body heading is not the cinematic room-title treatment.
+   Preserve Georgia and every word, with room for complete glyph line boxes. */
+.northstar-full-session .northstar-station-dialog .northstar-dialog-body :is(h2, h3, h4) {
+  font-family: Georgia, serif; font-size: clamp(22px, 2.5vw, 36px);
+  line-height: 1.4; letter-spacing: normal; height: auto; max-height: none;
+  min-width: 0; max-width: 100%; margin: 0 0 1rem; padding: 0;
+  white-space: normal; overflow-wrap: anywhere; overflow: visible;
+}
+/* Safari may not match :focus-visible after an owned Shift+Tab wrap to summary.
+   Keep an explicit indicator for all focused dialog elements, including the
+   initial heading and body region. No native focus is hidden without replacement. */
+.northstar-full-session .northstar-station-dialog :focus {
+  outline: 3px solid #edc88b; outline-offset: 3px;
+  scroll-margin-block: 12px;
+}
+/* The deny-only shell is intrinsically motion-frozen. Browser acceptance must
+   observe this source rule, never inject its own animation/transition override. */
+.northstar-full-session, .northstar-full-session *,
+.northstar-full-session *::before, .northstar-full-session *::after { animation: none; transition: none; }
+.northstar-full-session .auction-room-modal.northstar-station-backdrop > .northstar-collector-plaque { width: min(800px, 100%); }
+@media (max-width: 1100px) { .northstar-full-session .auction-level__rooms, .northstar-full-session .northstar-room-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) {
+  .northstar-full-session .auction-level__rooms,
+  .northstar-full-session .auction-status-rail,
+  .northstar-full-session .auction-activity-legend,
+  .northstar-full-session .northstar-room-grid,
+  .northstar-full-session dl { grid-template-columns: minmax(0, 1fr); }
+  .northstar-full-session .auction-building { padding: .5rem; }
+  .northstar-full-session .auction-nav { display: flex; flex-direction: column; align-items: stretch; }
+  .northstar-full-session .auction-nav nav, .northstar-full-session .auction-tools { display: flex; flex-wrap: wrap; }
+}

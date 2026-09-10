@@ -74,6 +74,11 @@ def validate_frontend_provenance(manifest: dict) -> None:
     h = lambda value: hashlib.sha256(canonical(value)).hexdigest()
     try:
         p = manifest['frontend_provenance']; i = p['inputs']
+        northstar = i['policy'].get('entry') == 'northstar-session.html'
+        if northstar:
+            from truth_spine_frontend_graph import NORTHSTAR_ENV
+            if i['policy']['environment'] != NORTHSTAR_ENV or i['policy'].get('base') != '/review/':
+                raise ValueError('NORTHSTAR_BUILD_POLICY_INVALID')
         if (manifest['source_state'] != 'CLEAN_COMMITTED_SOURCE'
                 or p['schema'] != 'iios-truth-frontend-build-v1'
                 or p['content_hash'] != h({k:v for k,v in p.items() if k != 'content_hash'})
@@ -81,12 +86,12 @@ def validate_frontend_provenance(manifest: dict) -> None:
                 or p['input_hash'] != h(i) or manifest['frontend_input_hash'] != p['input_hash']
                 or i['source_inventory_hash'] != h(i['source_inventory'])
                 or i['policy']['mode'] != 'production'
-                or i['policy']['environment']['VITE_TRUTH_INTEGRATION_PREVIEW'] != '1'
+                or (not northstar and i['policy']['environment'].get('VITE_TRUTH_INTEGRATION_PREVIEW') != '1')
                 or i['policy']['sourcemap'] is not False
                 or i['toolchain']['versions']['vite'] != '8.2.2'):
             raise ValueError('FRONTEND_PROVENANCE_INVALID')
         rows = [{**r, 'path': r['path'].removeprefix('frontend/')} for r in manifest['files'] if r['path'].startswith('frontend/')]
-        if (rows != p['outputs'] or len(rows) != 6 or p['output_hash'] != h(rows)
+        if (rows != p['outputs'] or (not northstar and len(rows) != 6) or p['output_hash'] != h(rows)
                 or manifest['frontend_content_hash'] != p['output_hash']
                 or manifest['source_inventory_hash'] != digest({'files': [r for r in manifest['files'] if r['path'].startswith('backend/')]})):
             raise ValueError('FRONTEND_PACKAGE_BINDING_INVALID')

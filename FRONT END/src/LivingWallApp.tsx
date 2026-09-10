@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import AuctionFactory, { RoomView } from "./AuctionFactory";
+import AuctionFactory, { RoomView, NorthstarRoomView, NorthstarAuctionFactory } from "./AuctionFactory";
 import { AUCTION_ROOMS, type AuctionRoomId } from "./auctionRegistry";
 import { buildAuctionModel, type AuctionModel, type GovernedCase } from "./auctionSceneModel";
 import MobExpansionWing from "./MobExpansionWing";
@@ -8,11 +8,18 @@ import MuseumCaseLibrary, { type CaseFilter } from "./MuseumCaseLibrary";
 import { latestFactoryOutputs, stationOutput } from "./museumLiveBinding";
 import { useExpansionWingSnapshot } from "./ExpansionWingSnapshotContext";
 import { adaptExpansionSnapshot } from "./TruthSourceAdapter";
-import { activateDialog, requestDialogClose } from "./dialogAccessibility";
+import { activateDialog, activateNorthstarDialog, requestDialogClose } from "./dialogAccessibility";
 import { resolveAuctionPresentation, type AuctionMode } from "./auctionPresentation";
 import { BRIGHTNESS_PROFILES, nextBrightnessProfile, resolveProtectionState, type BrightnessProfile } from "./commissioningProfile";
 import "./AuctionEdition.css";
 import "./MuseumLegibility.css";
+import { useNorthstar } from './northstarContext';
+import { NorthstarSessionStatus, NorthstarGroup, NorthstarHistory, NorthstarRow } from './NorthstarPanels';
+import { stationRows, northstarFloorOutputs } from './northstarSession';
+import { NorthstarControlRoom } from './MuseumControlRoom';
+import { NorthstarCaseLibrary } from './MuseumCaseLibrary';
+import { NorthstarExpansionWing } from './MobExpansionWing';
+import { boundedNavigation } from './northstarNavigation';
 
 type Mode = AuctionMode;
 const MODES: readonly [Mode, string][] = [["gallery", "Gallery"], ["story", "Story"], ["replay", "Replay"], ["command", "Command"], ["cases", "Cases"], ["expansion", "Expansion Wing"], ["watch", "Factory Watch"]];
@@ -182,3 +189,96 @@ function AccessibleDialog({ className, surfaceClassName, titleId, descriptionId,
 
 function Degraded({ model, error }: { model: AuctionModel; error: string | null }) { return <div className="auction-degraded" data-testid="truth-indicator" role="alert"><strong>{model.condition} / {model.freshness}</strong><span>{error ?? "The latest sanitized truth is not both AVAILABLE and CURRENT. Motion is withheld."}</span></div>; }
 function SafetyCurtain({ compact }: { compact: boolean }) { return <div className={`auction-safety-curtain ${compact ? "is-compact" : ""}`} data-testid="safety-indicator" role="alert"><strong>SAFETY LOCK</strong><span>Read-only authority could not be verified. Factory motion is frozen.</span></div>; }
+
+// Separate exported entry: no permanent snapshot provider or legacy destination is mounted.
+export function NorthstarLivingWall() {
+  const shadow = useNorthstar(); const { view, status } = shadow;
+  const [mode, setMode] = useState<Mode>(modeFromHash);
+  const [wallMode, setWallMode] = useState(false);
+  const [plaque, setPlaque] = useState(false); const [brightness, setBrightness] = useState<BrightnessProfile>('exhibition');
+  const [plaqueOpener, setPlaqueOpener] = useState<HTMLElement | null>(null);
+  const [routeError, setRouteError] = useState(false);
+  const [room, setRoom] = useState<AuctionRoomId | null>(null); const [opener, setOpener] = useState<HTMLElement | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const closeRoom = useCallback(() => setRoom(null), []);
+  const closePlaque = useCallback(() => setPlaque(false), []);
+  useEffect(() => {
+    const restore = () => { setMode(modeFromHash()); setRoom(null); };
+    const sync = () => setFullscreen(Boolean(document.fullscreenElement));
+    window.addEventListener('hashchange', restore); window.addEventListener('popstate', restore); document.addEventListener('fullscreenchange', sync);
+    return () => { window.removeEventListener('hashchange', restore); window.removeEventListener('popstate', restore); document.removeEventListener('fullscreenchange', sync); };
+  }, []);
+  // The floor is presentation, not a fabricated event adapter. Keep routes frozen.
+  const model = useMemo(() => {
+    const base = buildAuctionModel(null, 'NO_CURRENT_CASE_DOSSIER_IN_SHADOW_PROJECTION', new Date(0));
+    return { ...base, generatedAt: view?.published_at ?? null, freshness: status,
+      condition: status === 'CURRENT' ? 'AVAILABLE' as const : status,
+      marketValidation: 'SHADOW_OBSERVATION_NOT_MARKET_DATA',
+      safety: { telemetryReadOnly: true, ledger: false, write: false, trade: false, live: false } };
+  }, [view, status]);
+  const navigate = (next: Mode) => {
+    if (!boundedNavigation(history, window.location.hash, `#${next}`, { museumMode: next })) { setRouteError(true); return; }
+    setRouteError(false); setMode(next); setRoom(null); setPlaque(false);
+  };
+  const floor = <><p className="northstar-floor-label">MAX · NARRATIVE PRESENTATION ONLY. The house observes retained governed facts; no research, decisions or trades are implied by character artwork.</p>
+    <NorthstarAuctionFactory model={model} outputs={northstarFloorOutputs(shadow)} onOpenRoom={(id, el) => { setRoom(id); setOpener(el ?? null); }}/></>;
+  return <div className={`auction-shell auction-master-1-1 auction-master-1-2 northstar-full-session brightness-${brightness} is-truth-frozen ${wallMode ? 'is-wall-mode' : 'is-command-mode'}`} data-edition="Museum Master 1.2" data-shadow-state={status}>
+    <NorthstarNavigation mode={mode} wallMode={wallMode} fullscreen={fullscreen} brightness={brightness} navigate={navigate}
+      enterWallArtMode={() => { setWallMode(true); navigate('gallery'); }} cycleBrightness={() => setBrightness(nextBrightnessProfile(brightness))}
+      setWallMode={setWallMode} openPlaque={element => { setRoom(null); setPlaqueOpener(element); setPlaque(true); }} toggleFullscreen={() => {
+        void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => undefined);
+      }}/>
+    {routeError && <p role="alert">Browser navigation update unavailable. No source data or authority changed.</p>}
+    <NorthstarSessionStatus/>
+    <div className="auction-scene-plane">
+      {mode === 'gallery' && <main className="auction-gallery">{floor}<NorthstarGroup group="rooms"/><NorthstarGroup group="agents"/><NorthstarGroup group="governance"/></main>}
+      {mode === 'story' && <main className="auction-editorial"><h1>Source before story</h1><p>NARRATIVE is not evidence. Original classifications and timestamps remain intact.</p><NorthstarHistory/></main>}
+      {mode === 'replay' && <main className="auction-editorial"><h1>Historical and Replay remain distinct</h1><NorthstarHistory/></main>}
+      {mode === 'command' && <NorthstarControlRoom/>}
+      {mode === 'cases' && <NorthstarCaseLibrary/>}
+      {mode === 'expansion' && <NorthstarExpansionWing/>}
+      {mode === 'watch' && <main className="auction-watch"><NorthstarGroup group="routes"/><NorthstarGroup group="subsystems"/></main>}
+    </div>
+    {room && <NorthstarRoomView roomId={room} model={model} opener={opener} close={closeRoom}
+      governedContent={<section><h2>Governed shadow station evidence · {status}</h2><p>Station grouping is presentation only; individual activity requires an explicit binding.</p>
+        {stationRows(view?.factory, room).map(row => <details key={row.id}><summary>{row.name}</summary><NorthstarRow row={row}/></details>)}
+        {!stationRows(view?.factory, room).length && <p>UNAVAILABLE — no bound station evidence.</p>}</section>}/>}
+    {plaque && <NorthstarCollectorPlaque model={model} opener={plaqueOpener} close={closePlaque}/>}
+  </div>;
+}
+
+function NorthstarNavigation({ mode, wallMode, fullscreen, brightness, navigate, enterWallArtMode, cycleBrightness, setWallMode, openPlaque, toggleFullscreen }: {
+  mode: Mode; wallMode: boolean; fullscreen: boolean; brightness: BrightnessProfile; navigate: (mode: Mode) => void;
+  enterWallArtMode: () => void; cycleBrightness: () => void; setWallMode: Dispatch<SetStateAction<boolean>>;
+  openPlaque: (opener: HTMLElement) => void; toggleFullscreen: () => void;
+}) {
+  return <header className="auction-nav"><button className="auction-brand" onClick={() => navigate('gallery')}><span>IIOS LIVING WALL</span><strong>THE AUCTION EDITION · MUSEUM MASTER 1.2</strong></button>
+    <nav aria-label="Living Wall experiences">{MODES.map(([key, label]) => <button key={key} className={mode === key ? 'is-active' : ''} onClick={() => navigate(key)} aria-current={mode === key ? 'page' : undefined}>{label}</button>)}</nav>
+    <div className="auction-tools"><button disabled title="Isolated deny-only mode keeps scene motion frozen; governed status continues to refresh.">Scene Frozen · Deny-only</button>
+      <button onClick={() => wallMode ? setWallMode(false) : enterWallArtMode()} aria-pressed={wallMode}>{wallMode ? 'Reveal Controls' : 'Wall Art Mode'}</button>
+      <button onClick={toggleFullscreen} aria-pressed={fullscreen}>{fullscreen ? 'Exit Full Screen' : 'Enter Full Screen'}</button>
+      <button onClick={cycleBrightness}>Brightness: {BRIGHTNESS_PROFILES[brightness].label}</button>
+      <button data-northstar-plaque-opener onClick={event => openPlaque(event.currentTarget)}>Collector Plaque</button>
+      <button disabled title="Sound remains muted until an owned soundscape is supplied">Sound Muted</button></div>
+  </header>;
+}
+
+function NorthstarCollectorPlaque({ model, opener, close }: { model: AuctionModel; opener: HTMLElement | null; close: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null); const headingRef = useRef<HTMLHeadingElement>(null);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current, initialFocus = headingRef.current;
+    if (!dialog || !initialFocus || !dialog.parentElement) return;
+    const background = [...dialog.parentElement.children].filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialog);
+    return activateNorthstarDialog({ dialog, initialFocus, opener, background, close, documentTarget: document });
+  }, [close, opener]);
+  return <div ref={dialogRef} className="auction-room-modal northstar-station-backdrop" role="dialog" aria-modal="true" aria-labelledby="northstar-plaque-title" aria-describedby="northstar-plaque-description" onMouseDown={close}>
+    <section className="northstar-station-dialog northstar-collector-plaque" onMouseDown={event => event.stopPropagation()}>
+      <header className="northstar-dialog-header"><div><span>THE WORK · GOVERNED EDITION</span><h2 ref={headingRef} tabIndex={-1} id="northstar-plaque-title">IIOS Living Wall — The Auction Edition</h2></div><button className="auction-close" onClick={close} aria-label="Close Collector Plaque">×</button></header>
+      <div className="northstar-dialog-body" tabIndex={0} role="region" aria-label="Collector Plaque content">
+        <p id="northstar-plaque-description">A living architectural portrait of an evidence-governed intelligence factory. Motion is earned by receipts; silence is treated as information.</p>
+        <dl>{[['Edition','Museum Master 1.2 / 77-Inch Commissioning Edition'],['Creation date','2026'],['Governed state',`${model.condition} / ${model.freshness}`],['Medium','Responsive real-time browser artwork'],['Motion authority',model.motion.reason],['Authority','Observation and governed paper-market research only']].map(([label,value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+        <small>Ownership grants no trading authority, credentials, source-control access, financial guarantee, blockchain title, NFT right, or live-execution capability.</small>
+      </div>
+    </section>
+  </div>;
+}
