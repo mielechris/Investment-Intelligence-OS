@@ -233,3 +233,79 @@ This checkpoint does not install a shadow runtime, deploy an observer, authorize
 an operational session or certify permanent production. Permanent remains YELLOW
 and unchanged by this source batch. Whole-system audit may resume after the
 source checkpoint; installation and promotion still require separate approval.
+
+## Superbatch 3.5A — source-only shadow runner hardening
+
+Scope is the runner, its focused test module and this document. No observer
+authority, evidence classification, memory semantics, service implementation or
+frontend asset changes are included. This checkpoint is not a port-5290 rehearsal.
+
+The prior runner trusted a stored PID, removed it before confirmed termination,
+and allowed one shutdown exception to abort all remaining cleanup. It tested
+only scheduler duplication and restarted the scheduler without first proving
+readiness failure. The replacement keeps immutable fingerprints containing role,
+PID, parent, OS-observed start time, exact command/argv, manifest-pinned executable
+identity, working directory, shadow root, backend port, creation timestamp and
+runner identity. macOS inspection uses bounded ps/lsof commands without a shell
+or environment dump; tests inject an inspector, not a production CLI override.
+Every graceful/forced signal requires an independent matching inspection.
+
+Unverified startup records are retained separately from accepted fingerprints.
+Missing or mismatched identity means no signal, retained unresolved ownership,
+PROCESS_IDENTITY_MISMATCH and RED. A reaped Popen child with its previously
+verified fingerprint is recorded as already exited, without signaling a possibly
+reused PID. Graceful termination has a maximum 30-second wait; timeout is recorded
+and requires full reinspection before one force-stop and another bounded wait.
+Only confirmed exits leave the active registry. Completed fingerprints remain.
+
+Cleanup attempts every child in reverse start order, independently closes each
+log, and always attempts the port check. Only connection refusal proves the
+loopback port clear; permission errors/timeouts cannot produce GREEN. Primary
+and cleanup exception categories/types are preserved without unrestricted error
+messages. Acceptance and incident reports use owner-only sibling staging files,
+file fsync, atomic replacement and directory fsync in the supplied isolated root.
+Both output attempts are independent; any persistence failure is RED and triggers
+a best-effort minimal emergency incident. Repeated cleanup is idempotent. An
+unresolved child, unclosed log or unproven clear port prevents clean shutdown.
+
+Duplicate checks now cover scheduler, publisher and backend. Live contenders
+use the same fingerprint contract; fast already-reaped rejected contenders are
+not accepted owners and never receive a signal. Rejection must preserve the
+verified original owner, lock bytes and canonical unique/event counts. Existing
+service lock files contain PID bytes; those bytes are checked together with the
+runner's independent OS fingerprint, not represented as a new lock-file schema.
+Any contender whose identity cannot be verified remains a fail-closed incident.
+
+Focused proofs use fake children, temporary leases and an ephemeral loopback bind
+(port zero, never 5290). Actual Lease/probe/heartbeat logic rejects duplicate
+scheduler/publisher ownership, stale heartbeats and ownerless locks; restart can
+acquire once after the original lease closes. Backend second-bind rejection
+preserves the original listener. The scheduler health test uses the real health
+and ownership probes with fixture-only unrelated package/projection inputs:
+ready 200 → verified stop → 503 → new fingerprint/heartbeat → 200; market
+readiness stays 503 throughout. It does not repair a database or projection.
+The runner requires the same transitions and unchanged event counts in a later
+separately authorized installed-runtime rehearsal.
+
+Adversarial cases include command/start/root/executable/parent mismatch, missing
+process, inspection failure, timeout/reverification, terminate/wait/kill failure,
+force-wait timeout, one/all child failures, partial startup, KeyboardInterrupt,
+log and port failures, atomic-write failure, emergency-write failure, repeated
+cleanup, duplicate ownership disturbance and old-fingerprint rejection after
+restart. No mismatched or unverified process receives a test signal.
+
+Validation for this source candidate: 48 new runner tests; 158 focused runner,
+Truth Spine, integration, authority/memory and compatibility tests passed;
+Expansion Wing discovery/run: 776 tests, zero failures/errors, one existing
+opt-in Keychain skip; full backend discovery: 1,451 objects, zero import errors.
+Python 3.14 compilation, whitespace/diff, secret/credential/personal-path,
+authority-bypass, symlink and artifact checks must pass before checkpoint.
+Existing resource warnings in the combined legacy suite are not new failures.
+Frontend/Museum rerun is not required: no shared/frontend contracts changed.
+
+Operational provider/model/credential/broker/paper activity for this source batch
+is zero. Permanent production remains YELLOW and unchanged. No historical shadow
+root is created, no port-5290 rehearsal is run, and no merge, deployment or
+promotion is authorized. The new commit is the source-candidate identity for a
+separately authorized repeat of Superbatch 3.5; source test success is not an
+installed-runtime acceptance claim.
