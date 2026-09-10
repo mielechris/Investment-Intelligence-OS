@@ -6,6 +6,8 @@ import json
 import os
 import sqlite3
 import stat
+import re
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,7 +16,7 @@ from truth_spine_contract import canonical, digest, seal, utc, verified
 ADAPTER_VERSION = "iios-legacy-readonly-v1"
 KINDS = {"operational", "historical", "executor", "archive", "research", "event_reconstruction",
          "macro_regime", "patterns", "professional_judgment", "validation_9h", "shadow_9i",
-         "outcomes_9j", "universe"}
+         "outcomes_9j", "universe", "price_archive"}
 MEMORY_TYPES = {"professional_judgment": "PROFESSIONAL_JUDGMENT", "historical_pattern_review": "REVIEW_CANDIDATE",
                 "judgment_bank_review_queue": "REVIEW_CANDIDATE", "outcome_measurement_receipt": "MEASURED_OUTCOME",
                 "shadow_strategy": "COUNTERFACTUAL", "narrative": "NARRATIVE"}
@@ -84,6 +86,34 @@ def source(path: Path, kind: str) -> dict:
                  "kind": kind, "path": str(path), "sha256": h})
 
 
+def coverage_metadata(data: dict, record_type: str) -> dict:
+    """Allowlisted explicit references only; never infer agents/rooms from totals."""
+    def identity(keys):
+        supplied = [data[k] for k in keys if data.get(k) is not None]
+        if any(not isinstance(v, str) or not re.fullmatch(r"[a-z0-9_]{1,80}", v) for v in supplied):
+            return None
+        if len(set(supplied)) > 1:
+            raise ValueError("COVERAGE_IDENTITY_CONFLICT")
+        return supplied[0] if supplied else None
+    def money(key):
+        value = data.get(key)
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = Decimal(str(value))
+            return format(number, 'f') if number.is_finite() and 0 <= number <= Decimal('1e15') else None
+        except (InvalidOperation, ValueError):
+            return None
+    positions = data.get("position_count")
+    return {"product_id": identity(("product_id", "room_id")),
+            "agent_id": identity(("agent_key", "agent_id")),
+            "result_state": data.get("status") if data.get("status") in
+                {"complete", "failed", "failed_closed", "suppressed", "idle", "invoked"} else None,
+            "paper": {"nav": money("nav"), "cash": money("cash"),
+                      "positions": positions if type(positions) is int and positions >= 0 else None}
+                if record_type == "paper_portfolio_snapshot" else None}
+
+
 def normalize_record(spec: dict, object_id: str, object_type: str, raw: bytes,
                      original_timestamp: str | None) -> dict:
     data = json.loads(raw)
@@ -112,6 +142,7 @@ def normalize_record(spec: dict, object_id: str, object_type: str, raw: bytes,
                  "publication_time": data.get("generated_at"),
                  "provenance_reference": {"source_file_hash": spec["sha256"],
                                           "source_payload_hash": hashlib.sha256(raw).hexdigest()},
+                 "coverage": coverage_metadata(data, object_type),
                  "evidence_available": None, "operational_fill": False})
 
 
@@ -131,7 +162,7 @@ def read_ledger(spec: dict) -> list[dict]:
         rows = db.execute("""SELECT object_id,object_type,payload_json,created_at FROM ledger_objects
             WHERE object_type IN ('case','evidence_packet','agent_result','committee_decision','risk_authorization',
             'execution','historical_pattern_review','professional_judgment','judgment_entry','outcome_measurement_receipt',
-            'jesse_outcome_attribution','paper_portfolio_snapshot') ORDER BY object_id""").fetchall()
+            'jesse_outcome_attribution','paper_portfolio_snapshot','opportunity_candidate') ORDER BY object_id""").fetchall()
         if not rows: raise ValueError("EMPTY_LEDGER_NOT_OPERATIONAL_TRUTH")
         result = [normalize_record(spec, oid, kind, raw.encode(), stamp) for oid, kind, raw, stamp in rows]
     finally:

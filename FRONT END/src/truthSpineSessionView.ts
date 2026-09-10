@@ -1,4 +1,6 @@
 // Same-origin observer metadata only. Query selection never grants authority.
+import { validFactory } from './truthSpineFactoryView.ts';
+import type { FactoryView } from './truthSpineFactoryView.ts';
 export const sessionPhases = ['PREMARKET_PREPARATION', 'PREMARKET_READY', 'OPENING_OBSERVATION',
   'REGULAR_SESSION', 'CLOSING_OBSERVATION', 'POST_CLOSE_RECONCILIATION', 'SESSION_COMPLETE',
   'SHUTDOWN_COMPLETE', 'FAILED_CLOSED'];
@@ -6,6 +8,7 @@ const capabilities = ['provider_requests', 'credential_access', 'paid_model_requ
   'live_execution', 'operational_ledger_write', 'promotion', 'scheduler_authority', 'publisher_authority'];
 const counters = ['provider', 'model', 'credential', 'broker', 'paper', 'live_execution', 'operational_ledger_write'];
 export type SessionView = {
+  factory: FactoryView | null;
   schema: string; session: string; phase: string; scope: string; published_at: string;
   capture_status: string; source_generation: string | null; readiness: number;
   source_cycle: string | null; source_cycle_generated_at: string | null;
@@ -43,6 +46,12 @@ export function validSessionView(value: unknown, now = Date.now()): value is Ses
     || x.source_session_closed_is_not_installed_disabled !== true || !strings(x.incidents)
     || !object(x.owners) || !Object.entries(x.owners).every(([k,v]) =>
       ['backend_owner', 'scheduler_owner', 'publisher_owner'].includes(k) && hash(v))) return false;
+  if (x.factory === null) {
+    if (x.readiness !== 503) return false;
+  } else {
+    if (!validFactory(x.factory, String(x.session), x.source_generation, x.source_cycle, String(x.phase))) return false;
+    if (JSON.stringify(x.factory.universes) !== JSON.stringify(x.universes)) return false;
+  }
   return Array.isArray(x.sources) && x.sources.every(s => object(s) && label(s.store) && count(s.records)
     && instant(s.capture_end) && strings(s.classifications)
     && ['observation_time', 'event_time', 'publication_time'].every(k => s[k] === null || instant(s[k])))

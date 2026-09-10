@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { validSessionView, sessionReadiness } from './truthSpineSessionView.ts';
+import { factoryFixture } from './truthSpineFactory.fixture.ts';
 const now = Date.parse('2026-09-10T13:30:00Z');
 const fixture = () => ({
+  factory: factoryFixture(),
   schema: 'iios-full-session-shadow-browser-v1', session: 'unit-session', phase: 'OPENING_OBSERVATION',
   scope: 'SHADOW_OBSERVATION_NOT_LIVE_TRADING', published_at: new Date(now).toISOString(),
   capture_status: 'CURRENT', source_generation: 'a'.repeat(64), readiness: 200,
-  source_cycle: 'unit-cycle', source_cycle_generated_at: new Date(now).toISOString(),
+  source_cycle: 'd'.repeat(64), source_cycle_generated_at: new Date(now).toISOString(),
   watermark: { count: 2, identity: 'b'.repeat(64) }, owners: { scheduler_owner: 'c'.repeat(64) },
   universes: [517, 518].map((count, i) => ({ capture_id: String(i).repeat(64), count,
     capture_time: '2026-09-09T20:00:00Z', source_classes: ['HISTORICAL'] })),
@@ -35,7 +37,7 @@ test('all operational capabilities and observer counters fail closed', () => {
 });
 test('fresh wrapper cannot mask failed capture/readiness and terminal phase', () => {
   for (const change of [{ capture_status: 'STALE' }, { readiness: 503 }, { phase: 'FAILED_CLOSED' }, { phase: 'SHUTDOWN_COMPLETE' }]) {
-    const x = { ...fixture(), ...change }; assert.ok(validSessionView(x, now));
+    const x = { ...fixture(), ...change }; x.factory = factoryFixture(x.phase); assert.ok(validSessionView(x, now));
     assert.match(sessionReadiness(x), /NOT_READY/);
   }
   assert.equal(validSessionView(fixture(), now + 15001), false);

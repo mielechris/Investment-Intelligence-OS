@@ -6,6 +6,9 @@ header, section, details { background: #222833; border: 1px solid #657083; paddi
 header strong { color: #ffd58b; }
 h1, h2 { line-height: 1.2; }
 .truth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.coverage-card { min-width: 0; padding: 16px; border: 1px solid #657083; border-radius: 8px; }
+.coverage-card details { padding: 12px; }
+.coverage-section > summary { margin-bottom: 18px; }
 dt { font-weight: 700; }
 dd { margin: 0 0 12px; }
 dd, dt, h1, h2, h3, li, p, summary { overflow-wrap: anywhere; }

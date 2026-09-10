@@ -1,8 +1,49 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './TruthSpinePreview.css';
-import { validSessionView, sessionReadiness } from './truthSpineSessionView';
+import { validSessionView, sessionReadiness, sessionPhases } from './truthSpineSessionView';
 import type { SessionView } from './truthSpineSessionView';
+import type { CoverageRow, FactoryView } from './truthSpineFactoryView';
+
+const coverageFields = ['product_classification','exposure','benchmark','universe_coverage','configured_evidence_routes',
+  'evidence_availability','candidate_count','case_count','configured_role','completed_result_count','model_route_status',
+  'suppression_reason','configured','credential_presence','enabled','connection','last_verified_state','permitted_capabilities',
+  'request_count','credit_cost_count','activity_scope','rate_budget_state','authoritative_truth_source','order_allowance',
+  'broker_connection','kill_switch','paper_authority','live_authority','paper_scope'];
+function show(value: unknown): string {
+  if (value === null || value === undefined) return 'UNAVAILABLE';
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (Array.isArray(value)) return value.map(show).join(' · ') || 'None';
+  if (typeof value === 'object') return Object.entries(value).map(([k,v]) => `${k}: ${show(v)}`).join(' · ') || 'UNAVAILABLE';
+  return String(value);
+}
+function CoverageCard({ row }: { row: CoverageRow }) {
+  return <article className="coverage-card"><h3>{row.name}</h3><p>{row.operational_state} · {row.readiness}</p>
+    <p>Evidence: {show(row.evidence_classifications)}</p><p>Authority: all disabled · Paper/live false</p>
+    <dl>{coverageFields.filter(k => k in row).map(k => <div key={k}><dt>{k.replaceAll('_',' ')}</dt><dd>{show(row[k])}</dd></div>)}
+      {'paper' in row && <><dt>Retained paper NAV / cash / positions</dt><dd>{show(row.paper)}</dd></>}
+      <dt>Source-qualified activity</dt><dd>{show(row.activity_counts)}</dd><dt>Last activity (original event time)</dt><dd>{show(row.last_activity)}</dd>
+      <dt>Incident state</dt><dd>{row.incident_state}</dd><dt>Limitation</dt><dd>{row.limitation}</dd></dl>
+    <details><summary>Identity, clocks and evidence bindings</summary><dl>
+      <dt>Registered ID</dt><dd>{row.id}</dd><dt>Component</dt><dd>{row.component_type}</dd><dt>Phase</dt><dd>{row.phase}</dd>
+      <dt>Generation</dt><dd>{row.generation_id}</dd><dt>Source cycle</dt><dd>{row.source_cycle_id}</dd>
+      <dt>Last verified capture</dt><dd>{row.last_verified_at}</dd><dt>Freshness</dt><dd>{row.freshness}</dd>
+      <dt>Binding set</dt><dd>{row.binding_set_hash} · {row.binding_count} records; first 20 references shown</dd></dl>
+      {row.bindings.map(b => <dl key={b.record_id}>{Object.entries(b).map(([k,v]) => <div key={k}><dt>{k.replaceAll('_',' ')}</dt><dd>{show(v)}</dd></div>)}</dl>)}
+      <p>Authority: {show(row.authority)}</p></details></article>;
+}
+function FactoryCoverage({ factory }: { factory: FactoryView | null }) {
+  const groups = [['rooms','24 product-market rooms'],['agents','Eight registered specialists'],['governance','Skeptic, Committee and Risk'],
+    ['subsystems','9A / 9B / 9E / 9G / 9H / 9I / 9J'],['routes','Provider, model and MCP routing'],['history','L7/L8 history and memory']] as const;
+  return <><section><h2>Full factory coverage</h2><p>Configured identity is not current activity. Missing evidence remains UNAVAILABLE.
+    Counts describe explicitly bound retained records only. No provider, model or credential probe is performed.</p></section>
+    {groups.map(([key,title]) => <details key={key} className="coverage-section" open={key === 'rooms'}><summary>{title}</summary>
+      {!factory ? <p>UNAVAILABLE — no authenticated factory projection.</p> : <div className="truth-grid">{factory[key].map(row => <CoverageCard key={row.id} row={row} />)}</div>}
+    </details>)}
+    <section><h2>Day Trading · locked observation only</h2>{factory ? <CoverageCard row={factory.day_trading} /> : <p>UNAVAILABLE — no governed paper evidence.</p>}</section>
+    <section><h2>Permanent production status</h2><p>{factory?.permanent_production ?? 'UNAVAILABLE'}</p>
+      <p>The shadow cannot certify permanent production. All operational authorities remain false.</p></section></>;
+}
 
 type View = {
   canonical_url: string; classification: string; phase: string;
@@ -62,6 +103,9 @@ export function Preview() {
         <p>Source cycle {session.source_cycle ?? 'UNAVAILABLE'} · Generated {session.source_cycle_generated_at ?? 'UNAVAILABLE'}</p>
         <p>A fresh capture is not fresh market evidence. Market readiness remains disabled.</p>
         <p>SESSION_CLOSED is a source session result; INSTALLED_DISABLED is installation status. Neither is inferred from the other.</p></section>
+      <details><summary>Session phase timeline</summary><ol>{sessionPhases.map(phase => <li key={phase} aria-current={phase === session.phase ? 'step' : undefined}>
+        {phase}{phase === session.phase ? ' · CURRENT' : ''}</li>)}</ol><p>Listed phases are the contract, not proof that every phase has occurred.</p></details>
+      <FactoryCoverage factory={session.factory} />
       <div className="truth-grid">{session.sources.map(s => <section key={s.store}><h2>{s.store}</h2>
         <p>{s.records} source-qualified retained records</p><p>{s.classifications.join(' · ') || 'UNAVAILABLE'}</p>
         <dl><dt>Capture end</dt><dd>{s.capture_end}</dd><dt>Observation time</dt><dd>{s.observation_time ?? 'UNAVAILABLE'}</dd>

@@ -18,6 +18,7 @@ import stat
 from truth_spine_adapters import file_bytes
 from truth_spine_contract import digest, seal, utc, verified
 from truth_spine_generations import owner_path
+from truth_spine_factory_coverage import factory_coverage
 from truth_spine_session_supervisor import REQUIRED_PROBES
 
 DIRECTORIES = ("release", "runtime", "captures", "projections", "logs", "receipts", "rollback")
@@ -30,7 +31,7 @@ BACKEND_FILES = tuple(name+".py" for name in (
     "truth_spine_adapters", "truth_spine_authority", "truth_spine_contract", "truth_spine_process_identity",
     "truth_spine_integration", "truth_spine_integration_service", "truth_spine_session", "truth_spine_generations",
     "truth_spine_session_supervisor", "truth_spine_session_package", "truth_spine_full_day_service",
-    "truth_spine_integration_runner", "truth_spine_full_day_runner"))
+    "truth_spine_integration_runner", "truth_spine_full_day_runner", "truth_spine_factory_coverage"))
 
 
 def installation_template():
@@ -170,15 +171,18 @@ def verify_artifacts(root, manifest, expected_hash):
     return manifest
 
 
-def publish_payload(*, session, release, lifecycle, generation, watermark, at, source_cycle):
+def publish_payload(*, session, release, lifecycle, generation, watermark, at, source_cycle, factory):
     """The publisher derives these fields; a harness cannot supply probe booleans."""
     verified(lifecycle); verified(generation); utc(at.isoformat())
+    verified(factory)
     if (lifecycle["session"] != session or generation["session"] != session
             or lifecycle["last_capture"] != generation["content_hash"]
-            or not isinstance(source_cycle, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,180}", source_cycle)):
+            or not isinstance(source_cycle, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,180}", source_cycle)
+            or factory["source_cycle_id"] != source_cycle or factory["session"] != session
+            or factory["generation_id"] != generation["content_hash"] or factory["phase"] != lifecycle["phase"]):
         raise ValueError("SESSION_PROJECTION_BINDING_INVALID")
     return seal({"schema": "iios-full-day-shadow-projection-v1", "session": session, "release": release,
-                 "generation": generation["content_hash"],
+                 "generation": generation["content_hash"], "factory": factory,
                  "phase": lifecycle["phase"], "watermark": watermark, "source_cycle": source_cycle,
                  "published_at": at.isoformat(), "capture_end": generation["end"],
                  "capture_status": lifecycle["capture_status"],
@@ -229,9 +233,11 @@ class RuntimeProbeReader:
         p = verified(json.loads(file_bytes(path)))
         if not 0 <= (now-utc(p["published_at"])).total_seconds() <= 30:
             raise ValueError("SESSION_PROJECTION_STALE")
+        cycle = captured_cycle(self.root, generation, store=self.store, session=self.session, now=now)
+        factory = factory_coverage(generation, self.store.selected_events(), cycle, states[-1]["phase"])
         expected = publish_payload(session=self.session.identity, release=manifest["release"], lifecycle=states[-1],
                                    generation=generation, watermark=watermark, at=utc(p["published_at"]),
-                                   source_cycle=p["source_cycle"])
+                                   source_cycle=p["source_cycle"], factory=factory)
         if p != expected:
             raise ValueError("SESSION_PROJECTION_NOT_DERIVED")
         # The cycle source must be captured and hash-bound independently; using

@@ -88,9 +88,13 @@ def publish_once(root, session, manifest, registry, at):
     if (lifecycle["capture_status"] != "CURRENT" or lifecycle["phase"] != session.phase_at(at)
             or cycle["phase"] != lifecycle["phase"]):
         raise ValueError("SOURCE_CYCLE_LIFECYCLE_MISMATCH")
+    from truth_spine_factory_coverage import factory_coverage
+    factory = factory_coverage(generation, store.selected_events(), cycle, lifecycle["phase"])
+    if store.selected() != generation:
+        raise ValueError("SOURCE_CYCLE_LIFECYCLE_MISMATCH")
     projection = publish_payload(session=session.identity, release=manifest["release"], lifecycle=lifecycle,
                                  generation=generation, watermark=store.watermark(), at=at,
-                                 source_cycle=cycle["source_cycle_id"])
+                                 source_cycle=cycle["source_cycle_id"], factory=factory)
     owner_path(root/"projections", root, directory=True)
     atomic(root/"projections/current.json", projection)
     return projection
@@ -106,6 +110,7 @@ def service_response(path, request, *, now=None):
     try:
         c, session, manifest, authority, registry = load_config(path, now=now, permit_expired=request == "/truth-spine/full-session")
         store, lifecycle = read_state(path.parent, session, registry)
+        factory = None
         try:
             owner_path(path.parent/"runtime-probes.json", path.parent)
             report = verified(json.loads(file_bytes(path.parent/"runtime-probes.json")))
@@ -115,7 +120,19 @@ def service_response(path, request, *, now=None):
                     or cycle["phase"] != lifecycle["phase"] or cycle["phase"] != session.phase_at(now)
                     or cycle["admitted_watermark"] != store.watermark()):
                 raise ValueError("SOURCE_CYCLE_PROBE_MISMATCH")
-        except (OSError, ValueError, KeyError):
+            from truth_spine_factory_coverage import factory_coverage
+            generation = store.selected()
+            expected_factory = factory_coverage(generation, store.selected_events(), cycle, lifecycle["phase"])
+            owner_path(path.parent/"projections/current.json", path.parent)
+            projection = verified(json.loads(file_bytes(path.parent/"projections/current.json")))
+            expected_projection = publish_payload(session=session.identity, release=manifest["release"], lifecycle=lifecycle,
+                generation=generation, watermark=store.watermark(), at=utc(projection["published_at"]),
+                source_cycle=cycle["source_cycle_id"], factory=expected_factory)
+            if (projection != expected_projection or not 0 <= (now-utc(projection["published_at"])).total_seconds() <= 30
+                    or store.selected() != generation):
+                raise ValueError("FACTORY_PROJECTION_UNAVAILABLE")
+            factory = projection["factory"]
+        except (OSError, ValueError, KeyError, TypeError):
             probes = {}
         kind = request.removeprefix("/health/") if request.startswith("/health/") else "ready"
         if kind not in {"ready", "research-readiness", "market-readiness"}:
@@ -136,6 +153,9 @@ def service_response(path, request, *, now=None):
                 view["readiness"] = 503
             view["source_cycle"] = cycle["source_cycle_id"] if cycle else None
             view["source_cycle_generated_at"] = cycle["published_at"] if cycle else None
+            view["factory"] = factory
+            if factory is None:
+                view["readiness"] = 503
             view["sources"] = [{"store": f["store"], "records": f["records"], "capture_end": f["capture_end"],
                                 "classifications": f["classifications"],
                                 **{k: max(v) if v else None for k,v in f["clocks"].items()}}

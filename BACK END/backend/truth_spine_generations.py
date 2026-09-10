@@ -23,7 +23,8 @@ from truth_spine_adapters import file_bytes, read_document, read_ledger, source,
 from truth_spine_contract import canonical, digest, seal, utc, verified
 
 KINDS = {"operational", "historical", "research", "event_reconstruction", "macro_regime",
-         "validation_9h", "shadow_9i", "outcomes_9j", "universe", "source_cycle"}
+         "validation_9h", "shadow_9i", "outcomes_9j", "universe", "source_cycle",
+         "patterns", "professional_judgment", "price_archive"}
 SOURCE_CYCLE_MAX_AGE_SECONDS = 900
 
 
@@ -203,6 +204,23 @@ class GenerationStore:
         finally:
             db.close()
 
+    def selected_events(self):
+        """Only the validated selected capture, not cumulative historical totals."""
+        self.validate()
+        generation = self.selected()
+        if generation is None:
+            return []
+        result = []
+        for spec, item in zip(self.registry["sources"], generation["files"], strict=True):
+            path = self.captures/generation["identity"]/item["file"]
+            file_bytes(path, item["sha256"])
+            events, _ = self._adapt(spec, path)
+            file_bytes(path, item["sha256"])
+            result.extend(events)
+        if self.selected() != generation:
+            raise ValueError("CAPTURE_SELECTION_CHANGED")
+        return sorted(result, key=lambda e: e["id"])
+
     def _adapt(self, spec, dest):
         if spec["kind"] == "source_cycle":
             value = json.loads(file_bytes(dest))
@@ -226,6 +244,7 @@ class GenerationStore:
                                 "object": row["source_object_identity"],
                                 "payload_hash": row["original_content_hash"],
                                 "classification": row["classification"], "type": row["record_type"],
+                                "coverage": row["coverage"],
                                 "observation_time": row["observation_time"], "event_time": row["event_time"],
                                 "publication_time": row["publication_time"]}))
         return events, None

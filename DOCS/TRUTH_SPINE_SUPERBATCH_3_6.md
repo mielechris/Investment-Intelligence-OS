@@ -245,3 +245,79 @@ introduced. The full-day service does not serve that historical API.
 No full-day root, port binding, installation or permanent service change is
 authorized by this source-only correction. A new dated full-day authorization
 must bind the new source candidate, fresh builds, exact package and runtime pins.
+
+## Superbatch 3.6B — governed full-factory coverage
+
+The existing publisher now includes a sealed `iios-full-factory-shadow-coverage-v1`
+extension in the full-day projection. Readiness independently reconstructs it from
+the selected, hash-validated capture and its authenticated source-cycle receipt.
+The browser reads that exact publisher artifact; it cannot construct an alternative
+ready inventory. Missing, mismatched, stale or tampered projections yield readiness
+503 and unavailable coverage. A current browser response timestamp cannot refresh
+the original capture, event, observation or publication times.
+
+The 24 stable product IDs/names/classifications/routes are pinned to the committed
+product registry. Eight specialist IDs/names/roles are pinned to `AGENT_CONFIGS` by
+AST comparison, without importing the application or contacting a model. Skeptic
+is also an explicit governance view of the registered `skeptic` agent, not a ninth
+specialist. Committee and deterministic Risk use their own typed ledger records.
+Frontend catalog equality is tested against these same source definitions.
+
+Only explicit `product_id`/`room_id` or `agent_key`/`agent_id` references qualify a
+record for an individual room or specialist. Conflicting aliases fail closed.
+Ticker, family, aggregate counts and general case totals never assign activity.
+Unregistered references do not bind any registered object. Completed specialist
+results require explicit `status=complete` and remain retained, source-qualified
+results, not new invocations. Each card binds its session/generation/source cycle,
+classified record identities, original payload hashes and clocks. Disclosures show
+at most 20 references, with exact full-set count and canonical hash. They do not
+change the underlying complete immutable captured records.
+
+Configuration identity is distinct from evidence availability and current activity.
+Unbound counts remain null/UNAVAILABLE; captured HISTORICAL, REPLAY, SIMULATED,
+NARRATIVE, UNAVAILABLE and other approved classifications remain unchanged.
+Rooms are observation-only and specialists suppressed by this deny-only session.
+No configured room is labeled live merely because an observer is running.
+Subsystem source summaries do not infer health or execution of permanent services.
+
+Bigdata, Financial Datasets, Alpha Vantage, Alpaca market data, Alpaca paper,
+OpenAI, Gemini, Grok, MCP and Vercel each have separate disabled cards. No approved
+precomputed configuration/credential record is currently bound to these captures;
+configured and credential presence therefore remain UNKNOWN. The view explicitly
+does not probe the environment, secret selectors, Keychain, network, provider,
+model or MCP. Zero requests describe only this deny-only observer, not historical
+host activity. Costs are unavailable without governed accounting. Vercel is
+presentation infrastructure, never an authoritative evidence source.
+
+Day Trading remains OBSERVATION_ONLY with zero order allowance, no broker
+connection, paper/live authority false and visible fail-closed lock. NAV/cash/
+positions may come only from the latest uniquely dated L7 paper snapshot and are
+labeled retained, not current account truth. Missing or tied snapshots are null.
+No opportunities, performance, paper orders or account values are synthesized.
+
+History summaries retain separate L7/L8 store namespaces and original hashes.
+Opportunity candidates join the existing read-only typed ledger allowlist.
+Pattern, professional-judgment and price-archive source kinds may be explicitly
+registered through the same pinned document reader; no new paths are discovered
+or captured automatically. Without such inputs their individual panels remain
+UNAVAILABLE. The 517/518 universe capture identities remain separate, with no
+inferred per-product membership. Original private content never crosses the
+metadata boundary.
+
+The existing full-session route/poll owner is unchanged. Normal-flow disclosures
+cover rooms, specialists/governance, routing, subsystems, history, locked Day
+Trading, source freshness and the phase contract. The timeline is not a claim
+that every listed phase occurred. Permanent production stays explicitly YELLOW
+and unassessed by the shadow. Responsive wrapping uses the existing bounded grid
+and single-column narrow breakpoint; required sections are not hidden by width.
+
+The full-day immutable backend graph adds only `truth_spine_factory_coverage.py`.
+The new generation event metadata changes capture identities; this source update
+is for a new separately authorized root and must not be applied over retained
+rehearsal evidence. Offline tests cover actual publisher/GET reconstruction,
+source preservation, restart determinism, tampering, unavailable information,
+classification preservation, locked authority and configuration catalog equality.
+Source/static acceptance is not actual Safari/full-day runtime acceptance.
+No full-day root, runtime, LaunchAgent, installation or port binding is authorized
+by this implementation. A new dated authorization must pin the new commit, package
+and independently reproduced frontend provenance before any actual rehearsal.
