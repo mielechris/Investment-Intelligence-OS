@@ -65,6 +65,35 @@ def derived_bindings(root: Path, manifest: dict, sources: list[dict]) -> dict:
     }
 
 
+def validate_frontend_provenance(manifest: dict) -> None:
+    """Reconcile the pre-copy attestation with the immutable installed assets.
+
+    This path never reaches back into the developer checkout or build toolchain.
+    Preparation independently verifies those inputs before creating the package.
+    """
+    h = lambda value: hashlib.sha256(canonical(value)).hexdigest()
+    try:
+        p = manifest['frontend_provenance']; i = p['inputs']
+        if (manifest['source_state'] != 'CLEAN_COMMITTED_SOURCE'
+                or p['schema'] != 'iios-truth-frontend-build-v1'
+                or p['content_hash'] != h({k:v for k,v in p.items() if k != 'content_hash'})
+                or i['source_commit'] != manifest['source_base']
+                or p['input_hash'] != h(i) or manifest['frontend_input_hash'] != p['input_hash']
+                or i['source_inventory_hash'] != h(i['source_inventory'])
+                or i['policy']['mode'] != 'production'
+                or i['policy']['environment']['VITE_TRUTH_INTEGRATION_PREVIEW'] != '1'
+                or i['policy']['sourcemap'] is not False
+                or i['toolchain']['versions']['vite'] != '8.2.2'):
+            raise ValueError('FRONTEND_PROVENANCE_INVALID')
+        rows = [{**r, 'path': r['path'].removeprefix('frontend/')} for r in manifest['files'] if r['path'].startswith('frontend/')]
+        if (rows != p['outputs'] or len(rows) != 6 or p['output_hash'] != h(rows)
+                or manifest['frontend_content_hash'] != p['output_hash']
+                or manifest['source_inventory_hash'] != digest({'files': [r for r in manifest['files'] if r['path'].startswith('backend/')]})):
+            raise ValueError('FRONTEND_PACKAGE_BINDING_INVALID')
+    except (KeyError, TypeError, AttributeError):
+        raise ValueError('FRONTEND_PROVENANCE_REQUIRED') from None
+
+
 def topology(path: Path, *, now: datetime | None = None) -> tuple[dict, dict]:
     t = read_json(path)
     required = {"schema", "mode", "root", "identities", "sources", "authority_path", "authority_hash",
@@ -86,6 +115,7 @@ def topology(path: Path, *, now: datetime | None = None) -> tuple[dict, dict]:
     if manifest["release_id"] != ids["release"]: raise ValueError("RELEASE_MISMATCH")
     package = Path(t["release_manifest"]).parent
     if manifest["schema"] != "iios-readonly-package-v1": raise ValueError("RELEASE_SCHEMA_INVALID")
+    validate_frontend_provenance(manifest)
     expected = {r["path"] for r in manifest["files"]}
     actual = {str(p.relative_to(package)) for p in package.rglob('*') if p.is_file() and p.name != 'manifest.json'}
     if actual != expected: raise ValueError("RELEASE_INVENTORY_INVALID")

@@ -26,17 +26,29 @@ def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def prepare(a):
     root=a.root.resolve()
     if root.exists():raise ValueError('NEW_ACCEPTANCE_ROOT_REQUIRED')
+    # Validate source and proven frontend before binding a socket or creating
+    # any shadow output. There is deliberately no fallback to source/dist.
+    from truth_spine_frontend_provenance import verify, validate_outputs
+    src=a.source.resolve()
+    commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=src,text=True).strip()
+    if subprocess.check_output(['git','status','--porcelain'],cwd=src,text=True):
+        raise ValueError('CLEAN_COMMITTED_SOURCE_REQUIRED')
+    frontend=verify(a.frontend_build,src,commit)
+    if frontend['input_hash']!=a.frontend_input_hash:raise ValueError('FRONTEND_INPUT_PIN_MISMATCH')
+    if sha(a.frontend_build/'frontend-provenance.json')!=a.frontend_manifest_hash:
+        raise ValueError('FRONTEND_MANIFEST_PIN_MISMATCH')
     if a.port in {5176,5177,5184,5185,5186,8002}:raise ValueError('PROTECTED_PORT')
     with socket.socket() as s:s.bind(('127.0.0.1',a.port))
     root.mkdir(mode=0o700);inputs=root/'inputs';inputs.mkdir(mode=0o700)
     package=root/'release';package.mkdir(mode=0o700);backend=package/'backend';backend.mkdir(mode=0o700)
-    src=a.source.resolve();source_hashes={}
+    source_hashes={}
     for p in (src/'BACK END/backend').rglob('*.py'):
         if p.name.startswith('test') or '__pycache__' in p.parts:continue
         if p.is_symlink():raise ValueError('SOURCE_SYMLINK')
         rel=p.relative_to(src/'BACK END/backend');target=backend/rel;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(p,target);target.chmod(0o400);source_hashes[str(p)]=sha(p)
-    shutil.copytree(src/'FRONT END/dist',package/'frontend')
+    shutil.copytree(a.frontend_build/'frontend/dist',package/'frontend',symlinks=True)
+    validate_outputs(package/'frontend',frontend['outputs'])
     sys_path=str(backend)
     import sys
     sys.path.insert(0,sys_path)
@@ -91,8 +103,10 @@ def prepare(a):
     runtime_files=[{'path':str(p.relative_to(runtime)),'bytes':p.stat().st_size,'sha256':sha(p)} for p in sorted(runtime.rglob('*')) if p.is_file()]
     files=[{'path':str(p.relative_to(package)),'bytes':p.stat().st_size,'sha256':sha(p)} for p in sorted(package.rglob('*')) if p.is_file()]
     release='truth-integration-'+digest({'files':files})[:16]
-    manifest=seal({'schema':'iios-readonly-package-v1','release_id':release,'source_base':subprocess.check_output(['git','rev-parse','HEAD'],cwd=src,text=True).strip(),
-                   'source_state':'UNCOMMITTED_ISOLATED_CANDIDATE','files':files,'interpreter_hash':sha(interpreter),'dependency_hash':dependency_hash,
+    manifest=seal({'schema':'iios-readonly-package-v1','release_id':release,'source_base':commit,
+                   'source_state':'CLEAN_COMMITTED_SOURCE','source_inventory_hash':digest({'files':[r for r in files if r['path'].startswith('backend/')]}),
+                   'frontend_provenance':frontend,'frontend_input_hash':frontend['input_hash'],'frontend_content_hash':frontend['output_hash'],
+                   'files':files,'interpreter_hash':sha(interpreter),'dependency_hash':dependency_hash,
                    'runtime_root':str(runtime),'runtime_files':runtime_files})
     write(package/'manifest.json',manifest)
     receipt_copy=inputs/'accepted-receipt.json';shutil.copyfile(a.receipt,receipt_copy);receipt_copy.chmod(0o400)
@@ -126,6 +140,9 @@ def request(port,path,method='GET'):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--source',type=Path,required=True)
     for key in ['operational','historical','executor','universe','stores','runtime','receipt']:p.add_argument('--'+key,type=Path,required=True)
+    p.add_argument('--frontend-build',type=Path,required=True)
+    p.add_argument('--frontend-input-hash',required=True)
+    p.add_argument('--frontend-manifest-hash',required=True)
     p.add_argument('--port',type=int,required=True);p.add_argument('--prepare-only',action='store_true');a=p.parse_args()
     t=prepare(a);print(json.dumps({'root':str(a.root),'release':t['identities']['release'],'topology':t['content_hash'],'port':a.port}),flush=True)
 

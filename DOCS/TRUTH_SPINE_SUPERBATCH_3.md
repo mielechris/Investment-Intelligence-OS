@@ -309,3 +309,120 @@ root is created, no port-5290 rehearsal is run, and no merge, deployment or
 promotion is authorized. The new commit is the source-candidate identity for a
 separately authorized repeat of Superbatch 3.5; source test success is not an
 installed-runtime acceptance claim.
+
+## Superbatch 3.5B — frontend provenance and reproducibility
+
+### Verified mismatch
+
+Classification: STALE_RETAINED_ARTIFACT and SOURCE_MISMATCH. The retained
+193,773-byte DeTs9eDC JavaScript lacks three changes already present in accepted
+TruthSpineIntegrationPreview.tsx: retention_context/classification_counts
+validation, the Original evidence classifications section, and the change from
+"historical records" to "retained records". There is no extra current application
+logic in that older bundle. It must not substitute for the accepted source.
+
+An in-memory forensic build removing only these changes reproduces the retained
+SHA-256 85d14810fe036c32e6820800b620f2c92b251fc33ed503fe74c02c8f0d4717f3
+byte-for-byte with the same toolchain. Reconstructed earlier TSX snapshot hash:
+b7ead6fc423f85f65fd64ecc6cec4cc89115ef98a8e771238fda65bc3ef2036a.
+Current TSX hash: d1bb0728584c83b8da3983fd0d424b4b69ec0ea3ee05cd0a7be2cf8f9f9deaef.
+This reconstruction proves the source delta; it does not invent an original
+build timestamp/commit. The retained artifact has no provenance manifest, and
+the file first entered tracked history with the newer source at 4e38f582.
+
+Module observations identify the two application files
+src/TruthSpineIntegrationPreview.tsx and src/TruthSpinePreview.css, the HTML entry,
+React/React DOM production and JSX-runtime modules, scheduler production modules,
+and Rolldown/modulepreload virtual modules. The old/new library prefix is
+identical; CSS is identical. Formatting is not used as equivalence evidence:
+the isolated old-source reconstruction matches the complete original bytes.
+
+### Canonical build inputs
+
+Node v24.19.0, executable SHA-256
+1f08f0e5b8d9a0136c6219f4cea4d96e0ff64869ce0dda6dd6a35; npm 11.17.0, CLI hash
+8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7.
+npm identity is read from installed files, without loading npm/user registry
+configuration or making an installation request. Vite 8.2.2, Rolldown 1.2.5,
+Oxc minification, @vitejs/plugin-react 6.1.0, TypeScript 6.0.3, React/DOM 19.2.8.
+Every installed dependency code file and package identity is recorded; normal
+internal .bin links are verified then copied as regular files. Environmental
+.tmp/.vite/.vite-temp/.cache/__pycache__ and tsbuildinfo caches are excluded
+explicitly, never used as build input. No network dependency installation occurs.
+
+package.json hash: 11b8111e0ac514cf8ae1129dcdb6cdabeaab26f6fa10dbc1f897f44d84789c23.
+Lockfile hash: 71dd50350c8b6eb4cb8723b0da9547bcdafbb7718e6d875cd31be18ca3936ceb.
+Vite config hash: c1b72b6ca4860b89026c4af90cc3c655dfbbec10efb2048bb04326cfacba6d4c.
+All three tsconfig hashes and the complete 235-file tracked frontend inventory
+are included in each build input manifest, along with the builder/driver hashes.
+
+Production mode, NODE_ENV=production, VITE_TRUTH_INTEGRATION_PREVIEW=1 are fixed;
+all other VITE variables are absent. Locale LANG/LC_ALL=C and timezone UTC are
+fixed, with no inherited environment, .env file, credential or account inputs.
+The config loader is runner (no .vite-temp source-checkout writes), base /review/,
+sourcemaps disabled, targets chrome111/edge111/firefox114/safari16.4/ios16.4.
+Each build starts from a new temporary root and copied source/dependencies, with
+no previous dist or build cache. Outputs are not normalized or rewritten.
+Different working directories and ambient locale/timezone values produce exact
+byte equality. A separate CRLF-only TSX experiment also produces identical JS;
+the provenance still binds actual source bytes and rejects modified source.
+No timestamps/generated nonces or developer paths appear in the six outputs.
+Date.now in the application is runtime freshness validation, not build metadata.
+
+### Accepted six-file frontend
+
+| Relative file | Bytes | SHA-256 |
+| --- | ---: | --- |
+| assets/truth-integration-C1hHYWhF.js | 194423 | e9dffd6ba26c0acab73f57fa47e9a70962b4defc6240df652595b832e64b8529 |
+| assets/truth-integration-DufHPXjH.css | 722 | 56246f5e1e6ae698f1e40c42ab279f663929d28cd9463dde1126a186248c3021 |
+| favicon.svg | 9522 | 61bc9a161de58248288e6905425d7180f0624c2865007b97d763fdac12043a66 |
+| fixtures/expansion-wing.json | 5932 | 62fedbaf0c266e776bef7ce3a8e3f7c724c0e9dc5ae89e87450014663397ae26 |
+| icons.svg | 5031 | b45fa506195cfcdef406ba9f0c77b36ddc1a7c224040926ec70abc2fdea7b93a |
+| truth-integration.html | 417 | 80dfd0837168d174888334be2674984ffa6fcc9c3e32099498a2d859ff476c59 |
+
+Aggregate frontend hash (SHA-256 of sorted path/bytes/sha256 inventory serialized
+with sorted JSON keys, compact separators and a trailing newline):
+37a28d8fdef8d09654d4716702ec2c19b944f23f15f717851452753aceb80c4f.
+Generated files are retained only in temporary build roots, not committed.
+
+### Package contract and later procedure
+
+`truth_spine_frontend_provenance.py` builds/verifies
+iios-truth-frontend-build-v1. Inputs bind the exact expected source root/commit,
+raw source inventory, package/lock/config/tsconfig hashes, Node/npm identities,
+complete dependency inventory, fixed policy and builder hashes. Outputs bind
+all six files, sizes, hashes, HTML references and module/config observations.
+Wrong/missing/mutated/unmanifested assets, stale dist, extra old JS, maps and
+absolute developer paths fail closed. Recomputed child hashes cannot replace
+the independently supplied provenance-manifest pin or source-root binding.
+
+The preparation script requires a clean committed checkout and these additional
+explicit arguments: --frontend-build, --frontend-input-hash and
+--frontend-manifest-hash. It validates them BEFORE creating a shadow root or
+binding a port, then copies only the proven build/dist. There is no source/dist
+fallback. The outer release embeds the complete provenance, source inventory,
+frontend input/content hashes and source_state=CLEAN_COMMITTED_SOURCE. The
+existing packaged topology validator reconciles that attestation to the installed
+file list without consulting the developer checkout. Old packages without this
+contract are not new accepted candidates; no running service is changed here.
+
+After checkpoint, use the builder CLI twice with the new full commit and separate
+new /private/tmp/iios-frontend-build-* roots. Compare input manifests, module
+observations and all six output bytes. Retain the two manifests and use one
+verified build root plus its printed input/manifest hashes for a separately
+authorized Superbatch 3.5 preparation. The manifest/input hash changes with the
+new commit; the six frontend hashes above remain reproducible. Recalculate the
+whole backend/frontend prospective package identity after that verification.
+Do not reuse the old 243-file digest as an acceptance requirement.
+
+Source validation includes 34 focused provenance tests (including actual dual
+cache-free builds), 192 combined Truth Spine/package/runner/authority tests,
+130 frontend/Museum tests, 776 Expansion Wing tests (one existing opt-in Keychain
+skip), and 1,485 backend discovery objects with zero import errors. TypeScript,
+production Vite builds, the existing build-identity matrix, Python compilation,
+diff and safety scans pass. ESLint exact baseline remains 26 errors/1 warning,
+zero new violations. No production source permissions, credentials, evidence,
+authority semantics or permanent service configuration are modified.
+
+This is source-only reconciliation: no historical shadow root, port-5290
+rehearsal, full-day operation, deployment or promotion. Permanent remains YELLOW.
