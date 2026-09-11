@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: '${{ github.workspace }}:${{ github.workspace }}/scripts:${{ github.workspace }}/BACK END/backend'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,6 +25,12 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: FRONT END
       - run: python -m pip install -r config/production-python-requirements.lock
+      - name: Configure disposable synthetic test root
+        run: |
+          test_root="$(mktemp -d /private/tmp/iios-sb38d-source-tests-ci-XXXXXXXX)"
+          chmod 700 "$test_root"
+          echo "IIOS_SB38D_TEST_ROOT=$test_root" >> "$GITHUB_ENV"
+          echo "TMPDIR=$test_root" >> "$GITHUB_ENV"
       - name: Complete frontend and exact lint baseline
         working-directory: FRONT END
         run: |
@@ -34,8 +41,8 @@ jobs:
       - name: Truth Spine and Expansion Wing
         working-directory: BACK END/backend
         run: |
-          python -B -m unittest discover -s . -p 'test_truth_spine*.py'
-          python -B -m unittest discover -s expansion_wing -t . -p 'test*.py'
+          python -B -m unittest discover -v -s . -p 'test_truth_spine*.py'
+          python -B -m unittest discover -v -s expansion_wing -t . -p 'test*.py'
       - name: Isolated compilation and diff
         run: |
           PYTHONPYCACHEPREFIX="$RUNNER_TEMP/northstar-bytecode" python -m compileall -q 'BACK END/backend' scripts

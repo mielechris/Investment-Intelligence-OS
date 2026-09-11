@@ -284,6 +284,17 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class IndependentBuildTests(unittest.TestCase):
+    def setUp(self):
+        # Adapt only the synthetic build's tool locations; production version,
+        # byte-identity and clean-source checks still execute unchanged.
+        node = shutil.which('node')
+        npm = shutil.which('npm')
+        self.assertIsNotNone(node, 'PINNED_NODE_REQUIRED')
+        self.assertIsNotNone(npm, 'PINNED_NPM_REQUIRED')
+        self.enterContext(patch.object(p, 'NODE', Path(node).resolve()))
+        self.enterContext(patch.object(p, 'NPM', Path(npm).resolve()))
+        self.enterContext(patch.dict(p.ENV, {'PATH': str(Path(node).parent) + os.pathsep + p.ENV['PATH']}))
+
     def test_two_clean_builds_and_readonly_verification(self):
         checkout = Path(__file__).resolve().parents[2]
         # Source-development tests cannot require committing the real checkout

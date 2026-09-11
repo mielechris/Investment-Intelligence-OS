@@ -6,6 +6,7 @@ import importlib.util
 import sys
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,18 @@ from truth_spine_frontend_graph import validate_northstar_graph
 from truth_spine_full_day_service import service_response
 import test_truth_spine_session as fixtures
 import test_truth_spine_frontend_provenance as provenance
+
+
+def pinned_test_node():
+    """Use setup-node/PATH while retaining the independently required version."""
+    node = shutil.which('node')
+    if node is None:
+        raise RuntimeError('PINNED_NODE_REQUIRED')
+    node = str(Path(node).resolve())
+    version = subprocess.check_output([node, '--version'], text=True, timeout=10).strip()
+    if version != 'v24.19.0':
+        raise RuntimeError('NODE_VERSION_MISMATCH')
+    return node
 
 
 class NorthstarGraphTests(unittest.TestCase):
@@ -79,7 +92,7 @@ class NorthstarPublisherTests(unittest.TestCase):
         self.assertEqual(view['factory'], json.loads((self.root/'projections/current.json').read_bytes())['factory'])
         frontend = Path(__file__).resolve().parents[2]/'FRONT END'
         script = "import {admitProjection} from './src/northstarSession.ts';let s='';for await(const c of process.stdin)s+=c;const x=JSON.parse(s);await admitProjection(x,null,Date.parse(x.published_at));console.log('ADMITTED_ACTUAL_PUBLISHER');"
-        result = subprocess.run(['/usr/local/bin/node','--input-type=module','-e',script], cwd=frontend,
+        result = subprocess.run([pinned_test_node(),'--input-type=module','-e',script], cwd=frontend,
                                 input=json.dumps(view),text=True,capture_output=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('ADMITTED_ACTUAL_PUBLISHER',result.stdout)
@@ -471,7 +484,7 @@ class PortableSettlementTests(unittest.TestCase):
         code=self.runner.SETTLEMENT_GEOMETRY
         if core_only:code=code.split('// PORTABLE_CORE_BEGIN:')[1].split('// PORTABLE_CORE_END')[0].split('\n',1)[1]
         script="const vm=require('node:vm'),assert=require('node:assert/strict');const api=vm.runInNewContext("+json.dumps(code)+"+'\\n({createSettlementCore,runSettlement"+('' if core_only else ',browserTelemetryAdapter,settleNorthstar')+"})',{});"+body
-        result=subprocess.run(['/usr/local/bin/node','-e',script],capture_output=True,text=True,timeout=10)
+        result=subprocess.run([pinned_test_node(),'-e',script],capture_output=True,text=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stderr)
         return result.stdout
 
