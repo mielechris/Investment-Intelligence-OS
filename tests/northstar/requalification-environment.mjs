@@ -40,8 +40,12 @@ export function fileInventory(root, allowedRoots = [realpathSync(root)]) {
   }
   walk(base); return rows;
 }
+// Candidate image qualification authorized after allocation failures 34577580857
+// and 34577603386. Published OS/build and Safari versions are unchanged; font
+// and rendering equivalence is unproven. Require fresh paired capture evidence.
+// The hosted label cannot select an immutable VM: any further drift fails closed.
 export const requiredSettings = Object.freeze({
-  os: '26.6.2', build: '25G83', architecture: 'arm64', imageVersion: '20260831.0337.3',
+  os: '26.6.2', build: '25G83', architecture: 'arm64', imageVersion: '20260907.0351.1',
   node: 'v24.19.0', npm: '11.17.0', python: 'Python 3.14.7', playwright: '1.63.0', webkitRevision: '2359', webkitVersion: '26.6',
 });
 export function admitSettings(actual, expectedSource) {
@@ -105,6 +109,7 @@ export function selfTest(testRoot) {
   assert(realpathSync(testRoot).startsWith('/private/tmp/iios-sb38d-source-tests-'), 'AUTHORIZED_TEST_ROOT_REQUIRED');
   const actual = { ...requiredSettings, source: 'a'.repeat(40) };
   admitSettings(actual, actual.source);
+  assert.throws(() => admitSettings({ ...actual, imageVersion: '20260831.0337.3' }, actual.source), /ENVIRONMENT_PIN_MISMATCH:imageVersion/);
   assert.throws(() => admitSettings(actual, undefined), /SOURCE_PIN_REQUIRED/);
   assert.throws(() => admitSettings(actual, 'b'.repeat(40)), /SOURCE_PIN_MISMATCH/);
   for (const key of Object.keys(requiredSettings)) assert.throws(() => admitSettings({ ...actual, [key]: 'wrong' }, actual.source), /ENVIRONMENT_PIN_MISMATCH/);
@@ -115,7 +120,7 @@ export function selfTest(testRoot) {
   symlinkSync(testRoot, resolve(dir, 'outside'));
   assert.throws(() => fileInventory(dir), /EXTERNAL_INVENTORY_SYMLINK/);
   assert.equal(hashObject({ b: 2, a: 1 }), hashObject({ a: 1, b: 2 }));
-  console.log(JSON.stringify({ suite: 'requalification-environment', passed: Object.keys(requiredSettings).length + 7, failed: 0 }));
+  console.log(JSON.stringify({ suite: 'requalification-environment', passed: Object.keys(requiredSettings).length + 8, failed: 0 }));
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   assert.equal(process.argv[2], '--self-test', 'EXPLICIT_SELF_TEST_ONLY'); selfTest(process.argv[3]);
