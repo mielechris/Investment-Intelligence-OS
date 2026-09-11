@@ -20,7 +20,8 @@ class OwnerSnapshotContractTests(unittest.TestCase):
         record = {"schema": kit.CONFIG_SCHEMA, "created_utc": "2026-09-10T00:00:00Z",
             "owner_confirmation_hash": hashlib.sha256(kit.CONFIRMATION.encode()).hexdigest(),
             "source_commit": "a" * 40, "helper_sha256": kit.sha(Path(kit.capture_helper.__file__)),
-            "owner_kit_sha256": kit.sha(Path(kit.__file__)), "sources": rows}
+            "owner_kit_sha256": kit.sha(Path(kit.__file__)),
+            "sqlite_coordination": kit.SQLITE_COORDINATION_POLICY, "sources": rows}
         record.update(changes); return seal(record)
 
     def test_mutable_size_and_mtime_advance_are_allowed(self):
@@ -52,8 +53,9 @@ class OwnerSnapshotContractTests(unittest.TestCase):
     def test_config_only_no_content_or_sqlite_and_bad_config_fails(self):
         with tempfile.TemporaryDirectory(dir="/private/tmp") as raw:
             root = Path(raw); root.chmod(0o700); cfg = root / "sources.json"; cfg.write_bytes(canonical(self._config(root))); cfg.chmod(0o600)
+            output_existed = kit.OUTPUT_ROOT.exists()
             result = kit.validate_config_only(cfg, expected_commit="a" * 40, helper_sha256=kit.sha(Path(kit.capture_helper.__file__)), owner_kit_sha256=kit.sha(Path(kit.__file__)))
-            self.assertFalse(result["ledger_content_opened"]); self.assertFalse(kit.OUTPUT_ROOT.exists())
+            self.assertFalse(result["ledger_content_opened"]); self.assertEqual(kit.OUTPUT_ROOT.exists(), output_existed)
             record = self._config(root); record["sources"][0]["role"] = "L8_HISTORICAL"; cfg.write_bytes(canonical(seal({k: v for k, v in record.items() if k != "content_hash"})))
             with self.assertRaisesRegex(ValueError, "OWNER_SOURCE_CONFIG_INVALID"):
                 kit.load_config(cfg, content=False)

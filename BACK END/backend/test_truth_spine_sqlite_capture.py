@@ -9,7 +9,8 @@ import threading
 import time
 import unittest
 
-from truth_spine_sqlite_capture import launch_capture, profile, sha, verify_snapshot
+from truth_spine_sqlite_capture import (coordination_profile_attestation,
+                                        launch_capture, profile, sha, verify_snapshot)
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'Seatbelt requires macOS; not an isolation acceptance elsewhere')
@@ -37,10 +38,11 @@ class SeatbeltCaptureTests(unittest.TestCase):
         result = launch_capture(self.source, self.output_dir/'negative', evidence_root=self.evidence_dir, timeout=15, probe=True)
         proof = result['negative_capabilities']
         self.assertEqual(result['status'], 'VERIFIED')
-        for name in ('open_wronly','open_rdwr','create-wal','create-shm','modify-wal','modify-shm',
-                     'truncate','rename','unlink','chmod','parent_create','outside_create',
+        for name in ('open_wronly','open_rdwr','rollback_journal','truncate','rename','unlink','chmod','parent_create','outside_create',
                      'network_connect','credential_fixture','symlink_escape','traversal_escape'):
             self.assertTrue(proof[name]['denied'], name)
+        self.assertTrue(proof['coordinate-wal']['allowed'])
+        self.assertTrue(proof['coordinate-shm']['allowed'])
         self.assertTrue(proof['child_inherits_denials'])
         self.assertTrue(proof['read_database'])
         self.assertTrue(proof['read-wal'])
@@ -63,27 +65,87 @@ class SeatbeltCaptureTests(unittest.TestCase):
         self.writer.close()
         before = {p.name:sha(p.read_bytes()) for p in self.source_dir.iterdir() if p.is_file()}
         root = self.output_dir/'no-companions'
-        with self.assertRaisesRegex(RuntimeError, 'CAPTURE_CHILD_FAILED_CLOSED'):
-            launch_capture(self.source, root, evidence_root=self.evidence_dir, timeout=10)
-        self.assertFalse((root/'receipt.json').exists())
-        self.assertFalse((root/'snapshot.db').exists())
-        self.assertEqual(before, {p.name:sha(p.read_bytes()) for p in self.source_dir.iterdir() if p.is_file()})
-        self.assertIn(json.loads((root/'failure.json').read_bytes())['sqlite_code'],
-                      (sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_READONLY_CANTINIT))
+        # The production profile permits exact companions, but a genuinely
+        # unwritable source directory must still fail closed before BEGIN.
+        self.source_dir.chmod(0o500)
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'CAPTURE_CHILD_FAILED_CLOSED'):
+                launch_capture(self.source, root, evidence_root=self.evidence_dir, timeout=10)
+            self.assertFalse((root/'receipt.json').exists())
+            self.assertFalse((root/'snapshot.db').exists())
+            self.assertEqual(before, {p.name:sha(p.read_bytes()) for p in self.source_dir.iterdir() if p.is_file()})
+            self.assertIn(json.loads((root/'failure.json').read_bytes())['sqlite_code'],
+                          (sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_READONLY_CANTINIT,
+                           sqlite3.SQLITE_READONLY_DIRECTORY))
+        finally:
+            self.source_dir.chmod(0o700)
 
     def test_exact_write_root_profile(self):
         policy = profile(self.source, self.output_dir/'new', Path(sys.executable).resolve(),
                          Path(__file__).resolve(), Path(sys.base_prefix))
+        attestation = coordination_profile_attestation(self.source, self.output_dir/'new', policy)
+        self.assertEqual(attestation['method'], 'PROFILE_EXACT_LITERALS_AND_SQLITE_SEQUENCE')
+        self.assertEqual(attestation['allowed_suffixes'], ['-wal', '-shm'])
+        self.assertFalse(attestation['main_database_writes'])
+        self.assertFalse(attestation['source_parent_writes'])
         self.assertEqual(policy.count('(allow file-write*'), 1)
+        self.assertIn(str(self.source)+'-wal', policy)
+        self.assertIn(str(self.source)+'-shm', policy)
+        self.assertNotIn(str(self.source)+'-journal', policy)
         self.assertIn('(deny file-read-data (subpath "/Library/Keychains")', policy)
         self.assertIn('(deny mach-lookup)', policy)
         self.assertIn('(deny network*)', policy)
+
+    def test_nonexistent_companions_are_attested_from_profile_not_sandbox_query(self):
+        """Absent WAL/SHM paths are admitted only by exact profile semantics."""
+        for suffix in ('-wal', '-shm'):
+            companion = Path(str(self.source) + suffix)
+            if companion.exists(): companion.unlink()
+        output = self.output_dir/'attestation'
+        policy = profile(self.source, output, Path(sys.executable).resolve(),
+                         Path(__file__).resolve(), Path(sys.base_prefix))
+        result = coordination_profile_attestation(self.source, output, policy)
+        self.assertEqual(result['allowed_suffixes'], ['-wal', '-shm'])
+        self.assertFalse((Path(str(self.source) + '-wal')).exists())
+        self.assertFalse((Path(str(self.source) + '-shm')).exists())
+        with self.assertRaisesRegex(PermissionError, 'OS_CAPTURE_COORDINATION_PROFILE_INVALID'):
+            coordination_profile_attestation(self.source, output, policy.replace('(literal '+json.dumps(str(Path(str(self.source)+'-shm')))+')', '(literal "/tmp/unrelated-shm")'))
 
     def test_existing_output_and_symlink_rejected(self):
         with self.assertRaisesRegex(ValueError, 'NEW_SEPARATE_CAPTURE_OUTPUT_REQUIRED'):
             launch_capture(self.source, self.output_dir, evidence_root=self.evidence_dir)
         link = self.output_dir/'link'; link.symlink_to(self.source_dir)
         with self.assertRaises(ValueError): launch_capture(self.source, link/'new', evidence_root=self.evidence_dir)
+
+    def test_runtime_metadata_is_sanitized_and_source_independent(self):
+        from truth_spine_sqlite_capture import sqlite_runtime_metadata
+        metadata = sqlite_runtime_metadata()
+        self.assertTrue(metadata['python'])
+        self.assertTrue(metadata['sqlite_runtime_version'])
+        self.assertIsInstance(metadata['compile_options'], list)
+        self.assertNotIn(str(self.source), repr(metadata))
+
+    def test_missing_companions_are_created_only_for_sqlite_and_publish(self):
+        self.writer.close()
+        for suffix in ('-wal', '-shm'):
+            companion = Path(str(self.source) + suffix)
+            if companion.exists(): companion.unlink()
+        root = self.output_dir/'missing-companions'
+        result = launch_capture(self.source, root, evidence_root=self.evidence_dir, timeout=10)
+        self.assertEqual(result['status'], 'VERIFIED')
+        self.assertTrue((root/'snapshot.db').exists())
+        self.assertEqual(result['coordination']['before']['-wal']['exists'], False)
+        self.assertEqual(result['coordination']['before']['-shm']['exists'], False)
+
+    def test_companion_metadata_is_metadata_only_and_exactly_scoped(self):
+        from truth_spine_sqlite_capture import companion_metadata
+        observed = companion_metadata(self.source)
+        self.assertEqual(set(observed), {'-wal', '-shm'})
+        for value in observed.values():
+            if value['exists']:
+                self.assertEqual(value['owner_uid'], os.getuid())
+                self.assertTrue(value['mode'] & 0o400)
+        self.assertFalse((self.source.parent / (self.source.name + '-journal')).exists())
 
     def test_companions_disappear_after_transaction_is_established(self):
         """A post-BEGIN WAL/SHM disappearance is a real disposable-process case."""

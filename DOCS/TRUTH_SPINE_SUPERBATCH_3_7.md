@@ -80,11 +80,13 @@ with rollback and close the handle, including on failure. A later writer commit
 or checkpoint must not move the pinned view. Source inode replacement still
 fails closed; ordinary advancement is not replacement.
 
-Operational acquisition must run under independently verified OS source-write
-denial. SQLite read-only/query-only flags alone do not guarantee zero companion
-file creation. If SQLite cannot acquire the view under that denial, report
-`SOURCE_SNAPSHOT_NOT_ACQUIRED`, not corruption inferred from disappearing files.
-No automatic retry, companion creation, immutable=1 bypass or raw copy is added.
+Operational acquisition runs under an independently verified OS source-write
+policy. SQLite may coordinate a read transaction only through the exact source
+`-wal` and `-shm` companions. The main database, rollback journals, source
+metadata, rename/unlink, sibling names and all other paths remain denied. If
+SQLite cannot acquire the view, report `SOURCE_SNAPSHOT_NOT_ACQUIRED`, not
+corruption inferred from companion lifecycle. No automatic retry, immutable=1
+bypass or raw copy is added; SQLite owns any permitted companion lifecycle.
 The transaction helper and disposable regressions do not certify a permanent
 capture or provide the still-required process-isolation packaging by themselves.
 
@@ -92,13 +94,16 @@ The source-only capture boundary is now explicit in
 `truth_spine_sqlite_capture.py`. It creates a hash-bound macOS Seatbelt profile,
 launches one pinned Python child, admits it only after a kernel denial query and
 process fingerprint, and writes startup/failure receipts in an independent
-owner-only evidence root. The profile denies source/WAL/SHM writes, source
-metadata/rename/unlink, writes outside the exact destination, networking, Mach
-lookup and credential paths while allowing signed runtime reads. The operational
-runner passes this launcher into `SessionSupervisor`; a production capture cannot
-silently use the direct SQLite reader. Direct helper use remains available to
-isolated unit fixtures only. A child failure is retained as a sanitized incident,
-and no snapshot publication or authority follows it.
+owner-only evidence root. The profile allows only exact source WAL/SHM
+coordination plus destination writes; it denies main-database writes,
+rollback-journal creation, source metadata/rename/unlink, writes outside the
+exact destination, networking, Mach lookup and credential paths while allowing
+signed runtime reads. The operational runner passes this launcher into
+`SessionSupervisor`; a production capture cannot silently use the direct SQLite
+reader. Direct helper use remains available to isolated unit fixtures only. A
+child failure records its source role, SQLite code/category, runtime metadata and
+before/after companion observations as a sanitized incident; no snapshot
+publication or authority follows it.
 
 Historical writer attribution remains `ATTRIBUTION_UNPROVEN`, accepted only as
 an explicit historical-shadow limitation. Permanent promotion remains blocked.
@@ -124,6 +129,14 @@ Source mode `0644` is disclosed as hardening debt and is not changed by this
 batch. Symlinks, special files, credential/keychain paths, placeholders,
 checkout/output paths, role swaps and metadata changes fail closed.
 
+The configuration carries the immutable
+`iios-owner-sqlite-wal-shm-coordination-v1` contract: only the exact `-wal` and
+`-shm` companions for the selected source may be coordinated; main-database,
+rollback-journal, metadata, rename/unlink and outside-destination writes remain
+prohibited. The generated job profile hash binds those exact absolute companion
+paths, and each receipt records runtime identity plus before/after companion
+metadata.
+
 `--config-only` is a metadata-only preflight: it reads the config JSON and uses
 `lstat` on the two sources, but never reads source bytes, opens SQLite, touches
 WAL/SHM files, creates the output root, or accesses credentials. At capture,
@@ -136,7 +149,7 @@ directory, guess filenames or auto-adopt a candidate. An owner must select a
 single L8 candidate and provide the exact confirmation below.
 
 The owner runs pinned Python 3.14 with the exact sentence below. The command
-requires the fixed output root `/private/tmp/iios-northstar-owner-snapshots-sb37`
+requires the fixed output root `/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2`
 to be absent and never overwrites an existing root. Each source is opened by
 the reviewed macOS Seatbelt helper (`truth_spine_sqlite_capture.py`) in
 `mode=ro`, with `query_only`, an established read transaction, SQLite backup,
@@ -157,12 +170,14 @@ cd /path/to/clean/iios-truth-spine-3-src && \
   --expected-commit <POST-CHECKPOINT-COMMIT> \
   --helper-sha256 <POST-CHECKPOINT-HELPER-SHA256> \
   --owner-kit-sha256 <POST-CHECKPOINT-OWNER-KIT-SHA256> \
-  --confirm 'I authorize opening these already-adopted L7 and L8 ledgers for read-only capture into the isolated owner snapshot root.'
+  --confirm 'I authorize read-only logical capture of my canonical IIOS L7 and L8 ledgers. SQLite may create or update only their exact WAL/SHM coordination files as required to establish a consistent read transaction. I do not authorize logical records, schemas, journal mode, or main database content to be modified.'
 ```
 
-The owner confirmation used to seal the configuration is exactly: `I confirm
-these are my canonical IIOS L7 and L8 ledgers. I authorize read-only capture
-into the isolated owner snapshot root. I do not authorize source modification.`
+The capture confirmation is exactly: `I authorize read-only logical capture of
+my canonical IIOS L7 and L8 ledgers. SQLite may create or update only their exact
+WAL/SHM coordination files as required to establish a consistent read
+transaction. I do not authorize logical records, schemas, journal mode, or main
+database content to be modified.`
 After config-only validation prints a sanitized config hash, the owner must
 provide the second capture confirmation in the command above. This is a
 two-person/owner-controlled boundary: the source kit never chooses an L8 path

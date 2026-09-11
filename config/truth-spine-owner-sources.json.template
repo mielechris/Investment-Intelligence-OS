@@ -5,6 +5,15 @@
   "source_commit": "<40-lowercase-hex-source-commit>",
   "helper_sha256": "<64-lowercase-hex-helper-sha256>",
   "owner_kit_sha256": "<64-lowercase-hex-owner-kit-sha256>",
+  "sqlite_coordination": {
+    "schema": "iios-owner-sqlite-wal-shm-coordination-v1",
+    "allowed_suffixes": ["-wal", "-shm"],
+    "main_database_writes": false,
+    "rollback_journal": false,
+    "source_metadata_changes": false,
+    "source_rename_unlink": false,
+    "outside_destination_writes": false
+  },
   "sources": [
     {
       "role": "L7_OPERATIONAL",

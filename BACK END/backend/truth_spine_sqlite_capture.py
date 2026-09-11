@@ -15,6 +15,7 @@ import errno
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import select
 import socket
@@ -33,9 +34,18 @@ SANDBOX = Path('/usr/bin/sandbox-exec')
 ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'PYTHONDONTWRITEBYTECODE': '1'}
 
 
+def source_metadata(path):
+    """Metadata-only source observation; never opens the ledger."""
+    info = path.lstat()
+    return {'device': info.st_dev, 'inode': info.st_ino,
+            'owner_uid': info.st_uid, 'mode': stat.S_IMODE(info.st_mode),
+            'file_type': stat.S_IFMT(info.st_mode), 'size': info.st_size,
+            'mtime_ns': info.st_mtime_ns}
+
+
 class CaptureAttempt:
     """Durable parent-owned evidence outside the disposable output lifetime."""
-    def __init__(self, evidence_root, source, output):
+    def __init__(self, evidence_root, source, output, source_role=None):
         path_identity(evidence_root, directory=True)
         if (stat.S_IMODE(evidence_root.stat().st_mode) != 0o700 or
                 evidence_root.is_relative_to(output) or output.is_relative_to(evidence_root) or
@@ -44,12 +54,16 @@ class CaptureAttempt:
         self.identity = 'capture-attempt-'+uuid.uuid4().hex
         self.root = evidence_root/self.identity
         self.root.mkdir(mode=0o700); fsync_dir(evidence_root)
+        self.source_role = source_role or "UNKNOWN"
         self.aliases = {str(source.parent): '{SOURCE_PARENT}', str(source): '{SOURCE}',
                         str(output): '{OUTPUT}', str(evidence_root): '{EVIDENCE}'}
         self.value = {'schema': 'iios-capture-attempt-v1', 'attempt': self.identity,
             'start_utc': datetime.now(timezone.utc).isoformat(), 'start_monotonic': time.monotonic(),
             'source_alias': '{SOURCE}', 'destination_alias': '{OUTPUT}',
+            'source_role': self.source_role,
             'environment': dict(ENVIRONMENT), 'mechanism': 'macOS_Seatbelt', 'pid': None,
+            'source_metadata_before': source_metadata(source),
+            'source_companions_before': companion_metadata(source),
             'original_failure': None, 'cleanup_errors': [], 'readiness': [], 'stdout': '', 'stderr': ''}
         # If durable evidence cannot be created, no subprocess may be launched.
         write_new(self.root/'started.json', encoded(sealed(self.value)))
@@ -162,10 +176,11 @@ def profile(source, output, executable, helper, runtime):
     """Fixed policy, never a caller-supplied profile or broader write allowlist.
 
     Runtime reads are allowed so the pinned interpreter can load its signed
-    framework libraries. Writes remain denied everywhere except the exact
-    output. Keychain reads, Mach lookup (including securityd), networking,
-    external exec and POSIX shared-memory access are denied. Filesystem SHM
-    used by SQLite is governed by the same read/write rules.
+    framework libraries. Writes remain denied everywhere except the exact output
+    and the two source-side WAL/SHM coordination paths. Keychain reads, Mach
+    lookup (including securityd), networking, external exec and POSIX shared-
+    memory access are denied. Filesystem SHM used by SQLite is governed by the
+    same exact-path rule.
     """
     q = lambda p: json.dumps(str(p), ensure_ascii=True)
     return ('(version 1)\n(allow default)\n'
@@ -177,7 +192,95 @@ def profile(source, output, executable, helper, runtime):
             '(deny network*)\n'
             '(deny mach-lookup)\n(deny ipc-posix-shm*)\n(deny process-exec)\n'
             '(allow process-exec (literal '+q(executable)+'))\n'
-            '(allow file-write* (subpath '+q(output)+'))\n')
+            # SQLite may coordinate a read transaction only through the two
+            # exact companions belonging to this source.  The main database,
+            # journals, sibling names and every other path remain denied.
+            '(allow file-write* (literal '+q(Path(str(source)+'-wal'))+') '
+            '(literal '+q(Path(str(source)+'-shm'))+') (subpath '+q(output)+'))\n')
+
+
+def companion_metadata(source):
+    """Return metadata-only observations for SQLite's exact WAL/SHM paths."""
+    result = {}
+    for suffix in ('-wal', '-shm'):
+        path = Path(str(source) + suffix)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            result[suffix] = {'exists': False}
+            continue
+        result[suffix] = {
+            'exists': True,
+            'file_type': stat.S_IFMT(info.st_mode),
+            'mode': stat.S_IMODE(info.st_mode),
+            'owner_uid': info.st_uid,
+            'device': info.st_dev,
+            'inode': info.st_ino,
+            'size': info.st_size,
+            'mtime_ns': info.st_mtime_ns,
+        }
+    return result
+
+
+def coordination_profile_attestation(source, output, policy):
+    """Statically attest the narrowly scoped source-side write capability.
+
+    ``sandbox_check`` cannot distinguish an absent, but permitted, WAL/SHM
+    path from a denied path on macOS.  The generated profile is therefore
+    checked as data: it must deny writes globally and contain exactly the two
+    source-specific companion literals plus the isolated destination subtree.
+    The actual sandboxed SQLite transaction remains the runtime proof.
+    """
+    source, output = Path(source), Path(output)
+    wal = json.dumps(str(Path(str(source) + '-wal')), ensure_ascii=True)
+    shm = json.dumps(str(Path(str(source) + '-shm')), ensure_ascii=True)
+    destination = json.dumps(str(output), ensure_ascii=True)
+    required = [
+        '(deny file-write*)',
+        '(allow file-write* (literal ' + wal + ') (literal ' + shm +
+        ') (subpath ' + destination + '))',
+    ]
+    if any(policy.count(fragment) != 1 for fragment in required):
+        raise PermissionError('OS_CAPTURE_COORDINATION_PROFILE_INVALID')
+    # No source-parent, home, wildcard, journal, rename, unlink or metadata
+    # write allowance may be smuggled into the generated profile.
+    forbidden = [
+        '(allow file-write* (subpath ' + json.dumps(str(source.parent), ensure_ascii=True),
+        '(allow file-write* (literal ' + json.dumps(str(source), ensure_ascii=True),
+        '(allow file-write* (literal ' + json.dumps(str(Path(str(source) + '-journal')), ensure_ascii=True),
+        'file-write-unlink', 'file-write-mode', 'file-write-owner',
+        'file-write-flags', 'file-write-xattr', 'file-write-security',
+    ]
+    if any(token in policy for token in forbidden):
+        raise PermissionError('OS_CAPTURE_COORDINATION_PROFILE_BROADENED')
+    allowed_clause = required[1]
+    if policy.count('(allow file-write*') != 1 or policy.count(allowed_clause) != 1:
+        raise PermissionError('OS_CAPTURE_COORDINATION_PROFILE_AMBIGUOUS')
+    return {
+        'method': 'PROFILE_EXACT_LITERALS_AND_SQLITE_SEQUENCE',
+        'allowed_suffixes': ['-wal', '-shm'],
+        'destination': '{OUTPUT}',
+        'main_database_writes': False,
+        'rollback_journal': False,
+        'source_parent_writes': False,
+        'unrelated_writes': False,
+    }
+
+
+def sqlite_runtime_metadata():
+    """Describe the pinned runtime without touching either source ledger."""
+    db = sqlite3.connect(':memory:')
+    try:
+        options = [row[0] for row in db.execute('PRAGMA compile_options').fetchall()]
+    finally:
+        db.close()
+    return {
+        'python': platform.python_version(),
+        'python_implementation': platform.python_implementation(),
+        'sqlite_module_version': getattr(sqlite3, 'version', None),
+        'sqlite_runtime_version': sqlite3.sqlite_version,
+        'compile_options': options,
+    }
 
 
 def kernel_denials(job):
@@ -185,11 +288,11 @@ def kernel_denials(job):
     lib = ctypes.CDLL('/usr/lib/libsandbox.dylib', use_errno=True)
     lib.sandbox_check.restype = ctypes.c_int
     source, output = Path(job['source']), Path(job['output'])
+    policy = profile(source, output, Path(job['executable']), Path(job['helper']), Path(job['runtime']))
+    coordination = coordination_profile_attestation(source, output, policy)
     checks = {}
     for name, operation, target in (
         ('database_write', 'file-write-data', source),
-        ('wal_write', 'file-write-data', Path(str(source)+'-wal')),
-        ('shm_write', 'file-write-data', Path(str(source)+'-shm')),
         ('parent_create', 'file-write-create', source.parent/'capture-forbidden'),
         ('source_unlink', 'file-write-unlink', source),
         ('source_metadata', 'file-write-mode', source),
@@ -203,9 +306,11 @@ def kernel_denials(job):
         # required denial; never assume a particular errno representation.
         checks[name] = result != 0
     checks['network'] = lib.sandbox_check(os.getpid(), b'network-outbound', 0) != 0
-    if not all(checks.values()):
-        missing = ','.join(sorted(name for name, denied in checks.items() if not denied))
+    required_denials = list(checks)
+    if not all(checks[name] for name in required_denials):
+        missing = ','.join(sorted(name for name in required_denials if not checks[name]))
         raise PermissionError('OS_CAPTURE_POLICY_NOT_ENFORCED:'+missing)
+    checks['coordination_profile'] = coordination
     return checks
 
 
@@ -214,7 +319,10 @@ def validate_job(job):
     required = {'schema', 'source', 'source_identity', 'output', 'output_identity',
                 'executable', 'executable_sha256', 'helper', 'helper_sha256',
                 'runtime', 'profile_sha256', 'sandbox_sha256', 'timeout', 'probe', 'content_hash'}
-    if (set(job) != required or job['schema'] != SCHEMA or type(job['probe']) is not bool
+    required.add('source_role')
+    if (set(job) != required or job['schema'] != SCHEMA or
+            job['source_role'] not in {'L7', 'L8', 'L7_OPERATIONAL', 'L8_HISTORICAL', 'DISPOSABLE'} or
+            type(job['probe']) is not bool
             or not 1 <= job['timeout'] <= 120):
         raise ValueError('CAPTURE_JOB_INVALID')
     source, output = Path(job['source']), Path(job['output'])
@@ -253,13 +361,19 @@ def negative_proof(job):
             raise PermissionError('NEGATIVE_CAPABILITY_FAILED:'+name)
     deny('open_wronly', lambda: os.open(source, os.O_WRONLY))
     deny('open_rdwr', lambda: os.open(source, os.O_RDWR))
+    # Exact WAL/SHM coordination is the sole source-side write capability.
     for suffix in ('-wal', '-shm'):
         p = Path(str(source)+suffix)
-        deny('create'+suffix, lambda p=p: os.open(p, os.O_WRONLY | os.O_CREAT, 0o600))
+        try:
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+        except OSError as error:
+            raise PermissionError('NEGATIVE_CAPABILITY_MISSING:'+suffix) from error
+        results['coordinate'+suffix] = {'allowed': True, 'path': suffix}
         if p.exists():
-            deny('modify'+suffix, lambda p=p: os.open(p, os.O_RDWR))
             with p.open('rb') as f: f.read(1)
             results['read'+suffix] = True
+    deny('rollback_journal', lambda: os.open(Path(str(source)+'-journal'), os.O_WRONLY | os.O_CREAT, 0o600))
     deny('truncate', lambda: os.truncate(source, 0))
     deny('rename', lambda: os.rename(source, output/'renamed-source'))
     deny('unlink', lambda: os.unlink(source))
@@ -342,19 +456,44 @@ def worker(job, pin):
     if Path(job['executable']) != Path(sys.executable).resolve():
         raise ValueError('CAPTURE_RUNNING_EXECUTABLE_INVALID')
     output = Path(job['output'])
-    policy = kernel_denials(job)  # Before any source DB handle or success receipt.
+    runtime = sqlite_runtime_metadata()
+    started = datetime.now(timezone.utc).isoformat()
+
+    def persist_failure(error):
+        """Persist one sanitized preflight/runtime failure before re-raising."""
+        record = sealed({'schema': SCHEMA, 'status': 'FAILED_CLOSED',
+            'job': pin, 'source_role': job['source_role'],
+            'error_type': type(error).__name__,
+            'sqlite_code': getattr(error, 'sqlite_errorcode', None),
+            'coordination': {'before': companion_metadata(Path(job['source'])),
+                             'after': companion_metadata(Path(job['source']))},
+            'runtime': runtime, 'start': started,
+            'end': datetime.now(timezone.utc).isoformat()})
+        write_new(output/'failure.json', encoded(record))
+        return record
+
+    try:
+        # Before any source DB handle or success receipt.  Static profile
+        # attestation replaces unreliable sandbox_check queries for absent
+        # WAL/SHM paths; SQLite itself proves the allowed capability later.
+        policy = kernel_denials(job)
+    except BaseException as error:
+        persist_failure(error)
+        raise
     print(json.dumps({'stage': 'OS_ENFORCED', 'pid': os.getpid(), 'job': pin}), flush=True)
     if not select.select([sys.stdin], [], [], 10)[0]: raise TimeoutError('PARENT_BINDING_TIMEOUT')
     parent = checked(json.loads(sys.stdin.readline(65536)))
     if parent['pid'] != os.getpid() or parent['parent_pid'] != os.getppid() or parent['job'] != pin:
         raise ValueError('CAPTURE_PARENT_BINDING_INVALID')
     write_new(output/'startup.json', encoded(sealed({'schema': SCHEMA, 'policy_denials': policy, 'process': parent})))
-    started = datetime.now(timezone.utc).isoformat()
     try:
         if job['probe']:
             result = {'negative_capabilities': negative_proof(job)}
         else:
+            coordination_before = companion_metadata(Path(job['source']))
             result = capture_transaction(job, time.monotonic()+job['timeout'])
+            result['coordination'] = {'before': coordination_before,
+                                      'after': companion_metadata(Path(job['source']))}
             target = output/'snapshot.incomplete.db'
             with target.open('rb') as stream: os.fsync(stream.fileno())
             target.chmod(0o400)
@@ -367,18 +506,23 @@ def worker(job, pin):
     except BaseException as error:
         # Bounded sanitized diagnostics; never exception text, SQL, raw rows or paths.
         write_new(output/'failure.json', encoded(sealed({'schema': SCHEMA, 'status': 'FAILED_CLOSED',
-            'job': pin, 'error_type': type(error).__name__, 'sqlite_code': getattr(error, 'sqlite_errorcode', None),
-            'start': started, 'end': datetime.now(timezone.utc).isoformat()})))
+            'job': pin, 'source_role': job['source_role'],
+            'error_type': type(error).__name__, 'sqlite_code': getattr(error, 'sqlite_errorcode', None),
+            'coordination': {'before': companion_metadata(Path(job['source'])),
+                             'after': companion_metadata(Path(job['source']))},
+            'runtime': runtime, 'start': started, 'end': datetime.now(timezone.utc).isoformat()})))
         raise
 
 
 def launch_capture(source, output, *, evidence_root, timeout=120, probe=False,
+                   source_role='DISPOSABLE',
                    on_child_started=None):
     """Create exactly one output directory and one OS-confined child, no retry."""
-    attempt = CaptureAttempt(evidence_root, source, output)
+    attempt = CaptureAttempt(evidence_root, source, output, source_role)
     error = None
     try:
         return _launch_capture(source, output, attempt, timeout=timeout, probe=probe,
+                               source_role=source_role,
                                on_child_started=on_child_started)
     except BaseException as exc:
         error = exc
@@ -393,7 +537,8 @@ def launch_capture(source, output, *, evidence_root, timeout=120, probe=False,
             error.add_note('INCIDENT_PERSISTENCE_FAILED:'+type(persistence_error).__name__)
 
 
-def _launch_capture(source, output, attempt, *, timeout, probe, on_child_started=None):
+def _launch_capture(source, output, attempt, *, timeout, probe, source_role,
+                    on_child_started=None):
     if sys.platform != 'darwin' or not SANDBOX.is_file():
         raise PermissionError('OS_CAPTURE_ISOLATION_UNAVAILABLE')
     if not 1 <= timeout <= 120 or type(probe) is not bool:
@@ -417,7 +562,7 @@ def _launch_capture(source, output, attempt, *, timeout, probe, on_child_started
         'executable': str(executable), 'executable_sha256': sha(executable.read_bytes()),
         'helper': str(helper), 'helper_sha256': sha(helper.read_bytes()), 'runtime': str(runtime),
         'profile_sha256': sha(policy.encode()), 'sandbox_sha256': sha(SANDBOX.read_bytes()),
-        'timeout': timeout, 'probe': probe})
+        'timeout': timeout, 'probe': probe, 'source_role': source_role})
     pin = sha(encoded(job))
     write_new(output/'job.json', encoded(job), 0o400)
     write_new(output/'profile.sb', policy.encode(), 0o400)
@@ -472,6 +617,11 @@ def _launch_capture(source, output, attempt, *, timeout, probe, on_child_started
         if process is None: attempt.value['creation_exception'] = attempt.failure(exc)
         raise
     finally:
+        try:
+            attempt.value['source_metadata_after'] = source_metadata(source)
+            attempt.value['source_companions_after'] = companion_metadata(source)
+        except BaseException as metadata_error:
+            attempt.value['post_failure_metadata_error'] = type(metadata_error).__name__
         def cleanup(action):
             try: action()
             except BaseException as error:

@@ -33,10 +33,20 @@ CONFIRMATION = ("I confirm these are my canonical IIOS L7 and L8 ledgers. I auth
                 "read-only capture into the isolated owner snapshot root. I do not "
                 "authorize source modification.")
 CAPTURE_CONFIRMATION = (
-    "I authorize read-only capture of my canonical IIOS L7 and L8 ledgers into "
-    "the isolated owner snapshot root. I do not authorize source modification."
+    "I authorize read-only logical capture of my canonical IIOS L7 and L8 ledgers. "
+    "SQLite may create or update only their exact WAL/SHM coordination files as required to establish a consistent read transaction. "
+    "I do not authorize logical records, schemas, journal mode, or main database content to be modified."
 )
 SOURCE_KINDS = {"L7", "L8"}
+SQLITE_COORDINATION_POLICY = {
+    "schema": "iios-owner-sqlite-wal-shm-coordination-v1",
+    "allowed_suffixes": ["-wal", "-shm"],
+    "main_database_writes": False,
+    "rollback_journal": False,
+    "source_metadata_changes": False,
+    "source_rename_unlink": False,
+    "outside_destination_writes": False,
+}
 HISTORICAL_OBSERVATIONS = {
     "L7": [{"observed_utc": "2026-09-10T00:52:05.297458Z", "size": 333561856,
             "sha256": "98397c6172bbd794d62e32ce1e155da9b93e3a07d4cdd0e69a7a4d34e8a22583"}],
@@ -131,7 +141,7 @@ def _parse_config(config: Path) -> dict:
     except (ValueError, json.JSONDecodeError):
         raise ValueError("OWNER_SOURCE_CONFIG_INVALID") from None
     expected = {"schema", "created_utc", "owner_confirmation_hash", "source_commit",
-                "helper_sha256", "owner_kit_sha256", "sources", "content_hash"}
+                "helper_sha256", "owner_kit_sha256", "sqlite_coordination", "sources", "content_hash"}
     if record.get("schema") != CONFIG_SCHEMA or set(record) != expected:
         raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
     try:
@@ -144,6 +154,8 @@ def _parse_config(config: Path) -> dict:
             raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
     if record["owner_confirmation_hash"] != hashlib.sha256(CONFIRMATION.encode()).hexdigest():
         raise ValueError("OWNER_CONFIRMATION_HASH_INVALID")
+    if record.get("sqlite_coordination") != SQLITE_COORDINATION_POLICY:
+        raise ValueError("OWNER_SQLITE_COORDINATION_POLICY_INVALID")
     rows = record.get("sources")
     if (not isinstance(rows, list) or len(rows) != 2 or
             {r.get("role") for r in rows if isinstance(r, dict)} != {"L7_OPERATIONAL", "L8_HISTORICAL"}):
@@ -245,7 +257,8 @@ def build_config(l7: Path, l8: Path, *, source_commit: str, helper_sha256: str,
     return seal({"schema": CONFIG_SCHEMA, "created_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                  "owner_confirmation_hash": hashlib.sha256(CONFIRMATION.encode()).hexdigest(),
                  "source_commit": source_commit, "helper_sha256": helper_sha256,
-                 "owner_kit_sha256": owner_kit_sha256, "sources": rows})
+                 "owner_kit_sha256": owner_kit_sha256,
+                 "sqlite_coordination": SQLITE_COORDINATION_POLICY, "sources": rows})
 
 
 def discover_metadata_files() -> list[Path]:
@@ -325,7 +338,9 @@ def snapshot_metadata(path: Path) -> dict:
 
 def capture(source: Path, output: Path, evidence: Path, sources: dict[Path, str]) -> dict:
     before = _absolute_regular_metadata(source)
-    receipt = launch_capture(source, output, evidence_root=evidence, timeout=120)
+    role = "L7" if sources[source] == "L7" else "L8"
+    receipt = launch_capture(source, output, evidence_root=evidence, timeout=120,
+                             source_role=role)
     after = _absolute_regular_metadata(source)
     if (before.st_dev, before.st_ino, before.st_uid, stat.S_IFMT(before.st_mode)) != (after.st_dev, after.st_ino, after.st_uid, stat.S_IFMT(after.st_mode)):
         raise ValueError("OWNER_SOURCE_IDENTITY_CHANGED")
@@ -335,6 +350,8 @@ def capture(source: Path, output: Path, evidence: Path, sources: dict[Path, str]
             "snapshot_sha256": receipt["snapshot_sha256"], "snapshot_bytes": receipt["bytes"],
             "capture_job": receipt["job"], "helper_sha256": job["helper_sha256"],
             "profile_sha256": job["profile_sha256"],
+            "coordination": receipt.get("coordination", {}),
+            "runtime": receipt.get("runtime", {}),
             "source_acquisition": {"role": "L7_OPERATIONAL" if sources[source] == "L7" else "L8_HISTORICAL",
                 "device": after.st_dev, "inode": after.st_ino, "owner_uid": after.st_uid,
                 "mode": stat.S_IMODE(after.st_mode), "size": after.st_size,
