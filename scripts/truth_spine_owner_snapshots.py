@@ -32,8 +32,10 @@ OUTPUT_ROOT = Path("/private/tmp/iios-northstar-owner-snapshots-sb37")
 CONFIRMATION = ("I confirm these are my canonical IIOS L7 and L8 ledgers. I authorize "
                 "read-only capture into the isolated owner snapshot root. I do not "
                 "authorize source modification.")
-CAPTURE_CONFIRMATION = ("I authorize opening these already-adopted L7 and L8 ledgers for read-only "
-                        "capture into the isolated owner snapshot root.")
+CAPTURE_CONFIRMATION = (
+    "I authorize read-only capture of my canonical IIOS L7 and L8 ledgers into "
+    "the isolated owner snapshot root. I do not authorize source modification."
+)
 SOURCE_KINDS = {"L7", "L8"}
 HISTORICAL_OBSERVATIONS = {
     "L7": [{"observed_utc": "2026-09-10T00:52:05.297458Z", "size": 333561856,
