@@ -125,6 +125,7 @@ The process holds a lifetime supervisor lock plus per-tick journal lock, records
 its PID/PPID and runtime/root bindings at startup, and cooperatively handles SIGTERM
 or SIGINT. It never kills a PID or touches a factory/benchmark agent. `disarm` writes
 an immutable stop marker; the current bounded request unwinds and the process exits.
+Duplicate startup exits 75 without changing the active session or its journal.
 No PID-reuse inference is used to authorize a kill. Exact native timing, LaunchAgent
 startup, host sleep behavior and shutdown still require later operational validation.
 

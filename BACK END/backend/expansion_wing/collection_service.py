@@ -111,13 +111,17 @@ def main(argv=None):
                     try:
                         for sig in previous:
                             signal.signal(sig, stop)
-                        with journal.lock("supervisor.lock"):
-                            with journal.lock():
-                                if journal.events():
-                                    journal.append("SUPERVISOR_STARTED", clock(), pid=os.getpid(), ppid=os.getppid(),
-                                        executable=manifest["runtime"]["executable"], root=str(args.root),
-                                        release_sha256=args.release_sha256, authority_sha256=args.authority_sha256)
-                            result = supervise(session, stop_requested=lambda: stopped[0])
+                        try:
+                            with journal.lock("supervisor.lock"):
+                                with journal.lock():
+                                    if journal.events():
+                                        journal.append("SUPERVISOR_STARTED", clock(), pid=os.getpid(), ppid=os.getppid(),
+                                            executable=manifest["runtime"]["executable"], root=str(args.root),
+                                            release_sha256=args.release_sha256, authority_sha256=args.authority_sha256)
+                                result = supervise(session, stop_requested=lambda: stopped[0])
+                        except BlockingIOError:
+                            print(json.dumps({"status": "DUPLICATE_STARTUP_REJECTED"}))
+                            return 75
                     finally:
                         for sig, handler in previous.items():
                             signal.signal(sig, handler)

@@ -128,6 +128,20 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(BlockingIOError):
                 with b.lock('supervisor.lock'):pass
 
+    def test_duplicate_service_start_does_not_append_failure(self):
+        self.install()
+        account_hash='c'*64;authority_hash='d'*64
+        command=['supervise','--root',str(self.root),'--release-sha256',self.hash,
+                 '--source-commit','1'*40,'--account-sha256',account_hash,
+                 '--authority-sha256',authority_hash]
+        journal=Journal(self.root,self.hash)
+        with journal.lock('supervisor.lock'), \
+             patch('expansion_wing.collection_service.Journal',return_value=journal), \
+             patch('expansion_wing.collection_service.validate_installed',return_value=self.doc), \
+             patch('expansion_wing.collection_service.documents',return_value=({},{})):
+            self.assertEqual(main(command),75)
+        self.assertEqual(journal.events(),[])
+
     def test_plist_explicit_root_pins_no_restart_loop(self):
         value=plistlib.loads(runtime.startup_plist(self.root,self.hash,'1'*40,str(self.executable),'c'*64,'d'*64))
         self.assertFalse(value['KeepAlive']);self.assertTrue(value['RunAtLoad'])
