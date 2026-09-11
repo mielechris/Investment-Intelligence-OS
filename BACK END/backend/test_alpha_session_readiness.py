@@ -12,6 +12,156 @@ CALENDAR = bulk_tests.CALENDAR
 from test_provider_gateway_live_contract import repin
 from test_provider_gateway_credentials import FakeCredentials
 from test_provider_gateway_transport import FakeNetwork
+from copy import deepcopy
+
+
+class RadarPackageTests(unittest.TestCase):
+    def setUp(self):
+        from test_provider_gateway_live_contract import quote_fixture
+        self.value = bulk_tests.radar_fixture_plan()
+        self.helper = bulk_tests.BulkTests()
+        self.helper.day = Path(self.value['root'])
+        self.helper.plan = self.value
+        self.template = quote_fixture()
+        for row in self.value['rows']:
+            Path(row['root']).mkdir(mode=0o700)
+
+    def docs(self, slot=0):
+        from provider_gateway_live_contract import request_parameters
+        m, a = (deepcopy(d) for d in self.template[:2]);r = self.template[2]
+        row = self.value['rows'][slot]
+        m.update(role=bulk_tests.ROLE, endpoint=bulk_tests.FUNCTION, feed='real_time',
+                 symbols=row['symbols'], root=row['root'], batch_id=row['id'],
+                 valid_from=row['valid_from'], expires_at=row['expires_at'],
+                 timeout_seconds=20, maximum_response_bytes=1000000)
+        m['parameters'] = request_parameters('ALPHA_VANTAGE', m['symbols'], 'real_time',
+                                             function=bulk_tests.FUNCTION)
+        a.update(endpoint=bulk_tests.FUNCTION, feed='real_time', symbols=m['symbols'],
+                 qualification_parameters=m['parameters'], bulk_plan=self.value,
+                 bulk_plan_parent=content_hash(self.value), bulk_slot=slot,
+                 expires_at=self.value['finalization_deadline'], available_unreserved='475')
+        a['retention'].update(mode=bulk_tests.RETENTION, raw_body=False, normalized=False,
+                              references=False, hashes=False, sanitized_receipt=True,
+                              retain_until=self.value['finalization_deadline'])
+        a['radar_allowance'] = {'plan_parent': a['bulk_plan_parent'],
+            'source_commit': m['source_commit'], 'account_identity': a['account_identity'],
+            'maximum_requests': 475, 'maximum_cost': '475', 'cost_unit': m['cost_unit'],
+            'expires_at': self.value['finalization_deadline'], 'enrichment_requests': 0}
+        return m, a, r
+
+    def package(self):
+        requests = []
+        for slot in range(475):
+            m,a,r = self.docs(slot)
+            requests.append({'manifest':m, 'account':a, 'runtime':r, 'expected':repin(m,a,r)})
+        return {'schema':'iios-opportunity-package-v1', 'scope':'OFFLINE_TEST',
+                'plan':self.value, 'plan_parent':content_hash(self.value),
+                'requests':requests, 'external_stages':{}, 'external_pins':{}}
+
+    def invoke(self, slot=0, previous=None, offset=0, payload=None):
+        m,a,r = self.docs(slot)
+        stamp = (utc(m['valid_from'])+timedelta(seconds=offset)).isoformat()
+        body = self.helper.payload(slot) if payload is None else payload
+        for row in body['data']:row['timestamp'] = stamp
+        net = FakeNetwork(payload=body)
+        result = qualify(m,a,r,expected=repin(m,a,r),credential_backend=FakeCredentials(),
+                         network=net,clock=lambda:stamp,expected_bulk_previous=previous)
+        completed = self.helper.day/f'{slot}.complete.json'
+        return result, content_hash(json.loads(completed.read_bytes())), net.calls
+
+    def test_a_475_package_readiness_and_disabled_dispatch(self):
+        from alpha_session_runner import validate_package, run
+        p = self.package()
+        self.assertEqual(len(validate_package(p,content_hash(p))['rows']),475)
+        # Run the default path with boundaries that fail if called; no activation.
+        def forbidden(*args):raise AssertionError('DISABLED_DISPATCH')
+        result=run(p,content_hash(p),clock=forbidden,wait=forbidden,executor=forbidden)
+        self.assertEqual(result['requests'],0)
+        self.assertEqual(result['status'],'DISABLED_VALIDATION_ONLY')
+        for flag in FLAGS:self.assertIs(result[flag],False)
+
+    def test_budget_missing_wrong_parent_expired_or_extra_enrichment_zero_calls(self):
+        mutations = [lambda a:a.pop('radar_allowance'),
+            lambda a:a['radar_allowance'].update(plan_parent='0'*64),
+            lambda a:a['radar_allowance'].update(maximum_requests=476),
+            lambda a:a['radar_allowance'].update(enrichment_requests=1),
+            lambda a:a['radar_allowance'].update(maximum_cost='474'),
+            lambda a:a.update(available_unreserved='474'),
+            lambda a:a['radar_allowance'].update(expires_at='2026-09-14T20:05:00+00:00'),
+            lambda a:a.update(expires_at='2026-09-14T20:05:00+00:00')]
+        for mutate in mutations:
+            m,a,r=self.docs();mutate(a);net=FakeNetwork()
+            with self.assertRaises(ValueError):
+                qualify(m,a,r,expected=repin(m,a,r),credential_backend=FakeCredentials(),
+                        network=net,clock=lambda:m['valid_from'])
+            self.assertEqual(net.calls,0)
+        self.assertFalse(list(self.helper.day.glob('*.json')))
+
+    def test_preflight_then_three_start_gate(self):
+        receipt,parent,calls=self.invoke()
+        self.assertEqual(receipt['result'],'OBSERVED');self.assertEqual(calls,1)
+        for slot,offset in ((1,0),(2,1),(3,2)):
+            receipt,parent,calls=self.invoke(slot,parent,offset)
+            self.assertEqual(receipt['result'],'OBSERVED')
+        with self.assertRaisesRegex(ValueError,'ROLLING_RATE_GATE'):self.invoke(4,parent,3)
+        receipt,parent,_=self.invoke(4,parent,60)
+        self.assertEqual(receipt['result'],'OBSERVED')
+
+    def test_reordered_response_stops_and_retains_consumed_reservation(self):
+        body=self.helper.payload(0);body['data'].reverse()
+        receipt,parent,calls=self.invoke(payload=body)
+        self.assertEqual(receipt['result'],'AMBIGUOUS_OR_UNVERIFIED_STOP')
+        self.assertEqual(calls,1)
+        self.assertTrue((self.helper.day/'0.reserved.json').is_file())
+        with self.assertRaises(ValueError):self.invoke(1,parent)
+        with self.assertRaises(ValueError):self.invoke()
+
+    def test_response_deadline_fail_closed(self):
+        m,a,r=self.docs();state=[False]
+        class Slow(FakeNetwork):
+            def exchange(self,**kw):
+                result=super().exchange(**kw);state[0]=True;return result
+        clock=lambda:(utc(m['valid_from'])+timedelta(seconds=21 if state[0] else 0)).isoformat()
+        net=Slow(payload=self.helper.payload(0))
+        result=qualify(m,a,r,expected=repin(m,a,r),credential_backend=FakeCredentials(),
+                       network=net,clock=clock)
+        self.assertEqual(result['result'],'AMBIGUOUS_OR_UNVERIFIED_STOP')
+        self.assertEqual(net.calls,1)
+
+    def test_missing_credential_has_zero_dispatch_and_consumes_reservation(self):
+        m,a,r=self.docs();net=FakeNetwork()
+        class Missing:
+            def read(self,service,account):raise ValueError('SYNTHETIC_SELECTOR_MISSING')
+        result=qualify(m,a,r,expected=repin(m,a,r),credential_backend=Missing(),
+                       network=net,clock=lambda:m['valid_from'])
+        self.assertEqual(result['result'],'AMBIGUOUS_OR_UNVERIFIED_STOP')
+        self.assertEqual(net.calls,0)
+        self.assertTrue((self.helper.day/'0.reserved.json').is_file())
+
+    def test_package_version_and_exact_request_count_are_separate_gates(self):
+        from alpha_session_runner import validate_package
+        for version, count in [('unknown',475), ('iios-alpha-monday-package-v1',475),
+                               ('iios-opportunity-package-v1',474), ('iios-opportunity-package-v1',476)]:
+            p={'schema':version,'scope':'OFFLINE_TEST','plan':self.value,
+               'plan_parent':content_hash(self.value),'requests':[{} for _ in range(count)],
+               'external_stages':{},'external_pins':{}}
+            with self.subTest(version=version,count=count), self.assertRaises(ValueError):
+                validate_package(p,content_hash(p))
+
+    def test_unfinished_receipt_is_not_native_or_full_session_green(self):
+        from alpha_session_runner import run
+        p=self.package();calls=[];now=p['plan']['rows'][0]['valid_from']
+        def execute(request,previous):
+            calls.append(1)
+            m,a,r=(request[k] for k in ('manifest','account','runtime'))
+            return qualify(m,a,r,expected=request['expected'],credential_backend=FakeCredentials(),
+                           network=FakeNetwork(payload={'data':[]}),clock=lambda:now,
+                           expected_bulk_previous=previous)
+        result=run(p,content_hash(p),enabled=True,clock=lambda:now,wait=lambda _:None,executor=execute)
+        self.assertEqual(calls,[1]);self.assertEqual(result['status'],'RED')
+        self.assertEqual(result['additional_provider_requests'],0)
+        self.assertEqual(result['native_readiness'],'NOT_QUALIFIED')
+        self.assertFalse(result['armed'])
 
 
 class ReadinessTests(unittest.TestCase):

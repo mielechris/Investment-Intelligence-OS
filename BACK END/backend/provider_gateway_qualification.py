@@ -92,6 +92,9 @@ def verify_runtime(admission):
                 if a_plan := admission.documents()[1].get('bulk_plan'):
                     if a_plan.get('schema') == 'iios-alpha-session-plan-v2':
                         required.add('alpha_session_readiness.py')
+                    if a_plan.get('schema') == 'iios-alpha-opportunity-plan-v3':
+                        required.update({'alpha_session_readiness.py', 'opportunity_spine_contract.py',
+                                         'alpha_session_runner.py'})
             require({Path(p).name for p in r['source_files']} == required, 'SOURCE_CLOSURE')
             for name in required:
                 module = sys.modules.get(name[:-3])
@@ -306,6 +309,12 @@ def _qualify(manifest, account, runtime, *, expected, credential_backend, networ
                         from provider_gateway_contract import utc
                         require(normalized['freshness'] == 'WITHIN_AGE_BOUND', 'BULK_FRESHNESS_STOP')
                         require(utc(result['response_time']) <= utc(m['expires_at']), 'BULK_INTERVAL_OVERRUN')
+                    if a['bulk_plan']['schema'] == 'iios-alpha-opportunity-plan-v3':
+                        require([row['symbol'] for row in response['public']['data']] == m['symbols'],
+                                'RADAR_RESPONSE_ORDER')
+                        start, end = utc(result['dispatch_time']), utc(result['response_time'])
+                        require(utc(m['valid_from']) <= start <= end < utc(m['expires_at']) and
+                                (end-start).total_seconds() <= 20, 'RADAR_RESPONSE_DEADLINE')
                     del normalized, response
                 elif a['retention'].get('mode') == 'EPHEMERAL_ALPHA_QUOTE':
                     # Fixed local classifications only: never persist or hash provider data.

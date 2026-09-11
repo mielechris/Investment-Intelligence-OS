@@ -139,6 +139,25 @@ def admit(manifest, account, runtime, *, expected, now):
         require(a['rate_per_minute'] <= 150, 'ALPHA_DOCUMENTED_RATE_CEILING')
     require(a.get('overage_enabled') is False and a.get('automatic_top_up') is False, 'OVERAGE_NOT_DISABLED')
     require(a.get('ambiguous_billing') == 'RESERVE_MAXIMUM_NO_RETRY', 'BILLING_RULE_REQUIRED')
+    if bulk:
+        from alpha_market_baseline import RADAR_SCHEMA
+        if a['bulk_plan']['schema'] == RADAR_SCHEMA:
+            require('radar_allowance' in a, 'RADAR_ALLOWANCE_REQUIRED')
+            allowance = a['radar_allowance']
+            require(isinstance(allowance, dict) and set(allowance) == {
+                'plan_parent', 'source_commit', 'account_identity', 'maximum_requests',
+                'maximum_cost', 'cost_unit', 'expires_at', 'enrichment_requests'}, 'RADAR_ALLOWANCE_SCHEMA')
+            require(allowance['plan_parent'] == a['bulk_plan_parent'] and
+                    allowance['source_commit'] == m['source_commit'] and
+                    allowance['account_identity'] == a['account_identity'], 'RADAR_ALLOWANCE_BINDING')
+            require(type(allowance['maximum_requests']) is int and allowance['maximum_requests'] == 475
+                    and type(allowance['enrichment_requests']) is int and allowance['enrichment_requests'] == 0,
+                    'RADAR_REQUEST_BUDGET')
+            require(allowance['cost_unit'] == m['cost_unit'] and
+                    amount(allowance['maximum_cost']) == 475 * amount(m['maximum_cost']) and
+                    amount(allowance['maximum_cost']) <= amount(a['available_unreserved']), 'RADAR_COST_BUDGET')
+            require(utc(allowance['expires_at']) == utc(a['bulk_plan']['finalization_deadline']),
+                    'RADAR_ALLOWANCE_EXPIRY')
     retention = a.get('retention', {})
     retention_mode = retention.get('mode', 'RETAIN_PROVIDER_DATA')
     require(retention_mode in ('RETAIN_PROVIDER_DATA', 'EPHEMERAL_ALPHA_QUOTE', 'EPHEMERAL_ALPHA_BULK'), 'RETENTION_MODE')

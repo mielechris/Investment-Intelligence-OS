@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import time
 
-from alpha_market_baseline import require, verify_plan
+from alpha_market_baseline import RADAR_SCHEMA, enrichment_policy, require, verify_plan
 from alpha_session_readiness import FLAGS, final_session_receipt
 from provider_gateway_contract import content_hash, pin, safe_document, utc
 from provider_gateway_credentials import MacKeychain
@@ -16,9 +16,15 @@ from provider_gateway_transport import NativeHTTPS
 def validate_package(package, expected):
     safe_document(package);pin(package, expected)
     require(set(package) == {'schema','scope','plan','plan_parent','requests','external_stages','external_pins'}, 'PACKAGE_SCHEMA')
-    require(package['schema']=='iios-alpha-monday-package-v1' and package['scope'] in ('OFFLINE_TEST','LIVE_QUALIFICATION'),'PACKAGE_SCOPE')
+    require(package['schema'] in ('iios-alpha-monday-package-v1', 'iios-opportunity-package-v1')
+            and package['scope'] in ('OFFLINE_TEST','LIVE_QUALIFICATION'),'PACKAGE_SCOPE')
     plan=package['plan'];verify_plan(plan,package['plan_parent'])
-    require(plan['schema']=='iios-alpha-session-plan-v2' and len(package['requests'])==19,'V2_PREFLIGHT_REQUIRED')
+    radar = package['schema'] == 'iios-opportunity-package-v1'
+    if radar:
+        require(plan['schema'] == RADAR_SCHEMA and len(package['requests']) == 475,
+                'RADAR_PACKAGE_BINDING')
+    else:
+        require(plan['schema']=='iios-alpha-session-plan-v2' and len(package['requests'])==19,'V2_PREFLIGHT_REQUIRED')
     for i,request in enumerate(package['requests']):
         require(set(request)=={'manifest','account','runtime','expected'},'REQUEST_SCHEMA')
         m,a,r=(request[k] for k in ('manifest','account','runtime'))
@@ -30,6 +36,15 @@ def validate_package(package, expected):
         require(len({content_hash(r['runtime']) for r in requests})==1,'ONE_RUNTIME_CLOSURE')
     require(len({r['manifest']['source_commit'] for r in requests})==1 and len({r['account']['cost_unit'] for r in requests})==1,'PACKAGE_IDENTITY')
     require(sum(amount(r['manifest']['maximum_cost']) for r in requests)<=min(amount(r['account']['available_unreserved']) for r in requests),'DAY_BUDGET')
+    if radar:
+        require(len({content_hash(r['runtime']) for r in requests}) == 1, 'RADAR_ONE_RUNTIME')
+        require(len({content_hash(r['account']['radar_allowance']) for r in requests}) == 1,
+                'RADAR_ONE_ALLOWANCE')
+        require(len({content_hash([r['account']['account_identity'], r['account']['tier_identity'],
+                                  r['account']['selectors']]) for r in requests}) == 1,
+                'RADAR_ONE_ACCOUNT_NO_FALLBACK')
+        require(sum(amount(r['manifest']['maximum_cost']) for r in requests) ==
+                amount(requests[0]['account']['radar_allowance']['maximum_cost']), 'RADAR_AGGREGATE_COST')
     for stage,receipt in package['external_stages'].items():
         pin(receipt,package['external_pins'][stage])
     require(set(package['external_stages'])==set(package['external_pins']) and
@@ -47,6 +62,10 @@ def run(package, expected, *, enabled=False, clock=None, wait=None, executor=Non
     if not enabled:
         return {'status':'DISABLED_VALIDATION_ONLY','requests':0,**dict.fromkeys(FLAGS,False)}
     live=package['scope']=='LIVE_QUALIFICATION'
+    radar = plan['schema'] == RADAR_SCHEMA
+    # Plan/package admission does not qualify the absent native full-radar
+    # supervisor, factory bridge, shutdown or audit path. Never imply activation.
+    require(not (radar and live), 'RADAR_NATIVE_ADAPTER_PENDING')
     require(not live or (clock is None and wait is None and executor is None),'LIVE_BOUNDARY')
     if live:
         clock=lambda:datetime.now(timezone.utc).isoformat()
@@ -94,8 +113,26 @@ def run(package, expected, *, enabled=False, clock=None, wait=None, executor=Non
             previous=content_hash(completion)
         except Exception:
             reason='AMBIGUOUS_OR_FAILED_STOP';break
-        if i==0 or i in (6,12,18):
+        if not radar and (i==0 or i in (6,12,18)):
             stage(row['phase'].lower(),'PASS',phase_receipts);phase_receipts=[]
+    if radar:
+        finished_at = clock()
+        in_time = utc(finished_at) <= utc(plan['finalization_deadline'])
+        complete = not reason and len(receipts) == 475 and in_time
+        # Collection evidence is not an audit/shutdown/Committee/Risk receipt.
+        # These absent native owners cannot be replaced by synthetic GREEN.
+        return {'schema': 'iios-opportunity-package-result-v1', 'scope': scope,
+                'status': 'YELLOW' if complete else 'RED',
+                'collection_status': 'PASS' if complete else 'FAILED',
+                'completed_requests': len(receipts), 'request_receipt_parents': receipts,
+                'package_parent': expected, 'schedule_parent': plan['schedule_parent'],
+                'finished_at': finished_at, 'finalization_deadline': plan['finalization_deadline'],
+                'stop_reason': reason if in_time else 'FINALIZATION_DEADLINE',
+                'enrichment': enrichment_policy(), 'additional_provider_requests': 0,
+                'native_readiness': 'NOT_QUALIFIED', 'armed': False,
+                'pending': ['NATIVE_OWNERSHIP', 'FACTORY_AND_NORTHSTAR_ADAPTERS',
+                            'COOPERATIVE_SHUTDOWN', 'FINAL_AUDIT'],
+                **dict.fromkeys(FLAGS,False)}
     evidence.update(package['external_stages']);pins.update(package['external_pins'])
     try:
         result=final_session_receipt(evidence,pins,scope=scope)

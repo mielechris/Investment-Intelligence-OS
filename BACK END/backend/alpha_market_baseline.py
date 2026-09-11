@@ -10,6 +10,20 @@ from provider_gateway_contract import content_hash, locked_authority, pin, symbo
 ROLE = 'GOVERNED_REALTIME_MARKET_BASELINE'
 FUNCTION = 'REALTIME_BULK_QUOTES'
 RETENTION = 'EPHEMERAL_ALPHA_BULK'
+RADAR_SCHEMA = 'iios-alpha-opportunity-plan-v3'
+
+
+def enrichment_policy():
+    """This package never dispatches enrichment or confers case/order authority."""
+    return {'schema': 'iios-radar-enrichment-disabled-v1',
+            'alpha_additional_requests': 0, 'yahoo_additional_requests': 0,
+            'other_providers': {p: {'live_dispatch': False, 'request_budget': None,
+                                  'cost_budget': None, 'receipt_parent': None}
+                                for p in ('ALPACA', 'BIGDATA', 'FINANCIAL_DATASETS', 'MASSIVE')},
+            'alpaca': {'realtime_feed': 'iex', 'realtime_sip': False,
+                       'delayed_sip_minutes': 15, 'maximum_streamed_symbols': 30,
+                       'promoted_candidates_only': True},
+            'authority': locked_authority()}
 
 
 def require(ok, reason):
@@ -47,10 +61,59 @@ def plan(universe, universe_hash, calendar, calendar_hash, *, root):
             'retry_count': 0, 'authority': locked_authority()}
 
 
+def radar_plan(universe, universe_hash, calendar, calendar_hash, *, root,
+               opportunity_schedule, schedule_hash):
+    """Explicit adapter, not an inferred conversion of a legacy plan.
+
+    The embedded schedule is reconstructed using its independently pinned inputs.
+    Its hash alone cannot supply the missing universe or calendar document.
+    """
+    from copy import deepcopy
+    from opportunity_spine_contract import schedule
+    pin(universe, universe_hash)
+    pin(calendar, calendar_hash)
+    pin(opportunity_schedule, schedule_hash)
+    require(opportunity_schedule == schedule(universe, universe_hash, calendar, calendar_hash,
+            mode='FULL_OPPORTUNITY_RADAR', root=root), 'RADAR_SCHEDULE_BINDING')
+    legacy = plan(universe, universe_hash, calendar, calendar_hash, root=root)
+    preflight = opportunity_schedule['preflight']
+    rows = [dict(preflight)]
+    for scan in opportunity_schedule['scans']:
+        for batch, members in enumerate(scan['batches']):
+            identifier = f"SCAN-{scan['scan']:02d}-{batch}"
+            rows.append({'slot': len(rows), 'id': identifier, 'phase': 'SCAN',
+                         'scan': scan['scan'], 'batch': batch, 'symbols': list(members),
+                         'symbol_hash': content_hash(members), 'valid_from': scan['start'],
+                         'expires_at': scan['end'], 'root': str(Path(root) / identifier)})
+    legacy.update(schema=RADAR_SCHEMA, mode='FULL_OPPORTUNITY_RADAR', rows=rows,
+                  opportunity_schedule=deepcopy(opportunity_schedule), schedule_parent=schedule_hash,
+                  maximum_requests=475, collection_requests=474, preflight_requests=1,
+                  maximum_starts_per_rolling_minute=3, requires_preflight=True,
+                  response_must_finish_in_interval=True, redirects=0, pagination=0,
+                  fallback=0, backfill=False, maximum_age_seconds=60,
+                  finalization_deadline='2026-09-14T20:15:00+00:00',
+                  enrichment=enrichment_policy())
+    return deepcopy(legacy)
+
+
 def verify_plan(value, expected):
     pin(value, expected)
+    require(isinstance(value, dict) and 'schema' in value, 'PLAN_VERSION_REQUIRED')
+    schema = value['schema']
+    require(schema in ('iios-alpha-bulk-plan-v1', 'iios-alpha-session-plan-v2', RADAR_SCHEMA),
+            'PLAN_VERSION_UNSUPPORTED')
+    require({'universe', 'universe_parent', 'calendar', 'calendar_parent', 'root'} <= set(value),
+            'PLAN_INPUTS_REQUIRED')
+    if schema == RADAR_SCHEMA:
+        require({'opportunity_schedule', 'schedule_parent'} <= set(value), 'RADAR_INPUTS_REQUIRED')
+        rebuilt = radar_plan(value['universe'], value['universe_parent'], value['calendar'],
+                             value['calendar_parent'], root=value['root'],
+                             opportunity_schedule=value['opportunity_schedule'],
+                             schedule_hash=value['schedule_parent'])
+        require(value == rebuilt, 'PLAN_SUBSTITUTION')
+        return
     builder = plan
-    if value.get('schema') == 'iios-alpha-session-plan-v2':
+    if schema == 'iios-alpha-session-plan-v2':
         from alpha_session_readiness import readiness_plan
         builder = readiness_plan
     require(value == builder(value['universe'], value['universe_parent'], value['calendar'],
@@ -70,6 +133,11 @@ def admit_batch(manifest, account):
             'BULK_TRANSPORT_BOUND')
     require(account.get('qualification_parameters') == manifest['parameters'], 'BULK_ACCOUNT_FUNCTION_BINDING')
     require(account['rate_per_minute'] <= 150, 'RATE_CEILING')
+    if value['schema'] == RADAR_SCHEMA:
+        require(manifest['maximum_age_seconds'] == 60, 'RADAR_FRESHNESS_BOUND')
+        require(utc(account['expires_at']) >= utc(value['finalization_deadline']), 'RADAR_ACCOUNT_EXPIRY')
+        require(utc(account['retention']['retain_until']) >= utc(value['finalization_deadline']),
+                'RADAR_RETENTION_EXPIRY')
 
 
 def summarize(payload, requested, *, received_at, maximum_age_seconds):

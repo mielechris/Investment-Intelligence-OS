@@ -12,8 +12,98 @@ from provider_gateway_qualification import qualify
 from test_provider_gateway_live_contract import quote_fixture, repin
 from test_provider_gateway_credentials import FakeCredentials, FAKE
 from test_provider_gateway_transport import FakeNetwork
+from alpha_market_baseline import radar_plan, RADAR_SCHEMA
 
 CALENDAR = {'calendar': 'XNYS', 'session': '2026-09-14', 'open': '2026-09-14T13:30:00+00:00', 'close': '2026-09-14T20:00:00+00:00'}
+
+
+def radar_fixture_plan():
+    from opportunity_spine_contract import schedule
+    root = tempfile.mkdtemp(prefix='radar-', dir=os.environ['IIOS_GATEWAY_TEST_ROOT'])
+    universe = {'symbols': [f'S{i:03}' for i in reversed(range(517))]}
+    s = schedule(universe, content_hash(universe), CALENDAR, content_hash(CALENDAR),
+                 mode='FULL_OPPORTUNITY_RADAR', root=root)
+    return radar_plan(universe, content_hash(universe), CALENDAR, content_hash(CALENDAR),
+                      root=root, opportunity_schedule=s, schedule_hash=content_hash(s))
+
+
+class RadarPlanTests(unittest.TestCase):
+    def test_explicit_adapter_admits_all_475_with_original_schedule_pin(self):
+        p = radar_fixture_plan()
+        verify_plan(p, content_hash(p))
+        self.assertEqual(p['schema'], RADAR_SCHEMA)
+        self.assertEqual(p['maximum_requests'], 475)
+        self.assertEqual(len(p['rows']), 475)
+        self.assertEqual(len(p['rows'][0]['symbols']), 10)
+        self.assertEqual(p['schedule_parent'], content_hash(p['opportunity_schedule']))
+        self.assertEqual(p['rows'][0]['valid_from'], '2026-09-14T13:20:00+00:00')
+        self.assertEqual(p['rows'][0]['expires_at'], '2026-09-14T13:25:00+00:00')
+        for i in range(79):
+            rows = p['rows'][1+i*6:7+i*6]
+            self.assertEqual([len(r['symbols']) for r in rows], [100]*5+[17])
+            self.assertEqual(sum([r['symbols'] for r in rows], []), p['universe']['symbols'])
+            self.assertEqual({r['scan'] for r in rows}, {i})
+        self.assertEqual(p['rows'][-1]['expires_at'], '2026-09-14T20:05:30+00:00')
+        self.assertEqual(p['finalization_deadline'], '2026-09-14T20:15:00+00:00')
+
+    def test_missing_unknown_or_inferred_version_rejected_cleanly(self):
+        p = radar_fixture_plan()
+        for field in ('schema', 'universe', 'schedule_parent'):
+            bad = copy.deepcopy(p);del bad[field]
+            with self.subTest(field=field), self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+        for schema in ('unknown', 'iios-alpha-session-plan-v2', 'iios-alpha-bulk-plan-v1'):
+            bad = {**p, 'schema': schema}
+            with self.subTest(schema=schema), self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+        # The formerly crashing bare offline schedule lacks runtime input bindings.
+        s = p['opportunity_schedule']
+        with self.assertRaisesRegex(ValueError, 'PLAN_VERSION_REQUIRED'):verify_plan(s, content_hash(s))
+
+    def test_universe_missing_duplicate_extra_reorder_substitution_and_hash(self):
+        p = radar_fixture_plan()
+        for kind in ('missing', 'extra', 'duplicate', 'reordered', 'substituted', 'hash'):
+            bad = copy.deepcopy(p);members = bad['universe']['symbols']
+            if kind == 'missing':members.pop()
+            elif kind == 'extra':members.append('EXTRA')
+            elif kind == 'duplicate':members[-1] = members[0]
+            elif kind == 'reordered':members.reverse()
+            elif kind == 'substituted':members[0] = 'OTHER'
+            else:bad['universe_parent'] = '0'*64
+            with self.subTest(kind=kind), self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+        bad = copy.deepcopy(p);bad['universe']['symbols'].reverse()
+        bad['universe_parent'] = content_hash(bad['universe'])
+        with self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+
+    def test_batch_order_membership_slot_and_independent_plan_hash(self):
+        p = radar_fixture_plan()
+        for change in ('order', 'missing', 'extra', 'duplicate', 'slot', 'batch_hash'):
+            bad = copy.deepcopy(p)
+            if change == 'order':bad['rows'][1]['symbols'].reverse()
+            elif change == 'missing':bad['rows'].pop()
+            elif change == 'extra':bad['rows'].append(copy.deepcopy(bad['rows'][-1]))
+            elif change == 'duplicate':bad['rows'][2] = copy.deepcopy(bad['rows'][1])
+            elif change == 'slot':bad['rows'][1]['slot'] = 0
+            else:bad['rows'][1]['symbol_hash'] = '0'*64
+            with self.subTest(change=change), self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+        with self.assertRaises(ValueError):verify_plan(p, '0'*64)
+
+    def test_timing_count_and_budget_constraints_cannot_be_relabelled(self):
+        p = radar_fixture_plan()
+        changes = {'maximum_requests': 476, 'collection_requests': 475,
+                   'maximum_starts_per_rolling_minute': 4, 'timeout_seconds': 21,
+                   'maximum_response_bytes': 1000001, 'maximum_age_seconds': 61,
+                   'retry_count': 1, 'redirects': 1, 'pagination': 1, 'fallback': 1,
+                   'backfill': True, 'finalization_deadline': '2026-09-14T20:16:00+00:00'}
+        for key, value in changes.items():
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                bad = {**p, key: value};verify_plan(bad, content_hash(bad))
+        for provider in ('ALPACA', 'BIGDATA', 'FINANCIAL_DATASETS', 'MASSIVE'):
+            bad = copy.deepcopy(p);bad['enrichment']['other_providers'][provider]['live_dispatch'] = True
+            with self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+        for key in ('alpha_additional_requests', 'yahoo_additional_requests'):
+            bad = copy.deepcopy(p);bad['enrichment'][key] = 1
+            with self.assertRaises(ValueError):verify_plan(bad, content_hash(bad))
+        self.assertEqual(p['enrichment']['alpaca']['maximum_streamed_symbols'], 30)
+        self.assertFalse(p['enrichment']['alpaca']['realtime_sip'])
 
 
 class BulkTests(unittest.TestCase):
