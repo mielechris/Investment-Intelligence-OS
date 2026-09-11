@@ -89,6 +89,9 @@ def verify_runtime(admission):
             required = {'provider_gateway_live_contract.py', 'provider_gateway_credentials.py', 'provider_gateway_transport.py', 'provider_gateway_wire.py', 'provider_gateway_qualification.py', 'provider_gateway_contract.py', 'provider_gateway_adapters.py', 'truth_spine_contract.py'}
             if m['parameters'].get('function') == 'REALTIME_BULK_QUOTES':
                 required.add('alpha_market_baseline.py')
+                if a_plan := admission.documents()[1].get('bulk_plan'):
+                    if a_plan.get('schema') == 'iios-alpha-session-plan-v2':
+                        required.add('alpha_session_readiness.py')
             require({Path(p).name for p in r['source_files']} == required, 'SOURCE_CLOSURE')
             for name in required:
                 module = sys.modules.get(name[:-3])
@@ -276,8 +279,16 @@ def _qualify(manifest, account, runtime, *, expected, credential_backend, networ
             with credential_scope(admission, backend=credential_backend, now=clock()) as material:
                 result['credential_access_count_basis'] = 'COMPLETED_EXACT_LOOKUPS'
                 verify_destination(fd, m['root'])
+                if a.get('bulk_plan', {}).get('requires_preflight'):
+                    result['dispatch_time'] = clock()
                 response = exchange(admission, material, network=network, now=clock())
                 result['http_status'] = response['status']
+                if a.get('bulk_plan', {}).get('requires_preflight'):
+                    result['response_time'] = clock()
+                    if mode == 'LIVE_QUALIFICATION':
+                        result['dispatch_time'] = response.get('request_start')
+                        result['response_time'] = response.get('response_end')
+                        require(result['dispatch_time'] is not None and result['response_time'] is not None, 'WIRE_TIMESTAMPS_REQUIRED')
                 require(response['body'] is not None, 'DISPATCH_UNVERIFIED')
                 bulk = a['retention'].get('mode') == 'EPHEMERAL_ALPHA_BULK'
                 if bulk:
@@ -291,6 +302,10 @@ def _qualify(manifest, account, runtime, *, expected, credential_backend, networ
                     result['bulk_checks'] = normalized
                     # Coverage defects stop the day after preserving sanitized diagnostics.
                     require(normalized['coverage'] == 'COMPLETE', 'BULK_PARTIAL_STOP')
+                    if a['bulk_plan'].get('requires_preflight'):
+                        from provider_gateway_contract import utc
+                        require(normalized['freshness'] == 'WITHIN_AGE_BOUND', 'BULK_FRESHNESS_STOP')
+                        require(utc(result['response_time']) <= utc(m['expires_at']), 'BULK_INTERVAL_OVERRUN')
                     del normalized, response
                 elif a['retention'].get('mode') == 'EPHEMERAL_ALPHA_QUOTE':
                     # Fixed local classifications only: never persist or hash provider data.
@@ -373,6 +388,7 @@ def qualify(manifest, account, runtime, *, expected, credential_backend, network
         required = {f'{i}.{suffix}.json' for i in range(slot) for suffix in ('reserved', 'complete')}
         require(names <= allowed and required <= names, 'DAY_INTERRUPTED_OR_DUPLICATE')
         previous = None
+        prior_dispatches = []
         for i in range(slot):
             complete = read_record(fd, f'{i}.complete.json')
             reservation = read_record(fd, f'{i}.reserved.json')
@@ -383,11 +399,19 @@ def qualify(manifest, account, runtime, *, expected, credential_backend, network
             try:
                 retained = read_record(child, 'ALPHA_VANTAGE.receipt.json', expected_hash=complete['receipt'])
                 verify_qualification_receipt(retained, complete['receipt'], parents=retained['parents'])
+                if day.get('requires_preflight'):
+                    require(retained.get('bulk_checks', {}).get('freshness') == 'WITHIN_AGE_BOUND', 'PREFLIGHT_OR_COLLECTION_NOT_FRESH')
+                    prior_dispatches.append(retained['dispatch_time'])
                 require(retained['source_commit'] == m['source_commit'] and retained['root'] == day['rows'][i]['root'] and retained['role'] == m['role'] and retained['result'] == 'OBSERVED', 'DAY_RECEIPT_BINDING')
             finally:
                 os.close(child)
             previous = content_hash(complete)
         require(previous == expected_bulk_previous, 'INDEPENDENT_DAY_PARENT')
+        if day.get('requires_preflight'):
+            from provider_gateway_contract import utc
+            dispatch_now = utc(datetime.now(timezone.utc).isoformat() if clock is None else clock())
+            require(all(utc(t) <= dispatch_now for t in prior_dispatches), 'CLOCK_ROLLBACK')
+            require(sum(0 <= (dispatch_now - utc(t)).total_seconds() < 60 for t in prior_dispatches) < 3, 'ROLLING_RATE_GATE')
         verify_destination(fd, day['root'])
         reserved = publish(fd, f'{slot}.reserved.json', {'plan': a['bulk_plan_parent'], 'slot': slot,
                            'source_commit': m['source_commit'], 'previous': previous})

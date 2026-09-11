@@ -49,15 +49,19 @@ def plan(universe, universe_hash, calendar, calendar_hash, *, root):
 
 def verify_plan(value, expected):
     pin(value, expected)
-    require(value == plan(value['universe'], value['universe_parent'], value['calendar'],
-                          value['calendar_parent'], root=value['root']), 'PLAN_SUBSTITUTION')
+    builder = plan
+    if value.get('schema') == 'iios-alpha-session-plan-v2':
+        from alpha_session_readiness import readiness_plan
+        builder = readiness_plan
+    require(value == builder(value['universe'], value['universe_parent'], value['calendar'],
+                             value['calendar_parent'], root=value['root']), 'PLAN_SUBSTITUTION')
 
 
 def admit_batch(manifest, account):
     value = account['bulk_plan']
     verify_plan(value, account['bulk_plan_parent'])
     slot = account['bulk_slot']
-    require(type(slot) is int and 0 <= slot < 18, 'SLOT_INVALID')
+    require(type(slot) is int and 0 <= slot < len(value['rows']), 'SLOT_INVALID')
     row = value['rows'][slot]
     require(manifest['symbols'] == row['symbols'] and manifest['root'] == row['root'] and
             manifest['batch_id'] == row['id'] and manifest['valid_from'] == row['valid_from'] and

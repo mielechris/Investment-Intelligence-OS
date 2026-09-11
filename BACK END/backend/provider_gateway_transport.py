@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import http.client
 import ipaddress
 import io
@@ -20,6 +21,8 @@ from provider_gateway_live_contract import Admission, ROUTES, require
 class Response:
     status: int
     body: bytes = field(repr=False)
+    request_start: str | None = None
+    response_end: str | None = None
 
     def __repr__(self):
         return f'<Response status={self.status} body=redacted>'
@@ -82,13 +85,14 @@ class NativeHTTPS:
             sock = context.wrap_socket(sock, server_hostname=host)
             connection.sock = DeadlineSocket(sock, remaining)
             sock.settimeout(remaining())
+            request_start = datetime.now(timezone.utc).isoformat()
             connection.request(method, target, body=body, headers=headers)
             sock.settimeout(remaining())
             reply = connection.getresponse()
             # Headers and raw request targets are never returned to callers.
             remaining()
             if reply.status != 200:
-                return Response(reply.status, b'')
+                return Response(reply.status, b'', request_start, datetime.now(timezone.utc).isoformat())
             require(reply.getheader('Content-Encoding', 'identity') == 'identity', 'ENCODING_REJECTED')
             require('application/json' in reply.getheader('Content-Type', ''), 'CONTENT_TYPE_REJECTED')
             chunks, count = [], 0
@@ -101,7 +105,7 @@ class NativeHTTPS:
                 chunks.append(chunk)
                 count += len(chunk)
                 require(count <= limit, 'BODY_TOO_LARGE')
-            return Response(reply.status, b''.join(chunks))
+            return Response(reply.status, b''.join(chunks), request_start, datetime.now(timezone.utc).isoformat())
         finally:
             connection.close()
             sock.close()
@@ -129,6 +133,7 @@ def exchange(admission, material, *, network, now):
     target, body, reply, public = None, None, None, None
     failed = False
     status = None
+    request_start = response_end = None
     try:
         p = m['provider']
         if p == 'ALPACA':
@@ -149,13 +154,14 @@ def exchange(admission, material, *, network, now):
         reply = network.exchange(host=m['host'], address=r['network_addresses'][p], method=m['method'], target=target, headers=headers, body=body, tls_file=str(Path(r['root']) / r['tls']), timeout=m['timeout_seconds'], limit=m['maximum_response_bytes'])
         require(type(reply) is Response and type(reply.status) is int and type(reply.body) is bytes, 'RESPONSE_TYPE')
         status = reply.status
+        request_start, response_end = reply.request_start, reply.response_end
         require(status == 200 and len(reply.body) <= m['maximum_response_bytes'], 'HTTP_OR_SIZE_REJECTED')
         material.reject_echo(reply.body)
         public = json.loads(reply.body, object_pairs_hook=_unique)
         # Detect unicode-escaped echoes after JSON decoding, before hashing.
         material.reject_echo(json.dumps(public, ensure_ascii=False).encode())
         safe_document(public)
-        return {'status': status, 'body': reply.body, 'public': public}
+        return {'status': status, 'body': reply.body, 'public': public, 'request_start': reply.request_start, 'response_end': reply.response_end}
     except Exception:
         failed = True
     finally:
@@ -165,4 +171,4 @@ def exchange(admission, material, *, network, now):
         target = body = reply = public = None
     if failed:
         # No underlying exception, URL, headers, provider message or body escapes.
-        return {'status': status, 'body': None, 'public': None, 'failure': 'REQUEST_OR_RESPONSE_UNVERIFIED'}
+        return {'status': status, 'body': None, 'public': None, 'failure': 'REQUEST_OR_RESPONSE_UNVERIFIED', 'request_start': request_start, 'response_end': response_end}

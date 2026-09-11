@@ -85,3 +85,56 @@ itself establish bulk entitlement or all-517 coverage.
 
 All broker, paper-order, trade-execution, live-execution and ledger authorities
 remain false. Installation and activation require a separate explicit authority.
+
+## Successor readiness contract: pre-open bulk qualification
+
+`alpha_session_readiness.readiness_plan` explicitly selects v2. The old v1 plan
+and old MU qualification are historical independent contracts and are not the
+Monday v2 activation plan. V2 has one ten-symbol REALTIME_BULK_QUOTES preflight
+between 06:20 and 06:25 PDT and 18 collection calls, for 19 total. The pilot is
+the approved MU/SPY/XLK/VNQ/TLT/GLD/UUP/IBIT/PFF/BIL list, which is not itself the
+517-member stock universe. Ten-symbol reconciliation cannot prove all-517 access.
+
+All six opening requests and responses must fall within 06:30:30–06:32:10 PDT;
+intraday within 09:30:00–09:32:00; closing within 13:00:30–13:02:10. Slots within
+a phase share its interval, preserving pinned order. Actual recorded dispatch
+times enforce at most three starts per rolling minute, and clock rollback fails
+closed. There is no promise that serialized requests at worst-case 20-second
+latency can complete inside 100 seconds. Slow responses must fail the interval
+gate; no silent extension or full-day GREEN. A controller may wait within the
+explicit interval for a rate slot, but this library does not schedule work.
+
+The preflight and all collection responses must have complete coverage and
+WITHIN_AGE_BOUND timestamp evidence. Unknown timestamp timezone, stale data,
+missing symbols or schema ambiguity stops continuation. Authentication and
+account entitlement remain separate evidence gates; GLOBAL_QUOTE does not
+supply the bulk preflight proof. Dispatch and response wall timestamps are
+recorded for v2; provider timestamps remain in sanitized bulk_checks.
+
+`final_session_receipt` joins independent, externally accepted stage receipts:
+universe, preflight, opening, intraday, closing, Yahoo discovery, candidates/cases,
+agents, committee, risk, paper decision. It verifies scope, session, stage,
+expected hashes and predecessor links. Existing governance owners must verify
+each stage's substantive evidence before accepting its independent hash. This
+join does not run agents, examine ledgers, synthesize missing committee/risk
+results or claim that a hash alone validates their semantics. Missing stages are
+YELLOW; failed stages are RED. OFFLINE_TEST cannot become live GREEN. Explicit
+broker_connected, paper_order_permission, trade_execution_permission and
+live_execution fields are always false. A paper decision is evidence only, not
+permission to submit a paper order.
+
+The successor opt-in `alpha_session_runner` validates all nineteen independently
+pinned admissions and the aggregate budget before dispatch. Its CLI is disabled
+unless --run is explicitly supplied to a live package. The enabled path checks
+the date, waits only inside the explicit plan, enforces rate slots, stops after
+any failed attempt and supports cooperative SIGTERM/SIGINT shutdown. There are
+no retries or providers outside Alpha. Missing Yahoo/agent/governance stage
+receipts remain YELLOW, even after successful Alpha collection. Existing agents
+and services are not activated by this runner.
+
+The disabled installation rehearsal publishes only a disabled plist inside a
+new independently pinned artifact root. It never registers launchd, invokes
+launchctl, starts a service or includes --run. This is not native startup or
+production installation acceptance. Production package, account and source
+checkpoint pins must be released separately; source preparation does not make
+actual bulk schema/timezone verification or full-session governance evidence true.
