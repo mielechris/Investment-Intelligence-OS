@@ -45,7 +45,8 @@ function exactKeys(value: object, keys: string): boolean {
 }
 function boundedShape(view: SessionView): boolean {
   const top = 'factory schema session phase scope published_at capture_status source_generation readiness source_cycle source_cycle_generated_at watermark owners universes sources capabilities counters counter_scope narrative_classification incidents source_session_closed_is_not_installed_disabled';
-  if (!exactKeys(view, top + ('evidence_classes' in view ? ' evidence_classes' : ''))
+  if (!exactKeys(view, top + ('evidence_classes' in view ? ' evidence_classes' : '') +
+      (view.schema === 'iios-historical-northstar-browser-v2' ? ' lineage' : ''))
       || !exactKeys(view.watermark, 'count identity')) return false;
   if (!view.sources.every(s => exactKeys(s,'store records capture_end classifications event_time observation_time publication_time'))
       || !view.universes.every(u => exactKeys(u,'capture_id count capture_time source_classes'))) return false;
@@ -86,6 +87,11 @@ export async function admitProjection(value: unknown, previous: SessionView | nu
   }
   if (previous && (previous.session !== value.session || Date.parse(previous.published_at) > Date.parse(value.published_at)
       || previous.watermark.count > value.watermark.count)) throw Error('SESSION_OR_GENERATION_REGRESSION');
+  if (previous?.lineage && (!value.lineage || ['source_commit','package_hash','package_generation',
+    'runtime_hash','frontend_hash','admission_hash','generation_hash','initial_cycle_hash','owner_manifest_hash',
+    'completion_hash','l7_hash','l8_hash','backend_instance_hash','common_watermark'].some(k =>
+      previous.lineage![k as keyof typeof previous.lineage] !== value.lineage![k as keyof typeof value.lineage])))
+    throw Error('PACKAGE_INSTANCE_REPLACED');
   // The validated object is never converted into an Expansion snapshot or activity model.
   return JSON.parse(JSON.stringify(value)) as SessionView;
 }

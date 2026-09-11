@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import json
 import tempfile
 import unittest
@@ -114,6 +116,7 @@ class ProfessionalAndFusionTests(unittest.TestCase):
         self.assertEqual((result["contradictions"],result["correlated_duplicates"]),(1,1))
 
 
+@isolated_compositor_readiness
 class PaperAndVisualTests(unittest.TestCase):
     def test_independent_sleeves_do_not_create_positions(self):
         lab=ParallelPaperLaboratory(); result=lab.add(sleeve(),{"price":100,"liquidity":"HIGH"})
@@ -142,7 +145,7 @@ class PaperAndVisualTests(unittest.TestCase):
             consolidated_nav=10000,candidate_state="AVAILABLE_EMPTY")
         with tempfile.TemporaryDirectory() as name:
             root=Path(name); missing=[root/f"missing-{i}" for i in range(4)]
-            compositor=acceptance_server.Compositor(*missing,"http://127.0.0.1:8002/system/status",multi_asset_reader=lambda:value)
+            compositor=acceptance_server.Compositor(*missing,"http://127.0.0.1:8002/system/status",multi_asset_reader=lambda:value, **isolated_service_readers())
             compositor._reachability=lambda:"CURRENT"; snapshot=compositor.snapshot()
             self.assertEqual(snapshot["sections"]["multi_asset_factory"]["state"],"AVAILABLE_EMPTY")
             unsafe={**value,"authority":{**AUTHORITY,"broker":True}}

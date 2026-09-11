@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import json
 import os
 import signal
@@ -21,6 +23,7 @@ from .tuesday_controller_state import (
 NOW = datetime(2026, 9, 6, 12, tzinfo=timezone.utc)
 
 
+@isolated_compositor_readiness
 class ControllerStateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -126,7 +129,7 @@ class ControllerStateTests(unittest.TestCase):
         base=lambda: ControllerStatusReader(self.root).read()
         missing=Path(self.temp.name)/"missing.json"
         compositor=Compositor(missing,missing,missing,missing,"http://127.0.0.1:1",controller_reader=base,
-                              controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE")
+                              controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE", **isolated_service_readers())
         compositor._reachability=lambda: "UNAVAILABLE"
         projected=compositor.snapshot()["sections"]["tuesday_controller_status"]
         self.assertEqual(projected["state"],"INSTALLED_BUT_DISABLED")

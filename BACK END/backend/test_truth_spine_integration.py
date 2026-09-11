@@ -20,6 +20,46 @@ from truth_spine_integration import DAY_CHAIN, atomic, derived_bindings, museum_
 from truth_spine_integration_service import Lease, heartbeat, probe, health
 
 
+class HistoricalLineageTests(unittest.TestCase):
+    def test_package_view_is_derived_from_admitted_records_and_keeps_original_clocks(self):
+        from truth_spine_lineage import historical_generation
+        from truth_spine_integration_service import historical_view
+        from truth_spine_contract import verified
+        at='2026-09-11T03:00:00+00:00'
+        original='2020-01-02T00:00:00+00:00'
+        files={name:{'source_sha256':str(i)*64} for i,name in enumerate(
+            ('manifest.json','completion-receipt.json','l7/snapshot.db','l8/snapshot.db'),1)}
+        admission=seal({'common_watermark':original,'files':files})
+        record={'record_id':'retained-case','source_store_identity':'history:test','record_type':'case',
+                'original_content_hash':'a'*64,'classification':'REPLAY','event_time':original,
+                'observation_time':original,'publication_time':original}
+        with patch('truth_spine_adapters.read_document',return_value=[record]):
+            generation,events=historical_generation([{'kind':'research','store_id':'history:test','sha256':'b'*64}],admission,'c'*64)
+        manifest={'lineage':{'package_generation':'c'*64,'initial_cycle':{'sha256':'d'*64}},
+                  'source_base':'e'*40,'dependency_hash':'f'*64,'frontend_content_hash':'a'*64}
+        topology={'root':'/synthetic','release_manifest_hash':'b'*64,
+                  'identities':{'scheduler_owner':'scheduler','publisher_owner':'publisher'}}
+        with patch('truth_spine_lineage.verify_chain',return_value={'admission':admission,'generation':generation,'events':events}):
+            view=historical_view(topology,manifest,{'content_hash':'f'*64},at)
+        verified(view['factory'])
+        self.assertEqual(view['sources'][0]['event_time'],original)
+        self.assertEqual(view['lineage']['common_watermark'],original)
+        self.assertEqual(view['published_at'],at)
+        self.assertEqual(view['phase'],'SESSION_CLOSED')
+        self.assertEqual(view['source_generation'],generation['content_hash'])
+        self.assertEqual(view['lineage']['projection_hash'],view['factory']['content_hash'])
+        self.assertEqual(len(view['factory']['rooms']),24)
+        self.assertTrue(all(x is False for x in view['capabilities'].values()))
+
+    def test_unhealthy_actual_backend_cannot_serve_historical_success(self):
+        from truth_spine_integration_service import historical_response
+        with patch('truth_spine_integration_service.topology',return_value=({'schema':'iios-historical-topology-v3'},{})), \
+             patch('truth_spine_integration_service.health',return_value=(503,{'status':'NOT_READY'})), \
+             patch('truth_spine_integration_service.historical_view',side_effect=AssertionError('NO_FALLBACK')):
+            self.assertEqual(historical_response(Path('/synthetic'),'/truth-spine/full-session',{}),
+                             (503,{'status':'NOT_READY'}))
+
+
 class AuthorityTests(unittest.TestCase):
     def setUp(self):
         self.now=datetime(2026,9,9,20,tzinfo=timezone.utc)
@@ -91,10 +131,22 @@ class AuthorityTests(unittest.TestCase):
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name).resolve()
-        self.db=self.root/'legacy.db';db=sqlite3.connect(self.db)
-        db.execute('CREATE TABLE ledger_objects(object_id TEXT,object_type TEXT,payload_json TEXT,created_at TEXT)')
-        db.execute('INSERT INTO ledger_objects VALUES (?,?,?,?)',('same-id','case','{"case_id":"same-id"}','2026-09-08T20:00:00Z'));db.commit();db.close()
+        from test_truth_spine_lineage import retained_root
+        from truth_spine_adapters import SQLitePolicy, create_run_event_store, strict_sqlite_scope, connect_strict_sqlite
+        import os
+        self.root=retained_root('legacy-adapter-regression')
+        (self.root/'state').mkdir();(self.root/'admission').mkdir()
+        policy=SQLitePolicy(str(self.root),'a'*64,'b'*64,'synthetic',os.getpid(),os.environ['IIOS_SB38D_TEST_ROOT'])
+        capability=create_run_event_store(policy,'c'*64,'state/legacy.db');self.db=Path(capability.path)
+        with strict_sqlite_scope(policy):
+            db=connect_strict_sqlite(capability)
+            try:
+                # An individually registered synthetic store supplies legacy
+                # behavior tests; no old evidence database is ever a fixture.
+                db.execute('PRAGMA journal_mode=OFF')
+                db.execute('CREATE TABLE ledger_objects(object_id TEXT,object_type TEXT,payload_json TEXT,created_at TEXT)')
+                db.execute('INSERT INTO ledger_objects VALUES (?,?,?,?)',('same-id','case','{"case_id":"same-id"}','2026-09-08T20:00:00Z'));db.commit()
+            finally:db.close()
 
     def test_ledger_is_readonly_and_namespaced(self):
         before=self.db.read_bytes();a=read_ledger(source(self.db,'operational'));b=read_ledger(source(self.db,'historical'))
@@ -115,7 +167,7 @@ class AdapterTests(unittest.TestCase):
             with self.assertRaises(ValueError):source(path,'operational')
 
     def test_empty_ledger_rejected(self):
-        db=sqlite3.connect(self.db);db.execute('DELETE FROM ledger_objects');db.commit();db.close()
+        db=sqlite3.connect(self.db);db.execute('PRAGMA journal_mode=MEMORY');db.execute('DELETE FROM ledger_objects');db.commit();db.close()
         with self.assertRaises(ValueError):read_ledger(source(self.db,'operational'))
 
     def test_active_wal_not_ignored(self):

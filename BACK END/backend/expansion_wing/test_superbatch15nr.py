@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import copy
 import hashlib
 import json
@@ -206,6 +208,7 @@ class ProjectionStoreTests(unittest.TestCase):
         self.assertFalse((self.root / PROJECTION_NAME).exists())
 
 
+@isolated_compositor_readiness
 class PublisherAndIntegrationTests(unittest.TestCase):
     def test_partial_current_projection_preserves_unknown_and_zero_distinctions(self):
         value = compose_from_sanitized_snapshot(sanitized_snapshot(), generated_at=NOW.isoformat(),
@@ -251,7 +254,7 @@ class PublisherAndIntegrationTests(unittest.TestCase):
             store = ProjectionStore(store_root); store.create_with_rollback(generated_at=clock.isoformat()); store.publish(projection(clock), now=clock)
             reader = FixedProjectionReader(root=store_root, enabled=True, validation_clock=clock)
             missing = [root / f"missing-{i}" for i in range(4)]
-            compositor = Compositor(*missing, "http://127.0.0.1:1", multi_asset_reader=reader.read)
+            compositor = Compositor(*missing, "http://127.0.0.1:1", multi_asset_reader=reader.read, **isolated_service_readers())
             compositor._reachability = lambda: "UNAVAILABLE"
             snapshot = compositor.snapshot()
             status = snapshot["sections"]["projection_activation"]
@@ -267,7 +270,7 @@ class PublisherAndIntegrationTests(unittest.TestCase):
             reader = FixedProjectionReader(root=store_root, enabled=True,
                 validation_clock=clock + timedelta(seconds=901))
             missing = [root / f"missing-{i}" for i in range(4)]
-            compositor = Compositor(*missing, "http://127.0.0.1:1", multi_asset_reader=reader.read)
+            compositor = Compositor(*missing, "http://127.0.0.1:1", multi_asset_reader=reader.read, **isolated_service_readers())
             compositor._reachability = lambda: "UNAVAILABLE"
             snapshot = compositor.snapshot(); sections = snapshot["sections"]
             status = sections["projection_activation"]

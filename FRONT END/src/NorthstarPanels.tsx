@@ -102,15 +102,22 @@ export function NorthstarGroup({ group }: { group: CoverageGroup }) {
 }
 export function NorthstarSessionStatus() {
   const { view, status, reason } = useNorthstar();
-  return <section className="northstar-session-status" aria-label="Full-session status"><header><span>ISOLATED DENY-ONLY SHADOW · NOT PERMANENT PRODUCTION</span>
-    <h1>Northstar · Full-Session Observation</h1><strong role="status">{status} · {view?.phase ?? 'UNAVAILABLE'}</strong><p>{reason}</p></header>
+  const lineage = view?.lineage;
+  return <section className="northstar-session-status" aria-label="Full-session status"
+    data-package-hash={lineage?.package_hash} data-projection-hash={lineage?.projection_hash}
+    data-backend-instance={lineage?.backend_instance_hash} data-source-cycle={view?.source_cycle}>
+    <header><span>ISOLATED DENY-ONLY SHADOW · NOT PERMANENT PRODUCTION</span>
+    <h1>{lineage ? 'Northstar · Historical Replay' : 'Northstar · Full-Session Observation'}</h1><strong role="status">{status} · {view?.phase ?? 'UNAVAILABLE'}</strong><p>{reason}</p></header>
+    {lineage && <p>Historical/replay evidence only. CURRENT describes publication health, not market freshness.
+      Original capture watermark: {lineage.common_watermark}. New publication time: {view?.published_at}.</p>}
     {status !== 'CURRENT' && <p role="alert">DEGRADED — all displayed records are the last verified projection, not current activity. No fallback source is used.</p>}
     <p>RUNNING is not LIVE_DATA. CONFIGURED is not CONNECTED. AVAILABLE is not VERIFIED. HISTORICAL is not REPLAY. IDLE is not FAILED. OBSERVATION_ONLY is not AUTHORIZED.</p>
     <dl>{[['Session',view?.session],['Source generation',view?.source_generation],['Source cycle',view?.source_cycle],
       ['Source cycle time',view?.source_cycle_generated_at],['Projection time',view?.published_at],['Capture',view?.capture_status],
       ['Readiness',view?.readiness],['Permanent production',view?.factory?.permanent_production],['Incidents',view?.incidents],
       ['Observer-only counters',view?.counters],['Authority',view?.capabilities]].map(([k,v]) => <div key={String(k)}><dt>{String(k)}</dt><dd>{display(v)}</dd></div>)}</dl>
-    <details><summary>Session timeline — not a claim that a phase occurred</summary><ol>{sessionPhases.map(phase => <li key={phase} aria-current={view?.phase === phase ? 'step' : undefined}>{phase}</li>)}</ol></details>
+    {lineage ? <p>SESSION_CLOSED — historical review; no market-session phases were performed.</p>
+      : <details><summary>Session timeline — not a claim that a phase occurred</summary><ol>{sessionPhases.map(phase => <li key={phase} aria-current={view?.phase === phase ? 'step' : undefined}>{phase}</li>)}</ol></details>}
   </section>;
 }
 export function NorthstarDayTrading() {

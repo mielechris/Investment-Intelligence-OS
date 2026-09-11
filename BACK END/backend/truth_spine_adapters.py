@@ -8,10 +8,261 @@ import sqlite3
 import stat
 import re
 from decimal import Decimal, InvalidOperation
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from contextlib import contextmanager
+from contextvars import ContextVar
+import sys
+import uuid
 
 from truth_spine_contract import canonical, digest, seal, utc, verified
+
+STRICT_MODE = 'SB38D_STRICT'
+LEGACY_MODE = 'LEGACY_UNSCOPED'
+_sqlite_policy = ContextVar('sb38d_sqlite_policy', default=None)
+_sqlite_permit = ContextVar('sb38d_sqlite_permit', default=None)
+_process_policy = None
+_audit_installed = False
+
+
+@dataclass(frozen=True)
+class SQLitePolicy:
+    root: str
+    run_identity: str
+    package_identity: str
+    process_role: str
+    owner_pid: int
+    synthetic_root: str | None = None
+
+    def validate(self):
+        from truth_spine_lineage import safe_path, require, hex_hash
+        root=safe_path(self.root)
+        require(hex_hash(self.run_identity) and hex_hash(self.package_identity), 'SQLITE_RUN_IDENTITY_REQUIRED')
+        if self.synthetic_root is None:
+            require(root.parent==Path('/private/tmp') and root.name.startswith('iios-truth-spine-3-acceptance-sb38d-clean-'),
+                    'SQLITE_RUN_ROOT_REQUIRED')
+            require(self.process_role in {'preparation','scheduler','publisher','backend','acceptance'}, 'SQLITE_PROCESS_ROLE')
+        else:
+            test=safe_path(self.synthetic_root)
+            require(str(test)==os.environ.get('IIOS_SB38D_TEST_ROOT') and test.parent==Path('/private/tmp') and
+                    test.name.startswith('iios-sb38d-source-tests-') and root.is_relative_to(test) and root!=test and
+                    self.process_role=='synthetic', 'EXACT_SYNTHETIC_REGISTRATION_REQUIRED')
+        require(type(self.owner_pid) is int and self.owner_pid==os.getpid(), 'SQLITE_PROCESS_OWNER')
+        for directory in (root,root/'state',root/'working-inputs',root/'admission'):
+            if directory.exists():
+                info=directory.lstat()
+                require(stat.S_ISDIR(info.st_mode) and info.st_uid==os.getuid() and not info.st_mode & 0o022,
+                        'SQLITE_DIRECTORY_NOT_OWNED')
+        return root
+
+
+@dataclass(frozen=True)
+class SQLiteCapability:
+    policy: SQLitePolicy = field(kw_only=True)
+    role: str
+    path: str
+    mode: str
+    receipt_path: str
+    receipt_hash: str
+    parent_package_hash: str | None = None
+
+
+def active_sqlite_policy():
+    return _process_policy or _sqlite_policy.get()
+
+
+def sqlite_audit(event, args):
+    """Audit applies only to this strict process or an explicitly scoped test."""
+    if active_sqlite_policy() is not None and event in {'sqlite3.enable_load_extension','sqlite3.load_extension'}:
+        raise PermissionError('SQLITE_EXTENSION_FORBIDDEN')
+    if event!='sqlite3.connect' or active_sqlite_policy() is None:
+        return
+    permit=_sqlite_permit.get()
+    if permit is None or len(args)!=1 or args[0]!=permit:
+        raise PermissionError('UNREGISTERED_SQLITE_CONNECTION')
+
+
+def install_sqlite_audit():
+    global _audit_installed
+    if not _audit_installed:
+        sys.addaudithook(sqlite_audit)
+        _audit_installed=True
+
+
+@contextmanager
+def strict_sqlite_scope(policy):
+    if not isinstance(policy,SQLitePolicy): raise ValueError('STRICT_SQLITE_POLICY_REQUIRED')
+    policy.validate()
+    if _process_policy is not None and _process_policy!=policy:
+        raise ValueError('STRICT_SQLITE_POLICY_REPLACEMENT')
+    install_sqlite_audit()
+    token=_sqlite_policy.set(policy)
+    try: yield policy
+    finally: _sqlite_policy.reset(token)
+
+
+def activate_strict_sqlite(policy):
+    """Irreversible run scope, including HTTP worker threads; never called by imports."""
+    global _process_policy
+    policy.validate()
+    if _process_policy is not None and _process_policy!=policy:
+        raise ValueError('STRICT_SQLITE_POLICY_REPLACEMENT')
+    install_sqlite_audit()
+    _process_policy=policy
+
+
+def validate_sqlite_capability(capability):
+    from truth_spine_lineage import safe_path, contained, regular, file_hash, require, hex_hash, OWNER_ROOT
+    require(type(capability) is SQLiteCapability,'STRICT_SQLITE_CAPABILITY_REQUIRED')
+    policy=capability.policy
+    require(type(policy) is SQLitePolicy,'STRICT_SQLITE_POLICY_REQUIRED')
+    ambient=active_sqlite_policy()
+    require(ambient is None or ambient==policy,'STRICT_SQLITE_POLICY_MISMATCH')
+    root=policy.validate()
+    # Reject protected names before any filesystem operation on the target.
+    raw=Path(capability.path)
+    require(not raw.is_relative_to(OWNER_ROOT) and 'Application Support' not in raw.parts and
+            not any(p.startswith('iios-northstar-owner-snapshots-') for p in raw.parts), 'PROTECTED_SQLITE_PATH')
+    path=safe_path(raw)
+    role=capability.role
+    require(role in {'L7_WORKING_COPY','L8_WORKING_COPY','RUN_EVENT_STORE'},'SQLITE_ROLE_INVALID')
+    subtree=root/('state' if role=='RUN_EVENT_STORE' else 'working-inputs')
+    require(path!=subtree and path.is_relative_to(subtree),'SQLITE_SUBTREE_MISMATCH')
+    receipt=safe_path(capability.receipt_path)
+    require(receipt.is_relative_to(root/'admission') and receipt!=root/'admission' and
+            hex_hash(capability.receipt_hash),'SQLITE_RECEIPT_REQUIRED')
+    require(file_hash(receipt)==capability.receipt_hash,'SQLITE_RECEIPT_PIN_MISMATCH')
+    document=json.loads(receipt.read_bytes());verified(document)
+    require(document['root']==str(root) and document['run_identity']==policy.run_identity and
+            document['package_identity']==policy.package_identity,'SQLITE_PARENT_IDENTITY_MISMATCH')
+    rows=document['databases']
+    require(isinstance(rows,list) and len({r['path'] for r in rows})==len(rows),'SQLITE_MEMBERSHIP_INVALID')
+    matches=[r for r in rows if r['path']==str(path)]
+    require(len(matches)==1,'UNREGISTERED_WORKING_DATABASE')
+    row=matches[0]
+    require(row['role']==role,'SQLITE_ROLE_MISMATCH')
+    info=regular(path)
+    require(info.st_nlink==1 and info.st_dev==row['device'] and info.st_ino==row['inode'], 'SQLITE_INODE_MISMATCH')
+    if role=='RUN_EVENT_STORE':
+        require(document['schema']=='iios-run-state-creation-v1' and row['creation']=='EXCLUSIVE_EMPTY_FILE' and
+                capability.mode in {'ro','rw'} and hex_hash(capability.parent_package_hash) and
+                document['parent_package_hash']==capability.parent_package_hash, 'EVENT_CREATION_RECEIPT_REQUIRED')
+        if capability.mode=='rw':
+            require(policy.process_role in {'scheduler','synthetic'},'EVENT_WRITER_NOT_OWNED')
+        for suffix in ('-wal','-shm','-journal'):
+            side=contained(root,'state/'+path.relative_to(root/'state').as_posix()+suffix)
+            if side.exists():
+                require(regular(side).st_nlink==1,'EVENT_SIDECAR_ALIAS')
+    else:
+        require(document['schema']=='iios-working-sqlite-admission-v1' and capability.mode=='ro-immutable' and
+                row['creation']=='VERIFIED_BYTE_COPY' and hex_hash(row['source_hash']) and
+                row['source_hash']==row['copied_hash']==row['source_after_hash'] and
+                file_hash(path)==row['copied_hash'],'WORKING_SQLITE_PIN_MISMATCH')
+    return path
+
+
+_CONNECTION_PROOF=object()
+
+
+class StrictConnection:
+    def __init__(self, native, capability, receipt, proof):
+        if proof is not _CONNECTION_PROOF:raise ValueError('STRICT_CONNECTION_PROOF_REQUIRED')
+        self.__native=native
+        self.capability=capability
+        self.telemetry=receipt
+        self.__proof=proof
+    def execute(self, *args):return self.__native.execute(*args)
+    def executescript(self, *args):return self.__native.executescript(*args)
+    def commit(self):return self.__native.commit()
+    def rollback(self):return self.__native.rollback()
+    def close(self):return self.__native.close()
+    def __enter__(self):self.__native.__enter__();return self
+    def __exit__(self,*args):return self.__native.__exit__(*args)
+    def verified_for(self,capability):
+        return self.__proof is _CONNECTION_PROOF and self.capability==capability
+
+
+def verify_strict_connection(connection, capability):
+    validate_sqlite_capability(capability)
+    if type(connection) is not StrictConnection or not connection.verified_for(capability):
+        raise ValueError('STRICT_CONNECTION_RESULT_REQUIRED')
+    from truth_spine_lineage import file_hash
+    if file_hash(connection.telemetry['path'])!=connection.telemetry['sha256']:
+        raise ValueError('SQLITE_TELEMETRY_CHANGED')
+    return connection
+
+
+def strict_target(capability):
+    path=validate_sqlite_capability(capability)
+    return {'path':str(path),'role':capability.role,'receipt_hash':capability.receipt_hash,
+            'run_identity':capability.policy.run_identity,'package_identity':capability.policy.package_identity}
+
+
+def verify_sqlite_targets(capabilities, telemetry):
+    """Caller supplies the complete independently expected capability membership."""
+    expected={canonical(strict_target(c)) for c in capabilities}
+    actual=set()
+    from truth_spine_lineage import file_hash
+    for link in telemetry:
+        if file_hash(link['path'])!=link['sha256']:raise ValueError('SQLITE_TELEMETRY_CHANGED')
+        doc=json.loads(Path(link['path']).read_bytes());verified(doc)
+        if doc['schema']!='iios-strict-sqlite-open-v1':raise ValueError('SQLITE_TELEMETRY_SCHEMA')
+        actual.add(canonical(doc['target']))
+    if actual!=expected:raise ValueError('SQLITE_TARGET_SET_MISMATCH')
+    return True
+
+
+def connect_strict_sqlite(capability):
+    path=validate_sqlite_capability(capability)
+    query='?mode=ro&immutable=1' if capability.mode=='ro-immutable' else '?mode='+capability.mode
+    uri=path.as_uri()+query
+    token=_sqlite_permit.set(uri)
+    try: db=sqlite3.connect(uri,uri=True)
+    finally: _sqlite_permit.reset(token)
+    try:
+        validate_sqlite_capability(capability)
+        if db.execute('PRAGMA database_list').fetchall()!=[(0,'main',str(path))]:
+            raise ValueError('SQLITE_NATIVE_TARGET_MISMATCH')
+        db.execute('PRAGMA query_only='+('OFF' if capability.mode=='rw' else 'ON'))
+        db.execute('PRAGMA temp_store=MEMORY')
+        if capability.mode=='rw': db.execute('PRAGMA journal_mode=PERSIST')
+        # ATTACH would open a second database without a connect audit event.
+        def authorize(action, _arg1, _arg2, _database, _trigger):
+            forbidden=action in {sqlite3.SQLITE_ATTACH,sqlite3.SQLITE_DETACH} or (
+                action==sqlite3.SQLITE_PRAGMA and str(_arg1).lower() in {'temp_store_directory','data_store_directory','temp_store'})
+            return sqlite3.SQLITE_DENY if forbidden else sqlite3.SQLITE_OK
+        db.set_authorizer(authorize)
+    except BaseException:
+        db.close();raise
+    from truth_spine_lineage import write_new
+    target=strict_target(capability)
+    relative='admission/sqlite-open-'+uuid.uuid4().hex+'.json'
+    try:
+        h=write_new(Path(capability.policy.root),relative,canonical(seal({
+            'schema':'iios-strict-sqlite-open-v1','target':target,'mode':capability.mode,
+            'device':path.stat().st_dev,'inode':path.stat().st_ino})))
+    except BaseException:
+        db.close();raise
+    return StrictConnection(db,capability,{'path':str(Path(capability.policy.root)/relative),'sha256':h},_CONNECTION_PROOF)
+
+
+def create_run_event_store(policy, parent_package_hash, relative='state/canonical-events.db'):
+    """Exclusive byte creation precedes any SQLite open; no copy or replacement."""
+    from truth_spine_lineage import contained, regular, require, write_new, hex_hash
+    require(hex_hash(parent_package_hash),'EVENT_PARENT_PACKAGE_REQUIRED')
+    root=policy.validate();path=contained(root,relative)
+    require(path.is_relative_to(root/'state') and path!=root/'state','EVENT_STATE_SUBTREE_REQUIRED')
+    require(not any(Path(str(path)+s).exists() for s in ('','-wal','-shm','-journal')),'EVENT_STORE_ALREADY_EXISTS')
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    info=regular(path)
+    row={'role':'RUN_EVENT_STORE','path':str(path),'device':info.st_dev,'inode':info.st_ino,'creation':'EXCLUSIVE_EMPTY_FILE'}
+    doc=seal({'schema':'iios-run-state-creation-v1','root':str(root),'run_identity':policy.run_identity,
+              'package_identity':policy.package_identity,'parent_package_hash':parent_package_hash,'databases':[row]})
+    receipt='admission/event-state-creation.json'
+    expected=write_new(root,receipt,canonical(doc))
+    return SQLiteCapability('RUN_EVENT_STORE',str(path),'rw',str(root/receipt),expected,parent_package_hash,policy=policy)
 
 ADAPTER_VERSION = "iios-legacy-readonly-v1"
 KINDS = {"operational", "historical", "executor", "archive", "research", "event_reconstruction",
@@ -146,7 +397,31 @@ def normalize_record(spec: dict, object_id: str, object_type: str, raw: bytes,
                  "evidence_available": None, "operational_fill": False})
 
 
-def read_ledger(spec: dict) -> list[dict]:
+def read_ledger(spec: dict, *, mode=LEGACY_MODE, capability=None) -> list[dict]:
+    """Legacy API. Never accepts a strict request or selects strict dispatch."""
+    if active_sqlite_policy() is not None or any(
+            p.startswith('iios-truth-spine-3-acceptance-sb38d-clean-') for p in Path(spec.get('path','')).parts):
+        raise PermissionError('LEGACY_SQLITE_UNREACHABLE_IN_STRICT_RUN')
+    if mode!=LEGACY_MODE or capability is not None:raise ValueError('EXPLICIT_LEGACY_MODE_REQUIRED')
+    path=validate_source(spec)
+    if any(Path(str(path)+suffix).exists() for suffix in ('-wal','-journal')):
+        raise ValueError('CONSISTENT_SNAPSHOT_REQUIRED')
+    db=sqlite3.connect(path.as_uri()+'?mode=ro&immutable=1',uri=True)
+    return _ledger_records(spec,db)
+
+
+def read_strict_ledger(spec: dict, capability: SQLiteCapability) -> list[dict]:
+    path=validate_sqlite_capability(capability)
+    role={'operational':'L7_WORKING_COPY','historical':'L8_WORKING_COPY'}.get(spec.get('kind'))
+    if capability.role!=role or str(path)!=spec.get('path'):
+        raise ValueError('STRICT_LEDGER_ROLE_OR_PATH_MISMATCH')
+    validate_source(spec)
+    db=connect_strict_sqlite(capability)
+    verify_strict_connection(db,capability)
+    return _ledger_records(spec,db)
+
+
+def _ledger_records(spec, db):
     path = validate_source(spec)
     if spec["kind"] not in {"operational", "historical"}:
         raise ValueError("LEDGER_ROLE_INVALID")
@@ -154,7 +429,6 @@ def read_ledger(spec: dict) -> list[dict]:
     # authorized consistent snapshot; immutable=1 must never ignore an active WAL.
     if any(Path(str(path)+suffix).exists() for suffix in ("-wal", "-journal")):
         raise ValueError("CONSISTENT_SNAPSHOT_REQUIRED")
-    db = sqlite3.connect(path.as_uri()+"?mode=ro&immutable=1", uri=True)
     try:
         db.execute("PRAGMA query_only=ON")
         if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:

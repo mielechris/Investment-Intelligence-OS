@@ -8,6 +8,7 @@ const capabilities = ['provider_requests', 'credential_access', 'paid_model_requ
   'live_execution', 'operational_ledger_write', 'promotion', 'scheduler_authority', 'publisher_authority'];
 const counters = ['provider', 'model', 'credential', 'broker', 'paper', 'live_execution', 'operational_ledger_write'];
 export type SessionView = {
+  lineage?: HistoricalLineage;
   factory: FactoryView | null;
   schema: string; session: string; phase: string; scope: string; published_at: string;
   capture_status: string; source_generation: string | null; readiness: number;
@@ -25,12 +26,37 @@ const label = (x: unknown) => typeof x === 'string' && /^[A-Za-z0-9_.:-]{1,180}$
 const count = (x: unknown) => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0;
 const instant = (x: unknown) => typeof x === 'string' && Number.isFinite(Date.parse(x)) && /(?:Z|\+00:00)$/.test(x);
 const strings = (x: unknown) => Array.isArray(x) && x.every(label);
+export type HistoricalLineage = {
+  schema: string; source_commit: string; package_hash: string; package_generation: string;
+  runtime_hash: string; frontend_hash: string; admission_hash: string; generation_hash: string;
+  initial_cycle_hash: string; owner_manifest_hash: string; completion_hash: string;
+  l7_hash: string; l8_hash: string; backend_instance_hash: string; common_watermark: string;
+  classification: string; source_cycle: string; projection_hash: string;
+};
+export function validHistoricalLineage(value: unknown): value is HistoricalLineage {
+  if (!object(value)) return false;
+  const hashes = ['package_hash','package_generation','runtime_hash','frontend_hash','admission_hash',
+    'generation_hash','initial_cycle_hash','owner_manifest_hash','completion_hash','l7_hash','l8_hash',
+    'backend_instance_hash','source_cycle','projection_hash'];
+  return Object.keys(value).length === hashes.length + 4 && hashes.every(k => hash(value[k]))
+    && value.schema === 'iios-northstar-package-binding-v1'
+    && typeof value.source_commit === 'string' && /^[a-f0-9]{40}$/.test(value.source_commit)
+    && instant(value.common_watermark) && value.classification === 'HISTORICAL_REPLAY';
+}
 export function validSessionView(value: unknown, now = Date.now()): value is SessionView {
   if (!object(value)) return false;
   const x = value;
   const age = now - Date.parse(String(x.published_at));
-  if (x.schema !== 'iios-full-session-shadow-browser-v1' || !label(x.session)
-    || !sessionPhases.includes(String(x.phase)) || x.scope !== 'SHADOW_OBSERVATION_NOT_LIVE_TRADING'
+  const historical = x.schema === 'iios-historical-northstar-browser-v2';
+  if (historical) {
+    if (!validHistoricalLineage(x.lineage) || x.phase !== 'SESSION_CLOSED'
+      || x.scope !== 'HISTORICAL_REPLAY_NOT_CURRENT_MARKET'
+      || x.lineage.generation_hash !== x.source_generation || x.lineage.source_cycle !== x.source_cycle
+      || !object(x.factory) || x.lineage.projection_hash !== x.factory.content_hash
+      || !object(x.owners) || x.lineage.backend_instance_hash !== x.owners.backend_owner) return false;
+  } else if ('lineage' in x) return false;
+  if ((!historical && x.schema !== 'iios-full-session-shadow-browser-v1') || !label(x.session)
+    || (!historical && (!sessionPhases.includes(String(x.phase)) || x.scope !== 'SHADOW_OBSERVATION_NOT_LIVE_TRADING'))
     || !instant(x.published_at) || !Number.isFinite(age) || age < 0 || age > 15000
     || !['CURRENT', 'STALE', 'UNAVAILABLE'].includes(String(x.capture_status))
     || ![200, 503].includes(Number(x.readiness)) || typeof x.readiness !== 'number'
@@ -59,6 +85,9 @@ export function validSessionView(value: unknown, now = Date.now()): value is Ses
       && count(u.count) && instant(u.capture_time) && strings(u.source_classes));
 }
 export function sessionReadiness(view: SessionView): string {
+  if (view.schema === 'iios-historical-northstar-browser-v2')
+    return view.readiness === 200 && view.capture_status === 'CURRENT'
+      ? 'HISTORICAL_REVIEW_READY · NOT CURRENT MARKET DATA' : 'NOT_READY · HISTORICAL PUBLICATION UNAVAILABLE';
   return view.readiness === 200 && view.capture_status === 'CURRENT'
     && !['FAILED_CLOSED', 'SESSION_COMPLETE', 'SHUTDOWN_COMPLETE'].includes(view.phase)
     ? 'SHADOW_OBSERVATION_READY' : 'NOT_READY · STALE OR CLOSED';

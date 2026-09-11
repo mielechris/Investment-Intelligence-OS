@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import json
 import os
 import subprocess
@@ -25,6 +27,7 @@ def telemetry(**overrides):
     value.update(overrides); return value
 
 
+@isolated_compositor_readiness
 class AcceptanceServerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
@@ -38,9 +41,31 @@ class AcceptanceServerTests(unittest.TestCase):
         paths = []
         for index, value in enumerate((telemetry_value, validation, shadow, outcome)):
             paths.append(self.write(f"{index}.json", value) if value is not None else self.root / f"missing-{index}.json")
-        result = server.Compositor(*paths, "http://127.0.0.1:8002/system/status")
+        result = server.Compositor(*paths, "http://127.0.0.1:8002/system/status", **isolated_service_readers())
         result._reachability = lambda: "CURRENT"
         return result
+
+    def test_synthetic_service_observations_never_launch_host_commands(self):
+        unavailable = isolated_service_readers()["supervisor_reader"]()
+        healthy = unavailable | {
+            "provenance": "AUTHENTIC_OPERATIONAL_SUPERVISOR_INSTALLATION",
+            "supervisor_installed": True, "supervisor_running": True,
+            "manifest_status": "VALID", "inventory_status": "VALID",
+            "commit_binding": "MATCH", "service_ownership": "LAUNCHD",
+            "lock_ownership": "VALID", "listener_count": 0, "child_count": 0,
+            "coherent_read_timestamp": "2026-09-03T22:50:00+00:00",
+            "generation_identity": "synthetic-test-generation",
+        }
+        for observation, expected in ((healthy, "CURRENT"), (unavailable, "UNAVAILABLE")):
+            with self.subTest(expected=expected), patch(
+                    "subprocess.Popen", side_effect=AssertionError("HOST_COMMAND_FORBIDDEN")) as launch:
+                compositor = server.Compositor(
+                    *(self.root / f"missing-{i}" for i in range(4)),
+                    "http://127.0.0.1:1", **isolated_service_readers(observation))
+                compositor._reachability = lambda: "UNAVAILABLE"
+                projected = compositor.snapshot()["sections"]["unattended_supervisor_installation"]
+                self.assertEqual(projected, {"state": expected, "data": observation})
+                launch.assert_not_called()
 
     def test_accepted_schema_versions(self):
         for schema in (server.TELEMETRY_SCHEMA, server.VALIDATION_SCHEMA, server.SHADOW_SCHEMA, server.OUTCOME_SCHEMA):
@@ -78,7 +103,7 @@ class AcceptanceServerTests(unittest.TestCase):
 
     def test_one_backend_get_per_snapshot(self):
         compositor = server.Compositor(*(self.root / f"missing-{i}" for i in range(4)),
-                                       "http://127.0.0.1:8002/system/status")
+                                       "http://127.0.0.1:8002/system/status", **isolated_service_readers())
         with patch.object(compositor, "_reachability", wraps=compositor._reachability) as reach:
             with patch.object(server, "urlopen", side_effect=OSError):
                 compositor.snapshot(); compositor.snapshot()
@@ -167,6 +192,7 @@ class FrontendPollingContractTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
 
 
+@isolated_compositor_readiness
 class RoomProjectionTests(unittest.TestCase):
     def test_truthful_empty_and_not_activated_rooms(self):
         fixture = AcceptanceServerTests(); fixture.setUp()

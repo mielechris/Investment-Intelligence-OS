@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import json
 import os
 import secrets
@@ -93,6 +95,7 @@ class ReviewPortalTests(unittest.TestCase):
             self.assertEqual(self.portal.dispatch("POST",route,self.body(),encoded_size=100)["status"],202)
 
 
+@isolated_compositor_readiness
 class IntegrationTruthTests(unittest.TestCase):
     def test_compositor_connects_truthful_empty_rooms(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -103,7 +106,7 @@ class IntegrationTruthTests(unittest.TestCase):
                 "transcription":"NOT_ACTIVATED","source_count":0,"note_count":0,"claim_count":0,
                 "rights_review_queue_count":0,"transcript_review_queue_count":0,"contradiction_queue_count":0,
                 "judgment_queue_count":0,"pattern_queue_count":0,"private_data_exposed":False,"authority_granted":False}
-            compositor=Compositor(missing,missing,missing,missing,"http://127.0.0.1:1",lambda:projection)
+            compositor=Compositor(missing,missing,missing,missing,"http://127.0.0.1:1",lambda:projection, **isolated_service_readers())
             compositor._reachability=lambda:"UNAVAILABLE"; snapshot=compositor.snapshot(); rooms=snapshot["room_states"]
         self.assertEqual(rooms["Investor Archive"]["presentation_status"],"AVAILABLE_EMPTY")
         self.assertEqual(rooms["Interview Studio"]["presentation_status"],"NOT_ACTIVATED")

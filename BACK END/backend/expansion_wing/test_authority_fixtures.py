@@ -87,3 +87,39 @@ def offline_boundary(*capabilities: str):
                 _active.remove(token); _scope.reset(scope_token)
         return wrapped
     return decorate
+
+
+def isolated_service_readers(supervisor=None):
+    """Synthetic external observations for Compositor tests, never host services."""
+    from copy import deepcopy
+    observation = deepcopy(supervisor) if supervisor is not None else {
+        "schema_version": "iios-unattended-supervisor-browser-v1",
+        "provenance": "UNAVAILABLE", "supervisor_installed": None,
+        "supervisor_running": None, "manifest_status": "UNAVAILABLE",
+        "inventory_status": "UNAVAILABLE", "commit_binding": "UNAVAILABLE",
+        "service_ownership": "UNAVAILABLE", "lock_ownership": "UNAVAILABLE",
+        "listener_count": None, "child_count": None,
+        "coherent_read_timestamp": None, "generation_identity": None,
+        "readiness_classification": "UNAVAILABLE",
+    }
+    return {"unattended_reader": lambda: None,
+            "supervisor_reader": lambda: deepcopy(observation),
+            "executor_reader": lambda: None}
+
+
+def isolated_compositor_readiness(test_class):
+    """Run real readiness projection against a synthetic root for each test."""
+    from .provider_readiness import installed_readiness_projection
+    for name, method in list(vars(test_class).items()):
+        if not name.startswith("test_") or not callable(method):
+            continue
+        def wrap(function):
+            @functools.wraps(function)
+            def run(*args, **kwargs):
+                with tempfile.TemporaryDirectory(prefix="compositor-readiness-") as raw:
+                    reader = functools.partial(installed_readiness_projection, root=Path(raw))
+                    with patch("expansion_wing.acceptance_server.installed_readiness_projection", reader):
+                        return function(*args, **kwargs)
+            return run
+        setattr(test_class, name, wrap(method))
+    return test_class

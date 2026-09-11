@@ -12,6 +12,26 @@ import { sessionPhases } from './truthSpineSessionView.ts';
 import { admitProjection, ageProjection, canonical, contentHash, emptyNorthstar, retainedFailure, observeNorthstar, stationRows, northstarFloorOutputs } from './northstarSession.ts';
 const now = Date.parse('2026-09-11T13:30:00Z');
 const source = (name: string) => readFileSync(new URL(name, import.meta.url), 'utf8');
+test('historical admission binds package identity without relaxing fixture or freshness contracts',async()=>{
+  const x=await northstarFixture(now),f=x.factory!;
+  x.schema='iios-historical-northstar-browser-v2';x.phase='SESSION_CLOSED';
+  x.scope='HISTORICAL_REPLAY_NOT_CURRENT_MARKET';f.phase=x.phase;
+  for(const row of [...f.rooms,...f.agents,...f.governance,...f.routes,...f.history,...f.subsystems,f.day_trading])row.phase=x.phase;
+  f.content_hash=await contentHash(f as unknown as Record<string,unknown>);
+  const lineage={schema:'iios-northstar-package-binding-v1',source_commit:'b'.repeat(40),
+    package_hash:'1'.repeat(64),package_generation:'2'.repeat(64),runtime_hash:'3'.repeat(64),frontend_hash:'4'.repeat(64),
+    admission_hash:'5'.repeat(64),generation_hash:x.source_generation!,initial_cycle_hash:'6'.repeat(64),
+    owner_manifest_hash:'7'.repeat(64),completion_hash:'8'.repeat(64),l7_hash:'9'.repeat(64),l8_hash:'a'.repeat(64),
+    backend_instance_hash:'e'.repeat(64),common_watermark:'2020-01-02T00:00:00Z',classification:'HISTORICAL_REPLAY',
+    source_cycle:x.source_cycle!,projection_hash:f.content_hash};
+  const historical={...x,lineage,owners:{...x.owners,backend_owner:lineage.backend_instance_hash}};
+  const admitted=await admitProjection(historical,null,now);
+  assert.equal(admitted.lineage?.common_watermark,lineage.common_watermark);
+  for(const key of ['package_hash','runtime_hash','frontend_hash','admission_hash'])
+    await assert.rejects(admitProjection({...historical,lineage:{...lineage,[key]:'c'.repeat(64)}},admitted,now),/PACKAGE_INSTANCE_REPLACED/);
+  await assert.rejects(admitProjection(historical,null,now+15001));
+  await assert.rejects(admitProjection({...historical,lineage:{...lineage,projection_hash:'c'.repeat(64)}},null,now));
+});
 test('Northstar validates the complete canonical projection without a legacy adapter', async () => {
   const x = await northstarFixture(now); const result = await admitProjection(x,null,now);
   assert.deepEqual(result,x); assert.notEqual(result,x);

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import copy
 import hashlib
 import json
@@ -66,6 +68,7 @@ class RadarProjectionTests(unittest.TestCase):
         self.assertFalse(any(historical["authority"].values()))
 
 
+@isolated_compositor_readiness
 class BaselineAndEmptyTests(unittest.TestCase):
     def test_once_only_authenticated_baseline(self):
         with tempfile.TemporaryDirectory() as name:
@@ -123,7 +126,7 @@ class BaselineAndEmptyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root=Path(name); path=root/"telemetry.json"; path.write_text(json.dumps(telemetry))
             missing=[root/f"missing-{i}" for i in range(3)]
-            compositor=acceptance_server.Compositor(path,*missing,"http://127.0.0.1:8002/system/status")
+            compositor=acceptance_server.Compositor(path,*missing,"http://127.0.0.1:8002/system/status", **isolated_service_readers())
             compositor._reachability=lambda:"CURRENT"
             conveyor=compositor.snapshot()["sections"]["candidate_conveyor"]
         self.assertEqual((conveyor["state"],len(conveyor["data"]["candidates"])),("CURRENT",5))

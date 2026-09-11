@@ -55,7 +55,8 @@ def derived_bindings(root: Path, manifest: dict, sources: list[dict]) -> dict:
     return {
         'runtime':runtime['runtime_id'],
         'event_ledger':release+'-canonical-events',
-        'evidence_receipt':hashlib.sha256(file_bytes(root/'inputs/accepted-receipt.json')).hexdigest(),
+        'evidence_receipt':hashlib.sha256(file_bytes(root/('working-inputs/owner/completion-receipt.json'
+            if manifest.get('schema')=='iios-historical-package-v2' else 'inputs/accepted-receipt.json'))).hexdigest(),
         'case_namespace':'SOURCE_STORE_AND_OBJECT',
         'projection_generation':release+'-projection',
         'publisher':publisher,
@@ -105,7 +106,9 @@ def topology(path: Path, *, now: datetime | None = None) -> tuple[dict, dict]:
                 "release_manifest", "release_manifest_hash", "event_ledger_path", "selected_state",
                 "selected_state_hash", "selector_path", "selector_hash", "source_cycle_path", "source_cycle_hash",
                 "phase", "content_hash"}
-    if (set(t) != required or t["schema"] != "iios-readonly-topology-v2"
+    if t.get('schema')=='iios-historical-topology-v3':
+        required|={'event_receipt_path','event_receipt_hash'}
+    if (set(t) != required or t["schema"] not in {"iios-readonly-topology-v2", "iios-historical-topology-v3"}
             or t["mode"] not in {"ISOLATED_SHADOW", "PERMANENT_READ_ONLY"}
             or set(t["identities"]) != IDENTITIES
             or any(not isinstance(v, str) or not v for v in t["identities"].values())):
@@ -116,10 +119,34 @@ def topology(path: Path, *, now: datetime | None = None) -> tuple[dict, dict]:
     root = Path(t["root"])
     if not root.is_absolute() or root.is_symlink() or path.parent != root:
         raise ValueError("TOPOLOGY_ROOT_INVALID")
+    historical = t['schema']=='iios-historical-topology-v3'
+    if root.name.startswith('iios-truth-spine-3-acceptance-sb38d-clean-') and not historical:
+        raise ValueError('LEGACY_TOPOLOGY_FORBIDDEN_IN_SB38D')
+    if historical:
+        from truth_spine_lineage import contained, require, safe_path
+        safe_path(root)
+        require(t['mode']=='ISOLATED_SHADOW' and root.parent==Path('/private/tmp') and
+                root.name.startswith('iios-truth-spine-3-acceptance-sb38d-clean-'), 'HISTORICAL_ROOT_REQUIRED')
+        for key,relative in [('release_manifest','release/manifest.json'),('authority_path','authority.json'),
+                             ('source_cycle_path','receipts/initial-cycle.json')]:
+            require(t[key]==str(contained(root,relative)), 'HISTORICAL_PATH_MISMATCH')
+        for p in [s['path'] for s in t['sources']] + [t['selected_state'],t['selector_path']]:
+            require(safe_path(p).is_relative_to(root/'working-inputs'), 'WORKING_INPUTS_ONLY')
     manifest = read_json(Path(t["release_manifest"]), t["release_manifest_hash"])
     if manifest["release_id"] != ids["release"]: raise ValueError("RELEASE_MISMATCH")
     package = Path(t["release_manifest"]).parent
-    if manifest["schema"] != "iios-readonly-package-v1": raise ValueError("RELEASE_SCHEMA_INVALID")
+    if manifest["schema"] != ('iios-historical-package-v2' if historical else 'iios-readonly-package-v1'):
+        raise ValueError("RELEASE_SCHEMA_INVALID")
+    if historical:
+        from truth_spine_lineage import verify_chain, historical_generation
+        from truth_spine_runtime_provenance import verify_runtime
+        require(manifest['runtime_root']==str(root/'runtime'), 'RUNTIME_ROOT_MISMATCH')
+        runtime_record=read_json(root/'runtime/runtime-manifest.json',manifest['dependency_hash'])
+        verify_runtime(root,manifest,runtime_record)
+        docs=verify_chain(root,manifest)
+        generation,events=historical_generation(t['sources'],docs['admission'],manifest['lineage']['package_generation'],
+                                               admission_hash=manifest['lineage']['admission']['sha256'])
+        require(generation==docs['generation'] and events==docs['events'], 'HISTORICAL_DERIVATION_MISMATCH')
     validate_frontend_provenance(manifest)
     expected = {r["path"] for r in manifest["files"]}
     actual = {str(p.relative_to(package)) for p in package.rglob('*') if p.is_file() and p.name != 'manifest.json'}
@@ -153,8 +180,11 @@ def topology(path: Path, *, now: datetime | None = None) -> tuple[dict, dict]:
         if spec["kind"] in {"operational", "historical"} and ids[spec["kind"]+"_ledger"] != spec["store_id"]:
             raise ValueError("LEDGER_BINDING_INVALID")
     event = Path(t["event_ledger_path"])
-    if event.parent != root or event.name != "canonical-events.db" or str(event) in {s["path"] for s in t["sources"]}:
+    if event.parent != (root/'state' if historical else root) or event.name != "canonical-events.db" or str(event) in {s["path"] for s in t["sources"]}:
         raise ValueError("CANONICAL_LEDGER_PATH_INVALID")
+    if historical:
+        from truth_spine_adapters import validate_sqlite_capability
+        validate_sqlite_capability(event_capability(t,write=False))
     state = read_json(Path(t["selected_state"]), t["selected_state_hash"])
     plan = read_json(Path(t['selected_state']).parent/'request-plan.json')
     selector = read_json(Path(t['selector_path']), t['selector_hash'])
@@ -182,7 +212,58 @@ def topology(path: Path, *, now: datetime | None = None) -> tuple[dict, dict]:
     return t, authority
 
 
+def activate_topology_sqlite(t, role):
+    from truth_spine_adapters import SQLitePolicy, activate_strict_sqlite
+    from truth_spine_lineage import safe_path, require, verify_chain
+    verified(t);root=safe_path(t['root'])
+    require(t['schema']=='iios-historical-topology-v3' and t['release_manifest']==str(root/'release/manifest.json'),
+            'STRICT_TOPOLOGY_REQUIRED')
+    manifest=read_json(root/'release/manifest.json',t['release_manifest_hash'])
+    docs=verify_chain(root,manifest)
+    policy=SQLitePolicy(str(root),docs['admission']['input_spec_sha256'],manifest['lineage']['package_generation'],role,os.getpid())
+    activate_strict_sqlite(policy)
+
+
+def bound_working_capability(t, spec):
+    from truth_spine_lineage import working_capability
+    manifest=read_json(Path(t['release_manifest']),t['release_manifest_hash'])
+    link=manifest['lineage']['admission']
+    from truth_spine_lineage import contained
+    admission=read_json(contained(Path(t['root']),link['path']),link['sha256'])
+    role={'operational':'L7_WORKING_COPY','historical':'L8_WORKING_COPY'}.get(spec['kind'])
+    cap=working_capability(admission,link['sha256'],role)
+    if cap.path!=spec['path']: raise ValueError('BOUND_LEDGER_PATH_MISMATCH')
+    return cap
+
+
+def historical_topology(t):
+    historical=t.get('schema')=='iios-historical-topology-v3'
+    for key in ('root','event_ledger_path'):
+        if any(p.startswith('iios-truth-spine-3-acceptance-sb38d-clean-') for p in Path(t.get(key,'')).parts):
+            if not historical:raise ValueError('STRICT_TOPOLOGY_REQUIRED')
+    return historical
+
+
+def read_bound_ledger(t, spec):
+    if historical_topology(t):
+        from truth_spine_adapters import read_strict_ledger
+        return read_strict_ledger(spec,capability=bound_working_capability(t,spec))
+    return read_ledger(spec)  # Legacy only; the strict adapter rejects this under any strict process policy.
+
+
+def event_capability(t, *, write):
+    from truth_spine_adapters import SQLiteCapability, active_sqlite_policy
+    if t['event_receipt_path']!=str(Path(t['root'])/'admission/event-state-creation.json'):
+        raise ValueError('EVENT_RECEIPT_PATH_MISMATCH')
+    return SQLiteCapability('RUN_EVENT_STORE',t['event_ledger_path'],'rw' if write else 'ro',
+                            t['event_receipt_path'],t['event_receipt_hash'],t['release_manifest_hash'],policy=active_sqlite_policy())
+
+
 def connect_event(t: dict, *, write: bool = False):
+    if historical_topology(t):
+        from truth_spine_adapters import connect_strict_sqlite, verify_strict_connection
+        cap=event_capability(t,write=write)
+        return verify_strict_connection(connect_strict_sqlite(cap),cap)
     p = Path(t["event_ledger_path"])
     if p.is_symlink(): raise ValueError("EVENT_LEDGER_SYMLINK")
     db = sqlite3.connect(p.as_uri()+('?mode=rwc' if write else '?mode=ro'), uri=True)
@@ -196,7 +277,7 @@ def ingest(t: dict) -> dict:
     for spec in t["sources"]:
         if spec["kind"] == "universe":
             u = universe_version(spec, previous=prior); universes.append(u); prior = u["capture_id"]
-        elif spec["kind"] in {"operational", "historical"}: records.extend(read_ledger(spec))
+        elif spec["kind"] in {"operational", "historical"}: records.extend(read_bound_ledger(t,spec))
         else: records.extend(read_document(spec))
     result = reconcile(records)
     db = connect_event(t, write=True)
@@ -229,7 +310,7 @@ def snapshot(t: dict, authority: dict, *, now: datetime) -> dict:
     originals = {}
     for spec in t['sources']:
         if spec['kind'] == 'universe': continue
-        rows = read_ledger(spec) if spec['kind'] in {'operational', 'historical'} else read_document(spec)
+        rows = read_bound_ledger(t,spec) if spec['kind'] in {'operational', 'historical'} else read_document(spec)
         for row in rows:
             if row['record_id'] in originals and originals[row['record_id']] != row:
                 raise ValueError('SOURCE_ID_COLLISION')
@@ -254,7 +335,11 @@ def snapshot(t: dict, authority: dict, *, now: datetime) -> dict:
     finally: db.close()
     selected = read_json(Path(t['selected_state']),t['selected_state_hash'])
     spec = next(s for s in t['sources'] if s['kind']=='operational')
-    db = sqlite3.connect(Path(spec['path']).as_uri()+'?mode=ro&immutable=1',uri=True)
+    if historical_topology(t):
+        from truth_spine_adapters import connect_strict_sqlite, verify_strict_connection
+        cap=bound_working_capability(t,spec)
+        db=verify_strict_connection(connect_strict_sqlite(cap),cap)
+    else: db = sqlite3.connect(Path(spec['path']).as_uri()+'?mode=ro&immutable=1',uri=True)
     try:
         row=db.execute("SELECT payload_json FROM ledger_objects WHERE object_type='paper_portfolio_snapshot' ORDER BY created_at DESC LIMIT 1").fetchone()
         paper=json.loads(row[0]) if row else {}

@@ -58,6 +58,11 @@ class ProcessFingerprint:
 def atomic_evidence(root: Path, name: str, value: dict) -> None:
     if name not in {'acceptance.json', 'runner-incidents.json', 'emergency-incident.json'}:
         raise RunnerFailure('EVIDENCE_NAME_INVALID')
+    if root.name.startswith('iios-truth-spine-3-acceptance-sb38d-clean-'):
+        from truth_spine_lineage import write_new
+        from truth_spine_contract import canonical
+        write_new(root,name,canonical(value))
+        return
     if root != root.resolve() or any(p.is_symlink() for p in (root, *root.parents)):
         raise RunnerFailure('EVIDENCE_ROOT_INVALID')
     info = root.stat()
@@ -383,7 +388,7 @@ class OwnedChildren:
                           for r, e in self.active.items()], log_closure=self.log_results,
                       port_clear=clear)
         report['clean_shutdown'] = not self.active and clear and not self.errors
-        report['result'] = 'GREEN' if report['clean_shutdown'] and primary is None else 'RED'
+        report['result'] = ('BACKEND_CLEANUP_ONLY' if report.get('requires_package_browser') else 'GREEN') if report['clean_shutdown'] and primary is None else 'RED'
         # Raw process output and private paths never enter incident files.
         sanitized = safe(report, self.root)
         report.clear(); report.update(sanitized)
@@ -471,17 +476,266 @@ def port_is_clear(port):
     raise RunnerFailure('PORT_CLEAR_NOT_PROVEN')
 
 
+def stable_port_clear(port, *, probe=port_is_clear, pause=time.sleep, listeners=None):
+    def query():
+        result=subprocess.run(['/usr/sbin/lsof','-nP','-iTCP:'+str(port),'-sTCP:LISTEN','-Fpn'],
+                              capture_output=True,text=True,timeout=2)
+        if result.returncode!=1 or result.stdout.strip() or result.stderr.strip():
+            raise RunnerFailure('LISTENER_CLEAR_NOT_PROVEN')
+        return []
+    query=listeners or query
+    samples=[]
+    for i in range(2):
+        if i:pause(.25)
+        sample={'tcp_clear':probe(port),'listeners':query()}
+        if sample!={'tcp_clear':True,'listeners':[]}:raise RunnerFailure('STABLE_PORT_CLEAR_NOT_PROVEN')
+        samples.append(sample)
+    return {'schema':'iios-stable-port-clear-v1','port':port,'samples':samples}
+
+
+def protected_processes(expected, *, census=None, inspector=inspect_macos):
+    if census is None:
+        p=subprocess.run(['/bin/ps','-ww','-axo','pid=,comm='],capture_output=True,text=True,timeout=5,
+                         env={'PATH':'/usr/bin:/bin','LC_ALL':'C'})
+        if p.returncode:raise RunnerFailure('PROTECTED_CENSUS_FAILED')
+        census=[]
+        for line in p.stdout.splitlines():
+            parts=line.strip().split(None,1)
+            if len(parts)!=2 or not parts[0].isdigit():raise RunnerFailure('PROTECTED_CENSUS_INVALID')
+            census.append((int(parts[0]),parts[1]))
+    # Membership scope is independently pinned executable + working directory.
+    scopes={(r['executable'],r['cwd']) for r in expected}
+    expected_pids={r['pid'] for r in expected}
+    observations={}
+    for pid,executable in census:
+        if executable in {r['executable'] for r in expected} or pid in expected_pids:
+            observation=inspector(pid)
+            if observation is None:raise RunnerFailure('PROTECTED_CENSUS_UNRESOLVED')
+            if (observation.executable,observation.cwd) in scopes or pid in expected_pids:
+                observations[pid]=observation
+    if set(observations)!=expected_pids:raise RunnerFailure('PROTECTED_PROCESS_MEMBERSHIP_CHANGED')
+    result=[]
+    for row in expected:
+        observation=observations[row['pid']]
+        if observation is None:raise RunnerFailure('PROTECTED_PROCESS_MISSING')
+        data=asdict(observation)
+        data['argv']=list(data['argv'])
+        result.append({k:data[k] for k in row})
+    return result
+
+
+def protected_listeners(expected):
+    owners=sorted({r['pid'] for r in expected})
+    census=subprocess.run(['/usr/sbin/lsof','-a','-p',','.join(map(str,owners)),'-nP','-iTCP','-sTCP:LISTEN','-Fpn'],
+                          capture_output=True,text=True,timeout=5)
+    if census.returncode or census.stderr.strip():raise RunnerFailure('PROTECTED_LISTENER_CENSUS_FAILED')
+    seen=[];pid=None
+    for line in census.stdout.splitlines():
+        if line.startswith('p'):pid=int(line[1:])
+        elif line.startswith('n'):seen.append((pid,line[1:]))
+    if sorted(seen)!=sorted((r['pid'],r['address']+':'+str(r['port'])) for r in expected):
+        raise RunnerFailure('PROTECTED_LISTENER_MEMBERSHIP_CHANGED')
+    result=[]
+    for row in expected:
+        if set(row)!={'address','port','pid'} or row['address']!='127.0.0.1':
+            raise RunnerFailure('LISTENER_PIN_INVALID')
+        p=subprocess.run(['/usr/sbin/lsof','-nP','-iTCP:'+str(row['port']),'-sTCP:LISTEN','-Fpn'],capture_output=True,text=True,timeout=5)
+        lines=p.stdout.splitlines()
+        if (p.returncode or [s for s in lines if s.startswith('p')]!=['p'+str(row['pid'])] or
+                [s for s in lines if s.startswith('n')]!=['n'+row['address']+':'+str(row['port'])]):
+            raise RunnerFailure('PROTECTED_LISTENER_CHANGED')
+        result.append(row)
+    return result
+
+
+def verify_browser_tools(path, expected):
+    from truth_spine_lineage import file_hash, require, check_pin, contained
+    require(file_hash(path)==expected,'BROWSER_TOOLCHAIN_PIN_MISMATCH')
+    tools=json.loads(path.read_bytes())
+    require(set(tools)=={'node','cache','harness'},'BROWSER_TOOLCHAIN_SCHEMA')
+    check_pin(tools['node'])
+    for name in ('cache','harness'):
+        tree=tools[name];require(tree['files'],'COMPLETE_BROWSER_INVENTORY_REQUIRED')
+        root=Path(tree['root']);names=set()
+        for row in tree['files']:
+            p=contained(root,row['relative']);check_pin(row['pin'])
+            require(row['pin']['path']==str(p),'BROWSER_PIN_PATH_MISMATCH');names.add(row['relative'])
+        actual={str(p.relative_to(root)) for p in root.rglob('*') if not p.is_dir()}
+        require(names==actual and len(names)==len(tree['files']),'BROWSER_INVENTORY_MISMATCH')
+    return {**tools,'spec_file':str(path),'spec_hash':expected}
+
+
+def cleanup_browser_wrapper(process, expected, receipt_hash, root, *, inspector=inspect_macos):
+    """Never signal from a PID alone; retain each attempt even when another fails."""
+    from truth_spine_lineage import file_hash, write_new
+    from truth_spine_contract import canonical, verified
+    errors=[]
+    for number, action in enumerate(('terminate','kill')):
+        result='ALREADY_EXITED'
+        try:
+            if process.poll() is None:
+                path=root/'browser/wrapper-startup.json'
+                if file_hash(path)!=receipt_hash:raise RunnerFailure('WRAPPER_RECEIPT_CHANGED')
+                receipt=json.loads(path.read_bytes());verified(receipt)
+                if receipt!=expected:raise RunnerFailure('WRAPPER_PARENT_CHANGED')
+                observed=inspector(process.pid)
+                data=asdict(observed) if observed else None
+                if data is not None:data['argv']=list(data['argv'])
+                if data!=expected['observation']:raise RunnerFailure('WRAPPER_IDENTITY_CHANGED')
+                getattr(process,action)()
+                process.wait(timeout=15 if action=='terminate' else 5)
+                result='EXIT_CONFIRMED'
+        except BaseException:
+            errors.append('WRAPPER_'+action.upper()+'_UNRESOLVED');result='FAILED_CLOSED'
+        try:
+            write_new(root,'browser/wrapper-cleanup-'+str(number)+'.json',canonical({'action':action,'result':result}))
+        except BaseException:errors.append('WRAPPER_CLEANUP_EVIDENCE_FAILED')
+    return {'errors':errors,'remaining':process.poll() is None}
+
+
+def run_package_browser(root, package_hash, spec, tools, children):
+    from truth_spine_lineage import require, file_hash
+    backend=children.active['backend']['fingerprint']
+    require(backend is not None,'VERIFIED_BACKEND_REQUIRED')
+    children.verify(children.active['backend'])
+    protected_listeners([{'address':'127.0.0.1','port':spec['port'],'pid':backend.pid}])
+    # Startup content identity, not a PID-only label.
+    startup=json.loads((root/'state/backend-instance.json').read_bytes())
+    node=tools['node']['path'];harness=Path(tools['harness']['root'])
+    contract=root/'browser/contract.json'
+    env={'PATH':'/usr/bin:/bin','TMPDIR':str(root/'browser'),'PLAYWRIGHT_BROWSERS_PATH':tools['cache']['root']}
+    code="import {makeContract,newJSON} from './package-contract.mjs';newJSON(process.argv[1],makeContract(...process.argv.slice(2)));"
+    subprocess.run([node,'--input-type=module','-e',code,str(contract),str(root),package_hash,
+                    startup['content_hash'],'http://127.0.0.1:'+str(spec['port']),spec['source_commit'],tools['spec_file'],tools['spec_hash']],
+                   cwd=harness,env=env,check=True,timeout=30)
+    value=json.loads(contract.read_bytes())
+    from truth_spine_lineage import write_new
+    from truth_spine_contract import canonical, seal
+    argv=[node,str(harness/'package-run.mjs'),str(contract),value['content_hash'],str(root/'browser/run'),str(min(spec['duration_seconds'],1800))]
+    # The exclusive log exists before launch and retains partial output on timeout.
+    with (root/'logs/browser-wrapper.log').open('xb') as output:
+        process=subprocess.Popen(argv,cwd=harness,env=env,stdout=output,stderr=subprocess.STDOUT)
+        expected=None;expected_hash=None
+        try:
+            observed=inspect_macos(process.pid)
+            require(observed is not None and observed.parent_pid==os.getpid() and
+                    observed.argv==tuple(argv) and observed.cwd==str(harness) and
+                    observed.executable==str(Path(node).resolve()) and
+                    observed.executable_hash==tools['node']['sha256'],'BROWSER_WRAPPER_IDENTITY_INVALID')
+            data=asdict(observed);data['argv']=list(data['argv'])
+            expected=seal({'schema':'iios-browser-wrapper-startup-v1','observation':data,
+                           'root':str(root),'port':spec['port'],'package_hash':package_hash,
+                           'contract_hash':value['content_hash'],'backend_hash':startup['content_hash']})
+            expected_hash=write_new(root,'browser/wrapper-startup.json',canonical(expected))
+            process.wait(timeout=min(spec['duration_seconds'],1800)+40)
+        except BaseException:
+            cleanup=cleanup_browser_wrapper(process,expected,expected_hash,root) if expected_hash else {
+                'errors':['UNVERIFIED_WRAPPER_NOT_SIGNALED'],'remaining':process.poll() is None}
+            write_new(root,'browser/wrapper-failure.json',canonical({'result':'FAILED','cleanup':cleanup,'pid':process.pid}))
+            raise RunnerFailure('BROWSER_WRAPPER_FAILED') from None
+        finally:
+            output.flush();os.fsync(output.fileno())
+    require(process.returncode==0,'PACKAGE_BROWSER_FAILED')
+    children.verify(children.active['backend'])
+    verify_browser_tools(Path(tools['spec_file']),tools['spec_hash'])
+    receipt=root/'browser/run/browser-receipt.json'
+    return {'path':'browser/run/browser-receipt.json','sha256':file_hash(receipt),'contract':value['content_hash'],
+            'backend_instance_hash':startup['content_hash'],'tools_hash':tools['spec_hash']}
+
+
+def consolidate(root, package_hash, spec_hash, report, before, after):
+    from truth_spine_lineage import require, file_hash, contained
+    from truth_spine_contract import seal, verified
+    require(before==after and report.get('clean_shutdown') is True and report.get('port_clear') is True and
+            report.get('cleanup_errors')==[] and report.get('unresolved_children')==[] and
+            all(report.get(k) is True for k in ('rollback','input_preservation','source_preservation')),
+            'ACCEPTANCE_PRESERVATION_GATE')
+    link=report.get('browser');require(isinstance(link,dict),'PACKAGE_BROWSER_REQUIRED')
+    path=contained(root,link['path']);require(file_hash(path)==link['sha256'],'BROWSER_EVIDENCE_PIN_MISMATCH')
+    browser=json.loads(path.read_bytes());verified(browser)
+    require(browser['fixtureOnly'] is False and browser['result']=='PACKAGE_BROWSER_PASSED' and
+            browser['package_hash']==package_hash and browser['contract']==link['contract'] and
+            browser['backend_instance_hash']==link['backend_instance_hash'], 'BROWSER_PACKAGE_MISMATCH')
+    contract=json.loads((root/'browser/contract.json').read_bytes());verified(contract)
+    require(contract['content_hash']==link['contract'] and contract['fixtureOnly'] is False and
+            contract['expected']['package_hash']==package_hash and contract['expected']['backend_instance_hash']==link['backend_instance_hash'] and
+            contract['toolsHash']==link['tools_hash'],'CONTRACT_PARENT_MISMATCH')
+    require(browser['stats']=={'expected':9,'unexpected':0,'skipped':0,'flaky':0} and
+            all(type(v) is int for v in browser['stats'].values()) and browser['cleanup']['exitCode']==0 and
+            browser['cleanup']['errors']==[] and browser['cleanup']['remaining']==[] and
+            browser['cleanup']['listenersStable'] is True,'BROWSER_CLEANUP_OR_TOTALS_INVALID')
+    port_link=report.get('port_clear_receipt');require(isinstance(port_link,dict),'STABLE_PORT_RECEIPT_REQUIRED')
+    port_path=contained(root,port_link['path']);require(file_hash(port_path)==port_link['sha256'],'PORT_RECEIPT_PIN_MISMATCH')
+    port_record=json.loads(port_path.read_bytes())
+    require(port_record['schema']=='iios-stable-port-clear-v1' and port_record['package_hash']==package_hash and
+            port_record['port']==int(contract['origin'].rsplit(':',1)[1]) and
+            port_record['samples']==[{'tcp_clear':True,'listeners':[]}]*2,'PORT_PRESERVATION_GATE')
+    for row in browser['files']:
+        p=contained(path.parent,row['path'])
+        require(p.stat().st_size==row['bytes'] and file_hash(p)==row['sha256'],'BROWSER_ARTIFACT_CHANGED')
+    require(file_hash(root/'release/manifest.json')==package_hash and
+            file_hash(root/'admission/input-spec.json')==spec_hash,'FINAL_PACKAGE_PIN_MISMATCH')
+    from truth_spine_integration import bound_working_capability, event_capability
+    from truth_spine_adapters import verify_sqlite_targets
+    from truth_spine_lineage import write_new
+    from truth_spine_contract import canonical
+    t=json.loads((root/'topology.json').read_bytes())
+    caps=[bound_working_capability(t,s) for s in t['sources'] if s['kind'] in {'operational','historical'}]
+    caps.append(event_capability(t,write=False))
+    links=[{'path':str(p),'sha256':file_hash(p)} for p in sorted((root/'admission').glob('sqlite-open-*.json'))]
+    verify_sqlite_targets(caps,links)
+    telemetry_hash=write_new(root,'receipts/sqlite-targets.json',canonical(seal({
+        'schema':'iios-strict-sqlite-target-set-v1','package_hash':package_hash,'opens':links})))
+    return seal({'schema':'iios-consolidated-historical-acceptance-v1','result':'GREEN',
+                 'scope':'PACKAGE_BACKED_HISTORICAL_ONLY','package_hash':package_hash,'input_spec_hash':spec_hash,
+                 'backend_evidence_hash':file_hash(root/'acceptance.json'),'browser_receipt_hash':link['sha256'],
+                 'sqlite_target_receipt_hash':telemetry_hash,
+                 'baseline_before':file_hash(root/'baselines/before.json'),'baseline_after':file_hash(root/'baselines/after.json'),
+                 'owner_scope':'SIX_PINNED_OWNER_FILES','permanent_promotion':False})
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--root',required=True,type=Path);parser.add_argument('--port',required=True,type=int)
-    parser.add_argument('--review-seconds',type=int,default=0);a=parser.parse_args();root=a.root.resolve()
+    parser.add_argument('--review-seconds',type=int,default=0)
+    parser.add_argument('--package-sha256',required=True)
+    parser.add_argument('--input-spec-sha256',required=True)
+    parser.add_argument('--browser-tools',required=True,type=Path)
+    parser.add_argument('--browser-tools-sha256',required=True)
+    a=parser.parse_args();root=a.root.resolve()
     if root.parent!=Path('/private/tmp') or not root.name.startswith('iios-truth-spine-3-acceptance-') or a.port in {5176,5177,5184,5185,5186,8002}:raise ValueError('ISOLATED_ROOT_REQUIRED')
+    from truth_spine_lineage import require, file_hash, check_pin, write_new
+    from truth_spine_contract import canonical
+    from truth_spine_integration import topology
+    from truth_spine_noninterference import load_baseline, observe
+    require(root.name.startswith('iios-truth-spine-3-acceptance-sb38d-clean-'),'NEW_LINEAGE_RUN_REQUIRED')
+    require(not (root/'runner-incidents.json').exists() and not (root/'baselines/before.json').exists(),'RUN_ALREADY_ATTEMPTED')
+    require(file_hash(root/'release/manifest.json')==a.package_sha256 and
+            file_hash(root/'admission/input-spec.json')==a.input_spec_sha256,'INDEPENDENT_RUN_PIN_MISMATCH')
+    spec=json.loads((root/'admission/input-spec.json').read_bytes())
+    require(spec['port']==a.port and spec['run_root']==str(root),'RUN_CONFIGURATION_MISMATCH')
+    from truth_spine_integration import activate_topology_sqlite
+    activate_topology_sqlite(json.loads((root/'topology.json').read_bytes()),'acceptance')
+    topology(root/'topology.json')
+    baseline=load_baseline(root/'admission/baseline-spec.json',spec['baseline']['sha256'])
+    browser_tools=verify_browser_tools(a.browser_tools,a.browser_tools_sha256)
+    before=observe(baseline,process_inventory=protected_processes,listener_inventory=protected_listeners)
+    require(before==json.loads((root/'baselines/before-preparation.json').read_bytes())==
+            json.loads((root/'baselines/after-preparation.json').read_bytes()),'PREPARATION_BASELINE_MISMATCH')
+    write_new(root,'baselines/before.json',canonical(before))
     t=json.loads((root/'topology.json').read_bytes());backend=root/'release/backend';python=root/'runtime/bin/python'
     env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':str(backend),'PYTHONUNBUFFERED':'1'}
     def port_clear():
-        return port_is_clear(a.port)
+        value=stable_port_clear(a.port)
+        value['package_hash']=a.package_sha256
+        name='receipts/port-clear-'+str(len(port_checks))+'.json'
+        expected=write_new(root,name,canonical(value))
+        port_checks.append({'path':name,'sha256':expected})
+        report['port_clear_receipt']=port_checks[-1]
+        return True
+    port_checks=[]
     children=OwnedChildren(root,port_clear=port_clear)
-    report={'readiness_transitions':[], 'duplicate_owner_tests':[]}
-    command=[str(python),'-B','-m','truth_spine_integration_service','--config',str(root/'topology.json')]
+    report={'readiness_transitions':[], 'duplicate_owner_tests':[], 'requires_package_browser':True}
+    command=[str(python),'-B','-m','truth_spine_integration_service','--config',str(root/'topology.json'),'--strict-lineage']
     runtime=json.loads((root/'runtime/runtime-manifest.json').read_bytes())
     executable_hashes={str(python):runtime['interpreter_sha256']}
     if runtime.get('process_executable'):
@@ -512,7 +766,8 @@ def main():
     def stop(role):
         if not children.stop(role):raise RunnerFailure('CHILD_STOP_FAILED')
     def count():
-        db=sqlite3.connect((root/'canonical-events.db').as_uri()+'?mode=ro',uri=True)
+        from truth_spine_integration import connect_event
+        db=connect_event(t)
         try:return db.execute('select count(*),count(distinct id) from records').fetchone()
         finally:db.close()
     primary=None
@@ -555,11 +810,14 @@ def main():
         for _ in range(10):
             started=time.monotonic();code,_=get(a.port,'/health/ready');report['soak'].append({'http':code,'seconds':time.monotonic()-started})
             if code!=200:raise ValueError('SOAK_READINESS_FAILED')
-        p=root/'inputs/operational.db';restored=root/'rollback-rehearsal.db';shutil.copyfile(p,restored);restored.chmod(0o400)
+        p=root/'working-inputs/owner/l7/snapshot.db';restored=root/'rollback/operational.db'
+        from truth_spine_lineage import copy_pinned
+        copy_pinned({'path':str(p),'sha256':file_hash(p),'bytes':p.stat().st_size,'mode':0o400},root,'rollback/operational.db')
         report['rollback']=hashlib.sha256(p.read_bytes()).hexdigest()==hashlib.sha256(restored.read_bytes()).hexdigest()
-        before=json.loads((root/'preservation.json').read_bytes());report['input_preservation']=all(hashlib.sha256((root/name).read_bytes()).hexdigest()==h for name,h in before['input_hashes'].items())
-        report['source_preservation']=all(hashlib.sha256(Path(name).read_bytes()).hexdigest()==h for name,h in before['source_files'].items())
+        preservation=json.loads((root/'preservation.json').read_bytes());report['input_preservation']=all(hashlib.sha256((root/name).read_bytes()).hexdigest()==h for name,h in preservation['input_hashes'].items())
+        report['source_preservation']=bool(preservation['source_files']) and all(hashlib.sha256(Path(name).read_bytes()).hexdigest()==h for name,h in preservation['source_files'].items())
         if not all(report[k] for k in ['rollback','input_preservation','source_preservation']):raise ValueError('PRESERVATION_FAILED')
+        report['browser']=run_package_browser(root,a.package_sha256,spec,browser_tools,children)
         report['result']='BACKEND_GREEN_BROWSER_SEPARATE';print(json.dumps(report),flush=True)
         # Read-only browser work occurs during this bounded interval; cleanup remains automatic.
         until=time.monotonic()+min(max(a.review_seconds,0),600)
@@ -569,7 +827,14 @@ def main():
     finally:
         children.cleanup(report,primary)
         print(json.dumps(report),flush=True)
-    return 0 if report['result']=='GREEN' else 1
+    if primary is not None or not report['clean_shutdown']:return 1
+    after=observe(baseline,process_inventory=protected_processes,listener_inventory=protected_listeners)
+    require(before==after,'NONINTERFERENCE_FAILED')
+    write_new(root,'baselines/after.json',canonical(after))
+    for pin in spec['owner_files'].values():check_pin(pin)
+    consolidated=consolidate(root,a.package_sha256,a.input_spec_sha256,report,before,after)
+    write_new(root,'consolidated-acceptance.json',canonical(consolidated))
+    return 0
 
 
 if __name__=='__main__':sys.exit(main())

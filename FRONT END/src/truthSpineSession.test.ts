@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { validSessionView, sessionReadiness } from './truthSpineSessionView.ts';
 import { factoryFixture } from './truthSpineFactory.fixture.ts';
+import { validHistoricalLineage } from './truthSpineSessionView.ts';
 const now = Date.parse('2026-09-10T13:30:00Z');
 const fixture = () => ({
   factory: factoryFixture(),
@@ -20,6 +21,23 @@ const fixture = () => ({
   counters: Object.fromEntries(['provider', 'model', 'credential', 'broker', 'paper', 'live_execution', 'operational_ledger_write'].map(k => [k, 0])),
   counter_scope: 'DENY_ONLY_SHADOW', narrative_classification: 'NARRATIVE', incidents: [],
   source_session_closed_is_not_installed_disabled: true,
+});
+test('historical package lineage requires every independent identity and retains the watermark', () => {
+  const hashes = ['package_hash','package_generation','runtime_hash','frontend_hash','admission_hash',
+    'generation_hash','initial_cycle_hash','owner_manifest_hash','completion_hash','l7_hash','l8_hash',
+    'backend_instance_hash','source_cycle','projection_hash'];
+  const lineage = { ...Object.fromEntries(hashes.map(k => [k,'a'.repeat(64)])),
+    schema:'iios-northstar-package-binding-v1',source_commit:'b'.repeat(40),
+    common_watermark:'2020-01-02T00:00:00Z',classification:'HISTORICAL_REPLAY' };
+  assert.equal(validHistoricalLineage(lineage),true);
+  for(const key of hashes) {
+    const bad: Record<string,unknown>={...lineage};delete bad[key];
+    assert.equal(validHistoricalLineage(bad),false);
+    assert.equal(validHistoricalLineage({...lineage,[key]:'retained-fixture'}),false);
+  }
+  assert.equal(validHistoricalLineage({...lineage,classification:'LIVE_VERIFIED'}),false);
+  assert.equal(validHistoricalLineage({...lineage,unexpected:true}),false);
+  assert.equal(validSessionView({...fixture(),lineage},now),false);
 });
 test('full-session metadata preserves distinct universes and original clocks', () => {
   const x = fixture(); assert.ok(validSessionView(x, now));

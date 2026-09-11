@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
+
 import copy
 import json
 import os
@@ -29,6 +31,7 @@ STAMP = "2026-09-07T00:00:00+00:00"
 IDENTITY = "controller-install-27r"
 
 
+@isolated_compositor_readiness
 class OperationalV2ContractTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -127,7 +130,7 @@ class OperationalV2ContractTests(unittest.TestCase):
         value = self.browser_v2()
         missing = Path(self.temp.name) / "missing"
         compositor = Compositor(missing, missing, missing, missing, "http://127.0.0.1:1", controller_reader=lambda: value,
-                                controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE")
+                                controller_status_provenance="AUTHENTIC_OPERATIONAL_STATE", **isolated_service_readers())
         compositor._reachability = lambda: "UNAVAILABLE"
         self.assertEqual(compositor.snapshot()["sections"]["tuesday_controller_status"]["state"], "INSTALLED_BUT_DISABLED")
         compositor.controller_reader = lambda: value | {"request_identities": []}
@@ -145,7 +148,7 @@ class OperationalV2ContractTests(unittest.TestCase):
                 missing, missing, missing, missing, "http://127.0.0.1:1",
                 controller_reader=lambda: value,
                 controller_status_provenance=provenance,
-            )
+             **isolated_service_readers())
             compositor._reachability = lambda: "UNAVAILABLE"
             return compositor.snapshot()["sections"]["tuesday_controller_status"]
 

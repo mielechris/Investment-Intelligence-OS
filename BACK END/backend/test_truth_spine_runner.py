@@ -21,6 +21,94 @@ sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
 
 
+class HistoricalAcceptanceTests(unittest.TestCase):
+    def test_protected_listener_census_rejects_extra_ports_or_substituted_owner(self):
+        expected=[{'pid':900001,'address':'127.0.0.1','port':6000}]
+        for text in ('p900001\nn127.0.0.1:6000\nn127.0.0.1:6001\n','p900002\nn127.0.0.1:6000\n'):
+            with patch.object(runner.subprocess,'run',return_value=Mock(returncode=0,stdout=text,stderr='')):
+                with self.assertRaises(runner.RunnerFailure):runner.protected_listeners(expected)
+        with patch.object(runner.subprocess,'run',return_value=Mock(returncode=0,stdout='p900001\nn127.0.0.1:6000\n',stderr='')):
+            self.assertEqual(runner.protected_listeners(expected),expected)
+
+    def test_protected_census_rejects_missing_extra_or_unresolved_members(self):
+        observed=runner.ProcessObservation(900001,900000,'stamp','node','/synthetic/node','a'*64,'/synthetic',('node',))
+        row=runner.asdict(observed);row.pop('command');row['argv']=list(row['argv'])
+        self.assertEqual(runner.protected_processes([row],census=[(900001,'/synthetic/node')],inspector=lambda _:observed),[row])
+        for census,inspector in [([],lambda _:observed), ([(900001,'/synthetic/node'),(900002,'/synthetic/node')],
+                                  lambda pid:replace(observed,pid=pid)), ([(900001,'/synthetic/node')],lambda _:None)]:
+            with self.assertRaises(runner.RunnerFailure):runner.protected_processes([row],census=census,inspector=inspector)
+
+    def wrapper(self, **kwargs):
+        from test_truth_spine_lineage import retained_root
+        from truth_spine_contract import canonical,seal
+        from truth_spine_lineage import write_new
+        root=retained_root('browser-wrapper');(root/'browser').mkdir()
+        child=Child(900001,**kwargs)
+        observed=runner.ProcessObservation(child.pid,900000,'2026-09-09T00:00:00+00:00','node wrapper',
+                                           '/synthetic/node','a'*64,str(root),('node','wrapper'))
+        data=runner.asdict(observed);data['argv']=list(data['argv'])
+        receipt=seal({'schema':'iios-browser-wrapper-startup-v1','observation':data,'root':str(root),
+                      'port':6000,'package_hash':'b'*64,'contract_hash':'c'*64,'backend_hash':'d'*64})
+        h=write_new(root,'browser/wrapper-startup.json',canonical(receipt))
+        return root,child,observed,receipt,h
+
+    def test_wrapper_pid_reuse_and_each_fingerprint_mismatch_never_signaled(self):
+        for field,value in {'pid':900002,'parent_pid':1,'start_time':'changed','command':'changed',
+                            'executable':'/other','executable_hash':'f'*64,'cwd':'/other','argv':('other',)}.items():
+            root,child,observed,receipt,h=self.wrapper()
+            result=runner.cleanup_browser_wrapper(child,receipt,h,root,inspector=lambda _:replace(observed,**{field:value}))
+            self.assertEqual(child.signals,[]);self.assertTrue(result['remaining']);self.assertTrue(result['errors'])
+
+    def test_wrapper_cleanup_continues_and_reverifies_after_terminate_failure(self):
+        root,child,observed,receipt,h=self.wrapper(terminate_error=OSError('synthetic'))
+        inspector=Mock(return_value=observed)
+        result=runner.cleanup_browser_wrapper(child,receipt,h,root,inspector=inspector)
+        self.assertEqual(child.signals,['terminate','kill']);self.assertEqual(inspector.call_count,2)
+        self.assertFalse(result['remaining']);self.assertTrue(result['errors'])
+        self.assertTrue((root/'browser/wrapper-cleanup-0.json').is_file())
+        self.assertTrue((root/'browser/wrapper-cleanup-1.json').is_file())
+
+    def test_wrapper_wrong_independent_receipt_hash_rejected(self):
+        root,child,observed,receipt,_=self.wrapper()
+        result=runner.cleanup_browser_wrapper(child,receipt,'e'*64,root,inspector=lambda _:observed)
+        self.assertEqual(child.signals,[]);self.assertTrue(result['remaining'])
+
+    def test_new_lineage_evidence_never_overwrites_existing_receipt(self):
+        from test_truth_spine_lineage import retained_root
+        root=retained_root('exclusive-runner')/'iios-truth-spine-3-acceptance-sb38d-clean-synthetic'
+        root.mkdir()
+        runner.atomic_evidence(root,'acceptance.json',{'first':True})
+        original=(root/'acceptance.json').read_bytes()
+        with self.assertRaises(FileExistsError):runner.atomic_evidence(root,'acceptance.json',{'second':True})
+        self.assertEqual((root/'acceptance.json').read_bytes(),original)
+
+    def test_stable_port_clear_requires_two_empty_owned_observations(self):
+        calls=[]
+        result=runner.stable_port_clear(6000,probe=lambda p:calls.append(p) or True,pause=lambda _:None,listeners=lambda:[])
+        self.assertEqual(calls,[6000,6000]);self.assertEqual(len(result['samples']),2)
+        with self.assertRaises(runner.RunnerFailure):
+            runner.stable_port_clear(6000,probe=lambda _:True,pause=lambda _:None,listeners=lambda:[{'pid':999}])
+        probes=iter([True,False])
+        with self.assertRaises(runner.RunnerFailure):
+            runner.stable_port_clear(6000,probe=lambda _:next(probes),pause=lambda _:None,listeners=lambda:[])
+
+    def test_cleanup_alone_never_satisfies_consolidation(self):
+        from test_truth_spine_lineage import retained_root
+        root=retained_root('consolidation')
+        report={'clean_shutdown':True,'port_clear':True,'cleanup_errors':[],
+                'unresolved_children':[],'rollback':True,'input_preservation':True,'source_preservation':True}
+        with self.assertRaisesRegex(ValueError,'PACKAGE_BROWSER_REQUIRED'):
+            runner.consolidate(root,'a'*64,'b'*64,report,{}, {})
+        self.assertEqual(list(root.iterdir()),[])
+
+    def test_changed_baseline_rejects_before_browser_reads(self):
+        from test_truth_spine_lineage import retained_root
+        root=retained_root('consolidation')
+        with self.assertRaisesRegex(ValueError,'ACCEPTANCE_PRESERVATION_GATE'):
+            runner.consolidate(root,'a'*64,'b'*64,{}, {'before':1},{'after':2})
+        self.assertEqual(list(root.iterdir()),[])
+
+
 class Child:
     def __init__(self, pid, waits=(), terminate_error=None, kill_error=None, on_exit=None):
         self.pid, self.returncode = pid, None

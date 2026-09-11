@@ -1,0 +1,14 @@
+{
+  "schema": "iios-protected-baseline-v1",
+  "files": {
+    "configurations": [],
+    "permanent_artifacts": [],
+    "retained_evidence": [],
+    "runtime_files": [],
+    "museum_assets": []
+  },
+  "trees": [],
+  "processes": [],
+  "listeners": [],
+  "owner_scope": "SIX_PINNED_OWNER_FILES"
+}

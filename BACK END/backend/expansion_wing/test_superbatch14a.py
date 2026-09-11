@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from expansion_wing.test_authority_fixtures import isolated_service_readers, isolated_compositor_readiness
 from .test_authority_fixtures import offline_boundary
 
 import json
@@ -47,6 +49,7 @@ def provider(transport: Transport | None = None) -> FinancialDatasetsAdapter:
         prior_ambiguous_credits=2)
 
 
+@isolated_compositor_readiness
 class CandidateEnrichmentBridgeTests(unittest.TestCase):
     def test_disabled_default_touches_neither_provider_nor_credits(self):
         source = provider(); result = CandidateEnrichmentBridge(source).run(candidates())
@@ -112,7 +115,7 @@ class CandidateEnrichmentBridgeTests(unittest.TestCase):
             candidates(), explicitly_authorized=True).browser_safe()
         missing = Path("/definitely/missing")
         compositor = Compositor(missing, missing, missing, missing, "http://127.0.0.1:1",
-            enrichment_reader=lambda: projection)
+            enrichment_reader=lambda: projection, **isolated_service_readers())
         compositor._reachability = lambda: "UNAVAILABLE"
         snapshot = compositor.snapshot()
         self.assertEqual(snapshot["sections"]["candidate_enrichment"]["state"], "CURRENT")

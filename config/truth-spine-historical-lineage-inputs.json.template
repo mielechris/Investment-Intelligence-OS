@@ -1,0 +1,174 @@
+{
+  "schema": "iios-historical-lineage-inputs-v1",
+  "source_commit": "REQUIRED_LATER_ACCEPTED_IMPLEMENTATION_COMMIT",
+  "owner_files": {
+    "manifest.json": {
+      "path": "/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2/manifest.json",
+      "sha256": "88bb82aebaa661978a4f03e8d4b0c926f2dd4fa3717a47938fa44883ed1b3ba9",
+      "bytes": 3729,
+      "mode": 256
+    },
+    "completion-receipt.json": {
+      "path": "/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2/completion-receipt.json",
+      "sha256": "b3db70d1ff84f88c7aa6fcadead513dd618697b945511dbeed332abcf1d8cc48",
+      "bytes": 749,
+      "mode": 256
+    },
+    "l7/snapshot.db": {
+      "path": "/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2/l7/snapshot.db",
+      "sha256": "89f03e445149d06b3bff1030df2d647edddeafa8561734126cfcd358aa6ad27e",
+      "bytes": 351170560,
+      "mode": 256
+    },
+    "l8/snapshot.db": {
+      "path": "/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2/l8/snapshot.db",
+      "sha256": "bb2e8b1223af91b1813a4502d6c2d694beec3b8393f03b1a29474ce737d354c9",
+      "bytes": 1351712768,
+      "mode": 256
+    },
+    "l7/receipt.json": {
+      "path": "/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2/l7/receipt.json",
+      "sha256": "21a2f07a0ccdcfbdac7e35d1e39e91394946ea1dac0ffe3e41d1a4e5b2444681",
+      "bytes": 1184,
+      "mode": 256
+    },
+    "l8/receipt.json": {
+      "path": "/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2/l8/receipt.json",
+      "sha256": "69b50545db38a2dd1fe958ada956395547fd6601e106a9f544eea2ecc80ff457",
+      "bytes": 945,
+      "mode": 256
+    }
+  },
+  "common_watermark": "2026-09-11T02:13:28.480261Z",
+  "auxiliary": [
+    {
+      "target": "universe-current.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/universe-current.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "research.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/research.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "event_reconstruction.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/event_reconstruction.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "macro_regime.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/macro_regime.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "validation_9h.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/validation_9h.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "shadow_9i.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/shadow_9i.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "outcomes_9j.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/outcomes_9j.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "executor/selected-session.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/executor/selected-session.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "executor/REQUIRED_SELECTED_ROOT/executor-state.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/executor/REQUIRED_SELECTED_ROOT/executor-state.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    },
+    {
+      "target": "executor/REQUIRED_SELECTED_ROOT/request-plan.json",
+      "pin": {
+        "path": "/private/tmp/REQUIRED_INDEPENDENT_INPUTS/executor/REQUIRED_SELECTED_ROOT/request-plan.json",
+        "sha256": "REQUIRED_INDEPENDENT_SHA256",
+        "bytes": null,
+        "mode": null
+      }
+    }
+  ],
+  "runtime": {
+    "files": [
+      {
+        "target": "bin/python",
+        "pin": {
+          "path": "/private/tmp/REQUIRED_TOOLCHAIN/python",
+          "sha256": "REQUIRED_INDEPENDENT_SHA256",
+          "bytes": null,
+          "mode": null
+        },
+        "mode": 320
+      },
+      {
+        "target": "pyvenv.cfg",
+        "pin": {
+          "path": "/private/tmp/REQUIRED_TOOLCHAIN/pyvenv.cfg",
+          "sha256": "REQUIRED_INDEPENDENT_SHA256",
+          "bytes": null,
+          "mode": null
+        },
+        "mode": 256
+      }
+    ],
+    "platform_dependencies": [],
+    "process_executable": {
+      "path": "/private/tmp/REQUIRED_TOOLCHAIN/ACTUAL_EXECUTABLE",
+      "sha256": "REQUIRED_INDEPENDENT_SHA256",
+      "bytes": null,
+      "mode": null
+    },
+    "interpreter": "bin/python"
+  },
+  "baseline": {
+    "path": "/private/tmp/REQUIRED_PINS/noninterference.json",
+    "sha256": "REQUIRED_INDEPENDENT_SHA256"
+  },
+  "run_root": "/private/tmp/iios-truth-spine-3-acceptance-sb38d-clean-REQUIRED_UNIQUE_ID",
+  "port": null,
+  "duration_seconds": null
+}
