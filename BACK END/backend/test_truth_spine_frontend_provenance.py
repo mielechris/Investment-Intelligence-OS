@@ -48,6 +48,74 @@ class ProvenanceTests(unittest.TestCase):
         self.record['content_hash'] = p.digest(self.record)
         (self.root/'frontend-provenance.json').write_bytes(p.encoded(self.record))
 
+    def northstar_fixture(self):
+        """A complete graph-shaped fixture (entry, principal assets, media)."""
+        assets = {
+            'northstar-session.html': '<script src="/review/assets/northstar-session-app.js"></script><link href="/review/assets/northstar-session-shell.css">',
+            'assets/northstar-session-app.js': ''.join(
+                f'const asset{i}="/review/assets/room-{i}.webp";'
+                for i in range(10)
+            ),
+            'assets/northstar-session-shell.css': ''.join(
+                f'.room-{i}{{background:url("/review/assets/room-{i}.webp")}}'
+                for i in range(10)
+            ),
+        }
+        assets.update({f'assets/room-{i}.webp': b'fixture-image' for i in range(10)})
+        root = self.root/'northstar/dist'
+        for name, data in assets.items():
+            target = root/name; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data.encode() if isinstance(data, str) else data)
+        return root, assets
+
+    def northstar_provenance(self, dist):
+        expected = copy.deepcopy(self.expected)
+        expected['policy'] = {**p.POLICY, 'entry': p.ENTRY, 'environment': p.NORTHSTAR_ENV}
+        rows = p.inventory(dist)
+        return {'schema': p.SCHEMA, 'inputs': expected, 'input_hash': p.digest(expected),
+                'outputs': rows, 'output_hash': p.digest(rows), 'observation': {'modules': []}}
+
+    def test_complete_northstar_graph_selected_by_exact_entrypoint(self):
+        dist, _ = self.northstar_fixture(); record = self.northstar_provenance(dist)
+        self.assertEqual(acceptance.validate_packaged_frontend(dist, record), record['outputs'])
+
+    def test_engineering_graph_keeps_original_validator(self):
+        self.assertEqual(acceptance.validate_packaged_frontend(self.dist, self.record), self.record['outputs'])
+
+    def test_cross_graph_validator_selection_is_rejected(self):
+        dist, _ = self.northstar_fixture()
+        with self.assertRaisesRegex(ValueError, 'SIX_FILE_ALLOWLIST_INVALID'):
+            p.validate_outputs(dist)
+        with self.assertRaisesRegex(ValueError, 'NORTHSTAR_ASSET_INVENTORY_INVALID'):
+            p.validate_outputs(self.dist, northstar=True)
+
+    def test_unknown_missing_and_ambiguous_entrypoints_are_rejected(self):
+        dist, _ = self.northstar_fixture(); record = self.northstar_provenance(dist)
+        for entry in (None, '', 'truth-integration.html,northstar-session.html', 'unknown.html'):
+            bad = copy.deepcopy(record)
+            if entry is None:
+                bad['inputs']['policy'].pop('entry')
+            else:
+                bad['inputs']['policy']['entry'] = entry
+            with self.assertRaisesRegex(ValueError, 'FRONTEND_ENTRYPOINT_INVALID'):
+                acceptance.validate_packaged_frontend(dist, bad)
+
+    def test_entrypoint_provenance_disagreement_is_rejected(self):
+        dist, _ = self.northstar_fixture(); bad = self.northstar_provenance(dist)
+        bad['outputs'] = self.record['outputs']
+        with self.assertRaises(ValueError): acceptance.validate_packaged_frontend(self.dist, bad)
+
+    def test_northstar_missing_extra_mutated_or_stale_asset_is_rejected(self):
+        dist, _ = self.northstar_fixture(); record = self.northstar_provenance(dist)
+        (dist/'assets/room-0.webp').unlink()
+        with self.assertRaises(ValueError): acceptance.validate_packaged_frontend(dist, record)
+        dist, _ = self.northstar_fixture(); record = self.northstar_provenance(dist)
+        (dist/'assets/old.webp').write_bytes(b'stale')
+        with self.assertRaises(ValueError): acceptance.validate_packaged_frontend(dist, record)
+        dist, _ = self.northstar_fixture(); record = self.northstar_provenance(dist)
+        (dist/'assets/room-0.webp').write_bytes(b'changed')
+        with self.assertRaises(ValueError): acceptance.validate_packaged_frontend(dist, record)
+
     def verify(self):
         return p.verify(self.root, self.root/'source', 'a'*40)
 

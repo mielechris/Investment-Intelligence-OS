@@ -23,12 +23,33 @@ from pathlib import Path
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def validate_packaged_frontend(dist, provenance):
+    """Dispatch only to the graph named by independently verified provenance.
+
+    Northstar and the engineering preview intentionally have different asset
+    contracts.  Selecting a validator from the observed file count would let a
+    stale or cross-graph distribution pass, so the entrypoint is the sole
+    selector and must be one of the two reviewed values.
+    """
+    from truth_spine_frontend_provenance import validate_outputs
+
+    try:
+        entry = provenance["inputs"]["policy"]["entry"]
+    except (KeyError, TypeError):
+        raise ValueError("FRONTEND_ENTRYPOINT_INVALID") from None
+    if entry == "northstar-session.html":
+        return validate_outputs(dist, provenance["outputs"], northstar=True)
+    if entry == "truth-integration.html":
+        return validate_outputs(dist, provenance["outputs"], northstar=False)
+    raise ValueError("FRONTEND_ENTRYPOINT_INVALID")
+
+
 def prepare(a):
     root=a.root.resolve()
     if root.exists():raise ValueError('NEW_ACCEPTANCE_ROOT_REQUIRED')
     # Validate source and proven frontend before binding a socket or creating
     # any shadow output. There is deliberately no fallback to source/dist.
-    from truth_spine_frontend_provenance import verify, validate_outputs
+    from truth_spine_frontend_provenance import verify
     src=a.source.resolve()
     commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=src,text=True).strip()
     if subprocess.check_output(['git','status','--porcelain'],cwd=src,text=True):
@@ -48,7 +69,7 @@ def prepare(a):
         rel=p.relative_to(src/'BACK END/backend');target=backend/rel;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(p,target);target.chmod(0o400);source_hashes[str(p)]=sha(p)
     shutil.copytree(a.frontend_build/'frontend/dist',package/'frontend',symlinks=True)
-    validate_outputs(package/'frontend',frontend['outputs'])
+    validate_packaged_frontend(package/'frontend', frontend)
     sys_path=str(backend)
     import sys
     sys.path.insert(0,sys_path)
