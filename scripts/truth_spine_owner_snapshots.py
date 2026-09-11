@@ -1,10 +1,8 @@
-"""Owner-operated, read-only L7/L8 SQLite snapshot kit.
+"""Owner-operated, read-only L7/L8 snapshot kit.
 
-This command is deliberately separate from the Codex workflow.  It accepts
-only a hash-bound, owner-created source configuration and the exact consent
-sentence below.  The capture child is the reviewed Seatbelt helper; no direct
-SQLite copy, network, credential, provider, model, broker, or ledger-write
-capability exists in this module.
+The v2 configuration is hash-bound and metadata-first.  ``--config-only``
+performs JSON validation and lstat checks only; it never opens a ledger.
+Capture remains an explicit owner action and is not callable from a browser.
 """
 from __future__ import annotations
 
@@ -14,54 +12,244 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import sqlite3
 import stat
 import subprocess
 import sys
+from typing import Any
 
 BACKEND = Path(__file__).resolve().parents[1] / "BACK END/backend"
 sys.path.insert(0, str(BACKEND))
-from truth_spine_contract import canonical, digest, seal, utc, verified  # noqa: E402
+from truth_spine_contract import canonical, seal, utc, verified  # noqa: E402
 from truth_spine_sqlite_capture import launch_capture  # noqa: E402
 import truth_spine_sqlite_capture as capture_helper  # noqa: E402
 
-
 SCHEMA = "iios-owner-ledger-snapshot-v1"
-CONFIG_SCHEMA = "iios-owner-ledger-source-config-v1"
+CONFIG_SCHEMA = "iios-owner-ledger-source-config-v2"
 OUTPUT_ROOT = Path("/private/tmp/iios-northstar-owner-snapshots-sb37")
-CONFIRMATION = (
-    "I authorize read-only capture of my canonical IIOS L7 and L8 ledgers into "
-    "the isolated owner snapshot root. I do not authorize source modification."
-)
+CONFIRMATION = ("I confirm these are my canonical IIOS L7 and L8 ledgers. I authorize "
+                "read-only capture into the isolated owner snapshot root. I do not "
+                "authorize source modification.")
+CAPTURE_CONFIRMATION = ("I authorize opening these already-adopted L7 and L8 ledgers for read-only "
+                        "capture into the isolated owner snapshot root.")
 SOURCE_KINDS = {"L7", "L8"}
-UTC_SUFFIX = re.compile(r"(?:Z|[+-]00:00)$")
+HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+COMMIT40 = re.compile(r"[0-9a-f]{40}\Z")
+PLACEHOLDER = re.compile(r"(?:<[^>]+>|PLACEHOLDER|OWNER[-_]SUPPLIED|REPLACE[-_]ME)", re.I)
+FORBIDDEN_PARTS = {"credentials", "keychain", "keychains", ".git", "node_modules"}
 
 
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def alias_path(path: Path, sources: dict[Path, str], output: Path) -> str:
-    resolved = path.resolve()
-    if resolved == output.resolve() or resolved.is_relative_to(output.resolve()):
-        return "{OUTPUT}" + ("/" + resolved.relative_to(output.resolve()).as_posix()
-                               if resolved != output.resolve() else "")
-    for source, alias in sources.items():
-        if resolved == source:
-            return "{" + alias + "}"
-    return "{PRIVATE_PATH}"
+def _absolute_regular_metadata(path: Path) -> os.stat_result:
+    if not path.is_absolute() or path != path.resolve() or path.is_symlink():
+        raise ValueError("OWNER_SOURCE_PATH_INVALID")
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError("OWNER_SOURCE_TYPE_OR_OWNER_INVALID")
+    return info
 
 
 def owner_regular(path: Path, *, mode: int | None = None) -> bytes:
-    if not path.is_absolute() or path != path.resolve() or any(p.is_symlink() for p in (path, *path.parents)):
-        raise ValueError("OWNER_SOURCE_PATH_INVALID")
-    info = path.lstat()
-    if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
-        raise ValueError("OWNER_SOURCE_TYPE_OR_OWNER_INVALID")
+    """Compatibility helper for the explicit capture path (not config-only)."""
+    info = _absolute_regular_metadata(path)
     if mode is not None and stat.S_IMODE(info.st_mode) != mode:
         raise ValueError("OWNER_SOURCE_MODE_INVALID")
     return path.read_bytes()
+
+
+def _source_path(path_value: Any) -> Path:
+    if not isinstance(path_value, str) or PLACEHOLDER.search(path_value):
+        raise ValueError("OWNER_SOURCE_PATH_INVALID")
+    path = Path(path_value)
+    if not path.is_absolute() or path != path.resolve():
+        raise ValueError("OWNER_SOURCE_PATH_INVALID")
+    if any(part.lower() in FORBIDDEN_PARTS for part in path.parts):
+        raise ValueError("OWNER_SOURCE_PATH_INVALID")
+    if path == OUTPUT_ROOT or OUTPUT_ROOT in path.parents:
+        raise ValueError("OWNER_SOURCE_PATH_INVALID")
+    if "iios-truth-spine-3-src" in path.parts:
+        raise ValueError("OWNER_SOURCE_PATH_CHECKOUT_BOUND")
+    return path
+
+
+def _source_metadata(row: dict) -> tuple[Path, dict]:
+    required = {"kind", "alias", "path", "size", "sha256", "device", "inode",
+                "owner_uid", "mode", "file_type", "provenance"}
+    if set(row) != required or row.get("kind") not in SOURCE_KINDS or row.get("alias") != row.get("kind"):
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    if not isinstance(row["size"], int) or row["size"] < 0 or not HEX64.fullmatch(str(row["sha256"])):
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    if not all(isinstance(row[key], int) for key in ("device", "inode", "owner_uid", "mode")):
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    provenance = row.get("provenance")
+    if (not isinstance(provenance, list) or not provenance or
+            any(not isinstance(x, str) or not x for x in provenance)):
+        raise ValueError("OWNER_SOURCE_PROVENANCE_MISSING")
+    if row.get("file_type") != "regular":
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    path = _source_path(row["path"])
+    info = _absolute_regular_metadata(path)
+    if (info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode)) != (
+            row["device"], row["inode"], row["owner_uid"], row["mode"]):
+        raise ValueError("OWNER_SOURCE_METADATA_MISMATCH")
+    return path, row
+
+
+def _parse_config(config: Path) -> dict:
+    info = _absolute_regular_metadata(config)
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError("OWNER_CONFIG_MODE_INVALID")
+    try:
+        record = verified(json.loads(config.read_bytes()))
+    except (ValueError, json.JSONDecodeError):
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID") from None
+    expected = {"schema", "created_utc", "owner_confirmation_hash", "source_commit",
+                "helper_sha256", "owner_kit_sha256", "sources", "content_hash"}
+    if record.get("schema") != CONFIG_SCHEMA or set(record) != expected:
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    try:
+        utc(record["created_utc"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("OWNER_SOURCE_CONFIG_TIMESTAMP_INVALID") from None
+    for key, pattern in (("owner_confirmation_hash", HEX64), ("helper_sha256", HEX64),
+                         ("owner_kit_sha256", HEX64), ("source_commit", COMMIT40)):
+        if not isinstance(record.get(key), str) or not pattern.fullmatch(record[key]):
+            raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    if record["owner_confirmation_hash"] != hashlib.sha256(CONFIRMATION.encode()).hexdigest():
+        raise ValueError("OWNER_CONFIRMATION_HASH_INVALID")
+    rows = record.get("sources")
+    if (not isinstance(rows, list) or len(rows) != 2 or
+            {r.get("kind") for r in rows if isinstance(r, dict)} != SOURCE_KINDS):
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    return record
+
+
+def load_config(config: Path, *, content: bool = True) -> tuple[dict, dict[Path, str]]:
+    """Load v2 config; ``content=False`` performs metadata checks only."""
+    record = _parse_config(config)
+    resolved: dict[Path, str] = {}
+    for row in record["sources"]:
+        path, metadata = _source_metadata(row)
+        if path in resolved or metadata["alias"] in resolved.values():
+            raise ValueError("OWNER_SOURCE_IDENTITY_DUPLICATE")
+        if content and (path.stat().st_size != metadata["size"] or sha(path) != metadata["sha256"]):
+            raise ValueError("OWNER_SOURCE_IDENTITY_MISMATCH")
+        resolved[path] = metadata["alias"]
+    return record, resolved
+
+
+def validate_config_only(config: Path, *, expected_commit: str, helper_sha256: str,
+                         owner_kit_sha256: str) -> dict:
+    """Validate config and source metadata without reading source bytes."""
+    if not COMMIT40.fullmatch(expected_commit) or not HEX64.fullmatch(helper_sha256) or not HEX64.fullmatch(owner_kit_sha256):
+        raise ValueError("OWNER_PIN_INVALID")
+    if sha(Path(capture_helper.__file__).resolve()) != helper_sha256 or sha(Path(__file__).resolve()) != owner_kit_sha256:
+        raise ValueError("OWNER_PIN_MISMATCH")
+    record, sources = load_config(config, content=False)
+    if (record["source_commit"] != expected_commit or record["helper_sha256"] != helper_sha256 or
+            record["owner_kit_sha256"] != owner_kit_sha256):
+        raise ValueError("OWNER_PIN_MISMATCH")
+    return {"status": "CONFIG_VALID", "schema": CONFIG_SCHEMA, "source_count": len(sources),
+            "source_aliases": sorted(sources.values()), "config_sha256": sha(config),
+            "ledger_content_opened": False, "credential_accesses": 0, "provider_requests": 0}
+
+
+def discover_candidates(metadata_files: list[Path]) -> list[dict]:
+    """Discover paths explicitly present in supplied metadata files only."""
+    candidates: dict[str, dict] = {}
+    for metadata_file in metadata_files:
+        try:
+            _absolute_regular_metadata(metadata_file)
+            raw = metadata_file.read_bytes()
+        except (OSError, ValueError):
+            continue
+        try:
+            obj = plistlib.loads(raw) if metadata_file.suffix == ".plist" else json.loads(raw)
+            values: list[str] = []
+            def collect(value: Any) -> None:
+                if isinstance(value, str) and value.startswith("/") and value.lower().endswith(".db"):
+                    values.append(value)
+                elif isinstance(value, dict):
+                    for item in value.values(): collect(item)
+                elif isinstance(value, (list, tuple)):
+                    for item in value: collect(item)
+            collect(obj)
+        except (ValueError, json.JSONDecodeError, plistlib.InvalidFileException):
+            values = re.findall(r"/[^\n\"']+?\.db", raw.decode("utf-8", "ignore"), re.I)
+        for value in values:
+            try:
+                path = _source_path(value)
+                st = _absolute_regular_metadata(path)
+            except (OSError, ValueError):
+                continue
+            key = str(path)
+            entry = candidates.setdefault(key, {"path": "{OWNER_SELECTED}", "basename": path.name,
+                "size": st.st_size, "device": st.st_dev, "inode": st.st_ino,
+                "owner_uid": st.st_uid, "mode": stat.S_IMODE(st.st_mode), "file_type": "regular",
+                "evidence_sources": [], "confidence": "HIGH"})
+            if metadata_file.name not in entry["evidence_sources"]:
+                entry["evidence_sources"].append(metadata_file.name)
+    return sorted(candidates.values(), key=lambda item: (item["basename"], item["inode"]))
+
+
+def build_config(l7: Path, l8: Path, *, source_commit: str, helper_sha256: str,
+                 owner_kit_sha256: str, provenance: dict[str, list[str]]) -> dict:
+    """Build a sealed v2 config after the owner has selected both sources."""
+    if not COMMIT40.fullmatch(source_commit) or not HEX64.fullmatch(helper_sha256) or not HEX64.fullmatch(owner_kit_sha256):
+        raise ValueError("OWNER_PIN_INVALID")
+    rows = []
+    for kind, path in (("L7", l7), ("L8", l8)):
+        path = _source_path(str(path))
+        info = _absolute_regular_metadata(path)
+        data = path.read_bytes()
+        refs = provenance.get(kind, [])
+        if not refs:
+            raise ValueError("OWNER_SOURCE_PROVENANCE_MISSING")
+        rows.append({"kind": kind, "alias": kind, "path": str(path), "size": len(data),
+                     "sha256": hashlib.sha256(data).hexdigest(), "device": info.st_dev,
+                     "inode": info.st_ino, "owner_uid": info.st_uid,
+                     "mode": stat.S_IMODE(info.st_mode), "file_type": "regular",
+                     "provenance": list(refs)})
+    if l7.resolve() == l8.resolve():
+        raise ValueError("OWNER_SOURCE_IDENTITY_DUPLICATE")
+    return seal({"schema": CONFIG_SCHEMA, "created_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                 "owner_confirmation_hash": hashlib.sha256(CONFIRMATION.encode()).hexdigest(),
+                 "source_commit": source_commit, "helper_sha256": helper_sha256,
+                 "owner_kit_sha256": owner_kit_sha256, "sources": rows})
+
+
+def discover_metadata_files() -> list[Path]:
+    """Return only bounded, known IIOS metadata locations (never a home scan)."""
+    home = Path.home()
+    files = list((home / "Library/LaunchAgents").glob("com.iios.*.plist"))
+    releases = home / "Library/Application Support/IIOS/Releases"
+    files.extend(releases.glob("*/release-manifest.json"))
+    return [p for p in files if p.is_file()]
+
+
+def owner_workflow(source_root: Path, config: Path, *, expected_commit: str,
+                   helper_sha256: str, owner_kit_sha256: str,
+                   l7: Path, l8: Path, confirm: str, capture_confirm: str,
+                   provenance: dict[str, list[str]]) -> dict:
+    """Explicit two-confirmation owner flow; never auto-selects a source."""
+    if confirm != CONFIRMATION:
+        raise PermissionError("OWNER_CONFIRMATION_REQUIRED")
+    if capture_confirm != CAPTURE_CONFIRMATION:
+        raise PermissionError("OWNER_CAPTURE_CONFIRMATION_REQUIRED")
+    record = build_config(l7, l8, source_commit=expected_commit,
+                         helper_sha256=helper_sha256, owner_kit_sha256=owner_kit_sha256,
+                         provenance=provenance)
+    atomic_write(config, canonical(record))
+    validate_config_only(config, expected_commit=expected_commit,
+                         helper_sha256=helper_sha256, owner_kit_sha256=owner_kit_sha256)
+    return run(source_root, config, confirmation=capture_confirm,
+               expected_commit=expected_commit, helper_sha256=helper_sha256,
+               owner_kit_sha256=owner_kit_sha256)
 
 
 def atomic_write(path: Path, payload: bytes, mode: int = 0o600) -> None:
@@ -71,14 +259,8 @@ def atomic_write(path: Path, payload: bytes, mode: int = 0o600) -> None:
     if stat.S_IMODE(path.parent.stat().st_mode) != 0o700:
         raise ValueError("OWNER_OUTPUT_DIRECTORY_MODE_INVALID")
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, mode)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-    finally:
-        # fd is owned by fdopen after successful construction.
-        pass
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(payload); stream.flush(); os.fsync(stream.fileno())
     dfd = os.open(path.parent, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         os.fsync(dfd)
@@ -86,68 +268,31 @@ def atomic_write(path: Path, payload: bytes, mode: int = 0o600) -> None:
         os.close(dfd)
 
 
-def load_config(config: Path) -> tuple[dict, dict[Path, str]]:
-    raw = owner_regular(config, mode=0o600)
-    try:
-        record = verified(json.loads(raw))
-    except (ValueError, json.JSONDecodeError):
-        raise ValueError("OWNER_SOURCE_CONFIG_INVALID") from None
-    if record.get("schema") != CONFIG_SCHEMA or set(record) != {"schema", "sources", "content_hash"}:
-        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
-    rows = record.get("sources")
-    if not isinstance(rows, list) or len(rows) != 2 or {r.get("kind") for r in rows} != SOURCE_KINDS:
-        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
-    resolved: dict[Path, str] = {}
-    for row in rows:
-        if set(row) != {"kind", "alias", "path", "sha256", "size"}:
-            raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
-        if row["alias"] not in {"L7", "L8"} or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]):
-            raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
-        path = Path(row["path"])
-        if not path.is_absolute() or any(part.lower() in {"credentials", "keychains"} for part in path.parts):
-            raise ValueError("OWNER_SOURCE_PATH_INVALID")
-        data = owner_regular(path)
-        if len(data) != row["size"] or sha(path) != row["sha256"]:
-            raise ValueError("OWNER_SOURCE_IDENTITY_MISMATCH")
-        if path in resolved or row["alias"] in resolved.values():
-            raise ValueError("OWNER_SOURCE_IDENTITY_DUPLICATE")
-        resolved[path] = row["alias"]
-    return record, resolved
-
-
 def snapshot_metadata(path: Path) -> dict:
-    """Read only aggregate metadata; no ledger rows or payloads leave SQLite."""
+    """Read aggregate metadata only after explicit owner capture consent."""
     db = sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True)
     try:
-        quick = db.execute("PRAGMA quick_check").fetchall()
-        integrity = db.execute("PRAGMA integrity_check").fetchall()
-        foreign = db.execute("PRAGMA foreign_key_check").fetchall()
-        if quick != [("ok",)] or integrity != [("ok",)] or foreign:
+        if (db.execute("PRAGMA quick_check").fetchall() != [("ok",)] or
+                db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or
+                db.execute("PRAGMA foreign_key_check").fetchall()):
             raise ValueError("OWNER_SNAPSHOT_INTEGRITY_INVALID")
         schema = db.execute("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").fetchall()
-        table_rows = db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
-        total = 0
-        timestamps: list[datetime] = []
-        for (table,) in table_rows:
+        tables = db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        total = 0; stamps: list[datetime] = []
+        for (table,) in tables:
             quoted = '"' + table.replace('"', '""') + '"'
-            count = db.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0]
-            total += int(count)
-            columns = db.execute(f"PRAGMA table_info({quoted})").fetchall()
-            for _, name, *_ in columns:
+            total += int(db.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0])
+            for _, name, *_ in db.execute(f"PRAGMA table_info({quoted})").fetchall():
                 if not (name.lower().endswith(("_at", "_time", "timestamp")) or name.lower() in {"created", "updated"}):
                     continue
-                col = '"' + name.replace('"', '""') + '"'
-                value = db.execute(f"SELECT max({col}) FROM {quoted}").fetchone()[0]
-                if not isinstance(value, str) or not UTC_SUFFIX.search(value):
-                    continue
-                try:
-                    timestamps.append(utc(value))
-                except ValueError:
-                    continue
-        high = max(timestamps).isoformat().replace("+00:00", "Z") if timestamps else None
-        return {"schema_sha256": hashlib.sha256(canonical(schema)).hexdigest(),
-                "table_count": len(table_rows), "row_count": total,
-                "high_watermark_utc": high, "quick_check": "ok",
+                column = name.replace('"', '""')
+                value = db.execute(f'SELECT max("{column}") FROM {quoted}').fetchone()[0]
+                if isinstance(value, str):
+                    try: stamps.append(utc(value))
+                    except ValueError: pass
+        high = max(stamps).isoformat().replace("+00:00", "Z") if stamps else None
+        return {"schema_sha256": hashlib.sha256(canonical(schema)).hexdigest(), "table_count": len(tables),
+                "row_count": total, "high_watermark_utc": high, "quick_check": "ok",
                 "integrity_check": "ok", "foreign_key_violations": 0}
     finally:
         db.close()
@@ -155,8 +300,7 @@ def snapshot_metadata(path: Path) -> dict:
 
 def capture(source: Path, output: Path, evidence: Path, sources: dict[Path, str]) -> dict:
     receipt = launch_capture(source, output, evidence_root=evidence, timeout=120)
-    snapshot = output / "snapshot.db"
-    metadata = snapshot_metadata(snapshot)
+    metadata = snapshot_metadata(output / "snapshot.db")
     job = json.loads((output / "job.json").read_bytes())
     return {"alias": sources[source], "snapshot": "{OUTPUT}/" + sources[source].lower() + "/snapshot.db",
             "snapshot_sha256": receipt["snapshot_sha256"], "snapshot_bytes": receipt["bytes"],
@@ -164,66 +308,47 @@ def capture(source: Path, output: Path, evidence: Path, sources: dict[Path, str]
             "profile_sha256": job["profile_sha256"], **metadata}
 
 
-def run(source_root: Path, config: Path, *, confirmation: str,
-        expected_commit: str | None = None, helper_sha256: str | None = None) -> dict:
-    if confirmation != CONFIRMATION:
+def run(source_root: Path, config: Path, *, confirmation: str, expected_commit: str | None = None,
+        helper_sha256: str | None = None, owner_kit_sha256: str | None = None) -> dict:
+    if confirmation != CAPTURE_CONFIRMATION:
         raise PermissionError("OWNER_CONFIRMATION_REQUIRED")
     source_root = source_root.resolve()
     if not source_root.is_dir() or source_root.is_symlink():
         raise ValueError("OWNER_SOURCE_CHECKOUT_INVALID")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise ValueError("OWNER_SOURCE_COMMIT_INVALID")
-    if expected_commit is None or not re.fullmatch(r"[0-9a-f]{40}", expected_commit) or commit != expected_commit:
+    if expected_commit is None or not COMMIT40.fullmatch(expected_commit) or commit != expected_commit:
         raise ValueError("OWNER_SOURCE_COMMIT_PIN_MISMATCH")
     helper = Path(capture_helper.__file__).resolve()
-    if helper_sha256 is None or not re.fullmatch(r"[0-9a-f]{64}", helper_sha256) or sha(helper) != helper_sha256:
+    if helper_sha256 is None or not HEX64.fullmatch(helper_sha256) or sha(helper) != helper_sha256:
         raise ValueError("OWNER_HELPER_PIN_MISMATCH")
+    if owner_kit_sha256 is None or not HEX64.fullmatch(owner_kit_sha256) or sha(Path(__file__).resolve()) != owner_kit_sha256:
+        raise ValueError("OWNER_KIT_PIN_MISMATCH")
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=source_root, text=True):
         raise ValueError("OWNER_SOURCE_CHECKOUT_DIRTY")
-    config_record, sources = load_config(config)
+    config_record, sources = load_config(config, content=True)
+    if (config_record["source_commit"] != commit or config_record["helper_sha256"] != helper_sha256 or
+            config_record["owner_kit_sha256"] != owner_kit_sha256):
+        raise ValueError("OWNER_CONFIG_PIN_MISMATCH")
     if OUTPUT_ROOT.exists() or OUTPUT_ROOT.is_symlink():
         raise ValueError("OWNER_OUTPUT_ROOT_MUST_BE_ABSENT")
-    output = OUTPUT_ROOT.resolve()
-    output.mkdir(mode=0o700)
-    evidence = output / "incidents"
-    evidence.mkdir(mode=0o700)
-    captures = {}
+    output = OUTPUT_ROOT.resolve(); output.mkdir(mode=0o700)
+    evidence = output / "incidents"; evidence.mkdir(mode=0o700)
+    captures: dict[str, dict] = {}
     try:
         for path in sorted(sources, key=lambda p: sources[p]):
-            destination = output / sources[path].lower()
-            captures[sources[path]] = capture(path, destination, evidence, sources)
+            captures[sources[path]] = capture(path, output / sources[path].lower(), evidence, sources)
         high = [captures[x]["high_watermark_utc"] for x in ("L7", "L8")]
         if any(value is None for value in high):
             raise ValueError("OWNER_HIGH_WATERMARK_UNAVAILABLE")
         watermark = min(high)
-        manifest = seal({"schema": SCHEMA, "source_commit": commit,
-                         "config_sha256": sha(config), "config_identity": config_record["content_hash"],
-                         "sources": [{"alias": sources[p], "source_identity": "{" + sources[p] + "}",
-                                      "bytes": p.stat().st_size, "sha256": sha(p)} for p in sorted(sources, key=lambda p: sources[p])],
-                         "captures": captures, "common_reconciliation_watermark_utc": watermark,
-                         "authority": {"read_only": True, "provider": False, "credential": False,
-                                       "broker": False, "paper": False, "ledger_write": False},
-                         "output_root": "{OUTPUT}", "completion": "OWNER_REVIEW_REQUIRED"})
+        manifest = seal({"schema": SCHEMA, "source_commit": commit, "config_sha256": sha(config),
+            "config_identity": config_record["content_hash"], "sources": [{"alias": sources[p], "source_identity": "{" + sources[p] + "}", "bytes": p.stat().st_size, "sha256": sha(p)} for p in sorted(sources, key=lambda p: sources[p])], "captures": captures, "common_reconciliation_watermark_utc": watermark, "authority": {"read_only": True, "provider": False, "credential": False, "broker": False, "paper": False, "ledger_write": False}, "output_root": "{OUTPUT}", "completion": "OWNER_REVIEW_REQUIRED"})
         atomic_write(output / "manifest.json", canonical(manifest))
-        receipt = seal({"schema": "iios-owner-ledger-snapshot-receipt-v1",
-                        "status": "VERIFIED", "manifest_hash": manifest["content_hash"],
-                        "manifest_sha256": sha(output / "manifest.json"),
-                        "source_commit": commit, "common_reconciliation_watermark_utc": watermark,
-                        "sources": [{"alias": sources[p], "snapshot_sha256": captures[sources[p]]["snapshot_sha256"]}
-                                    for p in sorted(sources, key=lambda p: sources[p])],
-                        "rows": "NOT_CAPTURED_OR_REPORTED", "credentials": 0, "providers": 0,
-                        "output_root": "{OUTPUT}"})
+        receipt = seal({"schema": "iios-owner-ledger-snapshot-receipt-v1", "status": "VERIFIED", "manifest_hash": manifest["content_hash"], "manifest_sha256": sha(output / "manifest.json"), "source_commit": commit, "common_reconciliation_watermark_utc": watermark, "sources": [{"alias": sources[p], "snapshot_sha256": captures[sources[p]]["snapshot_sha256"]} for p in sorted(sources, key=lambda p: sources[p])], "rows": "NOT_CAPTURED_OR_REPORTED", "credentials": 0, "providers": 0, "output_root": "{OUTPUT}"})
         atomic_write(output / "completion-receipt.json", canonical(receipt))
-        return {"status": receipt["status"], "output": "{OUTPUT}",
-                "receipt_sha256": sha(output / "completion-receipt.json"),
-                "manifest_hash": manifest["content_hash"], "source_commit": commit,
-                "watermark": watermark, "credential_accesses": 0, "provider_requests": 0}
+        return {"status": receipt["status"], "output": "{OUTPUT}", "receipt_sha256": sha(output / "completion-receipt.json"), "manifest_hash": manifest["content_hash"], "source_commit": commit, "watermark": watermark, "credential_accesses": 0, "provider_requests": 0}
     except BaseException as error:
-        failure = seal({"schema": "iios-owner-ledger-snapshot-failure-v1", "status": "FAILED_CLOSED",
-                        "category": type(error).__name__, "source_commit": commit,
-                        "output_root": "{OUTPUT}", "captures_started": sorted(captures),
-                        "credentials": 0, "providers": 0})
+        failure = seal({"schema": "iios-owner-ledger-snapshot-failure-v1", "status": "FAILED_CLOSED", "category": type(error).__name__, "source_commit": commit, "output_root": "{OUTPUT}", "captures_started": sorted(captures), "credentials": 0, "providers": 0})
         if not (output / "failure.json").exists():
             atomic_write(output / "failure.json", canonical(failure))
         raise
@@ -231,14 +356,48 @@ def run(source_root: Path, config: Path, *, confirmation: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Owner-only read-only IIOS L7/L8 capture")
-    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--expected-commit", required=True)
     parser.add_argument("--helper-sha256", required=True)
-    parser.add_argument("--confirm", required=True)
+    parser.add_argument("--owner-kit-sha256", required=True)
+    parser.add_argument("--confirm")
+    parser.add_argument("--config-only", action="store_true")
+    parser.add_argument("--discover", action="store_true")
+    parser.add_argument("--metadata-file", action="append", type=Path, default=[])
+    parser.add_argument("--workflow", action="store_true")
+    parser.add_argument("--l7-path", type=Path)
+    parser.add_argument("--l8-path", type=Path)
+    parser.add_argument("--provenance-source", action="append", default=[])
     args = parser.parse_args()
-    print(json.dumps(run(args.source_root, args.config, confirmation=args.confirm,
-                         expected_commit=args.expected_commit, helper_sha256=args.helper_sha256), sort_keys=True))
+    if args.discover:
+        files = args.metadata_file or discover_metadata_files()
+        print(json.dumps({"status": "DISCOVERY_ONLY", "candidates": discover_candidates(files),
+                          "source_content_opened": False}, sort_keys=True))
+        return
+    if args.workflow:
+        if args.source_root is None:
+            parser.error("workflow requires --source-root")
+        # Listing is metadata-only; adoption remains explicit through the two paths.
+        files = args.metadata_file or discover_metadata_files()
+        print(json.dumps({"status": "DISCOVERY_ONLY", "candidates": discover_candidates(files)}, sort_keys=True))
+        l7_path = args.l7_path or Path(input("Canonical L7 path (select explicitly): ").strip())
+        l8_path = args.l8_path or Path(input("Canonical L8 path (select explicitly): ").strip())
+        owner_confirmation = input("Owner confirmation: ")
+        capture_confirmation = input("Capture confirmation: ")
+        refs = {"L7": list(args.provenance_source), "L8": list(args.provenance_source)}
+        result = owner_workflow(args.source_root, args.config, expected_commit=args.expected_commit,
+            helper_sha256=args.helper_sha256, owner_kit_sha256=args.owner_kit_sha256,
+            l7=l7_path, l8=l8_path, confirm=owner_confirmation,
+            capture_confirm=capture_confirmation, provenance=refs)
+        print(json.dumps(result, sort_keys=True)); return
+    if args.config_only:
+        result = validate_config_only(args.config, expected_commit=args.expected_commit, helper_sha256=args.helper_sha256, owner_kit_sha256=args.owner_kit_sha256)
+    else:
+        if args.source_root is None or args.confirm is None:
+            parser.error("capture requires --source-root and --confirm")
+        result = run(args.source_root, args.config, confirmation=args.confirm, expected_commit=args.expected_commit, helper_sha256=args.helper_sha256, owner_kit_sha256=args.owner_kit_sha256)
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

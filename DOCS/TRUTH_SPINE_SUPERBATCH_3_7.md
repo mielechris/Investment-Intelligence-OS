@@ -109,15 +109,26 @@ passed. The owner-only machine receipt must record actual results, source and
 runtime identities, snapshots, projections, ownership, shutdown and permanent
 noninterference before any GREEN or Superbatch 3.8 planning recommendation.
 
-## Owner-operated L7/L8 snapshot kit (3.7E.3)
+## Owner-operated L7/L8 snapshot kit (3.7E.5)
 
 The source-only kit is `scripts/truth_spine_owner_snapshots.py`. Codex must not
 execute it. An owner prepares a separate owner-only JSON configuration from
 `config/truth-spine-owner-sources.json.template`, sealing it with the
-`iios-truth-spine-contract` canonical JSON rules. The configuration contains
-exact byte size and SHA-256 pins for exactly two distinct regular files, aliased
-only as `L7` and `L8`; symlinks, special files, credential/keychain paths,
-path changes and owner/mode mismatches fail closed.
+`iios-truth-spine-contract` canonical JSON rules. Version 2 binds the source
+commit, capture-helper SHA, owner-kit SHA, UTC creation time and the exact owner
+confirmation hash. Each of exactly two distinct regular files (aliases `L7` and
+`L8`) is bound to device, inode, owner UID, mode, size, content SHA-256 and a
+non-empty provenance list. Symlinks, special files, credential/keychain paths,
+placeholders, checkout/output paths, path changes and metadata mismatches fail
+closed.
+
+`--config-only` is a metadata-only preflight: it reads the config JSON and uses
+`lstat` on the two sources, but never reads source bytes, opens SQLite, touches
+WAL/SHM files, creates the output root, or accesses credentials. The kit has no
+browser route. Discovery is bounded to explicitly supplied accepted metadata
+files (LaunchAgent/release-manifest references); it does not scan a home
+directory, guess filenames or auto-adopt a candidate. An owner must select a
+single L8 candidate and provide the exact confirmation below.
 
 The owner runs pinned Python 3.14 with the exact sentence below. The command
 requires the fixed output root `/private/tmp/iios-northstar-owner-snapshots-sb37`
@@ -140,8 +151,17 @@ cd /path/to/clean/iios-truth-spine-3-src && \
   --config /owner-controlled/iios-owner-ledger-sources.json \
   --expected-commit <POST-CHECKPOINT-COMMIT> \
   --helper-sha256 <POST-CHECKPOINT-HELPER-SHA256> \
-  --confirm 'I authorize read-only capture of my canonical IIOS L7 and L8 ledgers into the isolated owner snapshot root. I do not authorize source modification.'
+  --owner-kit-sha256 <POST-CHECKPOINT-OWNER-KIT-SHA256> \
+  --confirm 'I authorize opening these already-adopted L7 and L8 ledgers for read-only capture into the isolated owner snapshot root.'
 ```
+
+The owner confirmation used to seal the configuration is exactly: `I confirm
+these are my canonical IIOS L7 and L8 ledgers. I authorize read-only capture
+into the isolated owner snapshot root. I do not authorize source modification.`
+After config-only validation prints a sanitized config hash, the owner must
+provide the second capture confirmation in the command above. This is a
+two-person/owner-controlled boundary: the source kit never chooses an L8 path
+and Codex never runs the capture command.
 
 Before running, the owner independently verifies the source commit and helper
 SHA-256 pins supplied after the source checkpoint. The helper emits the exact
