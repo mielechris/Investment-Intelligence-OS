@@ -5,21 +5,124 @@ on:
   pull_request:
     paths: ['FRONT END/**', 'scripts/truth_spine*', 'BACK END/backend/truth_spine*', 'BACK END/backend/test_truth_spine*', 'tests/northstar/**', '.github/workflows/northstar-offline-acceptance.yml']
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [full, review]
+        default: full
+        required: true
+      source_sha:
+        description: Exact independently reviewed source commit for review capture
+        type: string
+        required: false
+      pass:
+        description: Independently recorded capture pass (never a retry)
+        type: choice
+        options: [A, B]
+        required: true
+        default: A
 permissions:
   contents: read
 jobs:
+  routing:
+    runs-on: macos-26
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - id: route
+        run: node tests/northstar/requalification-review.mjs --route
+  review-checks:
+    needs: routing
+    if: needs.routing.outputs.mode == 'review'
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: FRONT END
+      - name: Offline review helper tests, parsing and lint
+        run: |
+          test_root="$(mktemp -d /private/tmp/iios-sb38d-source-tests-review-XXXXXXXX)"
+          node tests/northstar/requalification-environment.mjs --self-test "$test_root"
+          node tests/northstar/requalification-review.mjs --self-test "$test_root"
+          node --check tests/northstar/requalification-environment.mjs
+          node --check tests/northstar/requalification-review.mjs
+          node --check tests/northstar/northstar.spec.mjs
+          cd 'FRONT END'
+          node node_modules/eslint/bin/eslint.js --no-ignore ../tests/northstar/requalification-environment.mjs ../tests/northstar/requalification-review.mjs ../tests/northstar/northstar.spec.mjs
+          cd ..
+          git diff --check
+  capture-review:
+    needs: [routing, review-checks]
+    if: github.event_name == 'workflow_dispatch' && needs.routing.outputs.mode == 'review'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      NORTHSTAR_EXPECTED_SOURCE: ${{ inputs.source_sha }}
+      NORTHSTAR_CAPTURE_PASS: ${{ inputs.pass }}
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/tests/northstar/node_modules/.cache/browsers
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.14.7'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: FRONT END
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: tests/northstar
+      - run: node node_modules/playwright/cli.js install webkit
+        working-directory: tests/northstar
+      - name: Fresh deterministic synthetic fixture builds and contracts
+        working-directory: tests/northstar
+        run: |
+          node prepare.mjs
+          npm run test:contracts
+      - name: One WebKit capture with rendering metadata and unchanged acceptance gates
+        working-directory: tests/northstar
+        run: node requalification-review.mjs --capture "$NORTHSTAR_CAPTURE_PASS"
+      - name: Preserve complete review evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: webkit-review-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass }}
+          path: |
+            tests/northstar/artifacts/
+            tests/northstar/.build/contract.json
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: error
   source:
+    needs: routing
+    if: needs.routing.outputs.mode == 'full'
     runs-on: macos-26
     timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONPATH: '${{ github.workspace }}:${{ github.workspace }}/scripts:${{ github.workspace }}/BACK END/backend'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.19.0'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.14'
       - run: npm ci --ignore-scripts --no-audit --no-fund
@@ -48,7 +151,8 @@ jobs:
           PYTHONPYCACHEPREFIX="$RUNNER_TEMP/northstar-bytecode" python -m compileall -q 'BACK END/backend' scripts
           git diff --check
   browser:
-    needs: source
+    needs: [routing, source]
+    if: needs.routing.outputs.mode == 'full'
     runs-on: macos-26
     timeout-minutes: 45
     strategy:
@@ -59,11 +163,11 @@ jobs:
       NORTHSTAR_ARTIFACTS: artifacts/frozen-ci
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/tests/northstar/node_modules/.cache/browsers
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.19.0'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.14'
       - run: npm ci --ignore-scripts --no-audit --no-fund
@@ -82,7 +186,7 @@ jobs:
         run: node run.mjs --project=${{ matrix.engine }}
       - name: Preserve screenshots, traces, diffs and provenance even on failure
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: northstar-${{ matrix.engine }}-${{ github.sha }}
           path: |

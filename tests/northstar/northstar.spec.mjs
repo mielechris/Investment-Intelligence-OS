@@ -175,6 +175,11 @@ for (const width of widths) {
     test.use({ viewport: { width, height: 825 } });
     for (const station of contract.stations) {
       test(`station ${station.id} complete dialog contract`, async ({ page, app }, info) => {
+        // CI run 34568988612: Firefox Expansion exhausted 180s while all
+        // completed readiness checks passed. Trace scroll cadence and complete
+        // fixture coverage project at most 310s; 35% headroom rounded up = 420s.
+        // Only the overall budget changes: readiness, assertions and retries do not.
+        if (info.project.name === 'firefox' && station.id === 'expansion') test.setTimeout(420000);
         await app.open(); await navigate(page, 'Gallery');
         const opener = page.locator(`[data-room-id="${station.id}"]`);
         await expect(opener.locator('.auction-room__identity b')).toHaveText(station.shortLabel);
