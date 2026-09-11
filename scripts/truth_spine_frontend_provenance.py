@@ -179,9 +179,14 @@ def verify(build_root, source, commit):
 
 def build(source, destination, commit, *, northstar=False, review=False):
     source, root = Path(source).resolve(), Path(destination).absolute()
-    require(root.parent == Path('/private/tmp') and root.name.startswith('iios-frontend-build-')
+    checkout_test = (root.is_relative_to(source/'tests/northstar/artifacts')
+                     and root.name.startswith('iios-frontend-build-unit-'))
+    temporary = root.parent == Path('/private/tmp') and (root.name.startswith('iios-frontend-build-')
+                 or root.name in {'iios-northstar-sb37-build-a', 'iios-northstar-sb37-build-b'})
+    require((temporary or checkout_test) and not any(p.is_symlink() for p in (root, *root.parents))
             and not root.exists() and not root.is_symlink(), 'NEW_ISOLATED_BUILD_ROOT_REQUIRED')
     before = inputs(source, commit, northstar=northstar, review=review)
+    if checkout_test: root.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
     root.mkdir(mode=0o700)
     front = root/'frontend'; front.mkdir(mode=0o700)
     for row in before['source_inventory']:

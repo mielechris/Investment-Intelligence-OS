@@ -66,7 +66,11 @@ def health(kind, *, lifecycle, session, authority, authority_hash, release, owne
                 raise ValueError("RUNTIME_PROBE_STALE_OR_UNBOUND")
         if kind == "market-readiness":
             return 503, {**result, "reason": "DENY_ONLY_NO_MARKET_AUTHORITY"}
-        result["status"] = "SHADOW_OBSERVATION_READY" if kind == "research-readiness" else "READY"
+        from truth_spine_session import HistoricalSession
+        if isinstance(session, HistoricalSession):
+            result['scope'] = 'BOUNDED_HISTORICAL_REPLAY_NOT_FULL_MARKET_DAY'
+        result["status"] = ("HISTORICAL_REVIEW_READY" if isinstance(session, HistoricalSession)
+                            else "SHADOW_OBSERVATION_READY") if kind == "research-readiness" else "READY"
         return 200, result
     except (ValueError, KeyError, TypeError, PermissionError):
         return 503, result
@@ -74,10 +78,12 @@ def health(kind, *, lifecycle, session, authority, authority_hash, release, owne
 
 class SessionSupervisor:
     def __init__(self, *, session, store, children, authority, approved_authority_hash,
-                 release, owners, topology_hash, start_child, probe_runtime, clock=None):
+                 release, owners, topology_hash, start_child, probe_runtime, clock=None,
+                 capture_fn=None):
         self.session, self.store, self.children = session, store, children
         self.authority, self.authority_hash, self.release, self.owners = authority, approved_authority_hash, release, owners
         self.start_child, self.probe_runtime = start_child, probe_runtime
+        self.capture_fn = capture_fn
         self.topology_hash = topology_hash
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         entries = store.entries()
@@ -169,7 +175,8 @@ class SessionSupervisor:
                     if self.store.selected():
                         self.store.issue_source_cycle(self.session, topology_hash=self.topology_hash,
                             authority_hash=self.authority_hash, owners=self.owners, now=self.clock(), permit=self.permit_capture)
-                    capture = self.store.capture(clock=self.clock, permit=self.permit_capture)
+                    capture = self.store.capture(clock=self.clock, permit=self.permit_capture,
+                                                 isolated_capture=self.capture_fn)
                     if not self.authority_current(self.clock()):
                         raise PermissionError("AUTHORITY_EXPIRED_DURING_CAPTURE")
                     self.store.issue_source_cycle(self.session, topology_hash=self.topology_hash,

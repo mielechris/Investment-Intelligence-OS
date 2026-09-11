@@ -15,7 +15,7 @@ import stat
 import time
 import uuid
 import copy
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,6 +26,68 @@ KINDS = {"operational", "historical", "research", "event_reconstruction", "macro
          "validation_9h", "shadow_9i", "outcomes_9j", "universe", "source_cycle",
          "patterns", "professional_judgment", "price_archive"}
 SOURCE_CYCLE_MAX_AGE_SECONDS = 900
+
+
+class SnapshotAcquisitionUnavailable(RuntimeError):
+    """SQLite could not acquire a read snapshot; not evidence of corruption."""
+
+
+@contextmanager
+def sqlite_read_snapshot(path: Path, *, deadline: float, permit=None):
+    """Acquire through SQLite, never through a WAL/SHM existence precheck.
+
+    BEGIN is deferred: the sqlite_schema read below actually pins the view.
+    Keep that transaction open through backup. Operational callers must also
+    impose OS-level source-write denial; mode=ro/query_only alone do not prove
+    SQLite cannot create or update companion files. This grants no capability.
+    """
+    def progress():
+        if permit is not None:
+            permit()
+        if time.monotonic() >= deadline:
+            raise TimeoutError("CAPTURE_DEADLINE")
+
+    progress()
+    before = path.stat()
+    live = None
+    try:
+        try:
+            live = sqlite3.connect(path.as_uri()+"?mode=ro", uri=True,
+                                   isolation_level=None,
+                                   timeout=min(1.0, max(0.0, deadline-time.monotonic())))
+            live.execute("PRAGMA query_only=ON")
+            if live.execute("PRAGMA query_only").fetchone() != (1,):
+                raise PermissionError("SOURCE_QUERY_ONLY_REQUIRED")
+            databases = live.execute("PRAGMA database_list").fetchall()
+            if len(databases) != 1 or Path(databases[0][2]).resolve() != path.resolve():
+                raise ValueError("SOURCE_DATABASE_BINDING_INVALID")
+            progress()
+            live.execute("BEGIN")
+            live.execute("SELECT count(*) FROM sqlite_schema").fetchone()
+        except sqlite3.Error as error:
+            # Missing readable WAL state under an OS write-denial sandbox can
+            # fail here. Do not create companions, retry, or call it corruption.
+            code = getattr(error, "sqlite_errorcode", None)
+            if code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_CANTOPEN,
+                        sqlite3.SQLITE_READONLY_CANTINIT,
+                        sqlite3.SQLITE_READONLY_RECOVERY}:
+                raise SnapshotAcquisitionUnavailable("SOURCE_SNAPSHOT_NOT_ACQUIRED") from error
+            raise
+        progress()
+        current = path.stat()
+        if (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError("SOURCE_REPLACED_DURING_CAPTURE")
+        yield live
+        progress()
+        current = path.stat()
+        if (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError("SOURCE_REPLACED_DURING_CAPTURE")
+    finally:
+        if live is not None:
+            try:
+                live.rollback()  # End only the read transaction; never commit.
+            finally:
+                live.close()
 
 
 def cycle_identity(value):
@@ -106,7 +168,8 @@ def registry_record(specs: list[dict]):
 
 
 class GenerationStore:
-    def __init__(self, root: Path, session: str, registry: dict, approved_registry: str, *, readonly=False):
+    def __init__(self, root: Path, session: str, registry: dict, approved_registry: str, *, readonly=False,
+                 require_isolated_capture=False):
         owner_path(root, root, directory=True)
         if (verified(registry) != registry_record(registry["sources"])
                 or registry["content_hash"] != approved_registry):
@@ -117,6 +180,7 @@ class GenerationStore:
         self.path = root / "session-journal.db"
         self.captures = root / "captures"
         self.readonly = readonly
+        self.require_isolated_capture = require_isolated_capture
         self._verified_inputs = {}
         self.binding = digest({"session": session, "registry": approved_registry})
         if readonly:
@@ -249,7 +313,8 @@ class GenerationStore:
                                 "publication_time": row["publication_time"]}))
         return events, None
 
-    def capture(self, *, clock=lambda: datetime.now(timezone.utc), timeout_seconds=120, permit=None):
+    def capture(self, *, clock=lambda: datetime.now(timezone.utc), timeout_seconds=120,
+                permit=None, isolated_capture=None):
         """Actual SQLite backup and fixed retained-file readers; no provider adapter.
 
         Tests inject a clock directly. There is no environment or production CLI
@@ -274,30 +339,42 @@ class GenerationStore:
             if time.monotonic() >= deadline:
                 raise TimeoutError("CAPTURE_DEADLINE")
             src = Path(spec["path"])
-            file_bytes(src)
-            before = src.stat()
+            # Operational L7/L8 callers must provide the OS-confined capture
+            # boundary. Tests and non-ledger fixture sources retain the direct
+            # reader path; the runner rejects an unbound live capture.
+            if self.require_isolated_capture and isolated_capture is None and spec["kind"] in {"operational", "historical"}:
+                raise PermissionError("OS_ISOLATED_CAPTURE_REQUIRED")
+            before = src.stat() if isolated_capture is None else None
             begin = clock(); utc(begin.isoformat())
             dest = directory/(str(index) + (".db" if spec["kind"] in {"operational", "historical"} else ".json"))
             schema, integrity = None, "JSON_VALID"
             if spec["kind"] in {"operational", "historical"}:
-                immutable_file(dest, b"")
-                live = sqlite3.connect(src.as_uri()+"?mode=ro", uri=True)
-                copy = sqlite3.connect(dest)
+                if isolated_capture is None:
+                    immutable_file(dest, b"")
+                isolated_path = isolated_capture(src, timeout_seconds=timeout_seconds,
+                                                 permit=permit) if isolated_capture is not None else None
+                if isolated_path is not None:
+                    immutable_file(dest, file_bytes(Path(isolated_path)))
                 def progress(*_):
                     if permit is not None:
                         permit()
                     if time.monotonic() >= deadline:
                         raise TimeoutError("CAPTURE_DEADLINE")
-                try:
-                    live.execute("PRAGMA query_only=ON")
-                    live.backup(copy, pages=256, progress=progress, sleep=0.05)
-                    integrity = copy.execute("PRAGMA quick_check").fetchall()
-                    if integrity != [("ok",)]:
-                        raise ValueError("SNAPSHOT_INTEGRITY_INVALID")
-                    integrity = "SQLITE_QUICK_CHECK_OK"
-                    schema = digest({"schema": copy.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()})
-                finally:
-                    live.close(); copy.close()
+                if isolated_path is None:
+                    with sqlite_read_snapshot(src, deadline=deadline, permit=permit) as live, closing(sqlite3.connect(dest)) as copy:
+                        live.backup(copy, pages=256, progress=progress, sleep=0.05)
+                        integrity = copy.execute("PRAGMA quick_check").fetchall()
+                        if integrity != [("ok",)]:
+                            raise ValueError("SNAPSHOT_INTEGRITY_INVALID")
+                        integrity = "SQLITE_QUICK_CHECK_OK"
+                        schema = digest({"schema": copy.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()})
+                else:
+                    with closing(sqlite3.connect(dest)) as copy:
+                        integrity = copy.execute("PRAGMA quick_check").fetchall()
+                        if integrity != [("ok",)]:
+                            raise ValueError("SNAPSHOT_INTEGRITY_INVALID")
+                        integrity = "SQLITE_QUICK_CHECK_OK"
+                        schema = digest({"schema": copy.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()})
                 fd = os.open(dest, os.O_RDONLY | os.O_NOFOLLOW)
                 try:
                     os.fsync(fd)
@@ -305,8 +382,8 @@ class GenerationStore:
                     os.close(fd)
             else:
                 immutable_file(dest, file_bytes(src))
-            after = src.stat()
-            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            after = src.stat() if isolated_capture is None else None
+            if before is not None and (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
                 raise ValueError("SOURCE_REPLACED_DURING_CAPTURE")
             events, universe = self._adapt(spec, dest)
             all_events.extend(events)

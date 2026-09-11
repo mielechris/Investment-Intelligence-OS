@@ -47,6 +47,9 @@ def load_config(path, *, now=None, permit_expired=False):
             raise ValueError("FULL_DAY_CONFIG_PIN_MISMATCH")
         return value
     session = parse_session(read("session.json", config["session_hash"]))
+    from truth_spine_session import HistoricalSession
+    if isinstance(session, HistoricalSession) != (root.name == 'iios-northstar-installed-shadow-sb37'):
+        raise ValueError('HISTORICAL_ROOT_SCOPE_MISMATCH')
     selector = read("session-selector.json", config["selector_hash"])
     if selector != seal({"schema": "iios-shadow-session-selector-v1", "session": session.identity,
                          "session_file": "session.json", "registry_hash": config["registry_hash"]}):
@@ -154,6 +157,15 @@ def service_response(path, request, *, now=None):
             view["source_cycle"] = cycle["source_cycle_id"] if cycle else None
             view["source_cycle_generated_at"] = cycle["published_at"] if cycle else None
             view["factory"] = factory
+            from truth_spine_session import HistoricalSession
+            if isinstance(session, HistoricalSession):
+                # Catalog absence is reported explicitly, never as a configured
+                # provider, credential observation or successful invocation.
+                from truth_spine_factory_coverage import ROUTES
+                ids = {identity for identity, _ in ROUTES}
+                view['incidents'] = list(view['incidents']) + [
+                    name.upper()+'_UNAVAILABLE_NO_REVIEWED_ROUTE'
+                    for name in ('massive', 'hercules') if name not in ids]
             if factory is None:
                 view["readiness"] = 503
             view["sources"] = [{"store": f["store"], "records": f["records"], "capture_end": f["capture_end"],
@@ -166,7 +178,7 @@ def service_response(path, request, *, now=None):
         return 503, {"status": "UNAVAILABLE", "scope": "DENY_ONLY_SHADOW", "live_research_ready": False}
 
 
-def serve(path, port):
+def serve(path, port, on_bound=None):
     c, *_ = load_config(path)
     if port != c["port"]:
         raise ValueError("PORT_BINDING_INVALID")
@@ -185,7 +197,8 @@ def serve(path, port):
                     _, _, manifest, _, _ = load_config(path)
                     rel = "release/frontend/" + requested.removeprefix("/review/")
                     row = next(r for r in manifest["files"] if r["path"] == rel)
-                    media = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}[Path(rel).suffix]
+                    media = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
+                             ".webp": "image/webp", ".png": "image/png", ".woff2": "font/woff2"}[Path(rel).suffix]
                     return self.respond(200, file_bytes(path.parent/rel, row["sha256"]), media)
                 except (OSError, ValueError, KeyError, StopIteration):
                     return self.respond(404, {"status": "NOT_FOUND"})
@@ -196,7 +209,9 @@ def serve(path, port):
         do_POST = do_PUT = do_PATCH = do_DELETE = denied
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
-    try: server.serve_forever()
+    try:
+        if on_bound is not None: on_bound()
+        server.serve_forever()
     finally: server.server_close()
 
 
@@ -213,13 +228,17 @@ def main():
     if Path(__file__).resolve().parent != root/"release/backend" or Path(sys.executable) != root/"runtime/bin/python":
         raise ValueError("MIXED_CHECKOUT_RUNTIME")
     from truth_spine_process_identity import write_startup
-    receipt = write_startup(root, args.instance_id, args.runner_id, args.role, args.port, args.created_at)
-    deny_external_io()
     lease = Lease(root, args.role)
     try:
+        def acquired():
+            receipt = write_startup(root, args.instance_id, args.runner_id, args.role, args.port, args.created_at)
+            deny_external_io()
+            return receipt
         if args.role == "backend":
-            serve(args.config, args.port)
+            # Receipt publication proves both the exclusive lease and actual bind.
+            serve(args.config, args.port, on_bound=acquired)
             return
+        receipt = acquired()
         stopped = False
         def stop(*_):
             nonlocal stopped

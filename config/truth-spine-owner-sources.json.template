@@ -1,0 +1,20 @@
+{
+  "schema": "iios-owner-ledger-source-config-v1",
+  "sources": [
+    {
+      "kind": "L7",
+      "alias": "L7",
+      "path": "<owner-supplied-absolute-path-to-canonical-L7-ledger>",
+      "size": 0,
+      "sha256": "<64-lowercase-hex-sha256>"
+    },
+    {
+      "kind": "L8",
+      "alias": "L8",
+      "path": "<owner-supplied-absolute-path-to-canonical-L8-ledger>",
+      "size": 0,
+      "sha256": "<64-lowercase-hex-sha256>"
+    }
+  ],
+  "content_hash": "<seal-with-iios-truth-spine-contract>"
+}

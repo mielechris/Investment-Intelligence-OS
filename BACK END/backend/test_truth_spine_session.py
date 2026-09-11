@@ -11,11 +11,13 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from truth_spine_contract import canonical, digest, seal, utc
-from truth_spine_generations import GenerationStore, immutable_file, registry_record
+from truth_spine_generations import (GenerationStore, immutable_file, registry_record,
+                                    sqlite_read_snapshot, SnapshotAcquisitionUnavailable)
 from truth_spine_session import (CADENCE, Lifecycle, Phase, RestartPolicy, exchange_session,
                                 parse_session, session_authority, validate_session_authority)
 from truth_spine_session_supervisor import (REQUIRED_PROBES, SessionSupervisor, browser_contract, health)
@@ -616,6 +618,94 @@ class ProductionPathTests(unittest.TestCase):
         self.assertNotIn("--clock", source)
         self.assertNotIn("launchctl", source)
         self.assertIn("service_module='truth_spine_full_day_service'", source)
+
+
+class SQLiteTransactionSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name).resolve()/"source.db"
+        self.writer = sqlite3.connect(self.path)
+        self.addCleanup(self.writer.close)
+        self.writer.execute("PRAGMA journal_mode=WAL")
+        self.writer.execute("CREATE TABLE example(id INTEGER PRIMARY KEY)")
+        self.writer.execute("INSERT INTO example VALUES(1)")
+        self.writer.commit()
+
+    def acquire(self):
+        return sqlite_read_snapshot(self.path, deadline=time.monotonic()+5)
+
+    def test_actual_read_pins_snapshot_before_writer_advances(self):
+        with self.acquire() as reader:
+            # No caller SELECT before this write: BEGIN alone would see two.
+            self.writer.execute("INSERT INTO example VALUES(2)")
+            self.writer.commit()
+            self.assertEqual(reader.execute("SELECT count(*) FROM example").fetchone(), (1,))
+            with closing(sqlite3.connect(Path(self.temp.name)/"snapshot.db")) as target:
+                reader.backup(target)
+                self.assertEqual(target.execute("SELECT count(*) FROM example").fetchone(), (1,))
+                self.assertEqual(target.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+        self.assertEqual(self.writer.execute("SELECT count(*) FROM example").fetchone(), (2,))
+
+    def test_checkpoint_cannot_change_pinned_view(self):
+        with self.acquire() as reader:
+            self.writer.execute("INSERT INTO example VALUES(2)"); self.writer.commit()
+            self.writer.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            self.assertEqual(reader.execute("SELECT count(*) FROM example").fetchone(), (1,))
+        with self.acquire() as reader:
+            self.assertEqual(reader.execute("SELECT count(*) FROM example").fetchone(), (2,))
+
+    def test_query_only_and_write_sql_rejected(self):
+        with self.acquire() as reader:
+            self.assertTrue(reader.in_transaction)
+            self.assertEqual(reader.execute("PRAGMA query_only").fetchone(), (1,))
+            for sql in ("INSERT INTO example VALUES(2)", "UPDATE example SET id=2",
+                        "DELETE FROM example", "CREATE TABLE forbidden(id)"):
+                with self.assertRaises(sqlite3.OperationalError) as raised:
+                    reader.execute(sql)
+                self.assertEqual(raised.exception.sqlite_errorcode, sqlite3.SQLITE_READONLY)
+
+    def test_failure_closes_reader_and_ends_read_transaction(self):
+        with self.assertRaisesRegex(RuntimeError, "INTERRUPTED_BACKUP"):
+            with self.acquire() as reader:
+                raise RuntimeError("INTERRUPTED_BACKUP")
+        with self.assertRaises(sqlite3.ProgrammingError): reader.execute("SELECT 1")
+        self.assertEqual(self.writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0], 0)
+
+    def test_replacement_rejected_not_reinterpreted_as_advancement(self):
+        with self.assertRaisesRegex(ValueError, "SOURCE_REPLACED"):
+            with self.acquire():
+                self.path.rename(self.path.with_name("preserved-original.db"))
+                with closing(sqlite3.connect(self.path)) as other:
+                    other.execute("CREATE TABLE replacement(id)")
+
+    def test_deadline_or_expired_permission_prevents_open(self):
+        with patch("truth_spine_generations.sqlite3.connect") as connect:
+            with self.assertRaises(TimeoutError):
+                with sqlite_read_snapshot(self.path, deadline=time.monotonic()-1): pass
+            def denied(): raise PermissionError("AUTHORITY_EXPIRED")
+            with self.assertRaises(PermissionError):
+                with sqlite_read_snapshot(self.path, deadline=time.monotonic()+5, permit=denied): pass
+            connect.assert_not_called()
+
+    def test_acquisition_race_is_unavailable_not_corruption_and_not_retried(self):
+        for code in (sqlite3.SQLITE_READONLY_CANTINIT, sqlite3.SQLITE_CANTOPEN):
+            with self.subTest(code=code):
+                error = sqlite3.OperationalError("readonly WAL initialization unavailable")
+                error.sqlite_errorcode = code
+                with patch("truth_spine_generations.sqlite3.connect", side_effect=error) as connect:
+                    with self.assertRaises(SnapshotAcquisitionUnavailable):
+                        with self.acquire(): pass
+                    connect.assert_called_once()
+                    self.assertEqual(connect.call_args.kwargs["isolation_level"], None)
+                    self.assertIn("?mode=ro", connect.call_args.args[0])
+
+    def test_corruption_is_not_downgraded_to_availability(self):
+        error = sqlite3.DatabaseError("malformed database")
+        error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+        with patch("truth_spine_generations.sqlite3.connect", side_effect=error):
+            with self.assertRaises(sqlite3.DatabaseError):
+                with self.acquire(): pass
 
 
 if __name__ == "__main__": unittest.main()

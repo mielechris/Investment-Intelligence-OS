@@ -31,7 +31,8 @@ BACKEND_FILES = tuple(name+".py" for name in (
     "truth_spine_adapters", "truth_spine_authority", "truth_spine_contract", "truth_spine_process_identity",
     "truth_spine_integration", "truth_spine_integration_service", "truth_spine_session", "truth_spine_generations",
     "truth_spine_session_supervisor", "truth_spine_session_package", "truth_spine_full_day_service",
-    "truth_spine_integration_runner", "truth_spine_full_day_runner", "truth_spine_factory_coverage", "truth_spine_frontend_graph"))
+    "truth_spine_integration_runner", "truth_spine_full_day_runner", "truth_spine_factory_coverage", "truth_spine_frontend_graph",
+    "truth_spine_sqlite_capture"))
 
 
 def installation_template():
@@ -74,7 +75,10 @@ def deployment_documents(root, session, manifest, registry, authority, owners):
     from truth_spine_session import parse_session, validate_session_authority
     from truth_spine_generations import registry_record
     parse_session(session.record()); verified(manifest); verified(registry)
-    if (root.parent != Path("/private/tmp") or not root.name.startswith("iios-truth-spine-full-day-")
+    from truth_spine_session import HistoricalSession
+    historical = isinstance(session, HistoricalSession)
+    valid_root = root.name == 'iios-northstar-installed-shadow-sb37' if historical else root.name.startswith('iios-truth-spine-full-day-')
+    if (root.parent != Path("/private/tmp") or not valid_root
             or root != root.resolve() or registry != registry_record(registry["sources"])
             or manifest["session"] != session.identity or manifest["source_registry_hash"] != digest(registry)
             or manifest["authority_hash"] != digest(authority)):

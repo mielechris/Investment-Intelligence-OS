@@ -117,10 +117,62 @@ def exchange_session(day: str) -> Session:
 
 def parse_session(record: dict) -> Session:
     verified(record)
+    if record.get('schema') == 'iios-historical-shadow-session-v1':
+        session = HistoricalSession(utc(record['start']), record['duration_seconds'])
+        if record != session.record():
+            raise ValueError('HISTORICAL_SESSION_BINDING_INVALID')
+        return session
     session = exchange_session(record["date"])
     if record != session.record():
         raise ValueError("SESSION_CALENDAR_BINDING_INVALID")
     return session
+
+
+@dataclass(frozen=True)
+class HistoricalSession:
+    """Bounded current-time replay of retained inputs, never an exchange session.
+
+    No market clock is overridden or backdated. Input observation timestamps
+    remain in captured records. Only capture/publication use this wall clock.
+    The final minute is reserved for verified cleanup, not further replay.
+    """
+    start: datetime
+    duration_seconds: int
+    status: str = 'HISTORICAL_ONLY'
+
+    def __post_init__(self):
+        aware(self.start)
+        if type(self.duration_seconds) is not int or not 300 <= self.duration_seconds <= 3600:
+            raise ValueError('HISTORICAL_DURATION_INVALID')
+        if self.status != 'HISTORICAL_ONLY':
+            raise ValueError('HISTORICAL_SCOPE_INVALID')
+
+    @property
+    def open_at(self): return self.start
+
+    @property
+    def close_at(self): return self.start
+
+    @property
+    def reconcile_end(self): return self.start + timedelta(seconds=self.duration_seconds-60)
+
+    @property
+    def shutdown_end(self): return self.start + timedelta(seconds=self.duration_seconds)
+
+    def phase_at(self, now):
+        now = aware(now)
+        if not self.start <= now < self.shutdown_end: return Phase.FAILED_CLOSED
+        return Phase.POST_CLOSE_RECONCILIATION if now < self.reconcile_end else Phase.SESSION_COMPLETE
+
+    def record(self):
+        return seal({'schema': 'iios-historical-shadow-session-v1',
+            'scope': 'BOUNDED_HISTORICAL_REPLAY_NOT_FULL_MARKET_DAY',
+            'start': self.start.isoformat(), 'duration_seconds': self.duration_seconds,
+            'reconcile_end': self.reconcile_end.isoformat(), 'shutdown_end': self.shutdown_end.isoformat(),
+            'market_calendar_authority': False, 'input_times': 'PRESERVED_NOT_REINTERPRETED'})
+
+    @property
+    def identity(self): return self.record()['content_hash']
 
 
 def session_authority(session: Session, release: str, owners: dict, issued: datetime) -> dict:
@@ -170,7 +222,8 @@ class Lifecycle:
                            "phase": Phase.PREMARKET_PREPARATION, "last_cycle": None,
                            "next_capture": session.start.isoformat(), "last_capture": None,
                            "capture_status": "UNAVAILABLE", "sequence": 0,
-                           "missed_phases": [], "incidents": [], "restart_counts":
+                           "missed_phases": [], "incidents":
+                           (["HISTORICAL_REPLAY_NOT_FULL_MARKET_DAY"] if isinstance(session, HistoricalSession) else []), "restart_counts":
                            dict.fromkeys(("backend", "scheduler", "publisher"), 0),
                            "restart_after": {}, "post_close_reconciled": False,
                            "capabilities": dict.fromkeys(CAPABILITIES, False)}) if state is None else json.loads(json.dumps(verified(state)))
@@ -219,10 +272,10 @@ class Lifecycle:
             return self.fail("SESSION_OUTSIDE_REVIEWED_WINDOW")
         phases = list(CADENCE)
         old = self.state["phase"]
-        if phase in phases and old in phases:
+        if phase in phases and old in phases and not isinstance(self.session, HistoricalSession):
             skipped = phases[phases.index(old)+1:phases.index(phase)]
             self.state["missed_phases"].extend(p for p in skipped if p not in self.state["missed_phases"])
-        if previous is None and now >= self.session.open_at:
+        if previous is None and now >= self.session.open_at and not isinstance(self.session, HistoricalSession):
             self.state["incidents"].append("PARTIAL_OBSERVATION_LATE_START")
         due = utc(self.state["next_capture"])
         if now > due + timedelta(seconds=60):

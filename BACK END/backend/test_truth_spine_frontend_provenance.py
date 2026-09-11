@@ -240,9 +240,9 @@ class IndependentBuildTests(unittest.TestCase):
         p.git(source, '-c', 'user.name=Offline Fixture', '-c', 'user.email=fixture@example.invalid',
               '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Isolated source fixture')
         # Ignore only the verified environmental dependency tree in this fixture.
-        (source/'.git/info/exclude').write_text('FRONT END/node_modules/\n')
+        (source/'.git/info/exclude').write_text('FRONT END/node_modules/\ntests/northstar/artifacts/\n')
         commit = p.git(source, 'rev-parse', 'HEAD').strip()
-        roots = [Path('/private/tmp')/('iios-frontend-build-unit-'+uuid.uuid4().hex) for _ in range(2)]
+        roots = [source/'tests/northstar/artifacts'/('iios-frontend-build-unit-'+uuid.uuid4().hex) for _ in range(2)]
         retained = checkout/'FRONT END/dist'
         before = p.inventory(retained) if retained.exists() else None
         try:

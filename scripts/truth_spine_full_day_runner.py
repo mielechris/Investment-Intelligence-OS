@@ -23,7 +23,8 @@ from truth_spine_integration_runner import OwnedChildren, port_is_clear
 
 def run(root, topology_pin, *, owner_session):
     # Package-local imports only. Never fall back to the authoritative checkout.
-    if root != root.resolve() or root.parent != Path('/private/tmp') or not root.name.startswith('iios-truth-spine-full-day-'):
+    if (root != root.resolve() or root.parent != Path('/private/tmp') or not
+            (root.name.startswith('iios-truth-spine-full-day-') or root.name == 'iios-northstar-installed-shadow-sb37')):
         raise ValueError('NEW_OWNER_AUTHORIZED_ISOLATED_ROOT_REQUIRED')
     if Path(__file__).resolve().parent != root/'release/backend' or Path(sys.executable) != root/'runtime/bin/python':
         raise ValueError('INSTALLED_PACKAGE_RUNNER_REQUIRED')
@@ -39,8 +40,12 @@ def run(root, topology_pin, *, owner_session):
     from truth_spine_contract import seal, canonical
     from truth_spine_session_package import RuntimeProbeReader, capacity_budget
     from truth_spine_session_supervisor import SessionSupervisor
+    from truth_spine_sqlite_capture import launch_capture
     owner_path(root, root, directory=True)
     c, session, manifest, authority, registry = load_config(root/'topology.json')
+    from truth_spine_session import HistoricalSession
+    if isinstance(session, HistoricalSession) != (root.name == 'iios-northstar-installed-shadow-sb37'):
+        raise ValueError('HISTORICAL_ROOT_SCOPE_MISMATCH')
     if owner_session != session.identity or not port_is_clear(c['port']):
         raise ValueError('SESSION_OR_PORT_PREFLIGHT_FAILED')
     if (root/'shutdown-receipt.json').exists():
@@ -70,7 +75,22 @@ def run(root, topology_pin, *, owner_session):
         for name, expected in hashes.items():
             if hashlib.sha256(Path(name).read_bytes()).hexdigest() != expected:
                 raise ValueError('INTERPRETER_IDENTITY_INVALID')
-        store = GenerationStore(root, session.identity, registry, c['registry_hash'])
+        store = GenerationStore(root, session.identity, registry, c['registry_hash'],
+                                require_isolated_capture=True)
+        isolated_root = root/'captures'/'isolated-attempts'
+        isolated_root.mkdir(mode=0o700, exist_ok=True)
+        def isolated_capture(source, *, timeout_seconds, permit):
+            if source not in {Path(s['path']) for s in registry['sources'] if s['kind'] in {'operational','historical'}}:
+                raise ValueError('ISOLATED_SOURCE_NOT_REGISTERED')
+            if permit is not None: permit()
+            output = isolated_root/('attempt-'+os.urandom(16).hex())
+            receipt = launch_capture(source, output, evidence_root=root/'receipts',
+                                     timeout=min(120, max(1, timeout_seconds)), probe=False)
+            if permit is not None: permit()
+            snapshot = output/'snapshot.db'
+            if receipt.get('snapshot_sha256') is None or not snapshot.is_file():
+                raise ValueError('ISOLATED_SNAPSHOT_MISSING')
+            return snapshot
         def start(role):
             load_config(root/'topology.json')
             if hashlib.sha256((root/'topology.json').read_bytes()).hexdigest() != topology_pin:
@@ -100,7 +120,8 @@ def run(root, topology_pin, *, owner_session):
             return evidence
         supervisor = SessionSupervisor(session=session, store=store, children=children, authority=authority,
             approved_authority_hash=c['authority_hash'], release=manifest['release'], owners=c['owners'],
-            topology_hash=c['content_hash'], start_child=start, probe_runtime=probes)
+            topology_hash=c['content_hash'], start_child=start, probe_runtime=probes,
+            capture_fn=isolated_capture)
         interrupted = False
         def stop(*_):
             nonlocal interrupted
