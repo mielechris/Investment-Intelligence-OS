@@ -1,0 +1,23 @@
+{
+  "schema": "iios-provider-gateway-review-template-v1",
+  "session": "2026-09-14",
+  "mode": "OFFLINE_ONLY",
+  "universe_hash": null,
+  "calendar_hash": null,
+  "source_commit": null,
+  "runtime_hash": null,
+  "account_evidence_hashes": null,
+  "credential_selector_bindings": null,
+  "maximum_baseline_requests": 3,
+  "maximum_credits": null,
+  "providers": {},
+  "authority": {
+    "broker_connection": false,
+    "paper_order_permission": false,
+    "trade_execution_permission": false,
+    "live_execution": false,
+    "ledger_read": false,
+    "ledger_write": false,
+    "provider_activation": false
+  }
+}
