@@ -266,12 +266,28 @@ def qualify(manifest, account, runtime, *, expected, credential_backend, network
                 require(response['body'] is not None, 'DISPATCH_UNVERIFIED')
                 normalized = decode(admission, response['public'], received_at=clock())
                 material.reject_echo(canonical(normalized))
-                # Hash only after echo and public-schema checks, never secrets.
-                result['raw_response_sha256'] = digest(response['body'])
-                result['normalized_sha256'] = content_hash(normalized)
-                result['observations'] = normalized
-                verify_destination(fd, m['root'])
-                publish(fd, m['provider'] + '.response.json', {'raw_utf8': response['body'].decode('utf-8'), 'parents': result['parents']})
+                if a['retention'].get('mode') == 'EPHEMERAL_ALPHA_QUOTE':
+                    # Fixed local classifications only: never persist or hash provider data.
+                    result['retention_mode'] = 'EPHEMERAL_ALPHA_QUOTE'
+                    result['qualification_checks'] = {
+                        'authentication': 'ACCEPTED_FOR_THIS_REQUEST',
+                        'endpoint_access': 'OBSERVED_VALID_MU_QUOTE',
+                        'symbol': 'MU', 'price_validation': 'VALID_POSITIVE_DECIMAL',
+                        'account_realtime_entitlement': 'PINNED_ACCOUNT_EVIDENCE',
+                        'response_realtime_entitlement': 'UNVERIFIED',
+                        'observed_quote_freshness': 'UNVERIFIED_NO_EVENT_INSTANT',
+                        'timestamp_evidence': 'TRADING_DATE_ONLY' if response['public']['Global Quote'].get('07. latest trading day') else 'MISSING',
+                    }
+                    # Python cannot guarantee zeroization of immutable response bytes;
+                    # drop references promptly, with no body/quote/hash publication.
+                    del normalized, response
+                else:
+                    # Hash only after echo and public-schema checks, never secrets.
+                    result['raw_response_sha256'] = digest(response['body'])
+                    result['normalized_sha256'] = content_hash(normalized)
+                    result['observations'] = normalized
+                    verify_destination(fd, m['root'])
+                    publish(fd, m['provider'] + '.response.json', {'raw_utf8': response['body'].decode('utf-8'), 'parents': result['parents']})
             require(verify_runtime(admission) == identities, 'RUNTIME_IDENTITY_CHANGED')
             result['result'] = 'OBSERVED'
         except Exception:

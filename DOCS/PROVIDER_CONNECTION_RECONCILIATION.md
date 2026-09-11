@@ -70,3 +70,22 @@ Quote account evidence must additionally bind qualification_parameters to the ex
 entitlement=realtime is requested entitlement, not response evidence. HTTP 200, a price, a current trading date or an unverified provider feed label never establishes real-time access. Original quote fields and explicit feed/entitlement/delay labels are retained only after existing secret and public-document checks. A date is validated but never converted into an invented instant. Missing timestamps retain UNVERIFIED freshness. Response real-time entitlement and provider readiness remain unverified/not ready pending independent account and runtime qualification. Provider error/throttling envelopes, malformed data, redirects and over-limit responses fail closed with consumed reservations preserved and no retry.
 
 Disposable runtime tests use pinned synthetic interpreter/source/TLS files and mocked credential/network boundaries. They qualify offline behavior only, not the actual Python/native Security.framework/TLS runtime closure. No real-key or live-call authorization may be released until a reviewed source identity, actual immutable runtime/dependency/TLS/address pins, account-specific API entitlement and usage/retention/cost evidence, output root and expiration are concrete. The previous selector presence remains accepted; sandboxed absence is not grounds for replacement or access-control changes.
+
+### Alpha qualification with ephemeral provider data
+
+Explicit account retention mode `EPHEMERAL_ALPHA_QUOTE` is restricted to the
+reviewed MU GLOBAL_QUOTE contract. All raw-body, normalized-data, reference and
+provider-data-hash retention flags must be false; sanitized receipt retention
+must be true and independently pinned. Existing retention defaults and Bigdata
+storage gates are unchanged. No response body, price, provider text or hash of
+provider data is published. Only fixed local qualification classifications and
+existing request/reservation identity receipts are retained. Runtime memory is
+not an encrypted enclave; Python immutable bytes cannot promise zeroization.
+
+Authentication and endpoint access describe only this one observed request.
+Account entitlement remains separately pinned; a valid price, HTTP 200 or the
+requested realtime flag does not establish response entitlement or freshness.
+A trading date alone provides no event instant. No after-hours freshness GREEN.
+Ephemeral receipts cannot authorize batch recovery: missing retained response
+proof fails closed, with consumed reservations preserved and no repeat dispatch.
+No automatic retry, rescheduling, activation or provider-role change is added.

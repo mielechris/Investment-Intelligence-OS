@@ -130,7 +130,13 @@ def admit(manifest, account, runtime, *, expected, now):
     require(a.get('overage_enabled') is False and a.get('automatic_top_up') is False, 'OVERAGE_NOT_DISABLED')
     require(a.get('ambiguous_billing') == 'RESERVE_MAXIMUM_NO_RETRY', 'BILLING_RULE_REQUIRED')
     retention = a.get('retention', {})
-    require(retention.get('raw_body') is True and retention.get('normalized') is True and retention.get('references') is True and retention.get('hashes') is True, 'RETENTION_NOT_ESTABLISHED')
+    retention_mode = retention.get('mode', 'RETAIN_PROVIDER_DATA')
+    require(retention_mode in ('RETAIN_PROVIDER_DATA', 'EPHEMERAL_ALPHA_QUOTE'), 'RETENTION_MODE')
+    if retention_mode == 'EPHEMERAL_ALPHA_QUOTE':
+        require(alpha_quote, 'EPHEMERAL_SCOPE')
+        require(all(retention.get(k) is False for k in ('raw_body', 'normalized', 'references', 'hashes')) and retention.get('sanitized_receipt') is True, 'EPHEMERAL_RETENTION')
+    else:
+        require(retention.get('raw_body') is True and retention.get('normalized') is True and retention.get('references') is True and retention.get('hashes') is True, 'RETENTION_NOT_ESTABLISHED')
     require(retention.get('agreement_sha256') == proofs['retention']['evidence_sha256'] and utc(retention['retain_until']) >= utc(m['expires_at']), 'RETENTION_BINDING')
     if p == 'BIGDATA':
         require(retention.get('explicit_api_storage_permission') is True and retention.get('no_grounding_or_model_call') is True, 'BIGDATA_STORAGE_BLOCKED')

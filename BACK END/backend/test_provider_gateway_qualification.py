@@ -500,3 +500,87 @@ class AlphaQuoteQualificationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 qualify(m, a, r, expected=pins(m, a, r), credential_backend=FakeCredentials(), network=network, clock=lambda: NOW)
             self.assertEqual(network.calls, 1)
+
+
+class EphemeralAlphaTests(unittest.TestCase):
+    def prepare(self):
+        from test_provider_gateway_live_contract import quote_fixture
+        m, a, r = quote_fixture()
+        a['retention'].update(mode='EPHEMERAL_ALPHA_QUOTE', raw_body=False,
+                              normalized=False, references=False, hashes=False,
+                              sanitized_receipt=True)
+        repin(m, a, r)
+        return m, a, r
+
+    def invoke(self, docs, payload=None, **kwargs):
+        m, a, r = docs
+        network = FakeNetwork(payload=payload if payload is not None else {
+            'Global Quote': {'01. symbol': 'MU', '05. price': '123.456789',
+                             '07. latest trading day': '2026-09-14'}}, **kwargs)
+        receipt = qualify(m, a, r, expected=repin(m, a, r),
+                          credential_backend=FakeCredentials(), network=network, clock=lambda: NOW)
+        return receipt, network
+
+    def test_ephemeral_success_has_no_provider_data_or_hash(self):
+        docs = self.prepare()
+        receipt, network = self.invoke(docs)
+        self.assertEqual(network.calls, 1)
+        self.assertEqual(receipt['result'], 'OBSERVED')
+        self.assertEqual(receipt['qualification_checks']['observed_quote_freshness'], 'UNVERIFIED_NO_EVENT_INSTANT')
+        for key in ('raw_response_sha256', 'normalized_sha256', 'observations'):
+            self.assertIsNone(receipt[key])
+        self.assertFalse((Path(docs[0]['root']) / 'ALPHA_VANTAGE.response.json').exists())
+        for path in Path(docs[0]['root']).iterdir():
+            body = path.read_bytes()
+            for value in (b'123.456789', b'Global Quote', FAKE):
+                self.assertNotIn(value, body)
+
+    def test_missing_timestamp_never_becomes_fresh(self):
+        receipt, _ = self.invoke(self.prepare(), {'Global Quote': {'01. symbol': 'MU', '05. price': '1'}})
+        self.assertEqual(receipt['qualification_checks']['timestamp_evidence'], 'MISSING')
+        self.assertEqual(receipt['qualification_checks']['response_realtime_entitlement'], 'UNVERIFIED')
+
+    def test_provider_text_and_secret_echo_not_retained(self):
+        for text in ('private-address-example', FAKE.decode()):
+            docs = self.prepare()
+            receipt, _ = self.invoke(docs, {'Global Quote': {'01. symbol': 'MU', '05. price': '1', 'feed': text}})
+            for path in Path(docs[0]['root']).iterdir():
+                self.assertNotIn(text.encode(), path.read_bytes())
+            if text == FAKE.decode():
+                self.assertEqual(receipt['result'], 'AMBIGUOUS_OR_UNVERIFIED_STOP')
+
+    def test_each_retention_flag_fails_closed(self):
+        for field in ('raw_body', 'normalized', 'references', 'hashes', 'sanitized_receipt'):
+            docs = self.prepare()
+            docs[1]['retention'][field] = not docs[1]['retention'][field]
+            with self.assertRaises(ValueError):
+                self.invoke(docs)
+            self.assertEqual(list(Path(docs[0]['root']).iterdir()), [])
+
+    def test_unknown_mode_and_sma_rejected(self):
+        from provider_gateway_live_contract import request_parameters
+        for kind in ('mode', 'sma'):
+            docs = self.prepare()
+            if kind == 'mode':
+                docs[1]['retention']['mode'] = 'EPHEMERAL_ANYTHING'
+            else:
+                docs[0]['parameters'] = request_parameters('ALPHA_VANTAGE', ['MU'], 'enrichment')
+            with self.assertRaises(ValueError):
+                self.invoke(docs)
+
+    def test_failure_retains_reservation_without_response(self):
+        for args in ({'status': 429}, {'failure': True}, {'payload': {'Information': 'private-error'}}):
+            docs = self.prepare()
+            receipt, network = self.invoke(docs, **args)
+            self.assertEqual(network.calls, 1)
+            self.assertEqual(receipt['result'], 'AMBIGUOUS_OR_UNVERIFIED_STOP')
+            self.assertTrue((Path(docs[0]['root']) / 'ALPHA_VANTAGE.reserved.json').exists())
+            self.assertFalse((Path(docs[0]['root']) / 'ALPHA_VANTAGE.response.json').exists())
+
+    def test_duplicate_ephemeral_attempt_never_dispatches(self):
+        docs = self.prepare()
+        self.invoke(docs)
+        fake = FakeNetwork()
+        with self.assertRaises(ValueError):
+            qualify(*docs, expected=repin(*docs), credential_backend=FakeCredentials(), network=fake, clock=lambda: NOW)
+        self.assertEqual(fake.calls, 0)
