@@ -1,0 +1,10 @@
+{
+  "schema": "iios-provider-qualification-inputs-template-v1",
+  "status": "UNRESOLVED_NOT_EXECUTABLE",
+  "manifest": null,
+  "account": null,
+  "runtime": null,
+  "independently_expected": {"manifest": null, "account": null, "runtime": null},
+  "authority": {"broker_connection": false, "paper_order_permission": false, "trade_execution_permission": false, "live_execution": false, "ledger_read": false, "ledger_write": false, "provider_activation": false},
+  "qualification_authorized": false
+}
