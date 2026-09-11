@@ -28,7 +28,8 @@ import truth_spine_sqlite_capture as capture_helper  # noqa: E402
 
 SCHEMA = "iios-owner-ledger-snapshot-v1"
 CONFIG_SCHEMA = "iios-owner-ledger-source-config-v3"
-OUTPUT_ROOT = Path("/private/tmp/iios-northstar-owner-snapshots-sb37")
+# Attempt 1 is retained failure evidence; attempt 2 must use a fresh root.
+OUTPUT_ROOT = Path("/private/tmp/iios-northstar-owner-snapshots-sb37-attempt2")
 CONFIRMATION = ("I confirm these are my canonical IIOS L7 and L8 ledgers. I authorize "
                 "read-only capture into the isolated owner snapshot root. I do not "
                 "authorize source modification.")
