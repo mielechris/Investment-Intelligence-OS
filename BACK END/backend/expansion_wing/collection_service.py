@@ -9,7 +9,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .collection_plan import canonical, verify_document
+from .collection_plan import (KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE, SessionPlan,
+                              canonical, require_plan, verify_document)
 from .collection_runtime import install_disabled, validate_installed
 from .collection_session import CollectionSession, Journal, exclusive, read_bytes
 
@@ -22,16 +23,36 @@ def documents(root, account_hash, authority_hash):
     return account, grant
 
 
-def production_boundary(root, manifest, stopped):
+class CollectionCredentials:
+    """Collection-only selector; never fall back to the legacy provider selector."""
+    def __init__(self, adapter):
+        if adapter.service != KEYCHAIN_SERVICE.encode("ascii"):
+            raise ValueError("FINANCIAL_DATASETS_SELECTOR_REQUIRED")
+        self.adapter = adapter
+
+    def retrieve(self):
+        from .financial_datasets import CREDENTIAL_MIN_BYTES, CREDENTIAL_MAX_BYTES, validate_credential
+        try:
+            value = self.adapter.retrieve_opaque(KEYCHAIN_ACCOUNT,
+                minimum_bytes=CREDENTIAL_MIN_BYTES, maximum_bytes=CREDENTIAL_MAX_BYTES)
+        except RuntimeError as exc:
+            category = str(exc)
+            if category in {"KEY_RECORD_MISSING", "KEY_RECORD_INACCESSIBLE_OR_AMBIGUOUS", "INVALID_KEYCHAIN_QUERY"}:
+                raise RuntimeError(category) from None
+            raise RuntimeError("KEYCHAIN_UNAVAILABLE") from None
+        return validate_credential(value)
+
+
+def production_boundary(root, manifest, stopped, *, plan):
+    require_plan(plan)
     # Imports are deliberately delayed until a verified, armed tick is eligible.
     from .collection_transport import CollectionBoundary
-    from .financial_datasets import KEYCHAIN_SERVICE, SecurityFrameworkCredentialProvider
     from .financial_datasets_tls import FinancialDatasetsHTTPSTransport, TrustBundlePolicy
     from .keychain_adapter import KeychainAdapter, SecurityFrameworkAPI
-    credentials = SecurityFrameworkCredentialProvider(KeychainAdapter(SecurityFrameworkAPI(), service=KEYCHAIN_SERVICE))
+    credentials = CollectionCredentials(KeychainAdapter(SecurityFrameworkAPI(), service=KEYCHAIN_SERVICE))
     transport = FinancialDatasetsHTTPSTransport(TrustBundlePolicy(root / "release" / "cacert.pem",
                                               manifest["files"]["cacert.pem"]["sha256"]))
-    return CollectionBoundary(credentials, transport, stopped=stopped)
+    return CollectionBoundary(credentials, transport, plan=plan, stopped=stopped)
 
 
 class DeferredBoundary:
@@ -53,12 +74,13 @@ def supervise(session, *, stop_requested, sleep=time.sleep):
     return "STOPPED"
 
 
-def main(argv=None):
+def main(argv=None, *, clock=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("install-disabled", "validate", "arm", "supervise", "disarm"))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--release-sha256", required=True)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--session-date", required=True, help="Explicit YYYY-MM-DD XNYS session; no date inference")
     parser.add_argument("--payload", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--account", type=Path)
@@ -66,17 +88,20 @@ def main(argv=None):
     parser.add_argument("--account-sha256")
     parser.add_argument("--authority-sha256")
     args = parser.parse_args(argv)
-    clock = lambda: datetime.now(timezone.utc)
+    # Dependency injection is for synthetic native tests only. The CLI exposes no
+    # clock override and the installed byte inventory rejects altered entrypoints.
+    clock = clock or (lambda: datetime.now(timezone.utc))
     try:
+        plan = SessionPlan(args.session_date)
         if args.command == "install-disabled":
             if args.payload is None or args.manifest is None:
                 raise ValueError("COMPLETE_RELEASE_INPUTS_REQUIRED")
-            result = install_disabled(args.root, args.payload, args.manifest, args.release_sha256, args.source_commit)
+            result = install_disabled(args.root, args.payload, args.manifest, args.release_sha256, args.source_commit, plan=plan)
         else:
             executing = args.command in ("arm", "supervise")
-            verify = lambda: validate_installed(args.root, args.release_sha256, args.source_commit, executing=executing)
+            verify = lambda: validate_installed(args.root, args.release_sha256, args.source_commit, plan=plan, executing=executing)
             manifest = verify()
-            journal = Journal(args.root, args.release_sha256)
+            journal = Journal(args.root, args.release_sha256, plan=plan)
             if args.command == "validate":
                 print(json.dumps({"status": "VALIDATED_NO_CREDENTIAL_ACCESS", "armed": bool(journal.events())}))
                 return 0
@@ -96,7 +121,7 @@ def main(argv=None):
                 stopped = [False]
                 session = CollectionSession(journal, account, args.account_sha256, grant, args.authority_sha256,
                     clock=clock, verify_runtime=verify, boundary=DeferredBoundary(
-                        lambda: production_boundary(args.root, manifest, lambda: stopped[0] or journal.disarmed())))
+                        lambda: production_boundary(args.root, manifest, lambda: stopped[0] or journal.disarmed(), plan=plan)))
                 if args.command == "arm":
                     session.gates(arming=True)
                     # Inputs are fresh, exclusive and become parents of the arm receipt.
@@ -130,7 +155,7 @@ def main(argv=None):
     except Exception:
         # Preserve a fresh diagnostic when the root is admitted. No exception text.
         try:
-            journal = Journal(args.root, args.release_sha256)
+            journal = Journal(args.root, args.release_sha256, plan=SessionPlan(args.session_date))
             with journal.lock():
                 journal.append("FAILED", clock(), category="SERVICE_FAILED_CLOSED", released_credits=0)
         except Exception:

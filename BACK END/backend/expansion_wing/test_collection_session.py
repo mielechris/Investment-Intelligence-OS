@@ -7,10 +7,20 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
-from .collection_plan import (EXPIRY, FORBIDDEN, OPEN, PATHS, SESSION, SPEC_SHA256, TICKERS,
+from functools import partial
+from .collection_plan import (SessionPlan, CREDENTIAL_BINDING, FORBIDDEN, PATHS, TICKERS,
     canonical, digest, instant, request_plan, validate_account, validate_authority, validate_row)
 from .collection_session import CollectionSession, Journal, exclusive, observation
 from .collection_service import DeferredBoundary, supervise
+
+# Explicit historical regression fixture, never a production default.
+PLAN = SessionPlan("2026-09-11")
+SESSION, OPEN, EXPIRY, SPEC_SHA256 = PLAN.session, PLAN.opening, PLAN.expiry, PLAN.spec_sha256
+request_plan = partial(request_plan, plan=PLAN)
+validate_row = partial(validate_row, plan=PLAN)
+validate_account = partial(validate_account, plan=PLAN)
+validate_authority = partial(validate_authority, plan=PLAN)
+Journal = partial(Journal, plan=PLAN)
 
 
 def test_root():
@@ -25,7 +35,7 @@ def account_document():
         'overage_or_topup': False, 'internal_use_permitted': True, 'calendar_open': True,
         'previous_session': '2026-09-10', 'ambiguous_billing': 'RESERVE_FULL_COST_NO_RETRY',
         'account_reference': 'SYNTHETIC_ACCOUNT', 'reservation_reference': 'SYNTHETIC_RESERVATION',
-        'credential_binding': 'com.iios.expansion-wing.financial-datasets/financial-datasets-api-key',
+        'credential_binding': CREDENTIAL_BINDING,
         'observed_at': '2026-09-11T12:00:00Z', 'valid_until': EXPIRY.isoformat(),
         'entitlement_source_sha256': 'e'*64, 'cost_balance_source_sha256': 'c'*64,
         'calendar_source_sha256': 'd'*64}

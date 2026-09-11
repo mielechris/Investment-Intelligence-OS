@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from . import collection_runtime as runtime
-from .collection_plan import OPEN, SPEC_SHA256, canonical, digest, request_plan
+from .collection_plan import SessionPlan, canonical, digest
+from .test_collection_session import PLAN, OPEN, SPEC_SHA256, request_plan
 from .collection_service import main
 from .collection_session import Journal
 from .collection_transport import CollectionBoundary
@@ -28,8 +29,8 @@ class RuntimeTests(unittest.TestCase):
         for name in runtime.FILES:
             data=('synthetic '+name).encode();(self.payload/name).write_bytes(data)
             self.files[name]={'sha256':hashlib.sha256(data).hexdigest(),'size':len(data)}
-        self.doc={'schema':'fd-collection-release-v1','session':'2026-09-11','spec_sha256':SPEC_SHA256,
-            'installed_root':str(self.root),'source_commit':'1'*40,'label':runtime.LABEL,
+        self.doc={'schema':'fd-collection-release-v2','session':'2026-09-11','spec_sha256':SPEC_SHA256,
+            'installed_root':str(self.root),'source_commit':'1'*40,'label':PLAN.label,
             'files':self.files,'source_inventory_sha256':'b'*64,
             'runtime':{'executable':str(self.executable),'sha256':hashlib.sha256(self.executable.read_bytes()).hexdigest(),
                        'version':platform.python_version(),'architecture':platform.machine()}}
@@ -41,13 +42,13 @@ class RuntimeTests(unittest.TestCase):
         self.manifest.write_bytes(canonical(self.doc));self.hash=hashlib.sha256(self.manifest.read_bytes()).hexdigest()
 
     def install(self):
-        return runtime.install_disabled(self.root,self.payload,self.manifest,self.hash,'1'*40)
+        return runtime.install_disabled(self.root,self.payload,self.manifest,self.hash,'1'*40, plan=PLAN)
 
     def test_disabled_install_exact_pinned_copy_no_authority(self):
         self.assertEqual(self.install(),'INSTALLED_DISABLED_ZERO_RELEASED_CREDITS')
         self.assertFalse(list((self.root/'receipts').iterdir()))
         self.assertFalse(list((self.root/'inputs').iterdir()))
-        runtime.validate_installed(self.root,self.hash,'1'*40)
+        runtime.validate_installed(self.root,self.hash,'1'*40, plan=PLAN)
         for name in runtime.FILES:self.assertEqual((self.payload/name).read_bytes(),(self.root/'release'/name).read_bytes())
 
     def test_existing_destination_rejected_preserved(self):
@@ -57,12 +58,27 @@ class RuntimeTests(unittest.TestCase):
 
     def test_wrong_commit_or_manifest_pin_rejected(self):
         for commit,pin in [('2'*40,self.hash),('1'*40,'f'*64)]:
-            with self.assertRaises(ValueError):runtime.install_disabled(self.root,self.payload,self.manifest,pin,commit)
+            with self.assertRaises(ValueError):runtime.install_disabled(self.root,self.payload,self.manifest,pin,commit, plan=PLAN)
         self.assertFalse(self.root.exists())
 
     def test_wrong_installed_root_rejected(self):
         self.doc['installed_root']=str(self.base/'other');self.refresh_manifest()
         with self.assertRaises(ValueError):self.install()
+
+    def test_wrong_session_or_legacy_release_rejected(self):
+        for field, value in [('session', '2026-09-14'), ('schema', 'fd-collection-release-v1'),
+                             ('label', SessionPlan('2026-09-14').label)]:
+            old = self.doc[field]
+            self.doc[field] = value
+            self.refresh_manifest()
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.install()
+            self.doc[field] = old
+        self.refresh_manifest()
+        with self.assertRaises(ValueError):
+            runtime.install_disabled(self.root, self.payload, self.manifest, self.hash, '1'*40,
+                                     plan=SessionPlan('2026-09-14'))
+        self.assertFalse(self.root.exists())
 
     def test_missing_extra_or_traversal_inventory_rejected(self):
         for key in ('extra.py','../escape.py','/absolute.py'):
@@ -100,21 +116,21 @@ class RuntimeTests(unittest.TestCase):
     def test_runtime_cannot_execute_from_mutable_checkout(self):
         self.install()
         with self.assertRaisesRegex(ValueError,'MUTABLE_CHECKOUT'):
-            runtime.validate_installed(self.root,self.hash,'1'*40,executing=True)
+            runtime.validate_installed(self.root,self.hash,'1'*40,executing=True, plan=PLAN)
 
     def test_root_identity_substitution_rejected(self):
         self.install();path=self.root/'state/ownership.json';value=json.loads(path.read_text());value['inode']+=1
         path.write_bytes(canonical(value))
-        with self.assertRaises(ValueError):runtime.validate_installed(self.root,self.hash,'1'*40)
+        with self.assertRaises(ValueError):runtime.validate_installed(self.root,self.hash,'1'*40, plan=PLAN)
 
     def test_extra_account_input_rejected(self):
         self.install();(self.root/'inputs/unknown.json').write_bytes(b'{}')
-        with self.assertRaises(ValueError):runtime.validate_installed(self.root,self.hash,'1'*40)
+        with self.assertRaises(ValueError):runtime.validate_installed(self.root,self.hash,'1'*40, plan=PLAN)
 
     def test_unrepaired_source_commit_rejected(self):
         self.doc['source_commit']='455d31752a0fc73c73625f5757d0f4e87683a6ed';self.refresh_manifest()
         with self.assertRaisesRegex(ValueError,'UNREPAIRED_SOURCE'):
-            runtime.install_disabled(self.root,self.payload,self.manifest,self.hash,self.doc['source_commit'])
+            runtime.install_disabled(self.root,self.payload,self.manifest,self.hash,self.doc['source_commit'], plan=PLAN)
 
     def test_source_inventory_parent_mismatch_rejected(self):
         self.doc['source_inventory_sha256']='c'*64
@@ -123,7 +139,7 @@ class RuntimeTests(unittest.TestCase):
             self.install()
 
     def test_second_supervisor_lock_rejected(self):
-        self.install();a=Journal(self.root,self.hash);b=Journal(self.root,self.hash)
+        self.install();a=Journal(self.root,self.hash, plan=PLAN);b=Journal(self.root,self.hash, plan=PLAN)
         with a.lock('supervisor.lock'):
             with self.assertRaises(BlockingIOError):
                 with b.lock('supervisor.lock'):pass
@@ -131,10 +147,10 @@ class RuntimeTests(unittest.TestCase):
     def test_duplicate_service_start_does_not_append_failure(self):
         self.install()
         account_hash='c'*64;authority_hash='d'*64
-        command=['supervise','--root',str(self.root),'--release-sha256',self.hash,
+        command=['supervise','--session-date',PLAN.session,'--root',str(self.root),'--release-sha256',self.hash,
                  '--source-commit','1'*40,'--account-sha256',account_hash,
                  '--authority-sha256',authority_hash]
-        journal=Journal(self.root,self.hash)
+        journal=Journal(self.root,self.hash, plan=PLAN)
         with journal.lock('supervisor.lock'), \
              patch('expansion_wing.collection_service.Journal',return_value=journal), \
              patch('expansion_wing.collection_service.validate_installed',return_value=self.doc), \
@@ -143,7 +159,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(journal.events(),[])
 
     def test_plist_explicit_root_pins_no_restart_loop(self):
-        value=plistlib.loads(runtime.startup_plist(self.root,self.hash,'1'*40,str(self.executable),'c'*64,'d'*64))
+        value=plistlib.loads(runtime.startup_plist(self.root,self.hash,'1'*40,str(self.executable),'c'*64,'d'*64, plan=PLAN))
         self.assertFalse(value['KeepAlive']);self.assertTrue(value['RunAtLoad'])
         self.assertIn(self.hash,value['ProgramArguments']);self.assertIn('supervise',value['ProgramArguments'])
         self.assertEqual(value['WorkingDirectory'],str(self.root/'release'))
@@ -154,10 +170,10 @@ class RuntimeTests(unittest.TestCase):
         with patch('expansion_wing.collection_service.production_boundary',side_effect=AssertionError('credentials')), \
              patch('subprocess.run',side_effect=AssertionError('process')), \
              patch('socket.socket',side_effect=AssertionError('network')):
-            self.assertEqual(main(['validate','--root',str(self.root),'--release-sha256',self.hash,'--source-commit','1'*40]),0)
+            self.assertEqual(main(['validate','--session-date',PLAN.session,'--root',str(self.root),'--release-sha256',self.hash,'--source-commit','1'*40]),0)
 
     def test_failure_cli_returns_failure_not_success(self):
-        self.assertEqual(main(['validate','--root',str(self.root),'--release-sha256',self.hash,'--source-commit','1'*40]),78)
+        self.assertEqual(main(['validate','--session-date',PLAN.session,'--root',str(self.root),'--release-sha256',self.hash,'--source-commit','1'*40]),78)
 
     def test_collection_import_closure_has_no_ledger_or_full_factory_service(self):
         directory=Path(__file__).parent
@@ -181,7 +197,7 @@ class TransportTests(unittest.TestCase):
         self.factory=Mock(return_value=self.connection);self.alarm=Mock(side_effect=lambda seconds:nullcontext())
         self.stopped=Mock(return_value=False)
         self.boundary=CollectionBoundary(self.credentials,self.transport,stopped=self.stopped,clock=lambda:self.now,
-                                        alarm=self.alarm,connection_factory=self.factory)
+                                        alarm=self.alarm,connection_factory=self.factory, plan=PLAN)
 
     def test_exact_history_query_and_mock_credentials(self):
         row=request_plan()[10];self.boundary.request(row,OPEN.replace(hour=14))

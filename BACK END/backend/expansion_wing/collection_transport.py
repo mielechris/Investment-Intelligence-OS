@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
-from .collection_plan import utc, validate_row
+from .collection_plan import require_plan, utc, validate_row
 from .financial_datasets import API_HOST, AUTH_HEADER
 from .financial_datasets_tls import _connection
 
@@ -30,14 +30,15 @@ def deadline_alarm(seconds):
 
 
 class CollectionBoundary:
-    def __init__(self, credentials, transport, *, stopped, clock=None, alarm=deadline_alarm,
+    def __init__(self, credentials, transport, *, plan, stopped, clock=None, alarm=deadline_alarm,
                  connection_factory=_connection):
+        self.plan = require_plan(plan)
         self.credentials, self.transport, self.stopped = credentials, transport, stopped
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.alarm, self.connection_factory = alarm, connection_factory
 
     def request(self, row, deadline):
-        validate_row(row)
+        validate_row(row, plan=self.plan)
         seconds = min(15.0, (utc(deadline) - utc(self.clock())).total_seconds())
         if seconds <= 0 or self.stopped():
             raise ValueError("DISPATCH_AUTHORITY_EXPIRED")

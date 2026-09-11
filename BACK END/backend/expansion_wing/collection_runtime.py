@@ -9,10 +9,9 @@ import re
 import sys
 from pathlib import Path, PurePosixPath
 
-from .collection_plan import SESSION, SPEC_SHA256, canonical, digest, pin
+from .collection_plan import canonical, digest, pin, require_plan
 from .collection_session import exclusive, read_bytes, safe_directory
 
-LABEL = "com.iios.financial-datasets-collection-20260911"
 MODULES = ("__init__.py", "models.py", "collection_plan.py", "collection_session.py",
            "collection_runtime.py", "collection_service.py", "collection_transport.py",
            "financial_datasets.py", "financial_datasets_tls.py", "keychain_adapter.py")
@@ -20,15 +19,16 @@ FILES = tuple("expansion_wing/" + name for name in MODULES) + ("cacert.pem",)
 DIRECTORIES = ("release", "inputs", "state", "raw", "receipts", "logs", "rollback")
 
 
-def manifest_document(path, expected, root, source_commit):
+def manifest_document(path, expected, root, source_commit, *, plan):
+    require_plan(plan)
     data = read_bytes(path)
     if hashlib.sha256(data).hexdigest() != pin(expected):
         raise ValueError("RELEASE_PIN_MISMATCH")
     doc = json.loads(data)
-    if (doc.get("schema") != "fd-collection-release-v1" or doc.get("session") != SESSION
-            or doc.get("spec_sha256") != SPEC_SHA256 or doc.get("installed_root") != str(root)
+    if (doc.get("schema") != "fd-collection-release-v2" or doc.get("session") != plan.session
+            or doc.get("spec_sha256") != plan.spec_sha256 or doc.get("installed_root") != str(root)
             or doc.get("source_commit") != source_commit or not re.fullmatch(r"[0-9a-f]{40}", source_commit)
-            or doc.get("label") != LABEL or set(doc.get("files", {})) != set(FILES)):
+            or doc.get("label") != plan.label or set(doc.get("files", {})) != set(FILES)):
         raise ValueError("RELEASE_IDENTITY_INVALID")
     for path, record in doc["files"].items():
         parsed = PurePosixPath(path)
@@ -79,12 +79,12 @@ def inventory(directory, manifest):
             raise ValueError("RELEASE_BYTES_INVALID")
 
 
-def install_disabled(root, payload, manifest_path, expected, source_commit):
+def install_disabled(root, payload, manifest_path, expected, source_commit, *, plan):
     """Future authorized installer; never invoked against a permanent root by source tests."""
     root, payload = Path(root), Path(payload)
     if not root.is_absolute() or root.exists() or root.is_symlink() or root.parent.resolve(strict=True) != root.parent:
         raise ValueError("NEW_CANONICAL_ROOT_REQUIRED")
-    manifest, data = manifest_document(manifest_path, expected, root, source_commit)
+    manifest, data = manifest_document(manifest_path, expected, root, source_commit, plan=plan)
     inventory(payload, manifest)
     root.mkdir(mode=0o700)
     for name in DIRECTORIES:
@@ -106,14 +106,14 @@ def install_disabled(root, payload, manifest_path, expected, source_commit):
     return "INSTALLED_DISABLED_ZERO_RELEASED_CREDITS"
 
 
-def validate_installed(root, expected, source_commit, *, executing=False):
+def validate_installed(root, expected, source_commit, *, plan, executing=False):
     root = Path(root)
     identity = safe_directory(root)
     if {p.name for p in root.iterdir()} != set(DIRECTORIES) | {"release-manifest.json"}:
         raise ValueError("ROOT_MEMBERSHIP_INVALID")
     for name in DIRECTORIES:
         safe_directory(root / name)
-    manifest, _ = manifest_document(root / "release-manifest.json", expected, root, source_commit)
+    manifest, _ = manifest_document(root / "release-manifest.json", expected, root, source_commit, plan=plan)
     ownership = json.loads(read_bytes(root / "state" / "ownership.json"))
     if ownership != {"device": identity[0], "inode": identity[1], "uid": os.getuid(), "release": expected}:
         raise ValueError("ROOT_OWNERSHIP_INVALID")
@@ -135,15 +135,16 @@ def validate_installed(root, expected, source_commit, *, executing=False):
     return manifest
 
 
-def startup_plist(root, manifest_hash, source_commit, runtime_executable, account_hash, authority_hash):
+def startup_plist(root, manifest_hash, source_commit, runtime_executable, account_hash, authority_hash, *, plan):
     """Returns reviewable data; does not install a LaunchAgent or launch a process."""
     import plistlib
+    require_plan(plan)
     for value in (manifest_hash, account_hash, authority_hash):
         pin(value)
-    return plistlib.dumps({"Label": LABEL, "ProgramArguments": [runtime_executable, "-B", "-m",
+    return plistlib.dumps({"Label": plan.label, "ProgramArguments": [runtime_executable, "-B", "-m",
         "expansion_wing.collection_service", "supervise", "--root", str(root),
         "--release-sha256", manifest_hash, "--source-commit", source_commit,
-        "--account-sha256", account_hash, "--authority-sha256", authority_hash],
+        "--session-date", plan.session, "--account-sha256", account_hash, "--authority-sha256", authority_hash],
         "WorkingDirectory": str(Path(root) / "release"), "RunAtLoad": True,
         "KeepAlive": False, "ExitTimeOut": 20,
         "EnvironmentVariables": {"PYTHONDONTWRITEBYTECODE": "1"},

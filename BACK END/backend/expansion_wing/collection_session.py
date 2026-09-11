@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .collection_plan import (EXPIRY, canonical, digest, instant, request_plan, utc,
+from .collection_plan import (canonical, digest, instant, request_plan, require_plan, utc,
                               validate_account, validate_authority)
 
 
@@ -59,7 +59,8 @@ def exclusive(path, data):
 
 
 class Journal:
-    def __init__(self, root, release_hash):
+    def __init__(self, root, release_hash, *, plan):
+        self.plan = require_plan(plan)
         self.root = Path(root)
         self.identity = safe_directory(self.root)
         self.release_hash = release_hash
@@ -90,7 +91,7 @@ class Journal:
     def events(self):
         self.check()
         events, parent = [], self.release_hash
-        known_rows = {r["proposal_row_sha256"] for r in request_plan()}
+        known_rows = {r["proposal_row_sha256"] for r in request_plan(plan=self.plan)}
         for number, path in enumerate(sorted((self.root / "receipts").iterdir())):
             if path.name != f"{number:06d}.json":
                 raise ValueError("JOURNAL_INVENTORY_INVALID")
@@ -193,15 +194,16 @@ class CollectionSession:
     """Dependencies are explicit; production constructs them only after release validation."""
     def __init__(self, journal, account, account_hash, authority, authority_hash, *, clock, boundary, verify_runtime):
         self.journal, self.account, self.account_hash = journal, account, account_hash
+        self.plan = require_plan(journal.plan)
         self.authority, self.authority_hash = authority, authority_hash
         self.clock, self.boundary, self.verify_runtime = clock, boundary, verify_runtime
 
     def gates(self, *, arming=False):
         now = utc(self.clock())
         self.verify_runtime()
-        validate_account(self.account, self.account_hash, now)
+        validate_account(self.account, self.account_hash, now, plan=self.plan)
         validate_authority(self.authority, self.authority_hash, self.account_hash,
-                           self.journal.release_hash, now, arming=arming)
+                           self.journal.release_hash, now, plan=self.plan, arming=arming)
         if self.journal.disarmed():
             raise ValueError("SESSION_DISARMED")
         return now
@@ -228,7 +230,7 @@ class CollectionSession:
                 raise ValueError("ARM_RECEIPT_MISMATCH")
             if any(e["kind"] in ("FAILED", "CLOSED") for e in events):
                 return "CLOSED"
-            if now >= EXPIRY or self.journal.disarmed():
+            if now >= self.plan.expiry or self.journal.disarmed():
                 self.journal.append("CLOSED", now, released_credits=0, coverage=self.coverage(events, now))
                 return "CLOSED"
             try:
@@ -238,7 +240,7 @@ class CollectionSession:
                 if reserved - outcomes:
                     raise ValueError("UNCERTAIN_PREVIOUS_DISPATCH_NO_RETRY")
                 skipped = {e["row"] for e in events if e["kind"] == "MISSED"}
-                for row in request_plan():
+                for row in request_plan(plan=self.plan):
                     key = row["proposal_row_sha256"]
                     if key in reserved or key in skipped:
                         continue
@@ -258,10 +260,10 @@ class CollectionSession:
                                         late_seconds=(now - instant(row["target_utc"])).total_seconds())
                     try:
                         now = self.gates()
-                        response = self.boundary.request(row, min(deadline, EXPIRY) - timedelta(seconds=1))
+                        response = self.boundary.request(row, min(deadline, self.plan.expiry) - timedelta(seconds=1))
                         observed = utc(self.clock())
                         details = observation(row, response, observed)
-                        if observed >= deadline or observed >= EXPIRY or self.journal.disarmed():
+                        if observed >= deadline or observed >= self.plan.expiry or self.journal.disarmed():
                             raise ValueError("RESPONSE_OUTSIDE_AUTHORITY")
                         raw = response[2]
                         exclusive(self.journal.root / "raw" / (key + ".json"), raw)
@@ -277,17 +279,16 @@ class CollectionSession:
                 self.journal.append("FAILED", utc(self.clock()), category="PREFLIGHT_OR_RECOVERY_FAILED", released_credits=0)
                 return "FAILED_CLOSED"
 
-    @staticmethod
-    def coverage(events, now):
+    def coverage(self, events, now):
         observed = {e["row"]: e for e in events if e["kind"] == "OBSERVED"}
-        expected = request_plan()
+        expected = request_plan(plan=self.plan)
         missing_open = [r["ticker"] for r in expected if r["type"] == "OPENING" and (
             r["proposal_row_sha256"] not in observed or observed[r["proposal_row_sha256"]].get("classification") != "CURRENT")]
         missing = [r["ordinal"] for r in expected if r["proposal_row_sha256"] not in observed]
         stale = [e["row"] for e in observed.values() if e.get("classification") == "STALE"]
         complete = not missing and not stale
         classification = "COMPLETE_SCHEDULED_COLLECTION" if complete else (
-            "PARTIAL_SESSION" if utc(now) >= instant("2026-09-11T14:00:00Z") else "INCOMPLETE_COLLECTION")
+            "PARTIAL_SESSION" if utc(now) >= self.plan.opening + timedelta(minutes=30) else "INCOMPLETE_COLLECTION")
         return {"classification": classification, "missing_opening_tickers": missing_open,
                 "missing_ordinals": missing, "stale_rows": stale, "official_close_proven": False,
                 "trading_authorized": False}
