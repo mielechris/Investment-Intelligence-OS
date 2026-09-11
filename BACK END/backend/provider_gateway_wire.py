@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date as calendar_date
 from decimal import Decimal
 import re
 
@@ -19,6 +20,7 @@ def decode(admission, payload, *, received_at):
     require(not any(k in payload for k in ('error', 'errors', 'message', 'code', 'Note', 'Information', 'Error Message', 'next_url', 'next_page_token', 'next_cursor')), 'ERROR_OR_PAGINATION')
     p = m['provider']
     original = payload
+    alpha_quote = p == 'ALPHA_VANTAGE' and m['parameters']['function'] == 'GLOBAL_QUOTE'
     if p == 'FINANCIAL_DATASETS':
         require(set(payload) == {'company_facts'} and isinstance(payload['company_facts'], dict), 'FD_FACTS_SCHEMA')
         facts = payload['company_facts']
@@ -34,6 +36,18 @@ def decode(admission, payload, *, received_at):
             rows.append({'ticker': 'MU', 'document_identity': document['id'], 'publication_time': document.get('timestamp'), 'observation_time': None, 'source_references': [document['url']] if document.get('url') else []})
         # Query association is not demonstrated company/ticker coverage.
         payload = {'records': rows}
+    elif alpha_quote:
+        require(set(payload) == {'Global Quote'} and isinstance(payload['Global Quote'], dict), 'QUOTE_SCHEMA')
+        quote = payload['Global Quote']
+        require(quote.get('01. symbol') == 'MU', 'QUOTE_SYMBOL')
+        price = quote.get('05. price')
+        require(isinstance(price, str) and re.fullmatch(r'\d+(?:\.\d+)?', price) is not None, 'QUOTE_PRICE')
+        require(Decimal(price).is_finite() and Decimal(price) > 0, 'QUOTE_PRICE')
+        day = quote.get('07. latest trading day')
+        if day is not None:
+            require(isinstance(day, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', day) is not None, 'QUOTE_DATE')
+            calendar_date.fromisoformat(day)
+        payload = {'records': [{'ticker': 'MU', 'indicator': 'GLOBAL_QUOTE_PRICE', 'value': price, 'observation_time': None, 'publication_time': None}]}
     elif p == 'ALPHA_VANTAGE':
         meta, points = payload.get('Meta Data'), payload.get('Technical Analysis: SMA')
         require(isinstance(meta, dict) and meta.get('1: Symbol') == 'MU' and isinstance(points, dict), 'INDICATOR_SCHEMA')
@@ -52,13 +66,16 @@ def decode(admission, payload, *, received_at):
     # Multiple historical periods/research documents are not duplicate quotes.
     duplicates = sorted(s for s, n in counts.items() if n > 1) if p in ('MASSIVE', 'ALPACA', 'FINANCIAL_DATASETS') else []
     missing, unexpected = sorted(requested - returned), sorted(returned - requested)
-    if p == 'ALPHA_VANTAGE':
+    if alpha_quote:
+        rows[0]['provider_event_timestamps']['latest_trading_day'] = day
+        rows[0]['event_time_basis'] = 'PROVIDER_TRADING_DATE_NO_INSTANT' if day else 'NO_PROVIDER_TIMESTAMP'
+    elif p == 'ALPHA_VANTAGE':
         for row, date in zip(rows, sorted(original['Technical Analysis: SMA'])):
             row['provider_event_timestamps']['period_date'] = date
             row['provider_event_timestamps']['provider_timezone'] = original['Meta Data'].get('7: Time Zone')
             row['event_time_basis'] = 'PROVIDER_PERIOD_DATE_NO_INSTANT'
     delay_conflict = (p in ('ALPACA', 'MASSIVE') and m['feed'] in ('sip', 'real_time') and (parsed['status'] == 'DELAYED' or (parsed['provider_reported_delay'] or 0) > 0))
-    return {'observations': rows, 'provider_timestamps': [r['provider_event_timestamps'] for r in rows],
+    result = {'observations': rows, 'provider_timestamps': [r['provider_event_timestamps'] for r in rows],
             'requested_symbols': m['symbols'], 'returned_symbols': sorted(returned), 'missing_symbols': missing,
             'unexpected_symbols': unexpected, 'duplicate_symbols': duplicates,
             'coverage': 'QUERY_ASSOCIATION_ONLY' if p == 'BIGDATA' else 'COMPLETE' if not missing and not unexpected and not duplicates and not parsed['partial_response'] else 'PARTIAL',
@@ -67,3 +84,9 @@ def decode(admission, payload, *, received_at):
             'provider_reported_delay': parsed['provider_reported_delay'], 'atomic_exchange_snapshot': False,
             'provider_usage': original.get('usage') if p == 'BIGDATA' else None,
             'usage_basis': 'PROVIDER_REPORTED_NOT_INDEPENDENT_BILLING_PROOF', 'provider_readiness': 'NOT_READY'}
+
+    if alpha_quote:
+        result.update({'requested_entitlement': 'realtime', 'response_realtime_entitlement': 'UNVERIFIED',
+                       'provider_feed_evidence': {k: v for k, v in quote.items() if any(word in k.lower() for word in ('feed', 'entitlement', 'delay'))},
+                       'provider_quote_fields': quote, 'feed_basis': 'SECONDARY_ROLE_ONLY_NOT_RESPONSE_REALTIME_PROOF'})
+    return result

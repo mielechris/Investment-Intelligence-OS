@@ -458,3 +458,45 @@ class RecoveryTests(unittest.TestCase):
             path.rename(path.with_suffix('.json.preserved-missing'))
         self.assert_blocked((*case[:3], None, None, case[5]))
         self.assert_blocked(case)
+
+
+class AlphaQuoteQualificationTests(unittest.TestCase):
+    def execute_quote(self, network):
+        from test_provider_gateway_live_contract import quote_fixture
+        m, a, r = quote_fixture()
+        credentials = FakeCredentials()
+        receipt = qualify(m, a, r, expected=pins(m, a, r), credential_backend=credentials, network=network, clock=lambda: NOW)
+        self.assertEqual(network.calls, 1)
+        self.assertEqual(len(credentials.calls), 1)
+        self.assertEqual(receipt['retry_count'], 0)
+        self.assertTrue(all(v is False for v in receipt['authority'].values()))
+        self.assertEqual(receipt['parents']['manifest'], pins(m, a, r)['manifest'])
+        for path in Path(m['root']).iterdir():
+            self.assertNotIn(FAKE, path.read_bytes())
+        return m, a, r, receipt
+
+    def test_disposable_runtime_quote_end_to_end_no_readiness_upgrade(self):
+        from test_provider_gateway_wire import global_quote
+        m, a, r, receipt = self.execute_quote(FakeNetwork(payload=global_quote()))
+        self.assertEqual(receipt['result'], 'OBSERVED')
+        self.assertEqual(receipt['observations']['response_realtime_entitlement'], 'UNVERIFIED')
+        self.assertEqual(receipt['billing'], 'UNVERIFIED')
+        self.assertEqual(receipt['provider_readiness'], 'NOT_READY')
+        verify_runtime(admit(m, a, r, expected=pins(m, a, r), now=NOW))
+
+    def test_failures_retain_reservation_without_retry(self):
+        from test_provider_gateway_wire import global_quote
+        escaped = ''.join('\\u%04x' % byte for byte in FAKE)
+        networks = [FakeNetwork(failure=True)]
+        networks += [FakeNetwork(status=status) for status in (301, 302, 307, 308, 401, 403, 429, 500)]
+        networks += [FakeNetwork(payload={key: 'synthetic'}) for key in ('Note', 'Information', 'Error Message')]
+        networks += [FakeNetwork(raw=raw) for raw in (b'{bad', b' ' * 100001, b'{"Global Quote":{},"Global Quote":{}}', ('{"name":"' + escaped + '"}').encode())]
+        networks += [FakeNetwork(payload={'value': FAKE.decode()})]
+        for network in networks:
+            m, a, r, receipt = self.execute_quote(network)
+            self.assertEqual(receipt['result'], 'AMBIGUOUS_OR_UNVERIFIED_STOP')
+            self.assertIsNone(receipt['raw_response_sha256'])
+            self.assertTrue((Path(m['root']) / 'ALPHA_VANTAGE.reserved.json').exists())
+            with self.assertRaises(ValueError):
+                qualify(m, a, r, expected=pins(m, a, r), credential_backend=FakeCredentials(), network=network, clock=lambda: NOW)
+            self.assertEqual(network.calls, 1)

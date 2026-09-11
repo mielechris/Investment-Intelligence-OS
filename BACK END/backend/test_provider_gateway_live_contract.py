@@ -136,3 +136,53 @@ class ContractTests(unittest.TestCase):
         m['source_commit'] = r['source_commit'] = BASE
         with self.assertRaises(ValueError):
             admit(m, a, r, expected=repin(m, a, r), now=NOW)
+
+
+def quote_fixture():
+    m, a, r = fixture('ALPHA_VANTAGE')
+    m['parameters'] = request_parameters('ALPHA_VANTAGE', ['MU'], 'enrichment', function='GLOBAL_QUOTE')
+    a['qualification_parameters'] = dict(m['parameters'])
+    a['rate_per_minute'] = 150
+    repin(m, a, r)
+    return m, a, r
+
+
+def quote_admitted():
+    m, a, r = quote_fixture()
+    return admit(m, a, r, expected=pins(m, a, r), now=NOW)
+
+
+class AlphaQuoteContractTests(unittest.TestCase):
+    def test_explicit_quote_keeps_secondary_role(self):
+        m, a, r = quote_admitted().documents()
+        self.assertEqual(m['role'], 'SECONDARY_ENRICHMENT')
+        self.assertEqual(m['parameters'], {'function': 'GLOBAL_QUOTE', 'symbol': 'MU', 'entitlement': 'realtime', 'datatype': 'json'})
+        self.assertEqual(a['rate_per_minute'], 150)
+        self.assertTrue(all(v is False for v in m['authority'].values()))
+
+    def test_parameter_mutations_rejected_even_with_new_pins(self):
+        for key, value in [('entitlement', None), ('entitlement', 'delayed'), ('symbol', 'IBM'), ('function', 'TIME_SERIES_INTRADAY'), ('datatype', 'csv'), ('extra', 'x')]:
+            m, a, r = quote_fixture()
+            if value is None:
+                del m['parameters'][key]
+            else:
+                m['parameters'][key] = value
+            a['qualification_parameters'] = dict(m['parameters'])
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                admit(m, a, r, expected=repin(m, a, r), now=NOW)
+
+    def test_sma_account_cannot_authorize_quote(self):
+        m, a, r = quote_fixture()
+        del a['qualification_parameters']
+        with self.assertRaises(ValueError):
+            admit(m, a, r, expected=repin(m, a, r), now=NOW)
+
+    def test_300_rate_and_oversize_rejected(self):
+        for kind in ('rate', 'size'):
+            m, a, r = quote_fixture()
+            if kind == 'rate':
+                a['rate_per_minute'] = 300
+            else:
+                m['maximum_response_bytes'] = 1000001
+            with self.assertRaises(ValueError):
+                admit(m, a, r, expected=repin(m, a, r), now=NOW)

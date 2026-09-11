@@ -82,3 +82,56 @@ class WireTests(unittest.TestCase):
         second = decode(a, snapshot(), received_at=NOW)
         self.assertEqual(first['freshness'], ['CURRENT'])
         self.assertEqual(first, second)
+
+
+def global_quote():
+    return {'Global Quote': {'01. symbol': 'MU', '05. price': '123.4567890123456789', '07. latest trading day': '2026-09-14'}}
+
+
+class AlphaQuoteWireTests(unittest.TestCase):
+    def decode_quote(self, payload):
+        from test_provider_gateway_live_contract import quote_admitted
+        return decode(quote_admitted(), payload, received_at=NOW)
+
+    def test_date_and_price_never_prove_realtime(self):
+        result = self.decode_quote(global_quote())
+        self.assertEqual(result['freshness'], ['UNVERIFIED'])
+        self.assertEqual(result['response_realtime_entitlement'], 'UNVERIFIED')
+        self.assertEqual(result['provider_feed_evidence'], {})
+        row = result['observations'][0]
+        self.assertIsNone(row['event_time'])
+        self.assertEqual(row['fields']['value'], '123.4567890123456789')
+        self.assertEqual(row['provider_event_timestamps']['latest_trading_day'], '2026-09-14')
+        self.assertEqual(result['provider_readiness'], 'NOT_READY')
+
+    def test_missing_timestamp_remains_missing(self):
+        payload = global_quote()
+        del payload['Global Quote']['07. latest trading day']
+        result = self.decode_quote(payload)
+        self.assertIsNone(result['provider_timestamps'][0]['latest_trading_day'])
+        self.assertEqual(result['freshness'], ['UNVERIFIED'])
+
+    def test_feed_and_other_provider_time_fields_preserved_not_promoted(self):
+        payload = global_quote()
+        payload['Global Quote'].update({'feed': 'delayed', 'provider timestamp': 'unchanged-provider-value'})
+        result = self.decode_quote(payload)
+        self.assertEqual(result['provider_feed_evidence'], {'feed': 'delayed'})
+        self.assertEqual(result['provider_quote_fields'], payload['Global Quote'])
+        self.assertEqual(result['response_realtime_entitlement'], 'UNVERIFIED')
+
+    def test_malformed_symbol_price_date_and_schema(self):
+        for key, value in [('01. symbol', 'OTHER'), ('05. price', 'NaN'), ('05. price', '0'), ('05. price', 12), ('07. latest trading day', '2026-02-30'), ('07. latest trading day', 'bad')]:
+            payload = global_quote()
+            payload['Global Quote'][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                self.decode_quote(payload)
+        for payload in ({}, {'Global Quote': {}}, {'Global Quote': []}, enrichment()):
+            with self.assertRaises(ValueError):
+                self.decode_quote(payload)
+
+    def test_errors_throttling_and_pagination_not_success(self):
+        for key in ('Note', 'Information', 'Error Message', 'next_url'):
+            payload = global_quote()
+            payload[key] = 'synthetic provider diagnostic'
+            with self.assertRaises(ValueError):
+                self.decode_quote(payload)

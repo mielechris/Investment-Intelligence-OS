@@ -43,8 +43,9 @@ def amount(value):
     return result
 
 
-def request_parameters(provider, members, feed):
+def request_parameters(provider, members, feed, *, function=None):
     """No arbitrary URL, credential, account, query or provider fallback input."""
+    require(function is None or provider == 'ALPHA_VANTAGE', 'FUNCTION_PROVIDER')
     members = symbols(members)
     if provider == 'ALPACA':
         return {'symbols': ','.join(members), 'feed': feed}
@@ -54,6 +55,9 @@ def request_parameters(provider, members, feed):
     if provider == 'FINANCIAL_DATASETS':
         return {'ticker': 'MU'}
     if provider == 'ALPHA_VANTAGE':
+        require(function in (None, 'SMA', 'GLOBAL_QUOTE'), 'ALPHA_FUNCTION')
+        if function == 'GLOBAL_QUOTE':
+            return {'function': 'GLOBAL_QUOTE', 'symbol': 'MU', 'entitlement': 'realtime', 'datatype': 'json'}
         return {'function': 'SMA', 'symbol': 'MU', 'interval': 'daily', 'time_period': '20', 'series_type': 'close', 'datatype': 'json'}
     require(provider == 'BIGDATA', 'PROVIDER_INVALID')
     return {'search_mode': 'fast', 'query': {'text': 'Micron Technology MU corporate evidence', 'max_chunks': 10}, 'include_audit': True}
@@ -92,7 +96,12 @@ def admit(manifest, account, runtime, *, expected, now):
     require((m['method'], m['host'], m['path'], m['endpoint']) == ROUTES[p], 'ROUTE_SUBSTITUTION')
     require(m['feed'] in FEEDS[p] and m['feed'] != 'unavailable', 'FEED_REQUIRED')
     require(symbols(m['symbols']) == m['symbols'] and len(m['symbols']) <= 517, 'SYMBOL_SCOPE')
-    require(m['parameters'] == request_parameters(p, m['symbols'], m['feed']), 'PARAMETER_SUBSTITUTION')
+    function = m['parameters'].get('function') if p == 'ALPHA_VANTAGE' and isinstance(m['parameters'], dict) else None
+    require(m['parameters'] == request_parameters(p, m['symbols'], m['feed'], function=function), 'PARAMETER_SUBSTITUTION')
+    alpha_quote = p == 'ALPHA_VANTAGE' and function == 'GLOBAL_QUOTE'
+    if alpha_quote:
+        require(m['timeout_seconds'] <= 20 and m['maximum_response_bytes'] <= 1_000_000, 'QUOTE_TRANSPORT_BOUND')
+        require(a.get('qualification_parameters') == m['parameters'], 'QUOTE_ACCOUNT_FUNCTION_BINDING')
     require(m['maximum_requests'] == 1 and type(m['maximum_requests']) is int, 'ONE_REQUEST_REQUIRED')
     require(type(m['timeout_seconds']) is int and 1 <= m['timeout_seconds'] <= 20, 'DEADLINE_INVALID')
     require(type(m['maximum_response_bytes']) is int and 1 <= m['maximum_response_bytes'] <= 4_000_000, 'BODY_BOUND_INVALID')
@@ -116,6 +125,8 @@ def admit(manifest, account, runtime, *, expected, now):
     require(a.get('cost_unit') == m['cost_unit'] and isinstance(m['cost_unit'], str) and 0 < len(m['cost_unit']) <= 40, 'COST_UNIT')
     require(amount(a['maximum_request_cost']) <= amount(m['maximum_cost']) <= amount(a['available_unreserved']), 'COST_UNBOUNDED')
     require(type(a.get('rate_per_minute')) is int and a['rate_per_minute'] >= 1 and a.get('rate_slot_reserved') is True, 'RATE_SLOT_REQUIRED')
+    if alpha_quote:
+        require(a['rate_per_minute'] <= 150, 'ALPHA_DOCUMENTED_RATE_CEILING')
     require(a.get('overage_enabled') is False and a.get('automatic_top_up') is False, 'OVERAGE_NOT_DISABLED')
     require(a.get('ambiguous_billing') == 'RESERVE_MAXIMUM_NO_RETRY', 'BILLING_RULE_REQUIRED')
     retention = a.get('retention', {})
