@@ -1,5 +1,5 @@
 {
-  "schema": "iios-owner-ledger-source-config-v2",
+  "schema": "iios-owner-ledger-source-config-v3",
   "created_utc": "<owner-created-UTC-timestamp>",
   "owner_confirmation_hash": "<sha256-of-exact-owner-confirmation>",
   "source_commit": "<40-lowercase-hex-source-commit>",
@@ -7,30 +7,30 @@
   "owner_kit_sha256": "<64-lowercase-hex-owner-kit-sha256>",
   "sources": [
     {
-      "kind": "L7",
-      "alias": "L7",
+      "role": "L7_OPERATIONAL",
       "path": "<owner-supplied-absolute-path-to-canonical-L7-ledger>",
-      "size": 0,
-      "sha256": "<64-lowercase-hex-sha256>",
       "device": 0,
       "inode": 0,
       "owner_uid": 0,
       "mode": 384,
       "file_type": "regular",
-      "provenance": ["<accepted-metadata-source>"]
+      "observed_utc": "<owner-observed-UTC-timestamp>",
+      "provenance": ["<accepted-metadata-source>"],
+      "prior_observations": [{"observed_utc": "<historical-UTC>", "size": 0, "sha256": "<64-lowercase-hex-historical-sha256>"}],
+      "mutable_source": true
     },
     {
-      "kind": "L8",
-      "alias": "L8",
+      "role": "L8_HISTORICAL",
       "path": "<owner-supplied-absolute-path-to-canonical-L8-ledger>",
-      "size": 0,
-      "sha256": "<64-lowercase-hex-sha256>",
       "device": 0,
       "inode": 0,
       "owner_uid": 0,
       "mode": 384,
       "file_type": "regular",
-      "provenance": ["<accepted-metadata-source>"]
+      "observed_utc": "<owner-observed-UTC-timestamp>",
+      "provenance": ["<accepted-metadata-source>"],
+      "prior_observations": [{"observed_utc": "<historical-UTC>", "size": 0, "sha256": "<64-lowercase-hex-historical-sha256>"}],
+      "mutable_source": true
     }
   ],
   "content_hash": "<seal-with-iios-truth-spine-contract>"

@@ -109,22 +109,27 @@ passed. The owner-only machine receipt must record actual results, source and
 runtime identities, snapshots, projections, ownership, shutdown and permanent
 noninterference before any GREEN or Superbatch 3.8 planning recommendation.
 
-## Owner-operated L7/L8 snapshot kit (3.7E.5)
+## Owner-operated L7/L8 snapshot kit (3.7E.7)
 
 The source-only kit is `scripts/truth_spine_owner_snapshots.py`. Codex must not
 execute it. An owner prepares a separate owner-only JSON configuration from
 `config/truth-spine-owner-sources.json.template`, sealing it with the
-`iios-truth-spine-contract` canonical JSON rules. Version 2 binds the source
-commit, capture-helper SHA, owner-kit SHA, UTC creation time and the exact owner
-confirmation hash. Each of exactly two distinct regular files (aliases `L7` and
-`L8`) is bound to device, inode, owner UID, mode, size, content SHA-256 and a
-non-empty provenance list. Symlinks, special files, credential/keychain paths,
-placeholders, checkout/output paths, path changes and metadata mismatches fail
-closed.
+`iios-truth-spine-contract` canonical JSON rules. Version 3 separates mutable
+source binding from immutable snapshot identity. Each of exactly two distinct
+regular files is bound to its role (`L7_OPERATIONAL` or `L8_HISTORICAL`),
+canonical path, device, inode, owner UID, observed mode and observation UTC.
+Prior audit size/SHA/time values are retained only under `prior_observations` as
+historical provenance; they are never presented as the current source identity.
+Source mode `0644` is disclosed as hardening debt and is not changed by this
+batch. Symlinks, special files, credential/keychain paths, placeholders,
+checkout/output paths, role swaps and metadata changes fail closed.
 
 `--config-only` is a metadata-only preflight: it reads the config JSON and uses
 `lstat` on the two sources, but never reads source bytes, opens SQLite, touches
-WAL/SHM files, creates the output root, or accesses credentials. The kit has no
+WAL/SHM files, creates the output root, or accesses credentials. At capture,
+path/device/inode/owner/type are revalidated, size and mtime may advance, and
+the immutable identity is the completed SQLite-consistent snapshot SHA-256.
+The kit has no
 browser route. Discovery is bounded to explicitly supplied accepted metadata
 files (LaunchAgent/release-manifest references); it does not scan a home
 directory, guess filenames or auto-adopt a candidate. An owner must select a

@@ -1,8 +1,8 @@
 """Owner-operated, read-only L7/L8 snapshot kit.
 
-The v2 configuration is hash-bound and metadata-first.  ``--config-only``
-performs JSON validation and lstat checks only; it never opens a ledger.
-Capture remains an explicit owner action and is not callable from a browser.
+Version 3 separates mutable source binding from immutable snapshot identity.
+Config-only validation uses metadata only; capture binds the SQLite-consistent
+snapshot hash and never treats a live source-file hash as a snapshot identity.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from truth_spine_sqlite_capture import launch_capture  # noqa: E402
 import truth_spine_sqlite_capture as capture_helper  # noqa: E402
 
 SCHEMA = "iios-owner-ledger-snapshot-v1"
-CONFIG_SCHEMA = "iios-owner-ledger-source-config-v2"
+CONFIG_SCHEMA = "iios-owner-ledger-source-config-v3"
 OUTPUT_ROOT = Path("/private/tmp/iios-northstar-owner-snapshots-sb37")
 CONFIRMATION = ("I confirm these are my canonical IIOS L7 and L8 ledgers. I authorize "
                 "read-only capture into the isolated owner snapshot root. I do not "
@@ -35,6 +35,12 @@ CONFIRMATION = ("I confirm these are my canonical IIOS L7 and L8 ledgers. I auth
 CAPTURE_CONFIRMATION = ("I authorize opening these already-adopted L7 and L8 ledgers for read-only "
                         "capture into the isolated owner snapshot root.")
 SOURCE_KINDS = {"L7", "L8"}
+HISTORICAL_OBSERVATIONS = {
+    "L7": [{"observed_utc": "2026-09-10T00:52:05.297458Z", "size": 333561856,
+            "sha256": "98397c6172bbd794d62e32ce1e155da9b93e3a07d4cdd0e69a7a4d34e8a22583"}],
+    "L8": [{"observed_utc": "2026-09-10T00:52:21.325937Z", "size": 1266163712,
+            "sha256": "63ae15e655adb313cda0db896118c571378d98c17c8d7dd9561867c5c6e29978"}],
+}
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT40 = re.compile(r"[0-9a-f]{40}\Z")
 PLACEHOLDER = re.compile(r"(?:<[^>]+>|PLACEHOLDER|OWNER[-_]SUPPLIED|REPLACE[-_]ME)", re.I)
@@ -78,20 +84,34 @@ def _source_path(path_value: Any) -> Path:
 
 
 def _source_metadata(row: dict) -> tuple[Path, dict]:
-    required = {"kind", "alias", "path", "size", "sha256", "device", "inode",
-                "owner_uid", "mode", "file_type", "provenance"}
-    if set(row) != required or row.get("kind") not in SOURCE_KINDS or row.get("alias") != row.get("kind"):
-        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
-    if not isinstance(row["size"], int) or row["size"] < 0 or not HEX64.fullmatch(str(row["sha256"])):
+    required = {"role", "path", "device", "inode", "owner_uid", "mode", "file_type",
+                "observed_utc", "provenance", "prior_observations", "mutable_source"}
+    if set(row) != required or row.get("role") not in {"L7_OPERATIONAL", "L8_HISTORICAL"}:
         raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
     if not all(isinstance(row[key], int) for key in ("device", "inode", "owner_uid", "mode")):
         raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    if row.get("mutable_source") is not True or row.get("mode") == 0:
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    try:
+        utc(row["observed_utc"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("OWNER_SOURCE_CONFIG_TIMESTAMP_INVALID") from None
     provenance = row.get("provenance")
     if (not isinstance(provenance, list) or not provenance or
             any(not isinstance(x, str) or not x for x in provenance)):
         raise ValueError("OWNER_SOURCE_PROVENANCE_MISSING")
     if row.get("file_type") != "regular":
         raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    prior = row.get("prior_observations")
+    if not isinstance(prior, list) or any(
+        not isinstance(item, dict) or set(item) != {"observed_utc", "size", "sha256"}
+        or not isinstance(item["size"], int) or item["size"] < 0 or not HEX64.fullmatch(str(item["sha256"]))
+        for item in prior
+    ):
+        raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
+    for item in prior:
+        try: utc(item["observed_utc"])
+        except ValueError: raise ValueError("OWNER_SOURCE_CONFIG_TIMESTAMP_INVALID") from None
     path = _source_path(row["path"])
     info = _absolute_regular_metadata(path)
     if (info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode)) != (
@@ -124,7 +144,7 @@ def _parse_config(config: Path) -> dict:
         raise ValueError("OWNER_CONFIRMATION_HASH_INVALID")
     rows = record.get("sources")
     if (not isinstance(rows, list) or len(rows) != 2 or
-            {r.get("kind") for r in rows if isinstance(r, dict)} != SOURCE_KINDS):
+            {r.get("role") for r in rows if isinstance(r, dict)} != {"L7_OPERATIONAL", "L8_HISTORICAL"}):
         raise ValueError("OWNER_SOURCE_CONFIG_INVALID")
     return record
 
@@ -135,11 +155,12 @@ def load_config(config: Path, *, content: bool = True) -> tuple[dict, dict[Path,
     resolved: dict[Path, str] = {}
     for row in record["sources"]:
         path, metadata = _source_metadata(row)
-        if path in resolved or metadata["alias"] in resolved.values():
+        alias = "L7" if metadata["role"] == "L7_OPERATIONAL" else "L8"
+        if path in resolved or alias in resolved.values():
             raise ValueError("OWNER_SOURCE_IDENTITY_DUPLICATE")
-        if content and (path.stat().st_size != metadata["size"] or sha(path) != metadata["sha256"]):
-            raise ValueError("OWNER_SOURCE_IDENTITY_MISMATCH")
-        resolved[path] = metadata["alias"]
+        # Mutable sources are allowed to advance; capture revalidates metadata
+        # immediately before admission and binds the resulting snapshot hash.
+        resolved[path] = alias
     return record, resolved
 
 
@@ -198,23 +219,25 @@ def discover_candidates(metadata_files: list[Path]) -> list[dict]:
 
 
 def build_config(l7: Path, l8: Path, *, source_commit: str, helper_sha256: str,
-                 owner_kit_sha256: str, provenance: dict[str, list[str]]) -> dict:
-    """Build a sealed v2 config after the owner has selected both sources."""
+                 owner_kit_sha256: str, provenance: dict[str, list[str]],
+                 prior_observations: dict[str, list[dict]] | None = None) -> dict:
+    """Build a sealed v3 config from metadata; never reads source bytes."""
     if not COMMIT40.fullmatch(source_commit) or not HEX64.fullmatch(helper_sha256) or not HEX64.fullmatch(owner_kit_sha256):
         raise ValueError("OWNER_PIN_INVALID")
     rows = []
     for kind, path in (("L7", l7), ("L8", l8)):
         path = _source_path(str(path))
         info = _absolute_regular_metadata(path)
-        data = path.read_bytes()
         refs = provenance.get(kind, [])
         if not refs:
             raise ValueError("OWNER_SOURCE_PROVENANCE_MISSING")
-        rows.append({"kind": kind, "alias": kind, "path": str(path), "size": len(data),
-                     "sha256": hashlib.sha256(data).hexdigest(), "device": info.st_dev,
-                     "inode": info.st_ino, "owner_uid": info.st_uid,
-                     "mode": stat.S_IMODE(info.st_mode), "file_type": "regular",
-                     "provenance": list(refs)})
+        prior = (prior_observations or HISTORICAL_OBSERVATIONS).get(kind, [])
+        rows.append({"role": "L7_OPERATIONAL" if kind == "L7" else "L8_HISTORICAL",
+                     "path": str(path), "device": info.st_dev, "inode": info.st_ino,
+                     "owner_uid": info.st_uid, "mode": stat.S_IMODE(info.st_mode),
+                     "file_type": "regular", "observed_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                     "provenance": list(refs), "prior_observations": prior,
+                     "mutable_source": True})
     if l7.resolve() == l8.resolve():
         raise ValueError("OWNER_SOURCE_IDENTITY_DUPLICATE")
     return seal({"schema": CONFIG_SCHEMA, "created_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -299,13 +322,22 @@ def snapshot_metadata(path: Path) -> dict:
 
 
 def capture(source: Path, output: Path, evidence: Path, sources: dict[Path, str]) -> dict:
+    before = _absolute_regular_metadata(source)
     receipt = launch_capture(source, output, evidence_root=evidence, timeout=120)
+    after = _absolute_regular_metadata(source)
+    if (before.st_dev, before.st_ino, before.st_uid, stat.S_IFMT(before.st_mode)) != (after.st_dev, after.st_ino, after.st_uid, stat.S_IFMT(after.st_mode)):
+        raise ValueError("OWNER_SOURCE_IDENTITY_CHANGED")
     metadata = snapshot_metadata(output / "snapshot.db")
     job = json.loads((output / "job.json").read_bytes())
     return {"alias": sources[source], "snapshot": "{OUTPUT}/" + sources[source].lower() + "/snapshot.db",
             "snapshot_sha256": receipt["snapshot_sha256"], "snapshot_bytes": receipt["bytes"],
             "capture_job": receipt["job"], "helper_sha256": job["helper_sha256"],
-            "profile_sha256": job["profile_sha256"], **metadata}
+            "profile_sha256": job["profile_sha256"],
+            "source_acquisition": {"role": "L7_OPERATIONAL" if sources[source] == "L7" else "L8_HISTORICAL",
+                "device": after.st_dev, "inode": after.st_ino, "owner_uid": after.st_uid,
+                "mode": stat.S_IMODE(after.st_mode), "size": after.st_size,
+                "captured_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")},
+            **metadata}
 
 
 def run(source_root: Path, config: Path, *, confirmation: str, expected_commit: str | None = None,
@@ -342,7 +374,7 @@ def run(source_root: Path, config: Path, *, confirmation: str, expected_commit: 
             raise ValueError("OWNER_HIGH_WATERMARK_UNAVAILABLE")
         watermark = min(high)
         manifest = seal({"schema": SCHEMA, "source_commit": commit, "config_sha256": sha(config),
-            "config_identity": config_record["content_hash"], "sources": [{"alias": sources[p], "source_identity": "{" + sources[p] + "}", "bytes": p.stat().st_size, "sha256": sha(p)} for p in sorted(sources, key=lambda p: sources[p])], "captures": captures, "common_reconciliation_watermark_utc": watermark, "authority": {"read_only": True, "provider": False, "credential": False, "broker": False, "paper": False, "ledger_write": False}, "output_root": "{OUTPUT}", "completion": "OWNER_REVIEW_REQUIRED"})
+            "config_identity": config_record["content_hash"], "sources": [{"alias": sources[p], "source_identity": "{" + sources[p] + "}", "source_acquisition": captures[sources[p]]["source_acquisition"]} for p in sorted(sources, key=lambda p: sources[p])], "captures": captures, "common_reconciliation_watermark_utc": watermark, "authority": {"read_only": True, "provider": False, "credential": False, "broker": False, "paper": False, "ledger_write": False}, "output_root": "{OUTPUT}", "completion": "OWNER_REVIEW_REQUIRED"})
         atomic_write(output / "manifest.json", canonical(manifest))
         receipt = seal({"schema": "iios-owner-ledger-snapshot-receipt-v1", "status": "VERIFIED", "manifest_hash": manifest["content_hash"], "manifest_sha256": sha(output / "manifest.json"), "source_commit": commit, "common_reconciliation_watermark_utc": watermark, "sources": [{"alias": sources[p], "snapshot_sha256": captures[sources[p]]["snapshot_sha256"]} for p in sorted(sources, key=lambda p: sources[p])], "rows": "NOT_CAPTURED_OR_REPORTED", "credentials": 0, "providers": 0, "output_root": "{OUTPUT}"})
         atomic_write(output / "completion-receipt.json", canonical(receipt))
