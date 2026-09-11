@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import fcntl
 import hashlib
 import json
@@ -86,6 +87,8 @@ def verify_runtime(admission):
         if m['mode'] == 'LIVE_QUALIFICATION':
             require(Path(sys.executable).resolve() == root / r['interpreter'] and Path(sys.prefix).resolve().is_relative_to(root), 'RUNNING_INTERPRETER_MISMATCH')
             required = {'provider_gateway_live_contract.py', 'provider_gateway_credentials.py', 'provider_gateway_transport.py', 'provider_gateway_wire.py', 'provider_gateway_qualification.py', 'provider_gateway_contract.py', 'provider_gateway_adapters.py', 'truth_spine_contract.py'}
+            if m['parameters'].get('function') == 'REALTIME_BULK_QUOTES':
+                required.add('alpha_market_baseline.py')
             require({Path(p).name for p in r['source_files']} == required, 'SOURCE_CLOSURE')
             for name in required:
                 module = sys.modules.get(name[:-3])
@@ -203,7 +206,15 @@ def recover_prior(fd, admission, *, recovery, expected_recovery, existing_batch)
     return verified
 
 
-def qualify(manifest, account, runtime, *, expected, credential_backend, network, clock=None, recovery=None, expected_recovery=None):
+@dataclass(frozen=True)
+class _BulkPermit:
+    request: str
+    day_fd: int
+    slot: int
+    reservation_hash: str
+
+
+def _qualify(manifest, account, runtime, *, expected, credential_backend, network, clock=None, recovery=None, expected_recovery=None, _bulk_permit=None):
     """All external boundaries explicit; mocks can produce OFFLINE_TEST evidence only.
 
     LIVE_QUALIFICATION uses wall time and exact native boundary types. A future
@@ -218,6 +229,10 @@ def qualify(manifest, account, runtime, *, expected, credential_backend, network
     admission = admit(manifest, account, runtime, expected=expected, now=clock())
     m, a, _ = admission.documents()
     identities = verify_runtime(admission)
+    if m['parameters'].get('function') == 'REALTIME_BULK_QUOTES':
+        require(type(_bulk_permit) is _BulkPermit and _bulk_permit.request == dict(admission.parents)['manifest'], 'BULK_DAY_PERMIT_REQUIRED')
+        verify_destination(_bulk_permit.day_fd, a['bulk_plan']['root'])
+        read_record(_bulk_permit.day_fd, f'{_bulk_permit.slot}.reserved.json', expected_hash=_bulk_permit.reservation_hash)
     fd = safe_root(m['root'])
     lock = None
     try:
@@ -264,9 +279,20 @@ def qualify(manifest, account, runtime, *, expected, credential_backend, network
                 response = exchange(admission, material, network=network, now=clock())
                 result['http_status'] = response['status']
                 require(response['body'] is not None, 'DISPATCH_UNVERIFIED')
-                normalized = decode(admission, response['public'], received_at=clock())
+                bulk = a['retention'].get('mode') == 'EPHEMERAL_ALPHA_BULK'
+                if bulk:
+                    from alpha_market_baseline import summarize
+                    normalized = summarize(response['public'], m['symbols'], received_at=clock(), maximum_age_seconds=m['maximum_age_seconds'])
+                else:
+                    normalized = decode(admission, response['public'], received_at=clock())
                 material.reject_echo(canonical(normalized))
-                if a['retention'].get('mode') == 'EPHEMERAL_ALPHA_QUOTE':
+                if bulk:
+                    result['retention_mode'] = 'EPHEMERAL_ALPHA_BULK'
+                    result['bulk_checks'] = normalized
+                    # Coverage defects stop the day after preserving sanitized diagnostics.
+                    require(normalized['coverage'] == 'COMPLETE', 'BULK_PARTIAL_STOP')
+                    del normalized, response
+                elif a['retention'].get('mode') == 'EPHEMERAL_ALPHA_QUOTE':
                     # Fixed local classifications only: never persist or hash provider data.
                     result['retention_mode'] = 'EPHEMERAL_ALPHA_QUOTE'
                     result['qualification_checks'] = {
@@ -309,6 +335,69 @@ def qualify(manifest, account, runtime, *, expected, credential_backend, network
         except Exception:
             pass  # The original write/path failure remains a hard error to caller.
         raise ValueError('QUALIFICATION_BLOCKED_EVIDENCE_PRESERVED_WHERE_WRITABLE') from None
+    finally:
+        if lock is not None:
+            os.close(lock)
+        os.close(fd)
+
+
+def qualify(manifest, account, runtime, *, expected, credential_backend, network,
+            clock=None, recovery=None, expected_recovery=None, expected_bulk_previous=None):
+    """Bulk day budget is separate from each request's existing reservation.
+
+    Continuation requires the independently expected previous completion hash.
+    Interrupted, ambiguous, duplicate or missing slots never regain authority.
+    No scheduler, wait, retry, root creation or fallback is provided here.
+    """
+    args = dict(expected=expected, credential_backend=credential_backend, network=network,
+                clock=clock, recovery=recovery, expected_recovery=expected_recovery)
+    if manifest.get('parameters', {}).get('function') != 'REALTIME_BULK_QUOTES':
+        require(expected_bulk_previous is None, 'UNEXPECTED_BULK_PARENT')
+        return _qualify(manifest, account, runtime, **args)
+    now = datetime.now(timezone.utc).isoformat() if clock is None else clock()
+    admission = admit(manifest, account, runtime, expected=expected, now=now)
+    verify_runtime(admission)
+    m, a, _ = admission.documents()
+    require(recovery is None and expected_recovery is None, 'BULK_RECOVERY_NOT_RETRY')
+    day, slot = a['bulk_plan'], a['bulk_slot']
+    fd = safe_root(day['root'])
+    lock = None
+    try:
+        lock = os.open('day.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        st = os.fstat(lock)
+        require(stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and st.st_uid == os.getuid() and stat.S_IMODE(st.st_mode) == 0o600, 'DAY_LOCK_IDENTITY')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        allowed = {'day.lock'} | {row['id'] for row in day['rows']}
+        allowed |= {f'{i}.{suffix}.json' for i in range(slot) for suffix in ('reserved', 'complete')}
+        names = set(os.listdir(fd))
+        required = {f'{i}.{suffix}.json' for i in range(slot) for suffix in ('reserved', 'complete')}
+        require(names <= allowed and required <= names, 'DAY_INTERRUPTED_OR_DUPLICATE')
+        previous = None
+        for i in range(slot):
+            complete = read_record(fd, f'{i}.complete.json')
+            reservation = read_record(fd, f'{i}.reserved.json')
+            require(complete.get('previous') == previous and complete.get('reservation') == content_hash(reservation), 'DAY_CHAIN')
+            require(reservation == {'plan': a['bulk_plan_parent'], 'slot': i, 'source_commit': m['source_commit'], 'previous': previous}, 'DAY_RESERVATION')
+            require(complete.get('result') == 'OBSERVED' and complete.get('slot') == i, 'DAY_STOPPED')
+            child = safe_root(day['rows'][i]['root'])
+            try:
+                retained = read_record(child, 'ALPHA_VANTAGE.receipt.json', expected_hash=complete['receipt'])
+                verify_qualification_receipt(retained, complete['receipt'], parents=retained['parents'])
+                require(retained['source_commit'] == m['source_commit'] and retained['root'] == day['rows'][i]['root'] and retained['role'] == m['role'] and retained['result'] == 'OBSERVED', 'DAY_RECEIPT_BINDING')
+            finally:
+                os.close(child)
+            previous = content_hash(complete)
+        require(previous == expected_bulk_previous, 'INDEPENDENT_DAY_PARENT')
+        verify_destination(fd, day['root'])
+        reserved = publish(fd, f'{slot}.reserved.json', {'plan': a['bulk_plan_parent'], 'slot': slot,
+                           'source_commit': m['source_commit'], 'previous': previous})
+        # An exception or process interruption leaves this immutable consumed slot.
+        receipt = _qualify(manifest, account, runtime, _bulk_permit=_BulkPermit(dict(admission.parents)['manifest'], fd, slot, reserved), **args)
+        verify_destination(fd, day['root'])
+        completion = {'slot': slot, 'previous': previous, 'reservation': reserved,
+                      'receipt': content_hash(receipt), 'result': receipt['result']}
+        publish(fd, f'{slot}.complete.json', completion)
+        return receipt
     finally:
         if lock is not None:
             os.close(lock)

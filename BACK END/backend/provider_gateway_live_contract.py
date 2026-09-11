@@ -46,6 +46,12 @@ def amount(value):
 def request_parameters(provider, members, feed, *, function=None):
     """No arbitrary URL, credential, account, query or provider fallback input."""
     require(function is None or provider == 'ALPHA_VANTAGE', 'FUNCTION_PROVIDER')
+    bulk = provider == 'ALPHA_VANTAGE' and function == 'REALTIME_BULK_QUOTES'
+    if bulk:
+        require(feed == 'real_time', 'BULK_FEED')
+        symbols(members)
+        require(len(members) <= 100, 'BULK_SYMBOL_LIMIT')
+        return {'function': function, 'symbol': ','.join(members), 'datatype': 'json'}
     members = symbols(members)
     if provider == 'ALPACA':
         return {'symbols': ','.join(members), 'feed': feed}
@@ -92,13 +98,17 @@ def admit(manifest, account, runtime, *, expected, now):
     require(m['provider'] in ROUTES, 'PROVIDER_INVALID')
     from provider_gateway_contract import PROVIDER_ROLES
     p = m['provider']
-    require(m['role'] == PROVIDER_ROLES[p], 'ROLE_SUBSTITUTION')
-    require((m['method'], m['host'], m['path'], m['endpoint']) == ROUTES[p], 'ROUTE_SUBSTITUTION')
-    require(m['feed'] in FEEDS[p] and m['feed'] != 'unavailable', 'FEED_REQUIRED')
-    require(symbols(m['symbols']) == m['symbols'] and len(m['symbols']) <= 517, 'SYMBOL_SCOPE')
+    bulk = p == 'ALPHA_VANTAGE' and isinstance(m['parameters'], dict) and m['parameters'].get('function') == 'REALTIME_BULK_QUOTES'
+    require(m['role'] == ('GOVERNED_REALTIME_MARKET_BASELINE' if bulk else PROVIDER_ROLES[p]), 'ROLE_SUBSTITUTION')
+    require((m['method'], m['host'], m['path'], m['endpoint']) == (*ROUTES[p][:3], 'REALTIME_BULK_QUOTES' if bulk else ROUTES[p][3]), 'ROUTE_SUBSTITUTION')
+    require((m['feed'] == 'real_time' if bulk else m['feed'] in FEEDS[p] and m['feed'] != 'unavailable'), 'FEED_REQUIRED')
+    require((bulk or symbols(m['symbols']) == m['symbols']) and len(m['symbols']) <= 517, 'SYMBOL_SCOPE')
     function = m['parameters'].get('function') if p == 'ALPHA_VANTAGE' and isinstance(m['parameters'], dict) else None
     require(m['parameters'] == request_parameters(p, m['symbols'], m['feed'], function=function), 'PARAMETER_SUBSTITUTION')
     alpha_quote = p == 'ALPHA_VANTAGE' and function == 'GLOBAL_QUOTE'
+    if bulk:
+        from alpha_market_baseline import admit_batch
+        admit_batch(m, a)
     if alpha_quote:
         require(m['timeout_seconds'] <= 20 and m['maximum_response_bytes'] <= 1_000_000, 'QUOTE_TRANSPORT_BOUND')
         require(a.get('qualification_parameters') == m['parameters'], 'QUOTE_ACCOUNT_FUNCTION_BINDING')
@@ -131,9 +141,10 @@ def admit(manifest, account, runtime, *, expected, now):
     require(a.get('ambiguous_billing') == 'RESERVE_MAXIMUM_NO_RETRY', 'BILLING_RULE_REQUIRED')
     retention = a.get('retention', {})
     retention_mode = retention.get('mode', 'RETAIN_PROVIDER_DATA')
-    require(retention_mode in ('RETAIN_PROVIDER_DATA', 'EPHEMERAL_ALPHA_QUOTE'), 'RETENTION_MODE')
-    if retention_mode == 'EPHEMERAL_ALPHA_QUOTE':
-        require(alpha_quote, 'EPHEMERAL_SCOPE')
+    require(retention_mode in ('RETAIN_PROVIDER_DATA', 'EPHEMERAL_ALPHA_QUOTE', 'EPHEMERAL_ALPHA_BULK'), 'RETENTION_MODE')
+    require(not bulk or retention_mode == 'EPHEMERAL_ALPHA_BULK', 'BULK_EPHEMERAL_REQUIRED')
+    if retention_mode in ('EPHEMERAL_ALPHA_QUOTE', 'EPHEMERAL_ALPHA_BULK'):
+        require((alpha_quote and retention_mode == 'EPHEMERAL_ALPHA_QUOTE') or (bulk and retention_mode == 'EPHEMERAL_ALPHA_BULK'), 'EPHEMERAL_SCOPE')
         require(all(retention.get(k) is False for k in ('raw_body', 'normalized', 'references', 'hashes')) and retention.get('sanitized_receipt') is True, 'EPHEMERAL_RETENTION')
     else:
         require(retention.get('raw_body') is True and retention.get('normalized') is True and retention.get('references') is True and retention.get('hashes') is True, 'RETENTION_NOT_ESTABLISHED')
