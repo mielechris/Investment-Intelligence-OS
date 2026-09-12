@@ -5,6 +5,9 @@ the independently pinned STARTUP_ONLY descriptor, once, in a fresh output root.
 Only the export directory is uploaded; runtime/TLS private bytes stay local.
 """
 import argparse
+# Standard-library initialization precedes the preparation boundary, like ssl.
+# No sandbox/inspection library is loaded here; later ctypes loads remain denied.
+import ctypes
 import hashlib
 import io
 import json

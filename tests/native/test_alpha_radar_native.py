@@ -1414,3 +1414,18 @@ class PreparationBackendTests(unittest.TestCase):
         for event,code in cases.items():
             with self.assertRaises(PermissionError) as caught:preparation_audit(event,())
             self.assertEqual(caught.exception.args,(code,));self.assertIn(code,FAILURES)
+
+
+class PreparationBootstrapTests(unittest.TestCase):
+    def test_ctypes_bootstrap_is_explicit_and_later_loads_stay_denied(self):
+        import ast
+        import alpha_radar_ci as ci
+        tree=ast.parse(Path(ci.__file__).read_bytes())
+        imports=[n for n in tree.body if isinstance(n,ast.Import) and any(a.name=='ctypes' for a in n.names)]
+        self.assertEqual(len(imports),1)
+        self.assertIsNotNone(ci.ctypes)
+        for target in (None,'/usr/lib/libsandbox.dylib','/usr/lib/libSystem.B.dylib','/unregistered'):
+            with self.assertRaisesRegex(PermissionError,'PREPARATION_CTYPES_REJECTED'):
+                ci.preparation_audit('ctypes.dlopen',(target,))
+        self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and
+                             n.func.attr in ('CDLL','PyDLL','sandbox_check') for n in tree.body))
