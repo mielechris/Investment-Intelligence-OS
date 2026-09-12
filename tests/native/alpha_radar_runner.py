@@ -90,6 +90,42 @@ def failure_category(error):
     return 'UNCLASSIFIED_ERROR'
 
 
+def launcher_hint(raw):
+    """Fixed lexical observations only; never a compiler verdict or authority.
+
+    The first hosted child exited before PS_START with six opaque stderr lines.
+    Preserve recognizable error classes/symbols without returning text, paths,
+    line contents, exception messages or arbitrary identifiers from those lines.
+    """
+    phrases = (
+        (b'profile compilation failed', 'PROFILE_COMPILATION_FAILED'),
+        (b'error compiling profile', 'PROFILE_COMPILATION_FAILED'),
+        (b'failed to parse entitlements', 'ENTITLEMENT_PARSE_FAILED'),
+        (b'unbound variable', 'UNBOUND_VARIABLE'), (b'undefined variable', 'UNBOUND_VARIABLE'),
+        (b'unbound symbol', 'UNBOUND_SYMBOL'), (b'unknown operation', 'UNKNOWN_OPERATION'),
+        (b'undefined operation', 'UNKNOWN_OPERATION'), (b'unsupported operation', 'UNSUPPORTED_OPERATION'),
+        (b'unknown filter', 'UNKNOWN_FILTER'), (b'invalid parameter', 'INVALID_PARAMETER'),
+        (b'syntax error', 'SYNTAX_ERROR'), (b'error on line', 'SOURCE_LOCATION_ERROR'),
+        (b'error at line', 'SOURCE_LOCATION_ERROR'), (b'sandbox_apply', 'SANDBOX_APPLY'),
+        (b'execvp()', 'EXECVP'), (b'operation not permitted', 'OPERATION_NOT_PERMITTED'),
+        (b'permission denied', 'PERMISSION_DENIED'), (b'no such file', 'FILE_NOT_FOUND'))
+    lowered = raw.lower()
+    tags = {label for phrase, label in phrases if phrase in lowered}
+    if lowered.startswith(b'sandbox-exec:'):
+        tags.add('SANDBOX_EXEC')
+    if not tags:
+        return 'REDACTED_UNRECOGNIZED'
+    # Only symbols present in the reviewed confinement language are admitted.
+    # An unknown identifier stays unknown; it is never echoed or hashed.
+    for symbol in (b'version', b'allow', b'deny', b'default', b'file-read-metadata',
+                   b'file-read*', b'file-write*', b'subpath', b'literal', b'process-exec',
+                   b'sysctl-read', b'network-outbound', b'network-inbound', b'network-bind',
+                   b'remote', b'local', b'ip'):
+        if re.search(rb'(?<![a-z0-9_*-])'+re.escape(symbol)+rb'(?![a-z0-9_*-])', lowered):
+            tags.add('SYMBOL_'+symbol.decode('ascii').upper().replace('-', '_').replace('*', '_STAR'))
+    return 'UNTRUSTED_LAUNCHER_'+'_'.join(sorted(tags))
+
+
 class StderrCapture:
     """Bounded nonblocking pipe; raw bytes are never written, hashed or echoed."""
     def __init__(self, stream=None):
@@ -130,6 +166,8 @@ class StderrCapture:
             if raw == ('RADAR_EARLY: ' + stage).encode('ascii'):
                 value = 'UNTRUSTED_EARLY_' + stage
                 break
+        if value == 'REDACTED_UNRECOGNIZED':
+            value = launcher_hint(raw)
         size = len(value) + 4
         if self.retained + size <= 8192:
             self.lines.append(value)

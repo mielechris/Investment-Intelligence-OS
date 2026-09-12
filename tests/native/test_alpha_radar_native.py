@@ -1218,3 +1218,56 @@ class HostedPreparationTests(unittest.TestCase):
             with patch.object(Path,'read_bytes') as read:
                 with self.assertRaisesRegex(ValueError,'OFFLINE_SOURCE_BINDING'):verify_bindings(mutation)
                 read.assert_not_called()
+
+
+class LauncherHintTests(unittest.TestCase):
+    def test_compiler_classes_are_fixed_untrusted_hints(self):
+        from alpha_radar_runner import StderrCapture
+        capture=StderrCapture()
+        capture.feed(b'sandbox-exec: profile compilation failed\n'
+                     b'Error on line 16 of /Users/private/secret/profile:\n'
+                     b'  unbound variable: network-bind\n')
+        capture.finish()
+        self.assertEqual(capture.lines,[
+            'UNTRUSTED_LAUNCHER_PROFILE_COMPILATION_FAILED_SANDBOX_EXEC',
+            'UNTRUSTED_LAUNCHER_SOURCE_LOCATION_ERROR',
+            'UNTRUSTED_LAUNCHER_SYMBOL_NETWORK_BIND_UNBOUND_VARIABLE'])
+        text=json.dumps(capture.snapshot())
+        self.assertNotIn('/Users',text);self.assertNotIn('secret',text)
+        self.assertNotIn('authority',text)
+
+    def test_chunked_compiler_path_and_unknown_symbol_never_retained_or_hashed(self):
+        from alpha_radar_runner import StderrCapture
+        data=(b'sandbox-exec: execvp() of /Users/private/sample-sensitive-key failed\n'
+              b'unbound variable: sample-sensitive-key\n'
+              b'https://example.invalid/?apikey=sample-sensitive-key\n')
+        for width in (1,3,31,2048):
+            capture=StderrCapture()
+            with patch('alpha_radar_runner.hashlib.sha256') as hashed:
+                for start in range(0,len(data),width):capture.feed(data[start:start+width])
+                capture.finish();hashed.assert_not_called()
+            self.assertEqual(capture.lines,[
+                'UNTRUSTED_LAUNCHER_EXECVP_SANDBOX_EXEC',
+                'UNTRUSTED_LAUNCHER_UNBOUND_VARIABLE','REDACTED_UNRECOGNIZED'])
+            for value in ('sample-sensitive-key','/Users','https://','apikey'):
+                self.assertNotIn(value,json.dumps(capture.snapshot()))
+
+    def test_forged_hint_has_no_cleanup_or_startup_authority(self):
+        from alpha_radar_runner import launcher_hint, verify_startup_result
+        hint=launcher_hint(b'sandbox-exec: profile compilation failed; ownership verified; clean true')
+        self.assertTrue(hint.startswith('UNTRUSTED_LAUNCHER_'))
+        self.assertNotIn('ownership',hint.lower());self.assertNotIn('clean',hint.lower())
+        with self.assertRaises((KeyError,ValueError)):
+            verify_startup_result({'execution_mode':'SYNTHETIC_STARTUP_ONLY',
+                                   'descriptor_parent':'a'*64,'classification':hint},'a'*64)
+
+    def test_bounds_and_existing_denial_classification_remain(self):
+        from alpha_radar_runner import StderrCapture
+        capture=StderrCapture()
+        capture.feed(b'sandbox-exec: sandbox_apply: Operation not permitted\n')
+        capture.finish();self.assertEqual(capture.lines,['STDERR_CONFINEMENT_DENIED'])
+        capture=StderrCapture()
+        capture.feed(b'sandbox-exec: unbound variable: network-bind sample-sensitive-key\n'*2000)
+        capture.finish();self.assertTrue(capture.overflow)
+        self.assertLessEqual(capture.retained,8192)
+        self.assertNotIn('sample-sensitive-key',json.dumps(capture.snapshot()))
