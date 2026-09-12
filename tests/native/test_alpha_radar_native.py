@@ -909,3 +909,312 @@ class QueryDiagnosticTests(unittest.TestCase):
             with self.assertRaises(ValueError):runner.child_main(launch,'fixture','a'*64)
         self.assertEqual(stderr.getvalue(),'RADAR_EARLY: CHILD_ADMISSION_BEGIN\n')
         diagnostic.assert_not_called()
+
+
+class StartupOnlyTests(unittest.TestCase):
+    capability = StartupDiagnosticsTests.capability
+    records = StartupDiagnosticsTests.records
+    # Reuse capability/record helpers without recollecting inherited test methods.
+    def descriptor(self, cap):
+        from alpha_radar_runner import STARTUP_MODE, STARTUP_SCHEMA
+        p, r, pins = cap.documents()
+        return {'schema': STARTUP_SCHEMA, 'execution_mode': STARTUP_MODE,
+                'package': p, 'runtime': r, 'expected': pins,
+                'authorized_root': cap.authorized_root,
+                'native_tools': {'/usr/bin/sandbox-exec': 'a'*64},
+                'clock_mode': 'STARTUP_WALL_CLOCK', 'maximum_duration_seconds': 120}
+
+    def run_startup(self, *, registration_error=None, cleanup_clean=True, tls_error=None):
+        from contextlib import ExitStack
+        import io
+        from alpha_radar_runner import supervise
+        cap = self.capability(); d = self.descriptor(cap)
+        child = MagicMock(pid=12345); child.poll.return_value = None
+        owned = MagicMock(); owned.children = {}; owned.startup_pins = {}
+        def register(role, process, **kwargs):
+            self.assertEqual(role, 'fixture')
+            if registration_error: raise registration_error
+            owned.children[role] = {'child': process}
+            store(cap, 'fixture-startup.json', {'mock': True})
+        owned.register.side_effect = register
+        owned.cleanup.return_value = {'clean': cleanup_clean, 'port_clear': True,
+                                      'remaining': [] if cleanup_clean else ['fixture']}
+        popen = MagicMock(return_value=child)
+        tls = {'hostname_verified': True, 'http_requests': 0,
+               'protocol': 'TLSv1.3', 'certificate_der_sha256': 'a'*64}
+        # Mock the native sentinel boundary only. Other file admission and all
+        # receipt publications remain real, exclusive artifact-local writes.
+        sentinel = Path(cap.authorized_root)/'confinement-denied-input'
+        original_open, original_chmod = Path.open, Path.chmod
+        def open_path(path, *args, **kwargs):
+            if path == sentinel:
+                self.assertEqual(args, ('xb',))
+                return io.BytesIO()
+            return original_open(path, *args, **kwargs)
+        def chmod_path(path, mode, **kwargs):
+            if path == sentinel:
+                self.assertEqual(mode, 0o400)
+                return None
+            return original_chmod(path, mode, **kwargs)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(Path, 'open', open_path))
+            stack.enter_context(patch.object(Path, 'chmod', chmod_path))
+            for name in ('native_identity', 'verify_tools', 'signal.signal'):
+                stack.enter_context(patch('alpha_radar_runner.' + name))
+            stack.enter_context(patch('alpha_radar_runner.OwnedProcesses', return_value=owned))
+            stack.enter_context(patch('alpha_radar_runner.read_startup', return_value='b'*64))
+            stack.enter_context(patch('alpha_radar_runner.listener_owners',
+                                     side_effect=[[], [(12345, '127.0.0.1:38491')]]))
+            handshake = stack.enter_context(patch('alpha_radar_runner.startup_tls',
+                                                  return_value=tls, side_effect=tls_error))
+            session = stack.enter_context(patch('alpha_radar_runner.Session'))
+            result = supervise(cap, d, popen=popen)
+            session.assert_not_called()
+        self.assertEqual(popen.call_count, 1)
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[argv.index('--child')+1], 'fixture')
+        self.assertFalse((Path(d['package']['root'])/'worker-launch.json').exists())
+        self.assertFalse((Path(d['package']['root'])/'session.json').exists())
+        self.assertFalse((Path(d['package']['root'])/'journal').exists())
+        return cap, d, result, owned, handshake
+
+    def test_startup_only_never_launches_worker_or_qualifies_session(self):
+        from alpha_radar_runner import verify_startup_result
+        cap, d, result, owned, handshake = self.run_startup()
+        verify_startup_result(result, content_hash(d))
+        self.assertEqual(result['classification'], 'SYNTHETIC_STARTUP_PASS')
+        self.assertEqual(result['requests'], 0)
+        self.assertIsNone(result['session'])
+        owned.register.assert_called_once(); owned.cleanup.assert_called_once()
+        handshake.assert_called_once()
+        self.assertFalse(any(cap.documents()[0]['authority'].values()))
+        for mutation in ({'classification':'SYNTHETIC_PASS'}, {'session':{'requests':475}},
+                         {'requests':475}, {'worker_launches':1}, {'armed':True},
+                         {'live_readiness':'GREEN'}, {'descriptor_parent':'0'*64}):
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                verify_startup_result({**result, **mutation}, content_hash(d))
+
+    def test_ownership_failure_prevents_handshake_and_stays_failed(self):
+        _, _, result, owned, handshake = self.run_startup(
+            registration_error=ValueError('PROCESS_INSPECTION_FAILED'), cleanup_clean=False)
+        self.assertEqual(result['classification'], 'SYNTHETIC_STARTUP_FAILED')
+        self.assertEqual(result['primary_failure']['stage'], 'OWNERSHIP_REGISTER')
+        handshake.assert_not_called(); owned.cleanup.assert_called_once()
+
+    def test_clear_port_does_not_replace_verified_cleanup(self):
+        _, _, result, _, _ = self.run_startup(cleanup_clean=False)
+        self.assertTrue(result['cleanup']['port_clear'])
+        self.assertEqual(result['classification'], 'SYNTHETIC_STARTUP_FAILED')
+        self.assertEqual(result['supervisor_exit_code'], 1)
+
+    def test_tls_failure_is_primary_and_cleanup_is_still_required(self):
+        import ssl
+        _, _, result, owned, _ = self.run_startup(tls_error=ssl.SSLError('unretained'))
+        self.assertEqual(result['primary_failure']['stage'], 'TLS_HANDSHAKE')
+        self.assertEqual(result['primary_failure']['category'], 'TLS_ERROR')
+        owned.cleanup.assert_called_once()
+        self.assertEqual(result['classification'], 'SYNTHETIC_STARTUP_FAILED')
+
+    def test_explicit_contract_and_deadline_cannot_fall_back(self):
+        from alpha_radar_runner import descriptor_schema, startup_only
+        cap = self.capability(); d = self.descriptor(cap)
+        descriptor_schema(d); self.assertTrue(startup_only(d))
+        for key in ('schema', 'execution_mode'):
+            bad = deepcopy(d); bad.pop(key)
+            with self.assertRaises(ValueError): descriptor_schema(bad)
+        for mutation in ({'schema':'unknown'}, {'execution_mode':'FULL'},
+                         {'maximum_duration_seconds':121}, {'maximum_duration_seconds':True},
+                         {'clock_mode':'ACCELERATED_LOGICAL_TIME'}, {'extra':False}):
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                descriptor_schema({**d, **mutation})
+        legacy = {k:v for k,v in d.items() if k not in ('schema','execution_mode')}
+        legacy['clock_mode'] = 'ACCELERATED_LOGICAL_TIME'
+        descriptor_schema(legacy); self.assertFalse(startup_only(legacy))
+
+    def test_worker_child_rejected_before_runtime_or_credentials(self):
+        from alpha_radar_runner import child_main
+        cap = self.capability(); d = self.descriptor(cap)
+        launch = {'scope':SCOPE, 'authority':AUTHORITY, 'descriptor':d,
+                  'output_identity':list(cap.output_identity), 'role':'worker',
+                  'parent_pid':os.getppid(), 'created_at':'2026-09-14T00:00:00+00:00'}
+        with patch('alpha_radar_runner.verify_inputs') as admission, \
+             patch('alpha_radar_runner.Session') as session:
+            with self.assertRaisesRegex(ValueError, 'CHILD_ROLE'):
+                child_main(launch, 'worker', 'a'*64)
+            admission.assert_not_called(); session.assert_not_called()
+
+    def test_tls_handshake_numeric_only_bounded_and_verified_twice(self):
+        from alpha_radar_runner import startup_tls
+        cap = self.capability(); owned = MagicMock()
+        raw = MagicMock(); raw.__enter__.return_value = raw
+        context = MagicMock(); context.check_hostname=True
+        import ssl
+        context.verify_mode=ssl.CERT_REQUIRED
+        channel = context.wrap_socket.return_value.__enter__.return_value
+        channel.getpeercert.return_value=b'SYNTHETIC_CERT'; channel.version.return_value='TLSv1.3'
+        with patch('alpha_radar_runner.socket.socket', return_value=raw) as create, \
+             patch('alpha_radar_runner.socket.getaddrinfo') as dns, \
+             patch('alpha_radar_runner.ssl.create_default_context', return_value=context), \
+             patch('alpha_radar_runner.ssl.PEM_cert_to_DER_cert', return_value=b'SYNTHETIC_CERT'):
+            result=startup_tls(cap, owned)
+            self.assertEqual(create.call_count,1); dns.assert_not_called()
+        raw.settimeout.assert_called_once_with(5)
+        raw.connect.assert_called_once_with(('127.0.0.1',38491))
+        channel.send.assert_not_called(); channel.sendall.assert_not_called()
+        self.assertEqual(owned.verify.call_args_list, [unittest.mock.call('fixture')]*2)
+        self.assertEqual(result['http_requests'],0)
+
+    def test_tls_does_not_open_socket_after_identity_failure(self):
+        from alpha_radar_runner import startup_tls
+        cap = self.capability(); owned = MagicMock()
+        owned.verify.side_effect=ValueError('PROCESS_IDENTITY')
+        import ssl
+        context=MagicMock(check_hostname=True,verify_mode=ssl.CERT_REQUIRED)
+        with patch('alpha_radar_runner.ssl.create_default_context',return_value=context), \
+             patch('alpha_radar_runner.ssl.PEM_cert_to_DER_cert',return_value=b'cert'), \
+             patch('alpha_radar_runner.socket.socket') as opened:
+            with self.assertRaisesRegex(ValueError,'PROCESS_IDENTITY'): startup_tls(cap,owned)
+            opened.assert_not_called()
+
+
+class HostedPreparationTests(unittest.TestCase):
+    def archive(self, entries):
+        import io
+        import tarfile
+        root=Path(tempfile.mkdtemp(prefix='archive-case-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        data=io.BytesIO()
+        with tarfile.open(fileobj=data,mode='w:gz') as bundle:
+            for name,kind,value in entries:
+                member=tarfile.TarInfo(name)
+                if kind=='file':
+                    member.size=len(value);member.mode=0o500
+                    bundle.addfile(member,io.BytesIO(value))
+                else:
+                    member.type=tarfile.SYMTYPE;member.linkname=value
+                    bundle.addfile(member)
+        archive=root/'fixture.tar.gz';archive.write_bytes(data.getvalue())
+        return archive, root/'destination', hashlib.sha256(data.getvalue()).hexdigest()
+
+    def test_verified_archive_materializes_independent_files(self):
+        from alpha_radar_ci import materialize
+        archive,destination,parent=self.archive([('python/bin/python3.13','file',b'SYNTHETIC'),
+                                               ('python/bin/python','link','python3.13')])
+        materialize(archive,destination,parent)
+        first=destination/'python/bin/python3.13';alias=destination/'python/bin/python'
+        self.assertEqual(first.read_bytes(),alias.read_bytes())
+        self.assertFalse(alias.is_symlink())
+        self.assertNotEqual(first.stat().st_ino,alias.stat().st_ino)
+        self.assertEqual(alias.stat().st_nlink,1)
+        with self.assertRaises(FileExistsError):materialize(archive,destination,parent)
+
+    def test_archive_wrong_pin_rejected_before_output(self):
+        from alpha_radar_ci import materialize
+        archive,destination,_=self.archive([('python/bin/python3.13','file',b'SYNTHETIC')])
+        with self.assertRaisesRegex(ValueError,'ARCHIVE_PIN'):materialize(archive,destination,'0'*64)
+        self.assertFalse(destination.exists())
+
+    def test_archive_traversal_absolute_duplicate_and_escape_rejected(self):
+        from alpha_radar_ci import materialize
+        cases=[ [('python/../../outside','file',b'x')], [('/python/absolute','file',b'x')],
+                [('python/a','file',b'x'),('python/a','file',b'y')],
+                [('python/link','link','../../outside')],
+                [('python/a','link','b'),('python/b','link','a')] ]
+        for entries in cases:
+            archive,destination,parent=self.archive(entries)
+            with self.subTest(entries=entries),self.assertRaises(ValueError):materialize(archive,destination,parent)
+            self.assertFalse((archive.parent/'outside').exists())
+
+    def test_hosted_admission_rejects_self_hosted_rerun_and_proxy(self):
+        from alpha_radar_ci import hosted
+        env={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'macOS',
+             'RUNNER_ARCH':'ARM64','GITHUB_RUN_ATTEMPT':'1'}
+        with patch('alpha_radar_ci.platform.system',return_value='Darwin'), \
+             patch('alpha_radar_ci.platform.machine',return_value='arm64'), \
+             patch('alpha_radar_ci.platform.mac_ver',return_value=('26.0',(),'')):
+            with patch.dict(os.environ,env,clear=True):hosted()
+            for mutation in ({'RUNNER_ENVIRONMENT':'self-hosted'},{'GITHUB_RUN_ATTEMPT':'2'},
+                             {'HTTPS_PROXY':'https://example.invalid'},{'RUNNER_ARCH':'X64'}):
+                with self.subTest(mutation=mutation),patch.dict(os.environ,{**env,**mutation},clear=True):
+                    with self.assertRaises(ValueError):hosted()
+
+    def test_ci_entrypoint_has_no_live_or_worker_dispatch_interface(self):
+        import ast
+        import alpha_radar_ci
+        source=Path(alpha_radar_ci.__file__).read_text()
+        tree=ast.parse(source)
+        self.assertNotIn('MacKeychain',source)
+        self.assertNotIn('provider_gateway_credentials',source)
+        self.assertNotIn('Session(',source)
+        function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        calls=[n for n in ast.walk(function) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+               and n.func.attr=='Popen']
+        self.assertEqual(len(calls),1)
+        self.assertIn("require(startup_only(d),'STARTUP_ONLY_REQUIRED')",source)
+        self.assertIn("'OFFLINE_SOURCE_BINDING'",source)
+        self.assertIn("'--expected-descriptor',pins['descriptor_sha256']",source)
+        self.assertNotIn('kill(',ast.get_source_segment(source,function))
+
+    def test_workflow_preserves_minimal_permissions_and_pinned_actions(self):
+        import re
+        root=Path(__file__).resolve().parents[2]
+        text=(root/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        self.assertIn('contents: read',text)
+        self.assertIn('runs-on: macos-26',text)
+        self.assertIn('persist-credentials: false',text)
+        self.assertNotIn('secrets.',text)
+        self.assertNotIn('self-hosted',text)
+        uses=re.findall(r'uses: ([^\n]+)',text)
+        self.assertEqual(len(uses),3)
+        for value in uses:self.assertRegex(value,r'^actions/[a-z-]+@[a-f0-9]{40}$')
+        self.assertLess(text.index('alpha_radar_ci.py offline'),text.index('alpha_radar_ci.py execute'))
+        self.assertIn('/export/',text)
+
+    def test_offline_partition_preserves_every_ordinary_test_and_native_gate(self):
+        from alpha_radar_ci import offline_partition, NATIVE_ONLY
+        def test(node):
+            value=unittest.FunctionTestCase(lambda:None)
+            value.id=lambda:node
+            return value
+        native=next(iter(NATIVE_ONLY))
+        suite,partition=offline_partition(unittest.TestSuite([test(native),test('mock.a'),test('mock.b')]))
+        self.assertEqual(partition['offline'],['mock.a','mock.b'])
+        self.assertEqual(suite.countTestCases(),2)
+        self.assertEqual(partition['native_not_run'][0]['node'],native)
+        self.assertEqual(len(partition['collected']),3)
+        for ids in ([native,native,'mock.a'],['mock.a'],[native,'unittest.loader._FailedTest.bad']):
+            with self.assertRaisesRegex(ValueError,'OFFLINE_COLLECTION'):
+                offline_partition(unittest.TestSuite(test(v) for v in ids))
+
+    def test_dylib_identity_is_not_a_load_dependency(self):
+        from alpha_radar_ci import dependency_rows
+        root=Path(tempfile.mkdtemp(prefix='dependency-case-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        path=root/'libexample.dylib';path.write_bytes(b'SYNTHETIC')
+        result=dependency_rows(root,path,['@rpath/libexample.dylib','/usr/lib/libSystem.B.dylib'],
+                               ['@rpath/libexample.dylib'],[],{'libexample.dylib'})
+        self.assertEqual(result['dependencies'],['/usr/lib/libSystem.B.dylib'])
+        with self.assertRaises(ValueError):
+            dependency_rows(root,path,['@rpath/other.dylib'],['@rpath/libexample.dylib'],[],{'libexample.dylib'})
+
+    def test_rpath_load_requires_pinned_contained_dependency(self):
+        from alpha_radar_ci import dependency_rows
+        root=Path(tempfile.mkdtemp(prefix='dependency-case-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        (root/'lib').mkdir();(root/'lib/libexample.dylib').write_bytes(b'SYNTHETIC')
+        path=root/'module.so';path.write_bytes(b'SYNTHETIC')
+        commands=['cmd LC_RPATH','cmdsize 48','path @loader_path/lib (offset 12)']
+        result=dependency_rows(root,path,['@rpath/libexample.dylib'],[],commands,{'lib/libexample.dylib'})
+        self.assertEqual(result['dependencies'],['lib/libexample.dylib'])
+        for targets,rpaths,known in [(['@rpath/libexample.dylib'],[],{'lib/libexample.dylib'}),
+            (['/unapproved/lib.dylib'],commands,{'lib/libexample.dylib'}),
+            (['@rpath/libexample.dylib'],commands,set()),
+            (['@rpath/libexample.dylib'],['cmd LC_RPATH','cmdsize 48','path @loader_path/.. (offset 12)'],set())]:
+            with self.assertRaises(ValueError):dependency_rows(root,path,targets,[],rpaths,known)
+
+    def test_source_bindings_are_complete_and_checked_before_path_access(self):
+        from alpha_radar_ci import source_bindings, verify_bindings
+        expected=source_bindings();verify_bindings(expected)
+        altered=dict(expected);altered[next(iter(altered))]='0'*64
+        with self.assertRaisesRegex(ValueError,'OFFLINE_SOURCE_BINDING'):verify_bindings(altered)
+        for mutation in ({}, {**expected,'../unregistered':'a'*64}):
+            with patch.object(Path,'read_bytes') as read:
+                with self.assertRaisesRegex(ValueError,'OFFLINE_SOURCE_BINDING'):verify_bindings(mutation)
+                read.assert_not_called()

@@ -1,0 +1,79 @@
+name: Alpha Radar synthetic startup diagnostics
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/iios-provider-gateway-superbatch-1]
+    paths:
+      - .github/workflows/alpha-radar-native-diagnostics.yml
+      - tests/native/alpha_radar_*.py
+      - tests/native/test_alpha_radar_native.py
+      - tests/native/alpha_radar.sb.in
+      - BACK END/backend/truth_spine_process_identity.py
+      - BACK END/backend/test_truth_spine_process_identity.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-radar-startup-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  startup-only:
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1'
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Exclusive preparation root; reject reruns
+        shell: bash
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python -B - <<'PY'
+          import os, pathlib, tempfile
+          root = pathlib.Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-ci-startup-', dir='/private/tmp'))
+          (root/'export').mkdir(mode=0o700)
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('IIOS_RADAR_CI_ROOT='+str(root)+'\n')
+          PY
+      - name: Fetch the independently pinned disposable runtime archive
+        shell: bash
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 \
+            --output "$IIOS_RADAR_CI_ROOT/python-runtime.tar.gz" \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
+          python -B tests/native/alpha_radar_ci.py prepare --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA"
+      - name: Verify immutable runtime, package, TLS and input closure
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize \
+            --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA"
+      - name: Complete mocked harness and process-inspector regressions
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py offline \
+            --root "$IIOS_RADAR_CI_ROOT"
+      - name: Exactly one confined fixture startup; never launch a worker
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py execute \
+            --root "$IIOS_RADAR_CI_ROOT"
+      - name: Preserve structured diagnostics on success or failure
+        if: always() && env.IIOS_RADAR_CI_ROOT != ''
+        shell: bash
+        run: |
+          python -B tests/native/alpha_radar_ci.py export --root "$IIOS_RADAR_CI_ROOT"
+      - name: Upload sanitized synthetic evidence only
+        if: always() && env.IIOS_RADAR_CI_ROOT != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: alpha-radar-startup-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IIOS_RADAR_CI_ROOT }}/export/
+          if-no-files-found: error
+          retention-days: 30

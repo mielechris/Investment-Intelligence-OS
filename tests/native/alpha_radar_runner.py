@@ -32,6 +32,7 @@ try:
     import ssl
     from pathlib import Path
     import signal
+    import socket
     import subprocess
     import time
     from urllib.parse import urlencode
@@ -56,7 +57,7 @@ STAGES = frozenset(('LAUNCH_INTENT', 'PROCESS_CREATE', 'OWNERSHIP_REGISTER',
     'STARTUP_VERIFY', 'LISTENER_VERIFY', 'PARENT_ACK', 'SESSION_WAIT',
     'RUNTIME_VERIFY', 'CONFINEMENT_CHECK', 'TLS_CONTEXT', 'TLS_LOAD',
     'SOCKET_CREATE', 'SOCKET_BIND', 'SOCKET_LISTEN', 'TLS_WRAP',
-    'STARTUP_PUBLISH', 'FIXTURE_SERVE', 'WORKER_SESSION'))
+    'STARTUP_PUBLISH', 'FIXTURE_SERVE', 'WORKER_SESSION', 'TLS_HANDSHAKE'))
 FAILURE_CODES = frozenset(('PROCESS_ABSENT', 'PROCESS_IDENTITY',
     'STARTUP_IDENTITY_CHANGED', 'OSCILLATING_EXECUTABLE', 'STARTUP_STABILIZATION_TIMEOUT',
     'PROCESS_INSPECTION_FAILED', 'PROCESS_INSPECTION_OVERSIZE', 'ARGV_OBSERVATION_FAILED',
@@ -677,11 +678,67 @@ def verify_tools(tools):
                 hashlib.sha256(p.read_bytes()).hexdigest() == expected, 'NATIVE_TOOL_PIN')
 
 
+STARTUP_SCHEMA = 'iios-radar-startup-only-v1'
+STARTUP_MODE = 'SYNTHETIC_STARTUP_ONLY'
+
+
+def startup_only(d):
+    # Legacy descriptors remain unchanged. A partial or unknown version never
+    # falls back to a full session. The complete descriptor is independently pinned.
+    if 'schema' not in d and 'execution_mode' not in d:
+        return False
+    require(d.get('schema') == STARTUP_SCHEMA and d.get('execution_mode') == STARTUP_MODE,
+            'DESCRIPTOR_SCHEMA')
+    require(d['clock_mode'] == 'STARTUP_WALL_CLOCK' and
+            type(d['maximum_duration_seconds']) is int and
+            1 <= d['maximum_duration_seconds'] <= 120, 'NATIVE_DURATION')
+    return True
+
+
+def startup_tls(cap, owned):
+    """One numeric-loopback TLS handshake, no HTTP request, DNS or redirect."""
+    p, r, _ = checked_capability(cap)
+    f = p['fixture']
+    require(f['address'] == f['server_name'] == '127.0.0.1', 'LOOPBACK_PIN_REQUIRED')
+    cert = Path(r['root']) / f['certificate']
+    context = ssl.create_default_context(cafile=str(cert))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    require(context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED, 'FIXTURE_TLS_PIN')
+    expected = hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert.read_text('ascii'))).hexdigest()
+    owned.verify('fixture')
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
+        raw.settimeout(5)
+        raw.connect(('127.0.0.1', f['port']))
+        with context.wrap_socket(raw, server_hostname='127.0.0.1') as channel:
+            peer = hashlib.sha256(channel.getpeercert(binary_form=True)).hexdigest()
+            require(peer == expected and channel.version() in ('TLSv1.2', 'TLSv1.3'), 'FIXTURE_TLS_PIN')
+            result = {'certificate_der_sha256': peer, 'protocol': channel.version(),
+                      'hostname_verified': True, 'http_requests': 0}
+    owned.verify('fixture')
+    return result
+
+
+def verify_startup_result(value, expected_descriptor):
+    """Startup evidence is never a session receipt, even with a valid self hash."""
+    require(value['execution_mode'] == STARTUP_MODE and
+            value['descriptor_parent'] == expected_descriptor and
+            value['classification'] == 'SYNTHETIC_STARTUP_PASS' and
+            value['session'] is None and value['requests'] == 0 and
+            value['worker_launches'] == 0 and set(value['startup_parents']) == {'fixture'} and
+            value['tls']['hostname_verified'] is True and value['tls']['http_requests'] == 0 and
+            value['cleanup']['clean'] is True and value['supervisor_exit_code'] == 0 and
+            value['failure'] is None and value['primary_failure'] is None and
+            value['secondary_failures'] == [] and value['live_readiness'] == 'NOT_QUALIFIED' and
+            value['armed'] is False, 'STARTUP_RESULT_MISMATCH')
+    return value
+
+
 def supervise(cap, descriptor, *, popen=subprocess.Popen):
     p, r, pins = checked_capability(cap)
     native_identity(cap)
     verify_tools(descriptor['native_tools'])
-    require(descriptor['clock_mode'] in ('ACCELERATED_LOGICAL_TIME', 'REAL_SESSION_TIME'), 'CLOCK_MODE')
+    diagnostic_only = startup_only(descriptor)
+    require(diagnostic_only or descriptor['clock_mode'] in ('ACCELERATED_LOGICAL_TIME', 'REAL_SESSION_TIME'), 'CLOCK_MODE')
     maximum = descriptor['maximum_duration_seconds']
     require(type(maximum) is int and 1 <= maximum <= 25200, 'NATIVE_DURATION')
     out, runtime = Path(p['root']), Path(r['root'])
@@ -695,7 +752,7 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
     sentinel.chmod(0o400)
     owned = OwnedProcesses(cap)
     started = time.monotonic()
-    failure, session, cleanup = None, None, None
+    failure, session, cleanup, tls = None, None, None, None
     primary_failure, secondary_failures = None, []
     stage, role = 'LAUNCH_INTENT', None
     stopped = [False]
@@ -707,7 +764,7 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
     lock = os.open('supervisor.lock', os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=fd)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for role in ('fixture', 'worker'):
+        for role in (('fixture',) if diagnostic_only else ('fixture', 'worker')):
             require(not stopped[0], 'COOPERATIVE_SHUTDOWN')
             launch = {'scope': SCOPE, 'authority': AUTHORITY, 'descriptor': descriptor, 'output_identity': list(cap.output_identity),
                       'role': role, 'parent_pid': os.getpid(), 'created_at': datetime.now(timezone.utc).isoformat()}
@@ -743,18 +800,24 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
             stage = 'PARENT_ACK'
             store(cap, role + '-ack.json', {'role': role, 'launch_parent': launch_hash,
                                           'startup_parent': startup_hashes[role]})
-        stage = 'SESSION_WAIT'
-        worker = owned.children['worker']['child']
-        while worker.poll() is None:
-            require(not stopped[0], 'COOPERATIVE_SHUTDOWN')
+        if diagnostic_only:
+            stage = 'TLS_HANDSHAKE'
+            require(not stopped[0] and time.monotonic() - started < maximum, 'NATIVE_SESSION_TIMEOUT')
+            tls = startup_tls(cap, owned)
             require(time.monotonic() - started < maximum, 'NATIVE_SESSION_TIMEOUT')
-            owned.verify('worker')
-            owned.verify('fixture')
-            time.sleep(.2)
-        require(worker.returncode == 0, 'WORKER_FAILED')
-        doc = read_record(fd, 'session.json')
-        session = verify_envelope(doc, content_hash(doc), parents=pins)
-        require(session['classification'] == 'SYNTHETIC_PASS' and session['requests'] == 475, 'SESSION_INCOMPLETE')
+        else:
+            stage = 'SESSION_WAIT'
+            worker = owned.children['worker']['child']
+            while worker.poll() is None:
+                require(not stopped[0], 'COOPERATIVE_SHUTDOWN')
+                require(time.monotonic() - started < maximum, 'NATIVE_SESSION_TIMEOUT')
+                owned.verify('worker')
+                owned.verify('fixture')
+                time.sleep(.2)
+            require(worker.returncode == 0, 'WORKER_FAILED')
+            doc = read_record(fd, 'session.json')
+            session = verify_envelope(doc, content_hash(doc), parents=pins)
+            require(session['classification'] == 'SYNTHETIC_PASS' and session['requests'] == 475, 'SESSION_INCOMPLETE')
     except BaseException as error:
         failure = 'SYNTHETIC_NATIVE_FAILED'
         primary_failure = {'stage': stage, 'role': role, 'category': failure_category(error),
@@ -782,13 +845,20 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
               'cleanup': cleanup, 'clock_mode': descriptor['clock_mode'],
               'live_readiness': 'NOT_QUALIFIED', 'armed': False,
               'actual_elapsed_seconds': time.monotonic() - started}
+    if diagnostic_only:
+        result.update(execution_mode=STARTUP_MODE, descriptor_parent=content_hash(descriptor),
+                      requests=0, worker_launches=0, tls=tls,
+                      classification='SYNTHETIC_STARTUP_PASS' if result['supervisor_exit_code'] == 0 else 'SYNTHETIC_STARTUP_FAILED')
     store(cap, 'final-audit.json', result)
     return result
 
 
 def descriptor_schema(d):
-    require(set(d) == {'package', 'runtime', 'expected', 'authorized_root', 'native_tools',
-                       'clock_mode', 'maximum_duration_seconds'}, 'DESCRIPTOR_SCHEMA')
+    fields = {'package', 'runtime', 'expected', 'authorized_root', 'native_tools',
+              'clock_mode', 'maximum_duration_seconds'}
+    if startup_only(d):
+        fields |= {'schema', 'execution_mode'}
+    require(set(d) == fields, 'DESCRIPTOR_SCHEMA')
 
 
 def require_confinement(cap):
@@ -837,6 +907,7 @@ def child_main(launch, role, launch_parent):
     early_diagnostic('CHILD_ADMISSION_BEGIN')
     d = launch['descriptor']
     descriptor_schema(d)
+    require(not startup_only(d) or role == 'fixture', 'CHILD_ROLE')
     identities = verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
     cap = SyntheticCapability(canonical(d['package']), canonical(d['runtime']), canonical(d['expected']),
                               d['authorized_root'], identities, tuple(launch['output_identity']))
@@ -920,6 +991,11 @@ def main():
     descriptor_schema(d)
     cap = admit(d['package'], d['runtime'], expected=d['expected'], authorized_root=d['authorized_root'])
     result = supervise(cap, d)
+    if startup_only(d):
+        if result['classification'] != 'SYNTHETIC_STARTUP_PASS':
+            return 1
+        verify_startup_result(result, args.expected_descriptor)
+        return 0
     return 0 if result['classification'] == 'SYNTHETIC_PASS' else 1
 
 
