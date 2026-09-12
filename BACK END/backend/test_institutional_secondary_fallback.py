@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from institutional_secondary_fallback import (
     parse_marketbeat_analyst,
@@ -54,16 +55,26 @@ class InstitutionalSecondaryFallbackTests(unittest.TestCase):
         self.assertEqual(parsed["details"]["shares_short"], 29892897)
 
     def test_options_parser_uses_future_expiry_only(self):
-        html = """
+        # Keep both sides of the expiration boundary valid as calendar time advances.
+        today = datetime.now(timezone.utc).date()
+        future_expiry = today + timedelta(days=30)
+        expired = today - timedelta(days=30)
+        html = f"""
         <table>
-          <tr><td>8/28/2026</td><td>$900</td><td>$10</td><td>Call</td><td>100</td><td>0</td><td>0</td><td>200</td></tr>
-          <tr><td>8/28/2026</td><td>$900</td><td>$8</td><td>Put</td><td>50</td><td>0</td><td>0</td><td>300</td></tr>
+          <tr><td>{expired:%m/%d/%Y}</td><td>$900</td><td>$10</td><td>Call</td><td>100</td><td>0</td><td>0</td><td>900</td></tr>
+          <tr><td>{future_expiry:%m/%d/%Y}</td><td>$900</td><td>$10</td><td>Call</td><td>100</td><td>0</td><td>0</td><td>200</td></tr>
+          <tr><td>{future_expiry:%m/%d/%Y}</td><td>$900</td><td>$8</td><td>Put</td><td>50</td><td>0</td><td>0</td><td>300</td></tr>
         </table>
         """
         parsed = parse_marketbeat_options(html, "")
         self.assertIsNotNone(parsed)
         self.assertAlmostEqual(parsed["details"]["put_call_open_interest_ratio"], 1.5)
         self.assertEqual(parsed["directional_context"], "PUT_HEAVY")
+        self.assertEqual(
+            datetime.fromisoformat(parsed["details"]["expiration"]).date(),
+            future_expiry,
+        )
+        self.assertEqual(parsed["details"]["contracts_parsed"], 2)
 
     def test_catalyst_parser_marks_date_estimated(self):
         text = "Micron Technology's next earnings date is estimated for Tuesday, September 22nd, 2026 based on past reporting schedules."
