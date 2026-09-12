@@ -17,98 +17,17 @@ from provider_gateway_contract import safe_document
 from provider_gateway_live_contract import Admission, ROUTES, require
 
 
-@dataclass(repr=False)
-class Response:
-    status: int
-    body: bytes = field(repr=False)
-    request_start: str | None = None
-    response_end: str | None = None
-
-    def __repr__(self):
-        return f'<Response status={self.status} body=redacted>'
-
-
-class DeadlineReader(io.RawIOBase):
-    def __init__(self, sock, remaining):
-        super().__init__()
-        self.sock, self.remaining = sock, remaining
-
-    def readable(self):
-        return True
-
-    def readinto(self, buffer):
-        self.sock.settimeout(self.remaining())
-        count = self.sock.recv_into(buffer)
-        self.remaining()
-        return count
-
-
-class DeadlineSocket:
-    def __init__(self, sock, remaining):
-        self.sock, self.remaining = sock, remaining
-
-    def makefile(self, mode):
-        require(mode == 'rb', 'RESPONSE_STREAM_MODE')
-        return io.BufferedReader(DeadlineReader(self.sock, self.remaining))
-
-    def sendall(self, data):
-        self.sock.settimeout(self.remaining())
-        self.sock.sendall(data)
-        self.remaining()
-
-    def close(self):
-        # HTTPConnection may detach on Connection: close before reading the body.
-        # NativeHTTPS owns the socket and closes it in its outer finally block.
-        pass
+from provider_gateway_https import Response, DeadlineReader, DeadlineSocket, bounded_https
 
 
 class NativeHTTPS:
     def exchange(self, *, host, address, method, target, headers, body, tls_file, timeout, limit):
-        """A pinned numeric address avoids unbounded resolver work or alternate IPs."""
+        """Production route admission remains independent of shared wire mechanics."""
         require(any(host == route[1] and method == route[0] and target.split('?', 1)[0] == route[2] for route in ROUTES.values()), 'NATIVE_ROUTE_REJECTED')
         address = str(ipaddress.IPv4Address(address))
-        context = ssl.create_default_context(cafile=tls_file)
-        require(context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname, 'TLS_REQUIRED')
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        deadline = time.monotonic() + timeout
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        connection = http.client.HTTPSConnection(host, timeout=timeout, context=context)
-        def remaining():
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise TimeoutError('DEADLINE')
-            return left
-        try:
-            sock.settimeout(remaining())
-            sock.connect((address, 443))
-            sock.settimeout(remaining())
-            sock = context.wrap_socket(sock, server_hostname=host)
-            connection.sock = DeadlineSocket(sock, remaining)
-            sock.settimeout(remaining())
-            request_start = datetime.now(timezone.utc).isoformat()
-            connection.request(method, target, body=body, headers=headers)
-            sock.settimeout(remaining())
-            reply = connection.getresponse()
-            # Headers and raw request targets are never returned to callers.
-            remaining()
-            if reply.status != 200:
-                return Response(reply.status, b'', request_start, datetime.now(timezone.utc).isoformat())
-            require(reply.getheader('Content-Encoding', 'identity') == 'identity', 'ENCODING_REJECTED')
-            require('application/json' in reply.getheader('Content-Type', ''), 'CONTENT_TYPE_REJECTED')
-            chunks, count = [], 0
-            while True:
-                sock.settimeout(remaining())
-                chunk = reply.read1(min(65536, limit + 1 - count))
-                remaining()
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                count += len(chunk)
-                require(count <= limit, 'BODY_TOO_LARGE')
-            return Response(reply.status, b''.join(chunks), request_start, datetime.now(timezone.utc).isoformat())
-        finally:
-            connection.close()
-            sock.close()
+        return bounded_https(host=host, address=address, port=443, method=method,
+                             target=target, headers=headers, body=body,
+                             tls_file=tls_file, timeout=timeout, limit=limit)
 
 
 def _unique(pairs):

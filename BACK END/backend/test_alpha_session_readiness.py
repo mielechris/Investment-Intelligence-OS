@@ -255,7 +255,7 @@ class ReadinessTests(unittest.TestCase):
         response.getheader.side_effect=lambda key,default: {'Content-Type':'application/json'}.get(key,default)
         response.read1.side_effect=[b'{}',b'']
         start=datetime.fromisoformat('2026-09-14T13:20:00+00:00');end=start+timedelta(seconds=1)
-        with patch('provider_gateway_transport.ssl.create_default_context',return_value=ctx),patch('provider_gateway_transport.socket.socket',return_value=sock),patch('provider_gateway_transport.http.client.HTTPSConnection',return_value=conn),patch('provider_gateway_transport.datetime') as dt:
+        with patch('provider_gateway_transport.ssl.create_default_context',return_value=ctx),patch('provider_gateway_transport.socket.socket',return_value=sock),patch('provider_gateway_transport.http.client.HTTPSConnection',return_value=conn),patch('provider_gateway_https.datetime') as dt:
             dt.now.side_effect=[start,end]
             result=NativeHTTPS().exchange(host='www.alphavantage.co',address='192.0.2.1',method='GET',target='/query',headers={},body=None,tls_file='synthetic.pem',timeout=20,limit=1000000)
         self.assertEqual(result.request_start,start.isoformat());self.assertEqual(result.response_end,end.isoformat())
@@ -320,3 +320,13 @@ class ReadinessTests(unittest.TestCase):
         result=disabled_installation_rehearsal(spec,content_hash(spec))
         self.assertFalse(result['registered']);self.assertFalse(result['armed'])
         with self.assertRaises(ValueError):disabled_installation_rehearsal(spec,content_hash(spec))
+
+
+class SharedSchedulerBoundaryTests(unittest.TestCase):
+    def test_runner_uses_shared_scheduler_and_retains_both_guards(self):
+        import inspect
+        import alpha_session_runner as runner
+        from alpha_session_execution import execute_schedule
+        self.assertIs(runner.execute_schedule, execute_schedule)
+        self.assertIn("'CLI_LIVE_ONLY'", inspect.getsource(runner.main))
+        self.assertIn("'RADAR_NATIVE_ADAPTER_PENDING'", inspect.getsource(runner.run))

@@ -11,6 +11,7 @@ from provider_gateway_credentials import MacKeychain
 from provider_gateway_live_contract import admit, amount, verify_qualification_receipt
 from provider_gateway_qualification import qualify, publish, safe_root, verify_runtime
 from provider_gateway_transport import NativeHTTPS
+from alpha_session_execution import execute_schedule
 
 
 def validate_package(package, expected):
@@ -84,37 +85,18 @@ def run(package, expected, *, enabled=False, clock=None, wait=None, executor=Non
              'result':result,'evidence_parents':parents,'authority':dict.fromkeys(FLAGS,False)}
         evidence[name]=doc;pins[name]=content_hash(doc);previous_stage=pins[name]
     stage('universe','PASS',[plan['universe_parent']])
-    receipts=[];starts=[];previous=None;phase_receipts=[];reason=None
-    for i,request in enumerate(package['requests']):
-        row=plan['rows'][i]
-        target=utc(row['valid_from'])
-        if len(starts)>=3:
-            from datetime import timedelta
-            target=max(target,utc(starts[-3])+timedelta(seconds=60))
-        while utc(clock())<target and not stop():
-            wait(min(1.0,(target-utc(clock())).total_seconds()))
-        if stop():
-            reason='COOPERATIVE_SHUTDOWN';break
-        if utc(clock())>=utc(row['expires_at']):
-            reason='MISSED_INTERVAL_NO_BACKFILL';break
-        try:
-            receipt=executor(request,previous)
-            require(receipt['parents']=={**request['expected'],'reservation':receipt['parents']['reservation']},'RECEIPT_PARENTS')
-            verify_qualification_receipt(receipt,content_hash(receipt),parents=receipt['parents'])
-            receipts.append(content_hash(receipt));phase_receipts.append(content_hash(receipt))
-            require(receipt['result']=='OBSERVED' and receipt['bulk_checks']['freshness']=='WITHIN_AGE_BOUND','OBSERVATION_FAILED')
-            starts.append(receipt['dispatch_time'])
-            # Completion identity is derived from the trusted executor result and
-            # exact day reservation, not from an untrusted self-labeled disk file.
-            reservation={'plan':request['account']['bulk_plan_parent'],'slot':i,
-                         'source_commit':request['manifest']['source_commit'],'previous':previous}
-            completion={'slot':i,'previous':previous,'reservation':content_hash(reservation),
-                        'receipt':content_hash(receipt),'result':receipt['result']}
-            previous=content_hash(completion)
-        except Exception:
-            reason='AMBIGUOUS_OR_FAILED_STOP';break
-        if not radar and (i==0 or i in (6,12,18)):
-            stage(row['phase'].lower(),'PASS',phase_receipts);phase_receipts=[]
+    def verify(receipt, request):
+        require(receipt['parents']=={**request['expected'],'reservation':receipt['parents']['reservation']},'RECEIPT_PARENTS')
+        verify_qualification_receipt(receipt,content_hash(receipt),parents=receipt['parents'])
+    def completion_parent(request, i, previous, receipt):
+        reservation={'plan':request['account']['bulk_plan_parent'],'slot':i,
+                     'source_commit':request['manifest']['source_commit'],'previous':previous}
+        completion={'slot':i,'previous':previous,'reservation':content_hash(reservation),
+                    'receipt':content_hash(receipt),'result':receipt['result']}
+        return content_hash(completion)
+    receipts, reason = execute_schedule(plan, package['requests'], clock=clock, wait=wait,
+        executor=executor, stop=stop, verify=verify, completion_parent=completion_parent,
+        checkpoint=None if radar else stage)
     if radar:
         finished_at = clock()
         in_time = utc(finished_at) <= utc(plan['finalization_deadline'])

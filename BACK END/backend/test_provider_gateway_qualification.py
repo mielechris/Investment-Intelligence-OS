@@ -584,3 +584,15 @@ class EphemeralAlphaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             qualify(*docs, expected=repin(*docs), credential_backend=FakeCredentials(), network=fake, clock=lambda: NOW)
         self.assertEqual(fake.calls, 0)
+
+
+class SharedJournalBoundaryTests(unittest.TestCase):
+    def test_shared_journal_does_not_import_credential_or_live_admission(self):
+        import inspect
+        import alpha_session_execution as shared
+        import provider_gateway_qualification as production
+        self.assertIs(production.execute_day, shared.execute_day)
+        text = inspect.getsource(shared)
+        self.assertNotIn('MacKeychain', text)
+        self.assertNotIn('provider_gateway_credentials', text)
+        self.assertNotIn('LIVE_QUALIFICATION', text)

@@ -136,3 +136,12 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(reader.read(), b'')
         reader.close()
         # The native exchange, not HTTPConnection's early detach, owns cleanup.
+
+
+class SharedHTTPSBoundaryTests(unittest.TestCase):
+    def test_production_still_rejects_loopback_fixture_route_before_exchange(self):
+        with patch('provider_gateway_transport.bounded_https') as wire:
+            with self.assertRaisesRegex(ValueError, 'NATIVE_ROUTE_REJECTED'):
+                NativeHTTPS().exchange(host='127.0.0.1', address='127.0.0.1', method='GET',
+                    target='/slot/0', headers={}, body=None, tls_file='synthetic.pem', timeout=20, limit=1000000)
+            wire.assert_not_called()
