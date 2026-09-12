@@ -1,0 +1,23 @@
+# Registration only. The selected feature ref owns the executable workflow.
+name: Alpha Radar synthetic startup diagnostics
+on:
+  workflow_dispatch:
+    inputs:
+      native_startup:
+        description: Separately authorized single startup-only native attempt
+        type: boolean
+        required: false
+        default: false
+      expected_source_commit:
+        description: Independently reviewed 40-character source commit; required for native execution
+        type: string
+        required: false
+        default: ''
+permissions: {}
+jobs:
+  registration-only:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: No execution on the default branch
+        run: exit 1
