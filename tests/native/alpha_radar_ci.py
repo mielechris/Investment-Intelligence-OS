@@ -670,6 +670,37 @@ def sanitize_probe_stderr(raw, replacements, *, overflow=False):
             'interpretation': categories[0] if len(categories) == 1 else 'UNKNOWN'}
 
 
+
+def sanitize_probe_lines(raw, replacements, *, overflow=False):
+    """Reject contaminated lines; never normalize controls into executable text.
+
+    The original validator and its whole-message rejection contract are retained.
+    This separate framing layer can retain independently validated clean lines.
+    Missing context is explicit and never establishes a root cause by itself.
+    """
+    whole = sanitize_probe_stderr(raw, replacements, overflow=overflow)
+    if whole['status'] == 'SANITIZED' or whole['reason'] != 'CONTROL':
+        return whole
+    # Check sensitive patterns across the original framing before any filtering.
+    if re.search(rb'(?i)(api.?key|secret|password|bearer|token\s*[=:]|https?://|-----BEGIN)', raw):
+        return {'status': 'REJECTED', 'diagnostic': None, 'interpretation': 'UNKNOWN', 'reason': 'SENSITIVE'}
+    retained = []; rejected = []; interpretations = set()
+    for index, line in enumerate(raw.split(b'\n'), 1):
+        value = sanitize_probe_stderr(line, replacements)
+        if value['status'] == 'SANITIZED':
+            if value['diagnostic'].strip():
+                retained.append(value['diagnostic'])
+                interpretations.add(value['interpretation'])
+        else:
+            rejected.append({'line': index, 'reason': value['reason']})
+    if not retained:
+        return whole
+    return {'status': 'PARTIALLY_SANITIZED', 'diagnostic': '\n'.join(retained),
+            'interpretation': next(iter(interpretations)) if len(interpretations) == 1 else 'UNKNOWN',
+            'reason': 'LINES_REJECTED', 'rejected_lines': rejected,
+            'complete_launcher_message': False, 'root_cause': 'NOT_ESTABLISHED'}
+
+
 def profile_clauses(text):
     """Split balanced top-level forms without interpreting the sandbox language."""
     forms = []; start = None; depth = 0; quoted = False; escaped = False
@@ -806,7 +837,7 @@ def profile_probe(root):
         interpreter_row = next(row for row in d['runtime']['files'] if row['path'] == d['runtime']['interpreter'])
         require(digest(interpreter.read_bytes()) == interpreter_row['sha256'], 'STATIC_IDENTITY')
         raw, overflow, code, eof = probe_child(list(argv), probe_root)
-        sanitized = sanitize_probe_stderr(raw, replacements, overflow=overflow)
+        sanitized = sanitize_probe_lines(raw, replacements, overflow=overflow)
         del raw
         result = {'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY', 'ordinal': index+1, 'profile': name,
             'profile_sha256': digest(profile.encode()), 'command_shape_sha256': digest(canonical(
@@ -818,7 +849,7 @@ def profile_probe(root):
         document(root/'export'/('profile-probe-'+str(index+1).zfill(2)+'.json'), result)
         results.append(result)
         require(code is not None and eof, 'PROFILE_PROBE_TIMEOUT')
-        require(sanitized['status'] == 'SANITIZED', 'PROFILE_PROBE_SANITIZATION')
+        require(sanitized['status'] in ('SANITIZED', 'PARTIALLY_SANITIZED'), 'PROFILE_PROBE_SANITIZATION')
         if index == 0 and code == 0: break
     document(root/'export/profile-probe-summary.json', {'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY',
         'count': len(results), 'maximum': PROBE_LIMIT, 'results': [digest(canonical(r)) for r in results],

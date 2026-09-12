@@ -1779,3 +1779,73 @@ class ProfileProbeTests(unittest.TestCase):
             saved = (root/'export/profile-probe-01.json').read_text()
             self.assertNotIn('api_key', saved); self.assertNotIn('SYNTHETIC\"', saved)
             self.assertFalse((root/'export/profile-probe-summary.json').exists())
+
+
+class ProfileProbeLineFramingTests(unittest.TestCase):
+    def test_control_line_is_rejected_without_losing_valid_independent_line(self):
+        from alpha_radar_ci import sanitize_probe_lines, sanitize_probe_stderr
+        raw = b'sandbox-exec: unbound variable: network-bind\n\tUNREVIEWED SYNTHETIC LINE\n'
+        self.assertEqual(sanitize_probe_stderr(raw, {})['status'], 'REJECTED')
+        value = sanitize_probe_lines(raw, {})
+        self.assertEqual(value['status'], 'PARTIALLY_SANITIZED')
+        self.assertEqual(value['diagnostic'], 'sandbox-exec: unbound variable: network-bind')
+        self.assertEqual(value['rejected_lines'], [{'line': 2, 'reason': 'CONTROL'}])
+        self.assertFalse(value['complete_launcher_message'])
+        self.assertEqual(value['root_cause'], 'NOT_ESTABLISHED')
+
+    def test_no_control_normalization_or_rejoining_contaminated_fragments(self):
+        from alpha_radar_ci import sanitize_probe_lines
+        for marker in (b'\x00', b'\t', b'\r', b'\x1b', b'\x7f'):
+            raw = b'error: failed\nsecretprefix'+marker+b'syntheticsuffix'
+            value = sanitize_probe_lines(raw, {})
+            # Sensitive material anywhere rejects the entire message.
+            self.assertEqual(value['status'], 'REJECTED'); self.assertIsNone(value['diagnostic'])
+            value = sanitize_probe_lines(b'error: failed\nprofile'+marker+b'compilation failed', {})
+            self.assertEqual(value['diagnostic'], 'error: failed')
+            self.assertEqual(value['interpretation'], 'UNKNOWN')
+            self.assertNotIn(marker.decode(), value['diagnostic'])
+
+    def test_split_sensitive_words_never_leave_rejected_lines(self):
+        from alpha_radar_ci import sanitize_probe_lines
+        raw = b'error: failed\napi_\tkey=SYNTHETIC_NOT_A_KEY'
+        value = sanitize_probe_lines(raw, {})
+        self.assertEqual(value['diagnostic'], 'error: failed')
+        self.assertNotIn('SYNTHETIC_NOT_A_KEY', json.dumps(value))
+        self.assertNotIn('api_', json.dumps(value))
+
+    def test_unknown_paths_and_tokens_never_retained_by_partial_framing(self):
+        from alpha_radar_ci import sanitize_probe_lines
+        raw = b'error: failed\n\tframing\n/unknown/private\nA1b2C3d4E5f6G7h8'
+        value = sanitize_probe_lines(raw, {})
+        self.assertEqual(value['diagnostic'], 'error: failed')
+        self.assertEqual(len(value['rejected_lines']), 3)
+        self.assertNotIn('/unknown', json.dumps(value)); self.assertNotIn('A1b2', json.dumps(value))
+
+    def test_no_valid_line_size_failure_and_sensitive_content_stay_rejected(self):
+        from alpha_radar_ci import sanitize_probe_lines
+        for raw, overflow in ((b'\tbad\nunknownword', False), (b'error: failed\npassword=SYNTHETIC\t', False),
+                              (b'error: failed\n'+b'x'*4096, False), (b'error: failed\n\t', True)):
+            value = sanitize_probe_lines(raw, {}, overflow=overflow)
+            self.assertEqual(value['status'], 'REJECTED'); self.assertIsNone(value['diagnostic'])
+
+    def test_clean_message_contract_unchanged(self):
+        from alpha_radar_ci import sanitize_probe_lines, sanitize_probe_stderr
+        for raw in (b'', b'error: failed', b'unbound variable: ip', b'unknownword'):
+            self.assertEqual(sanitize_probe_lines(raw, {}), sanitize_probe_stderr(raw, {}))
+
+    def test_chunk_boundaries_do_not_rescue_invalid_lines(self):
+        from alpha_radar_ci import sanitize_probe_lines
+        raw = b'error: failed\n\tunsafe\n/unknown/path'
+        expected = sanitize_probe_lines(raw, {})
+        for index in range(len(raw)+1):
+            self.assertEqual(sanitize_probe_lines(b''.join((raw[:index], raw[index:])), {}), expected)
+        self.assertEqual(expected['diagnostic'], 'error: failed')
+
+    def test_partial_message_keeps_rejections_visible_through_bounded_matrix(self):
+        first = (b'sandbox-exec: unbound variable: network-bind\n\tUNREVIEWED\n', False, 65, True)
+        root, count, error = ProfileProbeTests.mocked_matrix(self, [first]+[(b'', False, 0, True)]*9)
+        self.assertIsNone(error); self.assertEqual(count, 10)
+        value = json.loads((root/'export/profile-probe-01.json').read_text())
+        self.assertEqual(value['diagnostic']['status'], 'PARTIALLY_SANITIZED')
+        self.assertEqual(value['diagnostic']['rejected_lines'], [{'line': 2, 'reason': 'CONTROL'}])
+        self.assertEqual(value['root_cause'], 'NOT_ESTABLISHED')
