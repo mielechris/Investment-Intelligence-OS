@@ -32,6 +32,8 @@ FAILURES = frozenset(('EXACT_ROOT','ROOT_OWNERSHIP','HOSTED_IDENTITY','PROXY_REJ
     'OFFLINE_WRITE_BOUNDARY','OFFLINE_NATIVE_BOUNDARY','OFFLINE_FAILED','OFFLINE_REQUIRED',
     'OFFLINE_SOURCE_BINDING','STARTUP_ONLY_REQUIRED','ATTEMPT_ALREADY_EXISTS',
     'NATIVE_EXECUTION_NOT_AUTHORIZED','PREPARATION_NATIVE_BOUNDARY','STATIC_IDENTITY',
+    'PREPARATION_SOCKET_REJECTED','PREPARATION_CTYPES_REJECTED','PREPARATION_SIGNAL_REJECTED',
+    'PREPARATION_SHELL_REJECTED','PREPARATION_SPAWN_REJECTED',
     'SUPERVISOR_FAILED','WORKER_EVIDENCE_FORBIDDEN','EVIDENCE_FILE','EVIDENCE_SCOPE','EVIDENCE_NAME'))
 SOURCE_NAMES = (
     'alpha_session_execution.py', 'provider_gateway_https.py', 'alpha_market_baseline.py',
@@ -123,12 +125,19 @@ def require_native_execution(explicit_request):
 
 def preparation_audit(event, args):
     """Defense in depth: preparation can inspect/build inputs, never launch native targets."""
-    if event in ('socket.__new__', 'socket.connect', 'socket.bind', 'os.system',
-                 'os.posix_spawn', 'os.killpg', 'ctypes.dlopen'):
-        raise PermissionError('PREPARATION_NATIVE_BOUNDARY')
-    if event == 'os.kill' and args != (os.getpid(), 0):
-        raise PermissionError('PREPARATION_NATIVE_BOUNDARY')
-    if event == 'subprocess.Popen':
+    if event in ('socket.__new__', 'socket.connect', 'socket.bind'):
+        raise PermissionError('PREPARATION_SOCKET_REJECTED')
+    if event == 'ctypes.dlopen':
+        raise PermissionError('PREPARATION_CTYPES_REJECTED')
+    if event == 'os.system':
+        raise PermissionError('PREPARATION_SHELL_REJECTED')
+    if event == 'os.killpg' or (event == 'os.kill' and args != (os.getpid(), 0)):
+        raise PermissionError('PREPARATION_SIGNAL_REJECTED')
+    if event in ('subprocess.Popen', 'os.posix_spawn'):
+        # CPython may use either process backend for the same reviewed tool.
+        # Apply the identical positive admission to both; no new target is allowed.
+        if len(args) < 2:
+            raise PermissionError('PREPARATION_SPAWN_REJECTED')
         executable, argv = args[:2]
         allowed = {'/usr/bin/git': {'rev-parse', 'status', 'show'},
                    '/usr/bin/otool': {'-L', '-D', '-l'},

@@ -1390,3 +1390,27 @@ class StaticLauncherEvidenceTests(unittest.TestCase):
         self.assertFalse(doc['raw_stderr_retained']);self.assertFalse(doc['arbitrary_strings_retained'])
         with patch('alpha_radar_ci.static_image',return_value={'sha256':'c'*64}):
             with self.assertRaisesRegex(ValueError,'STATIC_IDENTITY'):static_provenance(root)
+
+
+class PreparationBackendTests(unittest.TestCase):
+    def test_posix_spawn_has_identical_positive_tool_admission(self):
+        from alpha_radar_ci import preparation_audit
+        for event in ('subprocess.Popen','os.posix_spawn'):
+            for exe,op in [('/usr/bin/git','show'),('/usr/bin/otool','-L'),('/usr/bin/sw_vers','-buildVersion'),('/usr/bin/openssl','req')]:
+                preparation_audit(event,(exe,[exe,op],{}))
+            for exe,argv in [('/usr/bin/sandbox-exec',['/usr/bin/sandbox-exec','-f','profile']),
+                             ('/synthetic/python',['/synthetic/python','alpha_radar_runner.py']),
+                             ('/usr/bin/git',['/usr/bin/git','push']),
+                             ('/usr/bin/openssl',['/usr/bin/openssl','s_client']),
+                             ('/usr/bin/git',['/bin/sh','show'])]:
+                with self.assertRaisesRegex(ValueError,'PREPARATION_NATIVE_BOUNDARY'):
+                    preparation_audit(event,(exe,argv,{}))
+
+    def test_preparation_failure_diagnostics_are_fixed_per_boundary(self):
+        from alpha_radar_ci import preparation_audit, FAILURES
+        cases={'socket.bind':'PREPARATION_SOCKET_REJECTED','ctypes.dlopen':'PREPARATION_CTYPES_REJECTED',
+               'os.killpg':'PREPARATION_SIGNAL_REJECTED','os.system':'PREPARATION_SHELL_REJECTED',
+               'os.posix_spawn':'PREPARATION_SPAWN_REJECTED'}
+        for event,code in cases.items():
+            with self.assertRaises(PermissionError) as caught:preparation_audit(event,())
+            self.assertEqual(caught.exception.args,(code,));self.assertIn(code,FAILURES)
