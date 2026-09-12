@@ -79,6 +79,12 @@ jobs:
         run: |
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py execute --native-startup \
             --root "$IIOS_RADAR_CI_ROOT"
+      - name: Separate bounded profile diagnostics; no fixture or worker
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py profile-probe \
+            --root "$IIOS_RADAR_CI_ROOT"
       - name: Preserve structured diagnostics on success or failure
         if: always() && env.IIOS_RADAR_CI_ROOT != ''
         shell: bash

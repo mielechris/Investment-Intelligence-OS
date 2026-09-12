@@ -37,6 +37,8 @@ FAILURES = frozenset(('EXACT_ROOT','ROOT_OWNERSHIP','HOSTED_IDENTITY','PROXY_REJ
     'NATIVE_EXECUTION_NOT_AUTHORIZED','PREPARATION_NATIVE_BOUNDARY','STATIC_IDENTITY',
     'PREPARATION_SOCKET_REJECTED','PREPARATION_CTYPES_REJECTED','PREPARATION_SIGNAL_REJECTED',
     'PREPARATION_SHELL_REJECTED','PREPARATION_SPAWN_REJECTED',
+    'PROFILE_PROBE_EVENT','PROFILE_PROBE_PROFILE','PROFILE_PROBE_LIMIT','PROFILE_PROBE_SPAWN',
+    'PROFILE_PROBE_TIMEOUT','PROFILE_PROBE_SANITIZATION',
     'SUPERVISOR_FAILED','WORKER_EVIDENCE_FORBIDDEN','EVIDENCE_FILE','EVIDENCE_SCOPE','EVIDENCE_NAME'))
 SOURCE_NAMES = (
     'alpha_session_execution.py', 'provider_gateway_https.py', 'alpha_market_baseline.py',
@@ -605,17 +607,240 @@ def export(root):
     document(destination/'EVIDENCE-INVENTORY.json',rows)
 
 
+# Separate compiler/launcher experiment: never a fixture qualification attempt.
+PROBE_LIMIT = 12
+PROBE_STDERR_LIMIT = 4096
+PROBE_SECONDS = 10
+PROBE_TAIL = ('-I', '-S', '-B', '-c', 'pass')
+PROBE_ENV = {'PATH': '/usr/bin:/bin:/usr/sbin', 'LC_ALL': 'C', 'TZ': 'UTC'}
+PROBE_WORDS = frozenset(('sandbox-exec profile compilation compile failed error syntax '
+    'unbound variable unexpected token invalid unknown operation filter argument arguments '
+    'while evaluating at line column of in on the a an is not supported permitted found '
+    'permission denied no such file or directory execvp execution sandbox apply applying '
+    'sandbox_apply sandbox_compile string number boolean expected got unexpected end '
+    'version deny default allow file-read-metadata file-read file-write process-exec '
+    'sysctl-read network-outbound network-inbound network-bind subpath literal remote '
+    'local ip exit runtime library load loading image dyld Library loaded Reason tried '
+    'Operation permitted undefined identifier reference evaluate failure read open '
+    'RUNTIME WORKSPACE TEMP PROFILE INTERPRETER OUTPUT SYSTEM_LIBRARY USR_LIB DEVICE '
+    'ROOT python3.13').split())
+
+
+def sanitize_probe_stderr(raw, replacements, *, overflow=False):
+    """Positive vocabulary, not a template claim. Entire payload fails closed.
+
+    No raw bytes, hashes, arbitrary identifiers, paths or exception messages leave
+    this function. New words require source review, not a permissive fallback.
+    """
+    rejected = {'status': 'REJECTED', 'diagnostic': None, 'interpretation': 'UNKNOWN'}
+    if type(raw) is not bytes or overflow or len(raw) > PROBE_STDERR_LIMIT:
+        return {**rejected, 'reason': 'SIZE'}
+    try:
+        text = raw.decode('ascii')
+    except UnicodeError:
+        return {**rejected, 'reason': 'ENCODING'}
+    # LF is the sole framing character. Tabs, CR, terminal escapes and DEL deny.
+    if any((ord(c) < 32 and c != '\n') or ord(c) == 127 for c in text):
+        return {**rejected, 'reason': 'CONTROL'}
+    if re.search(r'(?i)(api.?key|secret|password|bearer|token\s*[=:]|https?://|-----BEGIN)', text):
+        return {**rejected, 'reason': 'SENSITIVE'}
+    # Replace complete quoted/unquoted path tokens, never retain an unknown suffix.
+    for path, placeholder in sorted(replacements.items(), key=lambda v: len(v[0]), reverse=True):
+        if not path.startswith('/') or placeholder not in PROBE_WORDS:
+            return {**rejected, 'reason': 'REPLACEMENT'}
+        text = re.sub(re.escape(path)+r'(?=$|[\s"\'):,])', '<'+placeholder+'>', text)
+    if '/' in text or '\\' in text or '@' in text:
+        return {**rejected, 'reason': 'PATH_OR_IDENTIFIER'}
+    words = re.findall(r'[A-Za-z_][A-Za-z_0-9.\-]*', text)
+    if any(word not in PROBE_WORDS for word in words):
+        return {**rejected, 'reason': 'UNREVIEWED_TOKEN'}
+    residue = re.sub(r'[A-Za-z_][A-Za-z_0-9.\-]*', '', text)
+    if re.search(r'[^0-9\s<>():"\'.,;*+=?\-]', residue) or any(
+            len(n) > 5 for n in re.findall(r'\d+', text)):
+        return {**rejected, 'reason': 'UNREVIEWED_VALUE'}
+    categories = []
+    for category, patterns in (
+        ('PROFILE_COMPILE_OUTPUT', ('unbound variable', 'syntax error', 'profile compilation failed')),
+        ('OPERATION_FILTER_OUTPUT', ('invalid operation', 'unknown operation', 'unsupported filter')),
+        ('PROFILE_APPLY_OUTPUT', ('sandbox_apply',)),
+        ('EXECUTION_OUTPUT', ('execvp', 'Library not loaded', 'dyld'))):
+        if any(pattern in text for pattern in patterns):
+            categories.append(category)
+    return {'status': 'SANITIZED', 'diagnostic': text, 'reason': None,
+            'interpretation': categories[0] if len(categories) == 1 else 'UNKNOWN'}
+
+
+def profile_clauses(text):
+    """Split balanced top-level forms without interpreting the sandbox language."""
+    forms = []; start = None; depth = 0; quoted = False; escaped = False
+    for i, char in enumerate(text):
+        if quoted:
+            if escaped: escaped = False
+            elif char == '\\': escaped = True
+            elif char == '"': quoted = False
+        elif char == '"': quoted = True
+        elif char == '(':
+            if depth == 0: start = i
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            require(depth >= 0, 'PROFILE_PROBE_PROFILE')
+            if depth == 0: forms.append(text[start:i+1])
+        elif depth == 0:
+            require(char.isspace(), 'PROFILE_PROBE_PROFILE')
+    require(not quoted and depth == 0 and len(forms) == 10 and
+            forms[:2] == ['(version 1)', '(deny default)'], 'PROFILE_PROBE_PROFILE')
+    expected = ('file-read-metadata', 'file-read*', 'file-write*', 'process-exec',
+                'sysctl-read', 'network-outbound', 'network-inbound', 'network-bind')
+    require(all(form.startswith('(allow '+op+')') or form.startswith('(allow '+op+' ')
+                for form, op in zip(forms[2:], expected)), 'PROFILE_PROBE_PROFILE')
+    return forms
+
+
+def profile_matrix(exact):
+    forms = profile_clauses(exact)
+    # Every variant is a strict subset of the admitted profile. No substitute
+    # allow rules, broadened paths, shell, public destination or policy edits.
+    core = [0, 1, 3, 5]  # version, deny, exact reads, exact executable
+    variants = [('EXACT', exact), ('READ_EXEC_CORE', '\n'.join(forms[i] for i in core)+'\n')]
+    for index, name in ((2, 'METADATA'), (4, 'OUTPUT_WRITE'), (6, 'SYSCTL'),
+                        (7, 'OUTBOUND'), (8, 'INBOUND'), (9, 'BIND')):
+        variants.append(('CORE_PLUS_'+name, '\n'.join(forms[i] for i in sorted(core+[index]))+'\n'))
+    variants.extend((('EXEC_WITHOUT_READ', '\n'.join(forms[i] for i in (0, 1, 5))+'\n'),
+                     ('READ_WITHOUT_EXEC', '\n'.join(forms[i] for i in (0, 1, 3))+'\n')))
+    require(len(variants) <= PROBE_LIMIT, 'PROFILE_PROBE_LIMIT')
+    return variants
+
+
+def probe_spawn_audit(argv, cwd):
+    """Closure admits one exact immutable command; no mutable execution mode."""
+    exact = tuple(argv); directory = str(cwd)
+    def audit(event, args):
+        if event in ('subprocess.Popen', 'os.posix_spawn'):
+            require(event == 'subprocess.Popen' and len(args) == 4 and
+                    args[0] == exact[0] and tuple(args[1]) == exact and
+                    str(args[2]) == directory and args[3] == PROBE_ENV,
+                    'PROFILE_PROBE_SPAWN')
+        else:
+            preparation_audit(event, args)
+    return audit
+
+
+def probe_child(argv, cwd):
+    # Popen's stderr is never redirected to a file or exception/log formatter.
+    child = subprocess.Popen(argv, cwd=str(cwd), env=dict(PROBE_ENV), stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, close_fds=True)
+    os.set_blocking(child.stderr.fileno(), False)
+    retained = bytearray(); overflow = False; eof = False; started = time.monotonic()
+    try:
+        while time.monotonic()-started < PROBE_SECONDS:
+            try:
+                chunk = os.read(child.stderr.fileno(), min(1024, PROBE_STDERR_LIMIT-len(retained)+1))
+            except BlockingIOError:
+                chunk = None
+            if chunk == b'': eof = True
+            elif chunk:
+                remaining = PROBE_STDERR_LIMIT-len(retained)
+                overflow = overflow or len(chunk) > remaining
+                retained.extend(chunk[:remaining])
+            if child.poll() is not None and eof: break
+            time.sleep(.01)
+        # Timeout is a hard stop, no further probes and no unverified PID signal.
+        return bytes(retained), overflow, child.poll(), eof
+    finally:
+        child.stderr.close()
+
+
+def profile_probe(root):
+    require(os.environ.get('GITHUB_EVENT_NAME') == 'push' and
+            os.environ.get('GITHUB_REF') == 'refs/heads/feature/iios-provider-gateway-superbatch-1',
+            'PROFILE_PROBE_EVENT')
+    hosted(); root_check(root)
+    environment = json.loads((root/'export/environment.json').read_bytes())
+    require_execution_source(environment['source_commit'], os.environ.get('GITHUB_SHA'), os.environ.get('GITHUB_REF'))
+    require(command(['/usr/bin/git', 'rev-parse', 'HEAD'], cwd=REPO).decode().strip() == environment['source_commit']
+            and command(['/usr/bin/git', 'status', '--porcelain'], cwd=REPO) == b'', 'SOURCE_STATE')
+    offline_result = json.loads((root/'export/offline-results.json').read_bytes())
+    require(offline_result['success'] is True and not offline_result['skipped'] and
+            offline_result['executed'] == offline_result['collected'], 'OFFLINE_REQUIRED')
+    verify_bindings(offline_result['source_bindings'])
+    runtime = root/'runtime'; interpreter = runtime/'python/bin/python3.13'
+    pins = json.loads((root/'export/prepared-pins.json').read_bytes())
+    sys.path.insert(0, str(runtime/'source'))
+    from alpha_radar_runner import read_descriptor, confinement_profile, descriptor_schema, verify_tools
+    from alpha_radar_admission import verify_inputs
+    d = read_descriptor(root/'descriptor.json', pins['descriptor_sha256'])
+    descriptor_schema(d); verify_inputs(d['package'], d['runtime'], d['expected'], root)
+    verify_tools(d['native_tools'])
+    require(Path(sys.executable).resolve() == interpreter and
+            environment['tools']['/usr/bin/sandbox-exec'] == d['native_tools']['/usr/bin/sandbox-exec'], 'STATIC_IDENTITY')
+    require(not any((root/name).exists() for name in
+            ('execution-output', 'native-attempt.json', 'confinement-denied-input')), 'ATTEMPT_ALREADY_EXISTS')
+    exact = confinement_profile(runtime, root/'execution-output', interpreter, 38493)
+    require(exact.encode() == (runtime/'confinement.sb').read_bytes() and
+            digest(exact.encode()) == d['expected']['confinement'], 'PROFILE_PROBE_PROFILE')
+    probe_root = root/'profile-probes'; probe_root.mkdir(mode=0o700)  # exclusive series marker
+    variants = profile_matrix(exact)
+    replacements = {str(interpreter): 'INTERPRETER', str(runtime): 'RUNTIME', str(REPO): 'WORKSPACE',
+        str(root/'execution-output'): 'OUTPUT', str(root): 'ROOT', '/System/Library': 'SYSTEM_LIBRARY',
+        '/usr/lib': 'USR_LIB', '/dev/null': 'DEVICE', '/dev/urandom': 'DEVICE', '/dev/random': 'DEVICE'}
+    # This phase's process boundary is installed once, with a finite immutable
+    # command allowlist. No supervisor/fixture/worker script occurs in any argv.
+    commands = []
+    for index, (_, profile) in enumerate(variants):
+        path = probe_root/(str(index)+'.sb'); put(path, profile.encode())
+        replacements[str(path)] = 'PROFILE'
+        commands.append(('/usr/bin/sandbox-exec', '-f', str(path), str(interpreter), *PROBE_TAIL))
+    admitted = tuple(commands)
+    def boundary(event, args):
+        if event == 'subprocess.Popen':
+            require(len(args) == 4 and tuple(args[1]) in admitted, 'PROFILE_PROBE_SPAWN')
+            probe_spawn_audit(tuple(args[1]), probe_root)(event, args)
+        else: preparation_audit(event, args)
+    sys.addaudithook(boundary)
+    results = []
+    for index, ((name, profile), argv) in enumerate(zip(variants, commands)):
+        # Recheck immutable target bytes immediately before each compiler probe.
+        require(digest(Path(argv[2]).read_bytes()) == digest(profile.encode()), 'PROFILE_PROBE_PROFILE')
+        verify_tools(d['native_tools'])
+        interpreter_row = next(row for row in d['runtime']['files'] if row['path'] == d['runtime']['interpreter'])
+        require(digest(interpreter.read_bytes()) == interpreter_row['sha256'], 'STATIC_IDENTITY')
+        raw, overflow, code, eof = probe_child(list(argv), probe_root)
+        sanitized = sanitize_probe_stderr(raw, replacements, overflow=overflow)
+        del raw
+        result = {'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY', 'ordinal': index+1, 'profile': name,
+            'profile_sha256': digest(profile.encode()), 'command_shape_sha256': digest(canonical(
+                ['sandbox-exec', '-f', '<PROFILE>', '<INTERPRETER>', *PROBE_TAIL])),
+            'exit_code': code, 'eof': eof, 'diagnostic': sanitized, 'raw_stderr_retained': False,
+            'root_cause': 'NOT_ESTABLISHED', 'fixture_launches': 0, 'worker_launches': 0,
+            'authority': d['package']['authority'], 'environment_parent': digest(canonical(environment)),
+            'descriptor_parent': pins['descriptor_sha256'], 'source_commit': environment['source_commit']}
+        document(root/'export'/('profile-probe-'+str(index+1).zfill(2)+'.json'), result)
+        results.append(result)
+        require(code is not None and eof, 'PROFILE_PROBE_TIMEOUT')
+        require(sanitized['status'] == 'SANITIZED', 'PROFILE_PROBE_SANITIZATION')
+        if index == 0 and code == 0: break
+    document(root/'export/profile-probe-summary.json', {'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY',
+        'count': len(results), 'maximum': PROBE_LIMIT, 'results': [digest(canonical(r)) for r in results],
+        'fixture_series': 'CLOSED_RED_THREE_ATTEMPTS_CONSUMED', 'new_fixture_attempt': False,
+        'qualification': 'NOT_ESTABLISHED', 'authority': d['package']['authority']})
+
+
+
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export'))
+    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
     parser.add_argument('--native-startup', action='store_true', default=False)
     args=parser.parse_args();root=Path(args.root)
     try:
-        if args.phase != 'execute':
+        if args.phase not in ('execute', 'profile-probe'):
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             sys.addaudithook(preparation_audit)
-        if args.phase == 'execute': execute(root, native_startup=args.native_startup)
+        if args.phase == 'profile-probe':
+            require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+            profile_probe(root)
+        elif args.phase == 'execute': execute(root, native_startup=args.native_startup)
         elif args.phase in ('prepare','finalize'): globals()[args.phase](root,args.commit)
         else: globals()[args.phase](root)
         return 0

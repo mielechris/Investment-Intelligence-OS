@@ -1561,3 +1561,221 @@ class ManualSourceBindingTests(unittest.TestCase):
         self.assertIn('expected_source_commit:',text)
         self.assertIn('IIOS_EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}',text)
         self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true",text)
+
+
+class ProfileProbeTests(unittest.TestCase):
+    def sanitized(self, raw, **kwargs):
+        from alpha_radar_ci import sanitize_probe_stderr
+        return sanitize_probe_stderr(raw, {'/synthetic/runtime/python': 'INTERPRETER',
+            '/synthetic/runtime': 'RUNTIME', '/synthetic/workspace': 'WORKSPACE',
+            '/synthetic/tmp/profile.sb': 'PROFILE', '/synthetic/tmp': 'TEMP'}, **kwargs)
+
+    def test_known_paths_replaced_longest_first(self):
+        raw = b'sandbox-exec: /synthetic/tmp/profile.sb:10:2: unbound variable: ip\n'
+        value = self.sanitized(raw)
+        self.assertEqual(value['diagnostic'], 'sandbox-exec: <PROFILE>:10:2: unbound variable: ip\n')
+        self.assertEqual(value['interpretation'], 'PROFILE_COMPILE_OUTPUT')
+        self.assertEqual(raw, b'sandbox-exec: /synthetic/tmp/profile.sb:10:2: unbound variable: ip\n')
+        for path, expected in (('/synthetic/runtime/python', 'INTERPRETER'),
+                               ('/synthetic/runtime', 'RUNTIME'), ('/synthetic/workspace', 'WORKSPACE'),
+                               ('/synthetic/tmp', 'TEMP')):
+            self.assertEqual(self.sanitized(('error: "'+path+'"').encode())['diagnostic'], 'error: "<'+expected+'>"')
+
+    def test_path_suffix_and_unregistered_path_rejected(self):
+        for raw in (b'error: /synthetic/runtime/private/name', b'error: /unregistered/name',
+                    b'error: /synthetic/runtime-other', b'error: C:\\private\\name'):
+            value = self.sanitized(raw)
+            self.assertEqual(value['status'], 'REJECTED'); self.assertIsNone(value['diagnostic'])
+
+    def test_secret_like_input_rejected_entirely(self):
+        for raw in (b'api_key=SYNTHETIC_NOT_A_KEY', b'Bearer SYNTHETIC', b'password: synthetic',
+                    b'token=synthetic', b'https://example.invalid', b'error: user@example.invalid',
+                    b'error: A1b2C3d4E5f6G7h8', b'error: 1234567890123456'):
+            self.assertEqual(self.sanitized(raw)['status'], 'REJECTED')
+            self.assertIsNone(self.sanitized(raw)['diagnostic'])
+
+    def test_controls_non_ascii_and_oversize_rejected(self):
+        for raw in (b'error:\x1b[0m', b'error:\r', b'error:\t', b'error:\x00', b'error:\x7f',
+                    b'error:\xff', b'a'*4097):
+            self.assertIsNone(self.sanitized(raw)['diagnostic'])
+        self.assertEqual(self.sanitized(b'error', overflow=True)['reason'], 'SIZE')
+
+    def test_unknown_and_mixed_output_cannot_prove_root_cause(self):
+        self.assertEqual(self.sanitized(b'sandbox-exec: failed')['interpretation'], 'UNKNOWN')
+        self.assertEqual(self.sanitized(b'unbound variable: ip\nsandbox_apply failed')['interpretation'], 'UNKNOWN')
+        self.assertEqual(self.sanitized(b'unknownprivateword')['status'], 'REJECTED')
+        self.assertEqual(self.sanitized(b'')['diagnostic'], '')
+
+    def test_chunked_secret_and_path_checked_as_complete_payload(self):
+        for parts in ((b'api_', b'key=', b'SYNTHETIC'),
+                      (b'error: /synthetic/', b'runtime/private', b'/name')):
+            self.assertIsNone(self.sanitized(b''.join(parts))['diagnostic'])
+        parts = (b'error: /synthetic/', b'tmp/profile.sb:2:1: ', b'unbound variable: ip')
+        self.assertIn('<PROFILE>', self.sanitized(b''.join(parts))['diagnostic'])
+
+    def test_matrix_is_bounded_subsets_of_exact_policy(self):
+        from alpha_radar_ci import profile_matrix, profile_clauses
+        from alpha_radar_runner import confinement_profile
+        exact = confinement_profile(Path('/synthetic/runtime'), Path('/synthetic/output'),
+                                    Path('/synthetic/runtime/python'), 38493)
+        matrix = profile_matrix(exact); forms = profile_clauses(exact)
+        self.assertEqual(matrix[0], ('EXACT', exact)); self.assertEqual(len(matrix), 10)
+        self.assertLessEqual(len(matrix), 12)
+        for name, value in matrix:
+            self.assertIn('(deny default)', value)
+            self.assertNotIn('(allow default)', value)
+            self.assertNotIn('0.0.0.0', value)
+            if name != 'EXACT':
+                self.assertTrue(all(line in exact for line in value.splitlines()))
+        core = matrix[1][1]
+        self.assertNotIn('network-', core); self.assertNotIn('file-write', core)
+        self.assertEqual(matrix[-1][0], 'READ_WITHOUT_EXEC')
+        self.assertNotIn('process-exec', matrix[-1][1])
+        self.assertEqual(len(forms), 10)
+
+    def test_changed_or_malformed_profile_rejected(self):
+        from alpha_radar_ci import profile_matrix
+        from alpha_radar_runner import confinement_profile
+        exact = confinement_profile(Path('/synthetic/runtime'), Path('/synthetic/output'),
+                                    Path('/synthetic/runtime/python'), 38493)
+        for value in (exact+'(', exact.replace('(deny default)', '(allow default)'),
+                      exact.replace('network-bind', 'unknown-filter'), exact+'arbitrary'):
+            with self.assertRaisesRegex(ValueError, 'PROFILE_PROBE_PROFILE'): profile_matrix(value)
+
+    def test_spawn_boundary_accepts_only_fixed_command_environment_and_cwd(self):
+        from alpha_radar_ci import probe_spawn_audit, PROBE_ENV, PROBE_TAIL
+        argv = ('/usr/bin/sandbox-exec', '-f', '/synthetic/profile.sb', '/synthetic/python', *PROBE_TAIL)
+        audit = probe_spawn_audit(argv, '/synthetic')
+        audit('subprocess.Popen', (argv[0], argv, '/synthetic', dict(PROBE_ENV)))
+        cases = [(argv[0], (*argv[:-1], 'import os'), '/synthetic', PROBE_ENV),
+                 ('/bin/sh', ('/bin/sh',), '/synthetic', PROBE_ENV),
+                 (argv[0], argv, '/different', PROBE_ENV),
+                 (argv[0], argv, '/synthetic', {**PROBE_ENV, 'SYNTHETIC_CREDENTIAL': 'REJECT'}),
+                 (argv[0], (*argv[:4], 'alpha_radar_fixture.py'), '/synthetic', PROBE_ENV)]
+        for args in cases:
+            with self.assertRaises(ValueError): audit('subprocess.Popen', args)
+        for event in ('os.posix_spawn', 'socket.__new__', 'socket.bind', 'ctypes.dlopen', 'os.killpg'):
+            with self.assertRaises((ValueError, PermissionError)): audit(event, (argv[0], argv, {}))
+
+    def test_invalid_event_stops_before_host_paths_and_child(self):
+        import alpha_radar_ci as ci
+        for event in ('workflow_dispatch', 'pull_request', 'schedule', ''):
+            with patch.dict(os.environ, {'GITHUB_EVENT_NAME': event}, clear=True), \
+                 patch.object(ci, 'hosted') as host, patch.object(ci, 'probe_child') as child:
+                with self.assertRaisesRegex(ValueError, 'PROFILE_PROBE_EVENT'): ci.profile_probe(Path('/not-accessed'))
+                host.assert_not_called(); child.assert_not_called()
+
+    def test_minimal_child_bounded_capture_and_no_signals(self):
+        import alpha_radar_ci as ci
+        child = MagicMock(); child.poll.return_value = 65
+        with patch.object(ci.subprocess, 'Popen', return_value=child) as launch, \
+             patch.object(ci.os, 'set_blocking'), patch.object(ci.os, 'read', side_effect=[b'error: ', b'failed', b'']), \
+             patch.object(ci.time, 'sleep'):
+            raw, overflow, code, eof = ci.probe_child(['/synthetic/python', *ci.PROBE_TAIL], Path('/synthetic'))
+        self.assertEqual(raw, b'error: failed'); self.assertFalse(overflow); self.assertEqual(code, 65); self.assertTrue(eof)
+        self.assertEqual(launch.call_args.kwargs['env'], ci.PROBE_ENV)
+        child.kill.assert_not_called(); child.terminate.assert_not_called(); child.stderr.close.assert_called_once()
+
+    def test_overflow_never_retains_over_four_kib(self):
+        import alpha_radar_ci as ci
+        child = MagicMock(); child.poll.return_value = 65
+        with patch.object(ci.subprocess, 'Popen', return_value=child), patch.object(ci.os, 'set_blocking'), \
+             patch.object(ci.os, 'read', side_effect=[b'x'*1024]*4+[b'x', b'']), patch.object(ci.time, 'sleep'):
+            raw, overflow, _, _ = ci.probe_child(['/synthetic/python'], Path('/synthetic'))
+        self.assertEqual(len(raw), 4096); self.assertTrue(overflow)
+        self.assertIsNone(self.sanitized(raw, overflow=overflow)['diagnostic'])
+
+    def test_timeout_preserves_unverified_status_without_signal(self):
+        import alpha_radar_ci as ci
+        child = MagicMock(); child.poll.return_value = None
+        with patch.object(ci.subprocess, 'Popen', return_value=child), patch.object(ci.os, 'set_blocking'), \
+             patch.object(ci.time, 'monotonic', side_effect=[0, 11]):
+            raw, overflow, code, eof = ci.probe_child(['/synthetic/python'], Path('/synthetic'))
+        self.assertIsNone(code); self.assertFalse(eof); self.assertEqual(raw, b'')
+        child.kill.assert_not_called(); child.terminate.assert_not_called()
+
+    def test_probe_cli_cannot_route_to_fixture_execution(self):
+        import alpha_radar_ci as ci
+        with patch('sys.argv', ['ci', 'profile-probe', '--root', '/not-accessed']), \
+             patch.object(ci, 'profile_probe') as handler, patch.object(ci, 'execute') as fixture:
+            self.assertEqual(ci.main(), 0); handler.assert_called_once(); fixture.assert_not_called()
+
+    def test_workflow_probe_is_separate_push_only_after_offline(self):
+        text = (Path(__file__).resolve().parents[2]/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        step = text.split('- name: Separate bounded profile diagnostics; no fixture or worker')[1].split('- name:')[0]
+        self.assertIn("if: github.event_name == 'push'", step)
+        self.assertIn('alpha_radar_ci.py profile-probe', step)
+        self.assertNotIn('--native-startup', step)
+        self.assertLess(text.index('alpha_radar_ci.py offline'), text.index('alpha_radar_ci.py profile-probe'))
+
+    def test_probe_call_graph_cannot_invoke_fixture_or_worker(self):
+        import ast
+        import alpha_radar_ci as ci
+        tree = ast.parse(Path(ci.__file__).read_text())
+        names = {'profile_probe', 'profile_matrix', 'profile_clauses', 'probe_child', 'probe_spawn_audit', 'sanitize_probe_stderr'}
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.assertEqual(len(functions), len(names))
+        for node in functions:
+            for call in (v for v in ast.walk(node) if isinstance(v, ast.Call)):
+                target = call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, 'attr', '')
+                self.assertNotIn(target, ('execute', 'supervise', 'fixture_exchange', 'bind', 'connect', 'Session', 'exec', 'eval'))
+        self.assertEqual(ci.PROBE_TAIL, ('-I', '-S', '-B', '-c', 'pass'))
+
+    def mocked_matrix(self, outcomes):
+        import alpha_radar_ci as ci
+        from alpha_radar_runner import confinement_profile
+        root = Path(tempfile.mkdtemp(prefix='probe-matrix-', dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        runtime = root/'runtime'; interpreter = runtime/'python/bin/python3.13'
+        interpreter.parent.mkdir(parents=True); interpreter.write_bytes(b'SYNTHETIC_NOT_EXECUTED')
+        (root/'export').mkdir()
+        commit = 'a'*40
+        exact = confinement_profile(runtime, root/'execution-output', interpreter, 38493)
+        (runtime/'confinement.sb').write_text(exact)
+        environment = {'source_commit': commit, 'tools': {'/usr/bin/sandbox-exec': 'b'*64}}
+        docs = {'environment.json': environment, 'offline-results.json': {'success': True, 'skipped': [],
+                'executed': 1, 'collected': 1, 'source_bindings': {}}, 'prepared-pins.json': {'descriptor_sha256': 'c'*64}}
+        for name, value in docs.items(): (root/'export'/name).write_text(json.dumps(value))
+        d = {'package': {'authority': AUTHORITY}, 'native_tools': environment['tools'],
+             'runtime': {'interpreter': 'python/bin/python3.13', 'files': [{'path': 'python/bin/python3.13',
+                          'sha256': ci.digest(interpreter.read_bytes())}]},
+             'expected': {'confinement': ci.digest(exact.encode())}}
+        env = {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/heads/feature/iios-provider-gateway-superbatch-1',
+               'GITHUB_SHA': commit}
+        with patch.dict(os.environ, env), patch.object(ci, 'hosted'), patch.object(ci, 'root_check'), \
+             patch.object(ci, 'command', side_effect=[commit.encode(), b'']), patch.object(ci, 'verify_bindings'), \
+             patch('alpha_radar_runner.read_descriptor', return_value=d), patch('alpha_radar_runner.descriptor_schema'), \
+             patch('alpha_radar_admission.verify_inputs'), patch('alpha_radar_runner.verify_tools'), \
+             patch.object(ci.sys, 'executable', str(interpreter)), patch.object(ci.sys, 'addaudithook') as boundary, \
+             patch.object(ci, 'probe_child', side_effect=outcomes) as child, patch.object(ci, 'execute') as fixture:
+            error = None
+            try: ci.profile_probe(root)
+            except ValueError as exc: error = exc.args[0]
+            fixture.assert_not_called(); boundary.assert_called_once()
+            for call in child.call_args_list:
+                self.assertEqual(tuple(call.args[0][-5:]), ci.PROBE_TAIL)
+            return root, child.call_count, error
+
+    def test_successful_exact_profile_stops_after_one_minimal_command(self):
+        root, count, error = self.mocked_matrix([(b'', False, 0, True)])
+        self.assertIsNone(error); self.assertEqual(count, 1)
+        value = json.loads((root/'export/profile-probe-summary.json').read_text())
+        self.assertFalse(value['new_fixture_attempt']); self.assertEqual(value['authority'], AUTHORITY)
+        self.assertFalse((root/'execution-output').exists())
+
+    def test_failed_exact_profile_runs_bounded_subtractive_matrix(self):
+        root, count, error = self.mocked_matrix([(b'sandbox-exec: failed', False, 65, True)]*10)
+        self.assertIsNone(error); self.assertEqual(count, 10)
+        rows = list((root/'export').glob('profile-probe-??.json')); self.assertEqual(len(rows), 10)
+        for row in rows:
+            value = json.loads(row.read_text())
+            self.assertEqual(value['root_cause'], 'NOT_ESTABLISHED')
+            self.assertEqual(value['fixture_launches'], 0); self.assertEqual(value['worker_launches'], 0)
+
+    def test_failed_sanitization_or_timeout_publishes_safe_failure_then_stops(self):
+        for outcome, expected in (((b'api_key=SYNTHETIC', False, 65, True), 'PROFILE_PROBE_SANITIZATION'),
+                                  ((b'', False, None, False), 'PROFILE_PROBE_TIMEOUT')):
+            root, count, error = self.mocked_matrix([outcome])
+            self.assertEqual(error, expected); self.assertEqual(count, 1)
+            saved = (root/'export/profile-probe-01.json').read_text()
+            self.assertNotIn('api_key', saved); self.assertNotIn('SYNTHETIC\"', saved)
+            self.assertFalse((root/'export/profile-probe-summary.json').exists())
