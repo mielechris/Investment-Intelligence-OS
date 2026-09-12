@@ -485,3 +485,286 @@ class AdditionalLifecycleTests(unittest.TestCase):
         handler.send_header.assert_any_call('Content-Length','11')
         handler.wfile.write.assert_called_once_with(b'{"data":[')
         self.assertTrue(handler.close_connection)
+
+
+class StartupDiagnosticsTests(unittest.TestCase):
+    def capability(self):
+        root, p, r, e = fixture()
+        return admit(p, r, expected=e, authorized_root=root)
+
+    def records(self, cap):
+        p, _, _ = cap.documents()
+        return [json.loads(f.read_bytes())['value'] for f in
+                sorted(Path(p['root']).glob('lifecycle-*.json'))]
+
+    def test_chunked_stderr_never_retains_or_hashes_raw_material(self):
+        from alpha_radar_runner import StderrCapture
+        raw = (b'PermissionError: sample-sensitive-value /Users/private/person/key\n'
+               b'https://example.invalid/?apikey=sample-token\n'
+               b'-----BEGIN PRIVATE KEY-----\n\x1b[31msecret\xff\n'
+               b'RADAR_DIAGNOSTIC: IMPORT_ERROR\n')
+        for width in (1, 2, 7, 2048):
+            capture = StderrCapture()
+            with patch('alpha_radar_runner.hashlib.sha256') as hash_function:
+                for i in range(0, len(raw), width):
+                    capture.feed(raw[i:i+width])
+                capture.finish()
+                result = json.dumps(capture.snapshot())
+                hash_function.assert_not_called()
+            for forbidden in ('sample-sensitive', '/Users/', 'apikey', 'sample-token',
+                              'PRIVATE KEY', 'https://', '\\u001b'):
+                self.assertNotIn(forbidden, result)
+            self.assertIn('STDERR_PERMISSION_ERROR', result)
+            self.assertIn('STDERR_IMPORT_ERROR', result)
+            self.assertIn('REDACTED_UNRECOGNIZED', result)
+            self.assertFalse(capture.overflow)
+
+    def test_deceptive_prefix_is_only_an_untrusted_fixed_hint(self):
+        from alpha_radar_runner import StderrCapture
+        capture = StderrCapture()
+        capture.feed(b'PermissionError: attacker-content\n'
+                     b'RADAR_DIAGNOSTIC: PROCESS_IDENTITY secret\n'
+                     b'{"stage":"TLS_LOAD","scope":"LIVE_QUALIFICATION"}\n')
+        capture.finish()
+        value = capture.snapshot()
+        self.assertEqual(value['untrusted_stderr_hints'],
+                         ['STDERR_PERMISSION_ERROR', 'REDACTED_UNRECOGNIZED', 'REDACTED_UNRECOGNIZED'])
+        self.assertNotIn('authority', value)
+        self.assertFalse(value['raw_retained'])
+
+    def test_stderr_line_total_and_retained_bounds(self):
+        from alpha_radar_runner import StderrCapture
+        for data in (b'x'*80000, b'x\n'*40000, b'PermissionError: detail\n'*4000):
+            capture = StderrCapture()
+            capture.feed(data)
+            capture.finish()
+            self.assertTrue(capture.overflow)
+            self.assertLessEqual(len(capture.pending), 2048)
+            self.assertLessEqual(capture.retained, 8192)
+            self.assertNotIn('detail', json.dumps(capture.snapshot()))
+
+    def test_nonblocking_pipe_eof_and_bounded_drain(self):
+        from alpha_radar_runner import StderrCapture
+        stream = MagicMock();stream.fileno.return_value = 900
+        with patch('alpha_radar_runner.os.set_blocking') as nonblocking:
+            capture = StderrCapture(stream)
+        nonblocking.assert_called_once_with(900, False)
+        with patch('alpha_radar_runner.os.read', side_effect=[b'Import', BlockingIOError()]):
+            capture.drain()
+        self.assertFalse(capture.eof)
+        with patch('alpha_radar_runner.os.read', side_effect=[b'Error: hidden\n', b'']):
+            capture.drain()
+        self.assertTrue(capture.eof)
+        self.assertEqual(capture.lines, ['STDERR_IMPORT_ERROR'])
+        capture = StderrCapture();capture.fd = 900
+        with patch('alpha_radar_runner.os.read', return_value=b'x'*8192) as reader:
+            capture.drain()
+        self.assertEqual(reader.call_count, 8)
+        self.assertTrue(capture.overflow)
+
+    def test_exception_mapping_does_not_stringify_secrets(self):
+        from alpha_radar_runner import failure_category
+        class Hostile(Exception):
+            def __str__(self):
+                raise AssertionError('must not stringify')
+        self.assertEqual(failure_category(Hostile('sample-secret')), 'UNCLASSIFIED_ERROR')
+        self.assertEqual(failure_category(PermissionError(13, 'sample-secret', '/private/person')), 'PERMISSION_ERROR')
+        self.assertEqual(failure_category(ValueError('PROCESS_IDENTITY')), 'PROCESS_IDENTITY')
+
+    def test_child_returncode_signal_and_supervisor_are_separate(self):
+        from alpha_radar_runner import child_status
+        child = MagicMock()
+        for code, exit_code, sig in [(None, None, None), (0, 0, None), (7, 7, None), (-9, None, 9)]:
+            child.poll.return_value = code
+            value = child_status(child)
+            self.assertEqual(value['exit_code'], exit_code)
+            self.assertEqual(value['signal'], sig)
+            self.assertNotIn('supervisor_exit_code', value)
+        child.poll.return_value = True
+        with self.assertRaises(ValueError):child_status(child)
+
+    def test_unexpected_fingerprint_values_are_neither_retained_nor_hashed(self):
+        from alpha_radar_runner import observed_diagnostic
+        entry = {'expected': {'pid': 123, 'parent_pid': 456, 'argv': ('expected',),
+                 'cwd': '/approved', 'executable': '/approved/python', 'executable_hash': 'a'*64}}
+        actual = {'pid': 123, 'parent_pid': 456, 'argv': ('sample-secret',),
+                  'cwd': '/Users/private/person', 'executable': '/unapproved',
+                  'executable_hash': 'b'*64, 'start_time': '2026-09-12T00:00:00+00:00'}
+        with patch('alpha_radar_runner.hashlib.sha256') as h:
+            value = observed_diagnostic(entry, actual)
+            h.assert_not_called()
+        self.assertFalse(value['field_matches']['argv'])
+        self.assertIsNone(value['executable_hash'])
+        self.assertNotIn('sample-secret', json.dumps(value))
+        self.assertNotIn('/Users', json.dumps(value))
+
+    def test_exact_failed_registration_retains_exit_without_signaling(self):
+        from alpha_radar_runner import OwnedProcesses
+        for cause in (None, PermissionError('synthetic-denial'), ValueError('ARGV_OBSERVATION_FAILED')):
+            cap = self.capability()
+            inspector = MagicMock(return_value=None, side_effect=cause)
+            owned = OwnedProcesses(cap, inspect=inspector, pause=lambda _: None)
+            child = MagicMock(pid=12345);child.poll.return_value = 7
+            with self.assertRaises((ValueError, PermissionError)):
+                owned.register('fixture', child, argv=('synthetic',), cwd=cap.documents()[0]['root'],
+                               executable='/synthetic/python', executable_hash='a'*64,
+                               launch_parent='b'*64)
+            primary = deepcopy(owned.primary_failures)
+            result = owned.cleanup(lambda: True)
+            self.assertFalse(result['clean'])
+            self.assertTrue(result['port_clear'])
+            self.assertEqual(owned.primary_failures, primary)
+            self.assertIn('fixture', result['remaining'])
+            child.terminate.assert_not_called();child.kill.assert_not_called()
+            statuses = [v for v in self.records(cap) if v['event'] == 'FINAL_CHILD_STATUS']
+            self.assertEqual(statuses[0]['pid'], 12345)
+            self.assertEqual(statuses[0]['status']['exit_code'], 7)
+            self.assertFalse(statuses[0]['ownership_verified'])
+            self.assertFalse((Path(cap.documents()[0]['root'])/'worker-launch.json').exists())
+            self.assertFalse((Path(cap.documents()[0]['root'])/'journal').exists())
+
+    def test_inspection_timeout_is_preserved(self):
+        import subprocess
+        from alpha_radar_runner import OwnedProcesses
+        cap = self.capability();child = MagicMock(pid=12345);child.poll.return_value = 1
+        owned = OwnedProcesses(cap, inspect=MagicMock(side_effect=subprocess.TimeoutExpired('unretained-command', 1)), pause=lambda _:None)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            owned.register('fixture', child, argv=(), cwd=cap.documents()[0]['root'], executable='/synthetic', executable_hash='a'*64)
+        self.assertEqual(owned.primary_failures[0]['category'], 'PROCESS_TIMEOUT')
+        self.assertNotIn('unretained-command', json.dumps(self.records(cap)))
+        self.assertFalse(owned.cleanup(lambda:True)['clean'])
+
+    def test_cleanup_publication_failure_continues_and_cannot_be_green(self):
+        owned, child, _, _ = LifecycleTests.setup_owned(self)
+        child.poll.return_value = 0
+        other = MagicMock(pid=23456);other.poll.return_value = 0
+        owned.children['fixture'] = {'child':other,'observation':{},'expected':{}}
+        with patch.object(owned, 'evidence', side_effect=PermissionError('unretained')):
+            result = owned.cleanup(lambda:True)
+        self.assertFalse(result['clean'])
+        self.assertIn('DIAGNOSTIC_PUBLICATION_FAILED', result['diagnostic_failures'])
+        self.assertTrue(child.poll.called and other.poll.called)
+        child.terminate.assert_not_called();other.terminate.assert_not_called()
+
+    def test_popen_failure_and_cleanup_failure_keep_primary(self):
+        from alpha_radar_runner import supervise, OwnedProcesses
+        cap = self.capability()
+        descriptor = {'native_tools':{}, 'clock_mode':'ACCELERATED_LOGICAL_TIME', 'maximum_duration_seconds':60}
+        popen = MagicMock(side_effect=PermissionError('sample-sensitive-error'))
+        with patch('alpha_radar_runner.native_identity'), patch('alpha_radar_runner.verify_tools'), \
+             patch('alpha_radar_runner.listener_owners', return_value=[]), \
+             patch('alpha_radar_runner.signal.signal'), \
+             patch.object(OwnedProcesses, 'cleanup', side_effect=RuntimeError('sample-cleanup-secret')):
+            result = supervise(cap, descriptor, popen=popen)
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(result['primary_failure']['stage'], 'PROCESS_CREATE')
+        self.assertEqual(result['primary_failure']['creation_state'], 'NO_CHILD_CREATED')
+        self.assertEqual(result['primary_failure']['category'], 'PERMISSION_ERROR')
+        self.assertEqual(result['supervisor_exit_code'], 1)
+        self.assertEqual(result['secondary_failures'], ['UNCLASSIFIED_ERROR'])
+        self.assertFalse(result['cleanup']['clean'])
+        self.assertNotIn('sample-sensitive', json.dumps(result))
+        self.assertNotIn('sample-cleanup', json.dumps(result))
+        self.assertFalse((Path(cap.documents()[0]['root'])/'worker-launch.json').exists())
+
+    def test_all_child_stages_are_bound_diagnostics_not_live_receipts(self):
+        from alpha_radar_runner import ChildDiagnostics, STAGES, verify_child_diagnostic
+        from provider_gateway_live_contract import verify_qualification_receipt
+        cap = self.capability();diag = ChildDiagnostics(cap, 'fixture', 'a'*64)
+        p, _, pins = cap.documents()
+        for stage in sorted(STAGES):diag.emit(stage)
+        for f in Path(p['root']).glob('fixture-diagnostic-*.json'):
+            doc = json.loads(f.read_bytes())
+            value = verify_child_diagnostic(doc, content_hash(doc), parents=pins, role='fixture',
+                launch_parent='a'*64, pid=os.getpid(), parent_pid=os.getppid())
+            self.assertIn(value['stage'], STAGES)
+            with self.assertRaises(ValueError):verify_qualification_receipt(doc, content_hash(doc), parents=pins)
+
+    def test_forged_diagnostic_parents_roles_pid_and_categories_rejected(self):
+        from alpha_radar_runner import ChildDiagnostics, verify_child_diagnostic
+        cap = self.capability();p,_,pins=cap.documents()
+        ChildDiagnostics(cap, 'fixture', 'a'*64).emit('TLS_LOAD')
+        doc = json.loads((Path(p['root'])/'fixture-diagnostic-0001.json').read_bytes())
+        for key,value in [('launch_parent','b'*64),('role','worker'),('pid',12345),
+                          ('parent_pid',12345),('category','sample-secret'),('stage','UNKNOWN')]:
+            bad=deepcopy(doc);bad['value'][key]=value
+            with self.assertRaises(ValueError):verify_child_diagnostic(bad, content_hash(bad),
+                parents=pins,role='fixture',launch_parent='a'*64,pid=os.getpid(),parent_pid=os.getppid())
+        with self.assertRaises(ValueError):verify_child_diagnostic(doc,content_hash(doc),
+            parents={**pins,'package':'b'*64},role='fixture',launch_parent='a'*64,
+            pid=os.getpid(),parent_pid=os.getppid())
+
+    def test_diagnostic_publication_cannot_replace_primary_exception(self):
+        import io
+        from alpha_radar_runner import ChildDiagnostics
+        cap=self.capability();diag=ChildDiagnostics(cap,'fixture','a'*64)
+        primary=PermissionError('sample-primary-secret')
+        with patch('alpha_radar_runner.store', side_effect=OSError('sample-secondary-secret')), \
+             patch('alpha_radar_runner.sys.stderr',new_callable=io.StringIO) as stream:
+            diag.failure(primary)
+            self.assertEqual(stream.getvalue(),'RADAR_DIAGNOSTIC: DIAGNOSTIC_PUBLICATION_FAILED\n')
+
+    def test_child_diagnostics_reject_arbitrary_category_before_publication(self):
+        from alpha_radar_runner import ChildDiagnostics
+        cap=self.capability();diag=ChildDiagnostics(cap,'fixture','a'*64)
+        with patch('alpha_radar_runner.store') as writer:
+            with self.assertRaises(ValueError):diag.emit('TLS_LOAD',category='sample-secret')
+            writer.assert_not_called()
+
+    def test_child_failure_stages_preserve_original_and_do_not_launch(self):
+        from alpha_radar_runner import child_main
+        for stage in ('RUNTIME_VERIFY','CONFINEMENT_CHECK','TLS_LOAD','SOCKET_BIND',
+                      'SOCKET_LISTEN','TLS_WRAP','STARTUP_PUBLISH','PARENT_ACK'):
+            cap=self.capability();p,r,pins=cap.documents()
+            launch={'scope':SCOPE,'authority':AUTHORITY,'descriptor':{'package':p,'runtime':r,
+                'expected':pins,'authorized_root':cap.authorized_root,'native_tools':{},
+                'clock_mode':'ACCELERATED_LOGICAL_TIME','maximum_duration_seconds':60},
+                'output_identity':list(cap.output_identity),'role':'fixture',
+                'parent_pid':os.getppid(),'created_at':'2026-09-12T00:00:00+00:00'}
+            primary=PermissionError('sample-secret')
+            def fake_serve(cap,stop,ready,*,stage=stage):
+                # The keyword receives the actual stage publisher.
+                stage(target)
+                raise primary
+            target=stage
+            runtime_error=primary if stage=='RUNTIME_VERIFY' else None
+            confinement_error=primary if stage=='CONFINEMENT_CHECK' else None
+            with patch('alpha_radar_runner.native_identity',side_effect=runtime_error), \
+                 patch('alpha_radar_runner.require_confinement',side_effect=confinement_error), \
+                 patch('alpha_radar_runner.signal.signal'), \
+                 patch('alpha_radar_fixture.serve',side_effect=fake_serve):
+                with self.assertRaises(PermissionError) as caught:child_main(launch,'fixture','a'*64)
+            self.assertIs(caught.exception,primary)
+            docs=[json.loads(f.read_bytes())['value'] for f in Path(p['root']).glob('fixture-diagnostic-*.json')]
+            failures=[d for d in docs if d['category'] is not None]
+            self.assertEqual(failures[-1]['stage'],stage)
+            self.assertEqual(failures[-1]['category'],'PERMISSION_ERROR')
+            self.assertNotIn('sample-secret',json.dumps(docs))
+
+    def test_fixture_stage_order_with_entirely_mocked_socket_and_tls(self):
+        from alpha_radar_fixture import serve
+        cap=self.capability();events=[];instances=[]
+        class FakeServer:
+            def __init__(self,address,handler):
+                self.server_address=address;self.socket=MagicMock();self.closed=False
+                instances.append(self);self.server_bind();self.server_activate()
+            def server_activate(self):pass
+            def server_close(self):self.closed=True
+        context=MagicMock();context.wrap_socket.side_effect=lambda sock,**kwargs:sock
+        ready=MagicMock(side_effect=lambda:events.append('READY'))
+        with patch('alpha_radar_fixture.HTTPServer',FakeServer), \
+             patch('alpha_radar_fixture.ssl.SSLContext',return_value=context):
+            serve(cap,lambda:True,ready,stage=events.append)
+        self.assertEqual(events,['TLS_CONTEXT','TLS_LOAD','SOCKET_CREATE','SOCKET_BIND',
+            'SOCKET_LISTEN','TLS_WRAP','READY','FIXTURE_SERVE'])
+        self.assertTrue(instances[0].closed)
+        instances[0].socket.bind.assert_called_once_with(('127.0.0.1',38491))
+        context.load_cert_chain.assert_called_once()
+
+    def test_duplicate_diagnostic_publication_preserves_original(self):
+        from alpha_radar_runner import ChildDiagnostics
+        cap=self.capability();p,_,_=cap.documents()
+        first=ChildDiagnostics(cap,'fixture','a'*64);first.emit('TLS_LOAD')
+        path=Path(p['root'])/'fixture-diagnostic-0001.json';before=path.read_bytes()
+        with self.assertRaises(FileExistsError):ChildDiagnostics(cap,'fixture','a'*64).emit('TLS_WRAP')
+        self.assertEqual(path.read_bytes(),before)

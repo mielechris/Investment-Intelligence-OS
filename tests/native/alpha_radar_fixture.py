@@ -69,7 +69,7 @@ def emit(handler, status, data, *, fault, stop, monotonic=time.monotonic, pause=
         handler.close_connection = True
 
 
-def serve(cap, stop, ready):
+def serve(cap, stop, ready, *, stage=lambda _: None):
     require(type(cap) is SyntheticCapability, 'SYNTHETIC_CAPABILITY_REQUIRED')
     p, r, _ = cap.recheck()
     f = p['fixture']
@@ -92,19 +92,29 @@ def serve(cap, stop, ready):
         allow_reuse_address = False
 
         def server_bind(self):
+            stage('SOCKET_BIND')
             self.socket.bind(self.server_address)
             self.server_name, self.server_port = f['address'], f['port']
 
+        def server_activate(self):
+            stage('SOCKET_LISTEN')
+            super().server_activate()
+
+    stage('TLS_CONTEXT')
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
+    stage('TLS_LOAD')
     context.load_cert_chain(str(Path(r['root']) / f['certificate']),
                             str(Path(r['root']) / f['private_key']))
+    stage('SOCKET_CREATE')
     server = NumericServer((f['address'], f['port']), Handler)
     try:
+        stage('TLS_WRAP')
         server.socket = context.wrap_socket(server.socket, server_side=True)
         server.socket.settimeout(.5)
         server.timeout = .2
         ready()
+        stage('FIXTURE_SERVE')
         while not stop():
             server.handle_request()
     finally:

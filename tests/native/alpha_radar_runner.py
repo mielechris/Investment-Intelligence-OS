@@ -9,6 +9,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import ssl
 from pathlib import Path
 import signal
 import subprocess
@@ -24,6 +26,210 @@ from provider_gateway_https import bounded_https
 from truth_spine_process_identity import inspect_macos
 from alpha_radar_admission import (SCOPE, AUTHORITY, SyntheticCapability, admit,
     envelope, verify_envelope, store, verify_inputs)
+
+
+# Diagnostics are observations only; none of these records grant authority.
+STAGES = frozenset(('LAUNCH_INTENT', 'PROCESS_CREATE', 'OWNERSHIP_REGISTER',
+    'STARTUP_VERIFY', 'LISTENER_VERIFY', 'PARENT_ACK', 'SESSION_WAIT',
+    'RUNTIME_VERIFY', 'CONFINEMENT_CHECK', 'TLS_CONTEXT', 'TLS_LOAD',
+    'SOCKET_CREATE', 'SOCKET_BIND', 'SOCKET_LISTEN', 'TLS_WRAP',
+    'STARTUP_PUBLISH', 'FIXTURE_SERVE', 'WORKER_SESSION'))
+FAILURE_CODES = frozenset(('PROCESS_ABSENT', 'PROCESS_IDENTITY',
+    'STARTUP_IDENTITY_CHANGED', 'OSCILLATING_EXECUTABLE', 'STARTUP_STABILIZATION_TIMEOUT',
+    'PROCESS_INSPECTION_FAILED', 'PROCESS_INSPECTION_OVERSIZE', 'ARGV_OBSERVATION_FAILED',
+    'ARGV_OBSERVATION_INVALID', 'START_TIME_INVALID', 'RUNTIME_IDENTITY_CHANGED',
+    'STARTUP_RECEIPT_REQUIRED', 'STARTUP_RECEIPT_CHANGED', 'STARTUP_RECEIPT_MISMATCH',
+    'PARENT_ACK_TIMEOUT', 'PARENT_ACK_MISMATCH', 'LISTENER_OWNER_MISMATCH',
+    'LISTENER_INSPECTION', 'CHILD_SURVIVED', 'UNVERIFIED_PARTIAL_START',
+    'COOPERATIVE_SHUTDOWN', 'NATIVE_SESSION_TIMEOUT', 'WORKER_FAILED',
+    'SESSION_INCOMPLETE', 'OS_CONFINEMENT_REQUIRED', 'GENERAL_NETWORK_MUST_BE_DENIED',
+    'CONFINEMENT_SENTINEL_MISSING', 'IMPORTED_CLOSURE', 'NATIVE_RUNTIME',
+    'DIAGNOSTIC_PUBLICATION_FAILED', 'DIAGNOSTIC_OVERFLOW', 'DIAGNOSTIC_PIPE_FAILED'))
+
+
+def failure_category(error):
+    # Never stringify/hash an exception, argv, filename or stderr body.
+    if error.args and type(error.args[0]) is str and error.args[0] in FAILURE_CODES:
+        return error.args[0]
+    if isinstance(error, subprocess.TimeoutExpired):
+        return 'PROCESS_TIMEOUT'
+    if isinstance(error, ssl.SSLError):
+        return 'TLS_ERROR'
+    if isinstance(error, PermissionError):
+        return 'PERMISSION_ERROR'
+    if isinstance(error, FileExistsError):
+        return 'DESTINATION_EXISTS'
+    if isinstance(error, OSError):
+        return 'OS_ERROR'
+    if isinstance(error, (ImportError, ModuleNotFoundError)):
+        return 'IMPORT_ERROR'
+    return 'UNCLASSIFIED_ERROR'
+
+
+class StderrCapture:
+    """Bounded nonblocking pipe; raw bytes are never written, hashed or echoed."""
+    def __init__(self, stream=None):
+        self.stream, self.fd = stream, None
+        self.pending = bytearray()
+        self.lines, self.received, self.retained = [], 0, 0
+        self.overflow, self.discard_line, self.eof = False, False, False
+        if stream is not None:
+            self.fd = stream.fileno()
+            require(type(self.fd) is int and self.fd >= 0, 'DIAGNOSTIC_PIPE_FAILED')
+            os.set_blocking(self.fd, False)
+
+    def line(self, raw):
+        # Only fixed classifications survive. Even a forged known prefix is
+        # merely an untrusted stderr hint, never a proven failure or authority.
+        fixed = {
+            b'sandbox-exec: sandbox_apply: Operation not permitted': 'STDERR_CONFINEMENT_DENIED',
+            b'PermissionError:': 'STDERR_PERMISSION_ERROR',
+            b'FileNotFoundError:': 'STDERR_FILE_NOT_FOUND',
+            b'ModuleNotFoundError:': 'STDERR_IMPORT_ERROR',
+            b'ImportError:': 'STDERR_IMPORT_ERROR',
+            b'ssl.SSLError:': 'STDERR_TLS_ERROR',
+            b'OSError:': 'STDERR_OS_ERROR',
+        }
+        value = fixed.get(raw, 'REDACTED_UNRECOGNIZED')
+        if value == 'REDACTED_UNRECOGNIZED':
+            for prefix, category in fixed.items():
+                if prefix.endswith(b':') and raw.startswith(prefix + b' '):
+                    value = category
+                    break
+        if raw.startswith(b'RADAR_DIAGNOSTIC: '):
+            code = raw[len(b'RADAR_DIAGNOSTIC: '):]
+            allowed = FAILURE_CODES | {'PROCESS_TIMEOUT', 'TLS_ERROR', 'PERMISSION_ERROR',
+                'DESTINATION_EXISTS', 'OS_ERROR', 'IMPORT_ERROR', 'UNCLASSIFIED_ERROR'}
+            if code in {v.encode('ascii') for v in allowed}:
+                value = 'STDERR_' + code.decode('ascii')
+        size = len(value) + 4
+        if self.retained + size <= 8192:
+            self.lines.append(value)
+            self.retained += size
+        else:
+            self.overflow = True
+
+    def feed(self, chunk):
+        require(type(chunk) is bytes, 'DIAGNOSTIC_PIPE_FAILED')
+        remaining = max(0, 65536 - self.received)
+        self.received += len(chunk)
+        if len(chunk) > remaining:
+            self.overflow = True
+        for byte in chunk[:remaining]:
+            if byte == 10:
+                self.line(bytes(self.pending) if not self.discard_line else b'')
+                self.pending.clear()
+                self.discard_line = False
+            elif not self.discard_line:
+                if len(self.pending) < 2048:
+                    self.pending.append(byte)
+                else:
+                    self.pending.clear()
+                    self.discard_line = True
+                    self.overflow = True
+        if self.overflow:
+            self.pending.clear()
+
+    def drain(self):
+        if self.fd is None or self.eof:
+            return
+        # Fixed work per tick; continue draining/discarding after overflow so
+        # diagnostics do not become an unbounded buffer or a blocking read.
+        for _ in range(8):
+            try:
+                chunk = os.read(self.fd, 8192)
+            except BlockingIOError:
+                return
+            if not chunk:
+                self.finish()
+                return
+            self.feed(chunk)
+
+    def finish(self):
+        if not self.eof and (self.pending or self.discard_line):
+            self.line(bytes(self.pending) if not self.discard_line else b'')
+        self.pending.clear()
+        self.eof = True
+
+    def snapshot(self):
+        return {'untrusted_stderr_hints': list(self.lines), 'bytes_seen': self.received,
+                'overflow': self.overflow, 'eof': self.eof, 'raw_retained': False}
+
+
+def child_status(child):
+    code = child.poll()
+    require(code is None or type(code) is int, 'PROCESS_IDENTITY')
+    return {'state': 'CHILD_RUNNING' if code is None else 'CHILD_EXITED',
+            'returncode': code, 'exit_code': code if code is not None and code >= 0 else None,
+            'signal': -code if code is not None and code < 0 else None}
+
+
+def observed_diagnostic(entry, actual):
+    expected = entry['expected']
+    matches = {key: actual.get(key) == value for key, value in expected.items()}
+    def integer(key):
+        value = actual.get(key)
+        return value if type(value) is int and 0 < value < 2**31 else None
+    stamp = actual.get('start_time')
+    if not isinstance(stamp, str) or re.fullmatch(r'[0-9T:+.Z-]{20,40}', stamp) is None:
+        stamp = None
+    return {'basis': 'INDEPENDENT_OS_OBSERVATION', 'pid': integer('pid'),
+            'parent_pid': integer('parent_pid'), 'start_time': stamp,
+            'field_matches': matches, 'unexpected_values': 'REDACTED',
+            'executable_hash': expected.get('executable_hash') if matches.get('executable_hash') else None}
+
+
+class ChildDiagnostics:
+    def __init__(self, cap, role, launch_parent):
+        require(role in ('fixture', 'worker') and re.fullmatch('[a-f0-9]{64}', launch_parent), 'CHILD_LAUNCH')
+        self.cap, self.role, self.launch_parent = cap, role, launch_parent
+        self.sequence, self.stage = 0, 'RUNTIME_VERIFY'
+
+    def emit(self, stage, *, category=None):
+        require(stage in STAGES, 'CHILD_DIAGNOSTIC_STAGE')
+        allowed = FAILURE_CODES | {'PROCESS_TIMEOUT', 'TLS_ERROR', 'PERMISSION_ERROR',
+            'DESTINATION_EXISTS', 'OS_ERROR', 'IMPORT_ERROR', 'UNCLASSIFIED_ERROR'}
+        require(category is None or (type(category) is str and category in allowed), 'CHILD_DIAGNOSTIC_CATEGORY')
+        self.stage = stage
+        self.sequence += 1
+        require(self.sequence <= 64, 'DIAGNOSTIC_OVERFLOW')
+        value = {'kind': 'CHILD_DIAGNOSTIC_ONLY', 'role': self.role,
+                 'launch_parent': self.launch_parent, 'sequence': self.sequence,
+                 'stage': stage, 'category': category, 'pid': os.getpid(),
+                 'parent_pid': os.getppid()}
+        store(self.cap, f'{self.role}-diagnostic-{self.sequence:04d}.json', value)
+
+    def failure(self, error):
+        try:
+            self.emit(self.stage, category=failure_category(error))
+        except Exception:
+            # Preserve the primary exception. The parent still captures a fixed
+            # failure hint even if admitted child receipt publication failed.
+            sys.stderr.write('RADAR_DIAGNOSTIC: DIAGNOSTIC_PUBLICATION_FAILED\n')
+
+
+def verify_child_diagnostic(doc, expected, *, parents, role, launch_parent, pid, parent_pid):
+    # Validate the positive data vocabulary before hashing any untrusted document.
+    require(set(doc) == {'schema', 'scope', 'authority', 'parents', 'value', 'content_hash'} and
+            doc['schema'] == 'iios-radar-synthetic-receipt-v1' and doc['scope'] == SCOPE and
+            doc['parents'] == parents and doc['authority'] == AUTHORITY and
+            all(v is False for v in doc['authority'].values()) and
+            type(doc['content_hash']) is str and re.fullmatch('[a-f0-9]{64}', doc['content_hash']), 'CHILD_DIAGNOSTIC_SCHEMA')
+    value = doc['value']
+    require(set(value) == {'kind', 'role', 'launch_parent', 'sequence', 'stage',
+            'category', 'pid', 'parent_pid'}, 'CHILD_DIAGNOSTIC_SCHEMA')
+    require(value['kind'] == 'CHILD_DIAGNOSTIC_ONLY' and value['role'] == role and
+            value['launch_parent'] == launch_parent and value['pid'] == pid and
+            type(value['pid']) is int and type(pid) is int and type(value['parent_pid']) is int and
+            value['parent_pid'] == parent_pid and role in ('fixture', 'worker') and
+            re.fullmatch('[a-f0-9]{64}', launch_parent) is not None and
+            type(value['sequence']) is int and 1 <= value['sequence'] <= 64 and
+            type(value['stage']) is str and value['stage'] in STAGES, 'CHILD_DIAGNOSTIC_BINDING')
+    allowed = FAILURE_CODES | {'PROCESS_TIMEOUT', 'TLS_ERROR', 'PERMISSION_ERROR',
+        'DESTINATION_EXISTS', 'OS_ERROR', 'IMPORT_ERROR', 'UNCLASSIFIED_ERROR'}
+    require(value['category'] is None or (type(value['category']) is str and value['category'] in allowed), 'CHILD_DIAGNOSTIC_CATEGORY')
+    verify_envelope(doc, expected, parents=parents)
+    return value  # Not accepted by read_startup, Session.verify or live admission.
 
 
 def checked_capability(cap):
@@ -181,46 +387,79 @@ class OwnedProcesses:
         self.cap, self.inspect, self.monotonic, self.pause = cap, inspect, monotonic, pause
         self.children, self.failures, self.counter = {}, [], 0
         self.startup_pins = {}
+        self.diagnostic_failures, self.primary_failures = [], []
 
     def evidence(self, value):
         self.counter += 1
-        store(self.cap, f'lifecycle-{self.counter:04d}.json', value)
+        store(self.cap, f'lifecycle-{self.counter:04d}.json', {**value,
+            'recorded_at': datetime.now(timezone.utc).isoformat(),
+            'monotonic_seconds': self.monotonic()})
 
-    def register(self, role, child, *, argv, cwd, executable, executable_hash, launcher=None):
+    def safe_evidence(self, value):
+        try:
+            self.evidence(value)
+        except Exception:
+            self.diagnostic_failures.append('DIAGNOSTIC_PUBLICATION_FAILED')
+
+    def pump(self, entry):
+        capture = entry.get('capture')
+        if capture is not None:
+            capture.drain()
+
+    def register(self, role, child, *, argv, cwd, executable, executable_hash, launcher=None,
+                 stderr=None, launch_parent=None):
         require(role in ('worker', 'fixture') and role not in self.children, 'CHILD_ROLE')
         entry = {'child': child, 'expected': {'pid': child.pid, 'parent_pid': os.getpid(),
             'argv': tuple(argv), 'cwd': str(cwd), 'executable': str(executable),
-            'executable_hash': executable_hash}, 'observation': None, 'launcher': launcher}
+            'executable_hash': executable_hash}, 'observation': None, 'launcher': launcher, 'launch_parent': launch_parent}
         self.children[role] = entry  # Keep partial startup registered even on failure.
-        end = self.monotonic() + 10
-        previous, stable, anchor, final_seen = None, 0, None, False
-        while self.monotonic() < end:
-            observed = self.observe(entry, allow_launcher=True)
-            identity = {k: observed[k] for k in ('pid', 'parent_pid', 'start_time', 'cwd')}
-            if anchor is None:
-                anchor = identity
-            require(identity == anchor, 'STARTUP_IDENTITY_CHANGED')
-            final = observed['executable'] == str(executable)
-            require(not final_seen or final, 'OSCILLATING_EXECUTABLE')
-            final_seen |= final
-            if not final:
-                previous, stable = None, 0
+        try:
+            entry['capture'] = StderrCapture(stderr)
+            self.evidence({'event': 'PROCESS_CREATED', 'role': role, 'pid': child.pid,
+                'expected_parent_pid': os.getpid(), 'launch_parent': launch_parent,
+                'identity_status': 'CHILD_CREATED_UNOBSERVED',
+                'status': child_status(child)})
+            end = self.monotonic() + 10
+            previous, stable, anchor, final_seen = None, 0, None, False
+            while self.monotonic() < end:
+                self.pump(entry)
+                require(not entry['capture'].overflow, 'DIAGNOSTIC_OVERFLOW')
+                observed = self.observe(entry, allow_launcher=True)
+                identity = {k: observed[k] for k in ('pid', 'parent_pid', 'start_time', 'cwd')}
+                if anchor is None:
+                    anchor = identity
+                require(identity == anchor, 'STARTUP_IDENTITY_CHANGED')
+                final = observed['executable'] == str(executable)
+                require(not final_seen or final, 'OSCILLATING_EXECUTABLE')
+                final_seen |= final
+                if not final:
+                    previous, stable = None, 0
+                    self.pause(.05)
+                    continue
+                stable = stable + 1 if observed == previous else 1
+                previous = observed
+                if stable >= 3:
+                    entry['observation'] = observed
+                    self.evidence({'event': 'OWNERSHIP', 'role': role, 'observed': observed_diagnostic(entry, observed)})
+                    return
                 self.pause(.05)
-                continue
-            stable = stable + 1 if observed == previous else 1
-            previous = observed
-            if stable >= 3:
-                entry['observation'] = observed
-                self.evidence({'event': 'OWNERSHIP', 'role': role, 'observed': observed})
-                return
-            self.pause(.05)
-        raise ValueError('STARTUP_STABILIZATION_TIMEOUT')
+            raise ValueError('STARTUP_STABILIZATION_TIMEOUT')
+        except BaseException as error:
+            primary = {'role': role, 'stage': 'OWNERSHIP_REGISTER',
+                       'category': failure_category(error), 'pid': child.pid,
+                       'launch_parent': launch_parent}
+            self.primary_failures.append(primary)
+            self.safe_evidence({'event': 'REGISTRATION_FAILED', **primary})
+            raise
 
     def observe(self, entry, *, allow_launcher=False):
         checked_capability(self.cap)
         observed = self.inspect(entry['child'].pid)
         require(observed is not None, 'PROCESS_ABSENT')
         actual = asdict(observed)
+        self.safe_evidence({'event': 'OWNERSHIP_OBSERVATION', 'observed': observed_diagnostic(entry, actual),
+                            'launch_parent': entry.get('launch_parent')})
+        require(not self.diagnostic_failures, 'DIAGNOSTIC_PUBLICATION_FAILED')
         require(actual['start_time'] and actual['command'] == ' '.join(actual['argv']), 'PROCESS_IDENTITY')
         expected = entry['expected']
         if allow_launcher and entry.get('launcher') and actual['executable'] == entry['launcher']['executable']:
@@ -231,6 +470,8 @@ class OwnedProcesses:
 
     def verify(self, role, *, require_startup=True):
         entry = self.children[role]
+        self.pump(entry)
+        require(not entry.get('capture') or not entry['capture'].overflow, 'DIAGNOSTIC_OVERFLOW')
         require(entry['observation'] is not None and self.observe(entry) == entry['observation'], 'PROCESS_IDENTITY')
         require(not require_startup or role in self.startup_pins, 'STARTUP_RECEIPT_REQUIRED')
         if role in self.startup_pins:
@@ -243,6 +484,10 @@ class OwnedProcesses:
             try:
                 entry = self.children[role]
                 child = entry['child']
+                self.pump(entry)
+                self.safe_evidence({'event': 'CHILD_STATUS', 'role': role,
+                    'pid': child.pid, 'status': child_status(child),
+                    'ownership_verified': entry['observation'] is not None})
                 if child.poll() is None:
                     self.verify(role).terminate()
                     try:
@@ -254,8 +499,30 @@ class OwnedProcesses:
                 require(entry['observation'] is not None, 'UNVERIFIED_PARTIAL_START')
                 self.evidence({'event': 'EXIT', 'role': role, 'returncode': child.poll()})
                 del self.children[role]
-            except Exception:
-                self.failures.append({'role': role, 'failure': 'CLEANUP_UNVERIFIED'})
+            except Exception as error:
+                self.failures.append({'role': role, 'failure': 'CLEANUP_UNVERIFIED',
+                                      'category': failure_category(error)})
+            finally:
+                try:
+                    self.pump(entry)
+                    status = child_status(child)
+                    capture = entry.get('capture')
+                    if capture is not None and status['state'] == 'CHILD_EXITED':
+                        if capture.stream is not None:
+                            if not capture.eof:
+                                self.diagnostic_failures.append('DIAGNOSTIC_INCOMPLETE')
+                            capture.pending.clear()
+                            capture.stream.close()
+                        else:
+                            capture.finish()
+                    if capture is not None and capture.overflow:
+                        self.diagnostic_failures.append('DIAGNOSTIC_OVERFLOW')
+                    self.safe_evidence({'event': 'FINAL_CHILD_STATUS', 'role': role,
+                        'pid': child.pid, 'status': status,
+                        'ownership_verified': entry['observation'] is not None,
+                        'stderr': capture.snapshot() if capture is not None else None})
+                except Exception:
+                    self.diagnostic_failures.append('DIAGNOSTIC_STATUS_UNAVAILABLE')
         clear = True
         for _ in range(3):
             try:
@@ -264,8 +531,11 @@ class OwnedProcesses:
                 clear = False
             self.pause(.2)
         result = {'scope': SCOPE, 'remaining': sorted(self.children), 'failures': self.failures,
-                  'port_clear': clear, 'clean': not self.children and not self.failures and clear}
-        self.evidence({'event': 'CLEANUP', 'result': result})
+                  'port_clear': clear, 'diagnostic_failures': list(self.diagnostic_failures),
+                  'clean': not self.children and not self.failures and not self.diagnostic_failures and clear}
+        self.safe_evidence({'event': 'CLEANUP', 'result': result})
+        result['diagnostic_failures'] = list(self.diagnostic_failures)
+        result['clean'] = result['clean'] and not self.diagnostic_failures
         return result
 
 
@@ -367,6 +637,8 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
     owned = OwnedProcesses(cap)
     started = time.monotonic()
     failure, session, cleanup = None, None, None
+    primary_failure, secondary_failures = None, []
+    stage, role = 'LAUNCH_INTENT', None
     stopped = [False]
     def stop_handler(*_):
         stopped[0] = True
@@ -381,18 +653,25 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
             launch = {'scope': SCOPE, 'authority': AUTHORITY, 'descriptor': descriptor, 'output_identity': list(cap.output_identity),
                       'role': role, 'parent_pid': os.getpid(), 'created_at': datetime.now(timezone.utc).isoformat()}
             name = role + '-launch.json'
+            stage = 'LAUNCH_INTENT'
             launch_hash = publish(fd, name, launch)
             argv = [str(executable), '-B', str(script), '--child', role,
                     '--descriptor', str(out / name), '--expected-descriptor', launch_hash]
             command = ['/usr/bin/sandbox-exec', '-f', str(runtime / r['confinement']), *argv]
-            # Child output is suppressed; only schema-validated receipts survive.
+            # stdout stays suppressed; only positively sanitized stderr hints survive.
+            owned.evidence({'event': 'LAUNCH_INTENT', 'role': role, 'launch_parent': launch_hash,
+                            'creation_state': 'NO_CHILD_CREATED'})
+            stage = 'PROCESS_CREATE'
             child = popen(command, cwd=out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, close_fds=True,
+                          stderr=subprocess.PIPE, close_fds=True,
                           env={'PATH': '/usr/bin:/bin:/usr/sbin', 'LC_ALL': 'C', 'TZ': 'UTC'})
+            stage = 'OWNERSHIP_REGISTER'
             owned.register(role, child, argv=argv, cwd=out, executable=executable,
+                           stderr=child.stderr, launch_parent=launch_hash,
                            executable_hash=executable_hash, launcher={'argv': tuple(command),
                                'executable': '/usr/bin/sandbox-exec',
                                'executable_hash': descriptor['native_tools']['/usr/bin/sandbox-exec']})
+            stage = 'STARTUP_VERIFY'
             deadline = time.monotonic() + 10
             while not (out / (role + '-startup.json')).exists() and time.monotonic() < deadline:
                 owned.verify(role, require_startup=False)
@@ -400,9 +679,12 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
             startup_hashes[role] = read_startup(cap, role, launch_hash, owned)
             owned.startup_pins[role] = (launch_hash, startup_hashes[role])
             if role == 'fixture':
+                stage = 'LISTENER_VERIFY'
                 require(listener_owners(p['fixture']['port']) == [(child.pid, '127.0.0.1:' + str(p['fixture']['port']))], 'LISTENER_OWNER_MISMATCH')
+            stage = 'PARENT_ACK'
             store(cap, role + '-ack.json', {'role': role, 'launch_parent': launch_hash,
                                           'startup_parent': startup_hashes[role]})
+        stage = 'SESSION_WAIT'
         worker = owned.children['worker']['child']
         while worker.poll() is None:
             require(not stopped[0], 'COOPERATIVE_SHUTDOWN')
@@ -414,22 +696,30 @@ def supervise(cap, descriptor, *, popen=subprocess.Popen):
         doc = read_record(fd, 'session.json')
         session = verify_envelope(doc, content_hash(doc), parents=pins)
         require(session['classification'] == 'SYNTHETIC_PASS' and session['requests'] == 475, 'SESSION_INCOMPLETE')
-    except BaseException:
+    except BaseException as error:
         failure = 'SYNTHETIC_NATIVE_FAILED'
+        primary_failure = {'stage': stage, 'role': role, 'category': failure_category(error),
+                           'creation_state': 'CHILD_CREATED' if role in owned.children else 'NO_CHILD_CREATED'}
         try:
-            store(cap, 'native-failure.json', {'failure': failure})
+            store(cap, 'native-failure.json', {'failure': failure, 'primary_failure': primary_failure})
         except Exception:
-            failure = 'FAILURE_EVIDENCE_UNAVAILABLE'
+            secondary_failures.append('FAILURE_EVIDENCE_UNAVAILABLE')
     finally:
         try:
             cleanup = owned.cleanup(lambda: not listener_owners(p['fixture']['port']))
+        except Exception as error:
+            secondary_failures.append(failure_category(error))
+            cleanup = {'clean': False, 'remaining': sorted(owned.children),
+                       'failure': 'CLEANUP_UNVERIFIED', 'port_clear': False}
         finally:
             os.close(lock)
             os.close(fd)
             for sig, handler in previous_handlers.items():
                 signal.signal(sig, handler)
-    result = {'classification': 'SYNTHETIC_PASS' if failure is None and cleanup['clean'] else 'SYNTHETIC_FAILED',
-              'failure': failure, 'session': session, 'startup_parents': startup_hashes,
+    result = {'classification': 'SYNTHETIC_PASS' if failure is None and not secondary_failures and cleanup['clean'] else 'SYNTHETIC_FAILED',
+              'failure': failure, 'primary_failure': primary_failure, 'secondary_failures': secondary_failures,
+              'supervisor_exit_code': 0 if failure is None and not secondary_failures and cleanup['clean'] else 1,
+              'session': session, 'startup_parents': startup_hashes,
               'cleanup': cleanup, 'clock_mode': descriptor['clock_mode'],
               'live_readiness': 'NOT_QUALIFIED', 'armed': False,
               'actual_elapsed_seconds': time.monotonic() - started}
@@ -490,37 +780,47 @@ def child_main(launch, role, launch_parent):
     identities = verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
     cap = SyntheticCapability(canonical(d['package']), canonical(d['runtime']), canonical(d['expected']),
                               d['authorized_root'], identities, tuple(launch['output_identity']))
-    native_identity(cap)
-    require_confinement(cap)
-    stopped = [False]
-    require(type(d['maximum_duration_seconds']) is int and 1 <= d['maximum_duration_seconds'] <= 25200, 'NATIVE_DURATION')
-    child_deadline = time.monotonic() + d['maximum_duration_seconds']
-    def stop_handler(*_):
-        stopped[0] = True
-    def stop():
-        return stopped[0] or time.monotonic() >= child_deadline
-    def ready():
-        startup(cap, role, launch_parent)
-        await_parent_ack(cap, role, launch_parent)
-    signal.signal(signal.SIGTERM, stop_handler)
-    signal.signal(signal.SIGINT, stop_handler)
-    if role == 'fixture':
-        from alpha_radar_fixture import serve
-        serve(cap, stop, ready)
-        return 0
-    require(role == 'worker', 'CHILD_ROLE')
-    ready()
-    if d['clock_mode'] == 'ACCELERATED_LOGICAL_TIME':
-        now = [utc(d['package']['plan']['rows'][0]['valid_from'])]
-        clock = lambda: now[0].isoformat()
-        def wait(seconds):
-            now[0] += timedelta(seconds=seconds)
-    else:
-        require(d['clock_mode'] == 'REAL_SESSION_TIME', 'CLOCK_MODE')
-        clock = lambda: datetime.now(timezone.utc).isoformat()
-        wait = time.sleep
-    result = Session(cap, clock=clock, wait=wait, stop=stop).run()
-    return 0 if result['classification'] == 'SYNTHETIC_PASS' else 1
+    diagnostic = ChildDiagnostics(cap, role, launch_parent)
+    try:
+        diagnostic.emit('RUNTIME_VERIFY')
+        native_identity(cap)
+        diagnostic.emit('CONFINEMENT_CHECK')
+        require_confinement(cap)
+        stopped = [False]
+        require(type(d['maximum_duration_seconds']) is int and 1 <= d['maximum_duration_seconds'] <= 25200, 'NATIVE_DURATION')
+        child_deadline = time.monotonic() + d['maximum_duration_seconds']
+        def stop_handler(*_):
+            stopped[0] = True
+        def stop():
+            return stopped[0] or time.monotonic() >= child_deadline
+        def ready():
+            diagnostic.emit('STARTUP_PUBLISH')
+            startup(cap, role, launch_parent)
+            diagnostic.emit('PARENT_ACK')
+            await_parent_ack(cap, role, launch_parent)
+        signal.signal(signal.SIGTERM, stop_handler)
+        signal.signal(signal.SIGINT, stop_handler)
+        if role == 'fixture':
+            from alpha_radar_fixture import serve
+            serve(cap, stop, ready, stage=diagnostic.emit)
+            return 0
+        require(role == 'worker', 'CHILD_ROLE')
+        ready()
+        if d['clock_mode'] == 'ACCELERATED_LOGICAL_TIME':
+            now = [utc(d['package']['plan']['rows'][0]['valid_from'])]
+            clock = lambda: now[0].isoformat()
+            def wait(seconds):
+                now[0] += timedelta(seconds=seconds)
+        else:
+            require(d['clock_mode'] == 'REAL_SESSION_TIME', 'CLOCK_MODE')
+            clock = lambda: datetime.now(timezone.utc).isoformat()
+            wait = time.sleep
+        diagnostic.emit('WORKER_SESSION')
+        result = Session(cap, clock=clock, wait=wait, stop=stop).run()
+        return 0 if result['classification'] == 'SYNTHETIC_PASS' else 1
+    except BaseException as error:
+        diagnostic.failure(error)
+        raise
 
 
 def read_descriptor(path, expected):
@@ -561,4 +861,8 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as error:
+        sys.stderr.write('RADAR_DIAGNOSTIC: ' + failure_category(error) + '\n')
+        sys.exit(1)
