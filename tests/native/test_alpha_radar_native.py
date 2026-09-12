@@ -1271,3 +1271,122 @@ class LauncherHintTests(unittest.TestCase):
         capture.finish();self.assertTrue(capture.overflow)
         self.assertLessEqual(capture.retained,8192)
         self.assertNotIn('sample-sensitive-key',json.dumps(capture.snapshot()))
+
+
+class PreparationOnlyGateTests(unittest.TestCase):
+    def test_exact_manual_input_only(self):
+        from alpha_radar_ci import native_execution_allowed
+        for value in (True, 'true'):
+            self.assertTrue(native_execution_allowed('workflow_dispatch', {'inputs': {'native_startup': value}}, True))
+        for event in ('push', 'pull_request', '', None, 'schedule'):
+            for value in (True, 'true', False, 'false', None):
+                self.assertFalse(native_execution_allowed(event, {'inputs': {'native_startup': value}}, True))
+        for value in (False, 'false', '', 'TRUE', '1', 1, 0, None, [], {}, 'true '):
+            self.assertFalse(native_execution_allowed('workflow_dispatch', {'inputs': {'native_startup': value}}, True))
+        for event in ({}, {'inputs': {}}, {'inputs': []}, [], None):
+            self.assertFalse(native_execution_allowed('workflow_dispatch', event, True))
+        for flag in (False, None, 1, 'true'):
+            self.assertFalse(native_execution_allowed('workflow_dispatch', {'inputs': {'native_startup': True}}, flag))
+
+    def test_push_execute_fails_before_any_access_or_launch(self):
+        from alpha_radar_ci import execute
+        with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'push'}, clear=True), \
+             patch('alpha_radar_ci.hosted') as hosted, patch('alpha_radar_ci.root_check') as root, \
+             patch.object(Path, 'open') as opened, patch('alpha_radar_ci.subprocess.Popen') as launch:
+            for flag in (False, True):
+                with self.assertRaisesRegex(ValueError, 'NATIVE_EXECUTION_NOT_AUTHORIZED'):
+                    execute(Path('/not-accessed'), native_startup=flag)
+            hosted.assert_not_called(); root.assert_not_called(); opened.assert_not_called(); launch.assert_not_called()
+
+    def test_event_payload_missing_malformed_duplicate_or_false_denied(self):
+        from alpha_radar_ci import require_native_execution
+        root=Path(tempfile.mkdtemp(prefix='event-', dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        for index, raw in enumerate((b'{}', b'not-json', b'{"inputs":{"native_startup":true,"native_startup":false}}',
+                                     b'{"inputs":{"native_startup":1}}', b'{"inputs":{"native_startup":false}}')):
+            path=root/str(index);path.write_bytes(raw)
+            with patch.dict(os.environ, {'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_EVENT_PATH':str(path)}, clear=True):
+                with self.assertRaisesRegex(ValueError, 'NATIVE_EXECUTION_NOT_AUTHORIZED'):require_native_execution(True)
+        path=root/'valid';path.write_text('{"inputs":{"native_startup":"true"}}')
+        with patch.dict(os.environ, {'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_EVENT_PATH':str(path)}, clear=True):
+            require_native_execution(True)
+            with self.assertRaises(ValueError):require_native_execution(False)
+
+    def test_preparation_blocks_all_native_targets_and_os_boundaries(self):
+        from alpha_radar_ci import preparation_audit
+        for exe,argv in [('/usr/bin/sandbox-exec',['/usr/bin/sandbox-exec','-f','synthetic']),
+                         ('/bin/sh',['/bin/sh','-c','synthetic']),
+                         ('/synthetic/python',['/synthetic/python','alpha_radar_runner.py']),
+                         ('/synthetic/python',['/synthetic/python','alpha_radar_fixture.py']),
+                         ('/synthetic/python',['/synthetic/python','alpha_radar_runner.py','--child','worker'])]:
+            with self.assertRaisesRegex(ValueError,'PREPARATION_NATIVE_BOUNDARY'):
+                preparation_audit('subprocess.Popen',(exe,argv,None,{}))
+        for event in ('socket.__new__','socket.connect','socket.bind','os.system','os.posix_spawn','os.killpg','ctypes.dlopen'):
+            with self.assertRaises(PermissionError):preparation_audit(event,())
+        with self.assertRaises(PermissionError):preparation_audit('os.kill',(99999999,15))
+        for exe,op in [('/usr/bin/git','show'),('/usr/bin/otool','-L'),('/usr/bin/sw_vers','-buildVersion'),('/usr/bin/openssl','req')]:
+            preparation_audit('subprocess.Popen',(exe,[exe,op],None,{}))
+
+    def test_preparation_cli_dispatch_cannot_route_to_execute(self):
+        import alpha_radar_ci as ci
+        for phase in ('prepare','finalize','offline','export'):
+            with patch('sys.argv',['ci',phase,'--root','/not-accessed']), \
+                 patch('alpha_radar_ci.sys.addaudithook') as audit, \
+                 patch.object(ci,phase) as handler, patch.object(ci,'execute') as launch:
+                self.assertEqual(ci.main(),0)
+                handler.assert_called_once();launch.assert_not_called()
+                audit.assert_called_once_with(ci.preparation_audit)
+
+    def test_workflow_native_step_requires_manual_true_and_cli_flag(self):
+        text=(Path(__file__).resolve().parents[2]/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        self.assertIn('type: boolean\n        required: false\n        default: false',text)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true",text)
+        self.assertEqual(text.count('alpha_radar_ci.py execute'),1)
+        self.assertIn('alpha_radar_ci.py execute --native-startup',text)
+        step=text.split('- name: Exactly one confined fixture startup; never launch a worker')[1].split('- name:')[0]
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true",step)
+
+
+class StaticLauncherEvidenceTests(unittest.TestCase):
+    def test_finite_literal_evidence_never_exports_input(self):
+        from alpha_radar_ci import literal_evidence, STATIC_LITERALS
+        sample=b'\0'.join(STATIC_LITERALS.values())+b'\0/Users/private/SYNTHETIC_SECRET\0https://example.invalid/key=SYNTHETIC_SECRET'
+        result=literal_evidence(sample)
+        self.assertEqual(set(result),set(STATIC_LITERALS));self.assertTrue(all(v==1 for v in result.values()))
+        for value in ('SYNTHETIC_SECRET','/Users','https://'):
+            self.assertNotIn(value,json.dumps(result))
+        self.assertEqual(literal_evidence(b'\xff\x00unmatched'),dict.fromkeys(STATIC_LITERALS,0))
+        with self.assertRaises(ValueError):literal_evidence(b'x'*16_000_001)
+        with self.assertRaises(ValueError):literal_evidence('not bytes')
+
+    def test_literal_counts_bound_and_do_not_claim_runtime_failure(self):
+        from alpha_radar_ci import literal_evidence
+        result=literal_evidence(b'profile compilation failed\0'*300)
+        self.assertEqual(result['PROFILE_COMPILE_LITERAL'],255)
+        self.assertNotIn('runtime_failure',result)
+        self.assertEqual(literal_evidence(b'profile Compilation failed')['PROFILE_COMPILE_LITERAL'],0)
+
+    def test_missing_library_is_a_limitation_and_symlink_is_not_followed(self):
+        from alpha_radar_ci import static_image
+        root=Path(tempfile.mkdtemp(prefix='static-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        self.assertEqual(static_image(root/'missing')['status'],'NOT_AVAILABLE_AS_STANDALONE_FILE')
+        target=root/'target';target.write_bytes(b'SYNTHETIC');link=root/'link';link.symlink_to(target)
+        with patch.object(Path,'open') as opened:
+            self.assertEqual(static_image(link)['status'],'NOT_REGULAR_NO_FOLLOW')
+            opened.assert_not_called()
+
+    def test_static_receipt_binds_environment_without_historical_claim(self):
+        from alpha_radar_ci import static_provenance, STATIC_PATHS
+        root=Path(tempfile.mkdtemp(prefix='static-receipt-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        (root/'export').mkdir()
+        env={'source_commit':'a'*40,'tools':{'/usr/bin/sandbox-exec':'b'*64}}
+        (root/'export/environment.json').write_text(json.dumps(env))
+        with patch('alpha_radar_ci.static_image',return_value={'sha256':'b'*64,'status':'STATIC_BYTES_VERIFIED'}):
+            static_provenance(root)
+        doc=json.loads((root/'export/launcher-static-provenance.json').read_bytes())
+        self.assertEqual(set(doc['images']),set(STATIC_PATHS))
+        self.assertEqual(doc['environment_parent'],hashlib.sha256((root/'export/environment.json').read_bytes()).hexdigest())
+        self.assertFalse(doc['historical_attempt_attribution']);self.assertEqual(doc['native_launches'],0)
+        self.assertEqual(doc['template_applicability'],'LITERALS_ONLY_FULL_TEMPLATES_UNVERIFIED')
+        self.assertFalse(doc['raw_stderr_retained']);self.assertFalse(doc['arbitrary_strings_retained'])
+        with patch('alpha_radar_ci.static_image',return_value={'sha256':'c'*64}):
+            with self.assertRaisesRegex(ValueError,'STATIC_IDENTITY'):static_provenance(root)

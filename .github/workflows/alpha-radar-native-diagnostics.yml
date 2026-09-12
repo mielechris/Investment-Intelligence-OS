@@ -2,6 +2,12 @@ name: Alpha Radar synthetic startup diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      native_startup:
+        description: Separately authorized single startup-only native attempt
+        type: boolean
+        required: false
+        default: false
   push:
     branches: [feature/iios-provider-gateway-superbatch-1]
     paths:
@@ -60,9 +66,10 @@ jobs:
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py offline \
             --root "$IIOS_RADAR_CI_ROOT"
       - name: Exactly one confined fixture startup; never launch a worker
+        if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true
         shell: bash
         run: |
-          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py execute \
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py execute --native-startup \
             --root "$IIOS_RADAR_CI_ROOT"
       - name: Preserve structured diagnostics on success or failure
         if: always() && env.IIOS_RADAR_CI_ROOT != ''

@@ -31,6 +31,7 @@ FAILURES = frozenset(('EXACT_ROOT','ROOT_OWNERSHIP','HOSTED_IDENTITY','PROXY_REJ
     'DIRECTORY_DESCRIPTOR','DIRECTORY_IDENTITY','DIRECTORY_ESCAPE','OFFLINE_COLLECTION',
     'OFFLINE_WRITE_BOUNDARY','OFFLINE_NATIVE_BOUNDARY','OFFLINE_FAILED','OFFLINE_REQUIRED',
     'OFFLINE_SOURCE_BINDING','STARTUP_ONLY_REQUIRED','ATTEMPT_ALREADY_EXISTS',
+    'NATIVE_EXECUTION_NOT_AUTHORIZED','PREPARATION_NATIVE_BOUNDARY','STATIC_IDENTITY',
     'SUPERVISOR_FAILED','WORKER_EVIDENCE_FORBIDDEN','EVIDENCE_FILE','EVIDENCE_SCOPE','EVIDENCE_NAME'))
 SOURCE_NAMES = (
     'alpha_session_execution.py', 'provider_gateway_https.py', 'alpha_market_baseline.py',
@@ -84,6 +85,114 @@ def hosted():
     # The job never passes ambient proxy/credential configuration to a child.
     require(not any(os.environ.get(k) for k in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY',
                                                'http_proxy','https_proxy','all_proxy')), 'PROXY_REJECTED')
+
+
+def native_execution_allowed(event_name, event, explicit_request):
+    """Exact manual event AND explicit CLI request; absent/invalid values deny."""
+    if event_name != 'workflow_dispatch' or explicit_request is not True or type(event) is not dict:
+        return False
+    inputs = event.get('inputs')
+    if type(inputs) is not dict:
+        return False
+    value = inputs.get('native_startup')
+    return value is True or (type(value) is str and value == 'true')
+
+
+def require_native_execution(explicit_request):
+    require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
+            explicit_request is True, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    try:
+        path = Path(os.environ['GITHUB_EVENT_PATH'])
+        require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 1_000_000,
+                'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        with path.open('rb') as stream:
+            raw = stream.read(1_000_001)
+        require(len(raw) <= 1_000_000, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                require(key not in result, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+                result[key] = value
+            return result
+        event = json.loads(raw, object_pairs_hook=unique)
+    except (KeyError, OSError, ValueError):
+        raise ValueError('NATIVE_EXECUTION_NOT_AUTHORIZED') from None
+    require(native_execution_allowed(os.environ['GITHUB_EVENT_NAME'], event, explicit_request),
+            'NATIVE_EXECUTION_NOT_AUTHORIZED')
+
+
+def preparation_audit(event, args):
+    """Defense in depth: preparation can inspect/build inputs, never launch native targets."""
+    if event in ('socket.__new__', 'socket.connect', 'socket.bind', 'os.system',
+                 'os.posix_spawn', 'os.killpg', 'ctypes.dlopen'):
+        raise PermissionError('PREPARATION_NATIVE_BOUNDARY')
+    if event == 'os.kill' and args != (os.getpid(), 0):
+        raise PermissionError('PREPARATION_NATIVE_BOUNDARY')
+    if event == 'subprocess.Popen':
+        executable, argv = args[:2]
+        allowed = {'/usr/bin/git': {'rev-parse', 'status', 'show'},
+                   '/usr/bin/otool': {'-L', '-D', '-l'},
+                   '/usr/bin/sw_vers': {'-productVersion', '-buildVersion'},
+                   '/usr/bin/openssl': {'req'}}
+        require(type(argv) in (list, tuple) and len(argv) >= 2 and
+                executable in allowed and argv[0] == executable and argv[1] in allowed[executable],
+                'PREPARATION_NATIVE_BOUNDARY')
+
+
+# Candidate literals are inspected, not assumed to be complete message templates.
+# Only finite IDs/counts are exported. No arbitrary binary strings or stderr.
+STATIC_LITERALS = {
+    'PROFILE_COMPILE_LITERAL': b'profile compilation failed',
+    'PROFILE_APPLY_LITERAL': b'sandbox_apply',
+    'EXECVP_FORMAT_LITERAL': b"execvp() of '%s' failed",
+    'ENTITLEMENTS_LITERAL': b'failed to parse entitlements plist',
+    'USAGE_LITERAL': b'Usage: sandbox-exec [options] command [args]',
+    'PROFILE_READ_FORMAT_LITERAL': b'read(%s)',
+}
+STATIC_PATHS = {'LAUNCHER': '/usr/bin/sandbox-exec',
+                'SANDBOX_LIBRARY': '/usr/lib/libsandbox.1.dylib',
+                'SANDBOX_LIBRARY_ALIAS': '/usr/lib/libsandbox.dylib'}
+
+
+def literal_evidence(data):
+    require(type(data) is bytes and len(data) <= 16_000_000, 'STATIC_IDENTITY')
+    return {name: min(data.count(pattern), 255) for name, pattern in STATIC_LITERALS.items()}
+
+
+def static_image(path):
+    if not path.exists():
+        return {'status': 'NOT_AVAILABLE_AS_STANDALONE_FILE', 'templates': 'UNVERIFIED'}
+    st = path.lstat()
+    if not stat.S_ISREG(st.st_mode) or path.is_symlink():
+        return {'status': 'NOT_REGULAR_NO_FOLLOW', 'templates': 'UNVERIFIED'}
+    require(st.st_uid == 0 and not st.st_mode & 0o022 and st.st_size <= 16_000_000, 'STATIC_IDENTITY')
+    with path.open('rb') as stream:
+        observed = os.fstat(stream.fileno())
+        require((observed.st_dev, observed.st_ino) == (st.st_dev, st.st_ino), 'STATIC_IDENTITY')
+        data = stream.read(16_000_001)
+        after = os.fstat(stream.fileno())
+    final = path.lstat()
+    require(len(data) == st.st_size and (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) ==
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) ==
+            (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns), 'STATIC_IDENTITY')
+    return {'status': 'STATIC_BYTES_VERIFIED', 'sha256': digest(data), 'size': len(data),
+            'mode': stat.S_IMODE(st.st_mode), 'literal_counts': literal_evidence(data),
+            'evidence_scope': 'STATIC_LITERAL_PRESENCE_ONLY', 'runtime_failure': 'NOT_ESTABLISHED'}
+
+
+def static_provenance(root):
+    environment = json.loads((root/'export/environment.json').read_bytes())
+    images = {name: static_image(Path(path)) for name, path in STATIC_PATHS.items()}
+    require(images['LAUNCHER'].get('sha256') == environment['tools']['/usr/bin/sandbox-exec'],
+            'STATIC_IDENTITY')
+    document(root/'export/launcher-static-provenance.json', {
+        'scope': 'SYNTHETIC_TEST_ONLY', 'source_commit': environment['source_commit'],
+        'environment_parent': digest((root/'export/environment.json').read_bytes()),
+        'source_bindings': source_bindings(), 'images': images,
+        'template_applicability': 'LITERALS_ONLY_FULL_TEMPLATES_UNVERIFIED',
+        'compiler_cache_identity': 'NOT_COLLECTED_NO_CACHE_EXTRACTION',
+        'historical_attempt_attribution': False, 'native_launches': 0,
+        'raw_stderr_retained': False, 'arbitrary_strings_retained': False})
 
 
 def command(argv, *, cwd=None):
@@ -193,6 +302,7 @@ def prepare(root, commit):
         'tools':{p:digest(Path(p).read_bytes()) for p in
                  ('/usr/bin/sandbox-exec','/bin/ps','/usr/sbin/lsof','/usr/bin/openssl','/usr/bin/otool')},
         'system_libraries':'BOUND_TO_RECORDED_MACOS_BUILD', 'local_mac_qualification':'NOT_ESTABLISHED'})
+    static_provenance(root)
 
 
 def dependency_rows(runtime, path, listing, install_ids, load_commands, known):
@@ -406,7 +516,8 @@ def offline(root):
     verify_bindings(bindings_before)
 
 
-def execute(root):
+def execute(root, *, native_startup=False):
+    require_native_execution(native_startup)
     hosted();root_check(root)
     runtime=root/'runtime';out=root/'execution-output'
     sys.path[:0]=[str(runtime/'source')]
@@ -477,9 +588,14 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
+    parser.add_argument('--native-startup', action='store_true', default=False)
     args=parser.parse_args();root=Path(args.root)
     try:
-        if args.phase in ('prepare','finalize'): globals()[args.phase](root,args.commit)
+        if args.phase != 'execute':
+            require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+            sys.addaudithook(preparation_audit)
+        if args.phase == 'execute': execute(root, native_startup=args.native_startup)
+        elif args.phase in ('prepare','finalize'): globals()[args.phase](root,args.commit)
         else: globals()[args.phase](root)
         return 0
     except Exception as error:
