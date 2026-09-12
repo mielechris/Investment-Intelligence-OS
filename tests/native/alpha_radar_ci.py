@@ -103,6 +103,13 @@ def native_execution_allowed(event_name, event, explicit_request):
     return value is True or (type(value) is str and value == 'true')
 
 
+def require_execution_source(expected, actual, ref):
+    """Independent owner input must equal the workflow event's immutable SHA."""
+    require(type(expected) is str and re.fullmatch(r'[0-9a-f]{40}', expected) is not None and
+            expected == actual and ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1',
+            'SOURCE_PIN')
+
+
 def require_native_execution(explicit_request):
     require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
             explicit_request is True, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
@@ -530,6 +537,8 @@ def offline(root):
 
 def execute(root, *, native_startup=False):
     require_native_execution(native_startup)
+    require_execution_source(os.environ.get('IIOS_EXPECTED_SOURCE_COMMIT'),
+                             os.environ.get('GITHUB_SHA'), os.environ.get('GITHUB_REF'))
     hosted();root_check(root)
     runtime=root/'runtime';out=root/'execution-output'
     sys.path[:0]=[str(runtime/'source')]

@@ -126,11 +126,76 @@ def launcher_hint(raw):
     return 'UNTRUSTED_LAUNCHER_'+'_'.join(sorted(tags))
 
 
+# Reviewed lexical rules, NOT recovered macOS/compiler message templates.
+# Each record separates direct byte observations from tentative interpretation.
+LAUNCHER_LEXEMES = (
+    (b'profile compilation failed', 'PROFILE_COMPILE'),
+    (b'error compiling profile', 'PROFILE_COMPILE'),
+    (b'syntax error', 'SYNTAX'), (b'unbound variable', 'UNBOUND_VARIABLE'),
+    (b'unknown operation', 'UNKNOWN_OPERATION'), (b'unknown filter', 'UNKNOWN_FILTER'),
+    (b'sandbox_apply', 'PROFILE_APPLY'), (b'execvp()', 'EXECVP'),
+    (b'operation not permitted', 'EPERM_WORDS'),
+    (b'permission denied', 'EACCES_WORDS'), (b'no such file', 'ENOENT_WORDS'))
+
+
+def launcher_observation(raw, profile=b'', profile_path=b''):
+    """No arbitrary text, errno claims, template claims or causal verdicts.
+
+    Location grammars are our bounded extraction rules, not claims about an
+    Apple template. Coordinates are retained only against the pinned profile.
+    Forged output can produce an observation; it can never grant authority.
+    """
+    require(type(raw) is bytes and len(raw) <= 2048, 'DIAGNOSTIC_OVERFLOW')
+    require(type(profile) is bytes and len(profile) <= 65536 and
+            type(profile_path) is bytes and len(profile_path) <= 2048, 'DIAGNOSTIC_OVERFLOW')
+    result = {'schema': 'launcher-observation-v1', 'basis': 'UNTRUSTED_CHILD_PIPE',
+              'reporter': 'UNKNOWN', 'lexemes': [], 'location': None,
+              'interpretation': 'UNKNOWN', 'proven_root_cause': 'NOT_ESTABLISHED'}
+    if any(c < 32 or c > 126 for c in raw):
+        return result
+    if raw.startswith(b'sandbox-exec: '):
+        result['reporter'] = 'SANDBOX_EXEC_PREFIX'
+    elif re.match(rb'dyld\[[1-9][0-9]{0,9}\]: ', raw):
+        result['reporter'] = 'DYLD_PREFIX'
+    lowered = raw.lower()
+    result['lexemes'] = sorted({label for word, label in LAUNCHER_LEXEMES
+        if re.search(rb'(?<![a-z0-9_])'+re.escape(word)+rb'(?![a-z0-9_])', lowered)})
+    lines = profile.splitlines()
+    # Exact profile excerpts and exact path-prefixed coordinates are directly
+    # compared in memory. Neither the excerpt nor the path leaves this function.
+    matches = [i+1 for i, line in enumerate(lines) if line.strip() and raw == line]
+    if len(matches) == 1:
+        result['location'] = {'line': matches[0], 'column': None, 'basis': 'EXACT_PROFILE_LINE'}
+    if profile_path:
+        expression = (rb'(?:sandbox-exec: )?'+re.escape(profile_path)+
+                      rb':([1-9][0-9]{0,3}):([1-9][0-9]{0,3}): [ -~]{1,1024}')
+        match = re.fullmatch(expression, raw)
+        if match:
+            line, column = map(int, match.groups())
+            if 1 <= line <= len(lines) and column <= len(lines[line-1])+1:
+                result['location'] = {'line': line, 'column': column,
+                                      'basis': 'EXACT_PROFILE_PATH_IN_RANGE'}
+    tags = set(result['lexemes'])
+    phases = []
+    if tags & {'PROFILE_COMPILE','SYNTAX','UNBOUND_VARIABLE','UNKNOWN_OPERATION','UNKNOWN_FILTER'}:
+        phases.append('PROFILE_PARSE_INDICATED')
+    if 'PROFILE_APPLY' in tags:
+        phases.append('PROFILE_APPLICATION_INDICATED')
+    if 'EXECVP' in tags:
+        phases.append('EXECUTION_INDICATED')
+    # Mixed phases, bare literals, dyld and errno words stay inconclusive.
+    if len(phases) == 1 and result['reporter'] == 'SANDBOX_EXEC_PREFIX':
+        result['interpretation'] = phases[0]
+    return result
+
+
 class StderrCapture:
     """Bounded nonblocking pipe; raw bytes are never written, hashed or echoed."""
-    def __init__(self, stream=None):
+    def __init__(self, stream=None, *, profile=b'', profile_path=b''):
         self.stream, self.fd = stream, None
         self.pending = bytearray()
+        self.profile, self.profile_path = profile, profile_path
+        self.observations = []
         self.lines, self.received, self.retained = [], 0, 0
         self.overflow, self.discard_line, self.eof = False, False, False
         if stream is not None:
@@ -168,9 +233,11 @@ class StderrCapture:
                 break
         if value == 'REDACTED_UNRECOGNIZED':
             value = launcher_hint(raw)
-        size = len(value) + 4
+        observation = launcher_observation(raw, self.profile, self.profile_path)
+        size = len(value) + 4 + len(json.dumps(observation, sort_keys=True))
         if self.retained + size <= 8192:
             self.lines.append(value)
+            self.observations.append(observation)
             self.retained += size
         else:
             self.overflow = True
@@ -218,7 +285,8 @@ class StderrCapture:
         self.eof = True
 
     def snapshot(self):
-        return {'untrusted_stderr_hints': list(self.lines), 'bytes_seen': self.received,
+        return {'untrusted_stderr_hints': list(self.lines),
+                'launcher_observations': list(self.observations), 'bytes_seen': self.received,
                 'overflow': self.overflow, 'eof': self.eof, 'raw_retained': False}
 
 
@@ -449,7 +517,11 @@ class Session:
 class OwnedProcesses:
     """Pinned launch records; independent OS observation before every signal."""
     def __init__(self, cap, *, inspect=inspect_macos, monotonic=time.monotonic, pause=time.sleep):
-        checked_capability(cap)
+        _, runtime, pins = checked_capability(cap)
+        profile_path = Path(runtime['root']) / runtime['confinement']
+        self.profile = profile_path.read_bytes()
+        require(hashlib.sha256(self.profile).hexdigest() == pins['confinement'], 'CONFINEMENT_PIN')
+        self.profile_path = os.fsencode(profile_path)
         self.cap, self.inspect, self.monotonic, self.pause = cap, inspect, monotonic, pause
         self.children, self.failures, self.counter = {}, [], 0
         self.startup_pins = {}
@@ -480,7 +552,7 @@ class OwnedProcesses:
             'executable_hash': executable_hash}, 'observation': None, 'launcher': launcher, 'launch_parent': launch_parent}
         self.children[role] = entry  # Keep partial startup registered even on failure.
         try:
-            entry['capture'] = StderrCapture(stderr)
+            entry['capture'] = StderrCapture(stderr, profile=self.profile, profile_path=self.profile_path)
             self.evidence({'event': 'PROCESS_CREATED', 'role': role, 'pid': child.pid,
                 'expected_parent_pid': os.getpid(), 'launch_parent': launch_parent,
                 'identity_status': 'CHILD_CREATED_UNOBSERVED',

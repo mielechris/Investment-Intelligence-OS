@@ -1429,3 +1429,135 @@ class PreparationBootstrapTests(unittest.TestCase):
                 ci.preparation_audit('ctypes.dlopen',(target,))
         self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and
                              n.func.attr in ('CDLL','PyDLL','sandbox_check') for n in tree.body))
+
+
+class StructuredLauncherObservationTests(unittest.TestCase):
+    PROFILE = b'(version 1)\n(deny default)\n(allow sysctl-read)\n'
+    PROFILE_PATH = b'/synthetic/policy.sb'
+
+    def observation(self, raw):
+        from alpha_radar_runner import launcher_observation
+        return launcher_observation(raw, self.PROFILE, self.PROFILE_PATH)
+
+    def test_observations_interpretations_and_cause_are_separate(self):
+        cases = [(b'sandbox-exec: profile compilation failed', 'PROFILE_PARSE_INDICATED'),
+                 (b'sandbox-exec: sandbox_apply: Operation not permitted', 'PROFILE_APPLICATION_INDICATED'),
+                 (b'sandbox-exec: execvp() of synthetic failed', 'EXECUTION_INDICATED')]
+        for raw, expected in cases:
+            value = self.observation(raw)
+            self.assertEqual(value['interpretation'], expected)
+            self.assertEqual(value['basis'], 'UNTRUSTED_CHILD_PIPE')
+            self.assertEqual(value['proven_root_cause'], 'NOT_ESTABLISHED')
+            self.assertEqual(value['reporter'], 'SANDBOX_EXEC_PREFIX')
+
+    def test_bare_literals_mixed_phases_and_misleading_prefix_stay_unknown(self):
+        for raw in (b'profile compilation failed', b'not-sandbox-exec: syntax error',
+                    b'sandbox-exec: syntax error; sandbox_apply failed',
+                    b'sandbox-exec: execvp() syntax error', b'sandbox-exec: nosyntax errorx'):
+            self.assertEqual(self.observation(raw)['interpretation'], 'UNKNOWN')
+
+    def test_exact_profile_path_coordinates_are_range_checked(self):
+        value = self.observation(self.PROFILE_PATH+b':2:4: synthetic detail')
+        self.assertEqual(value['location'], {'line':2,'column':4,'basis':'EXACT_PROFILE_PATH_IN_RANGE'})
+        self.assertEqual(value['interpretation'], 'UNKNOWN')
+        value = self.observation(b'sandbox-exec: '+self.PROFILE_PATH+b':3:2: syntax error')
+        self.assertEqual(value['location']['line'], 3)
+        self.assertEqual(value['interpretation'], 'PROFILE_PARSE_INDICATED')
+
+    def test_wrong_path_and_invalid_locations_are_not_retained(self):
+        for suffix in (b':0:1: error',b':4:1: error',b':2:99: error',b':-1:1: error',
+                       b':02:1: error',b':2:0: error',b':2:999999: error',b':2:1:',b':2:1: error\x1b'):
+            self.assertIsNone(self.observation(self.PROFILE_PATH+suffix)['location'])
+        for raw in (b'/elsewhere/policy.sb:2:1: error',b'x'+self.PROFILE_PATH+b':2:1: error',
+                    b'line 2 column 1: error'):
+            self.assertIsNone(self.observation(raw)['location'])
+
+    def test_exact_profile_excerpt_without_stderr_text_retention(self):
+        value = self.observation(b'(deny default)')
+        self.assertEqual(value['location'], {'line':2,'column':None,'basis':'EXACT_PROFILE_LINE'})
+        self.assertNotIn('(deny default)', json.dumps(value))
+        self.assertIsNone(self.observation(b' (deny default)')['location'])
+        from alpha_radar_runner import launcher_observation
+        self.assertIsNone(launcher_observation(b'(deny default)', b'(deny default)\n(deny default)')['location'])
+
+    def test_unknown_and_loader_prefix_do_not_claim_a_cause(self):
+        for raw, reporter in ((b'opaque synthetic data','UNKNOWN'),
+                              (b'dyld[123]: synthetic detail','DYLD_PREFIX'),
+                              (b'xdyld[123]: synthetic detail','UNKNOWN')):
+            value=self.observation(raw)
+            self.assertEqual(value['reporter'],reporter)
+            self.assertEqual(value['interpretation'],'UNKNOWN')
+            self.assertEqual(value['proven_root_cause'],'NOT_ESTABLISHED')
+
+    def test_controls_nonascii_and_malformed_messages_fail_to_unknown(self):
+        for raw in (b'sandbox-exec: syntax error\x00secret',b'\x1bsandbox-exec: syntax error',
+                    b'sandbox-exec: syntax error\xff',b'sandbox-exec: syntax\terror'):
+            value=self.observation(raw)
+            self.assertEqual(value['lexemes'],[])
+            self.assertEqual(value['reporter'],'UNKNOWN')
+            self.assertIsNone(value['location'])
+
+    def test_chunk_boundaries_and_secret_material_never_leave_memory(self):
+        from alpha_radar_runner import StderrCapture
+        raw=b'sandbox-exec: '+self.PROFILE_PATH+b':2:4: syntax error sample-sensitive-value\n'
+        for width in (1,2,7,2048):
+            capture=StderrCapture(profile=self.PROFILE,profile_path=self.PROFILE_PATH)
+            with patch('alpha_radar_runner.hashlib.sha256') as hashed:
+                for i in range(0,len(raw),width):capture.feed(raw[i:i+width])
+                capture.finish();value=capture.snapshot();hashed.assert_not_called()
+            self.assertEqual(value['launcher_observations'][0]['location']['line'],2)
+            for forbidden in ('sample-sensitive-value','/synthetic/','syntax error'):
+                self.assertNotIn(forbidden,json.dumps(value))
+            self.assertFalse(value['raw_retained']);self.assertEqual(capture.pending,bytearray())
+
+    def test_oversize_diagnostics_are_bounded_and_not_rescued_by_suffix(self):
+        from alpha_radar_runner import StderrCapture,launcher_observation
+        with self.assertRaises(ValueError):launcher_observation(b'x'*2049)
+        capture=StderrCapture()
+        capture.feed(b'x'*2049+b'sandbox-exec: syntax error\n')
+        capture.finish();self.assertTrue(capture.overflow)
+        self.assertEqual(capture.snapshot()['launcher_observations'][0]['interpretation'],'UNKNOWN')
+        capture=StderrCapture();capture.feed(b'sandbox-exec: syntax error\n'*10000);capture.finish()
+        self.assertTrue(capture.overflow);self.assertLessEqual(capture.retained,8192)
+
+    def test_forged_success_text_cannot_establish_cleanup_or_acceptance(self):
+        raw=b'sandbox-exec: sandbox_apply failed; clean true; SYNTHETIC_STARTUP_PASS'
+        value=self.observation(raw)
+        self.assertEqual(value['proven_root_cause'],'NOT_ESTABLISHED')
+        self.assertEqual(set(value),{'schema','basis','reporter','lexemes','location','interpretation','proven_root_cause'})
+        self.assertNotIn('clean',value);self.assertNotIn('authority',value)
+        from alpha_radar_runner import verify_startup_result
+        with self.assertRaises((KeyError,ValueError)):verify_startup_result(value,'a'*64)
+
+    def test_owned_process_capture_uses_independently_pinned_profile(self):
+        from alpha_radar_runner import OwnedProcesses
+        root,p,r,e=fixture();cap=admit(p,r,expected=e,authorized_root=root)
+        owned=OwnedProcesses(cap)
+        self.assertEqual(hashlib.sha256(owned.profile).hexdigest(),e['confinement'])
+        self.assertEqual(owned.profile_path,os.fsencode(Path(r['root'])/r['confinement']))
+
+
+class ManualSourceBindingTests(unittest.TestCase):
+    def test_exact_source_and_feature_ref_required(self):
+        from alpha_radar_ci import require_execution_source
+        ref='refs/heads/feature/iios-provider-gateway-superbatch-1'
+        require_execution_source('a'*40,'a'*40,ref)
+        for expected,actual,branch in [(None,'a'*40,ref),('', 'a'*40,ref),('a'*39,'a'*39,ref),
+                                      ('A'*40,'A'*40,ref),('a'*40,'b'*40,ref),
+                                      ('a'*40,'a'*40,'refs/heads/main')]:
+            with self.assertRaisesRegex(ValueError,'SOURCE_PIN'):require_execution_source(expected,actual,branch)
+
+    def test_wrong_source_stops_before_host_runtime_or_launch(self):
+        from alpha_radar_ci import execute
+        with patch('alpha_radar_ci.require_native_execution'), \
+             patch.dict(os.environ,{},clear=True), patch('alpha_radar_ci.hosted') as hosted, \
+             patch('alpha_radar_ci.root_check') as checked, patch('alpha_radar_ci.subprocess.Popen') as launched:
+            with self.assertRaisesRegex(ValueError,'SOURCE_PIN'):execute(Path('/not-accessed'),native_startup=True)
+            hosted.assert_not_called();checked.assert_not_called();launched.assert_not_called()
+
+    def test_workflow_checks_out_event_sha_and_passes_independent_input(self):
+        text=(Path(__file__).resolve().parents[2]/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        self.assertIn('ref: ${{ github.sha }}',text)
+        self.assertIn('expected_source_commit:',text)
+        self.assertIn('IIOS_EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}',text)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true",text)
