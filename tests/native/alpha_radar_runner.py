@@ -3,30 +3,53 @@
 Native execution requires separately reviewed input and confinement pins.
 Clock acceleration is explicit synthetic evidence, never real-time acceptance.
 """
-from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
-import fcntl
-import hashlib
-import json
-import os
-import re
-import ssl
-from pathlib import Path
-import signal
-import subprocess
 import sys
-import time
-from urllib.parse import urlencode
 
-from alpha_market_baseline import require, summarize
-from alpha_session_execution import (execute_schedule, execute_day, safe_root, publish,
-    read_record, verify_destination)
-from provider_gateway_contract import canonical, content_hash, utc
-from provider_gateway_https import bounded_https
-from truth_spine_process_identity import inspect_macos
-from alpha_radar_admission import (SCOPE, AUTHORITY, SyntheticCapability, admit,
-    envelope, verify_envelope, store, verify_inputs)
+# Fixed early hints precede local imports and admission. They never grant authority.
+EARLY_STAGES = frozenset(('PYTHON_ENTRY', 'IMPORT_BEGIN', 'IMPORT_COMPLETE',
+    'IMPORT_FAILED', 'DESCRIPTOR_READ', 'DESCRIPTOR_VERIFIED',
+    'CHILD_ADMISSION_BEGIN', 'CHILD_ADMISSION_VERIFIED'))
 
+
+def early_diagnostic(stage):
+    if stage not in EARLY_STAGES:
+        raise ValueError('EARLY_DIAGNOSTIC_STAGE')
+    if __name__ == '__main__':
+        sys.stderr.write('RADAR_EARLY: ' + stage + '\n')
+        sys.stderr.flush()
+
+
+early_diagnostic('PYTHON_ENTRY')
+early_diagnostic('IMPORT_BEGIN')
+try:
+    from dataclasses import asdict
+    from datetime import datetime, timedelta, timezone
+    import fcntl
+    import hashlib
+    import json
+    import os
+    import re
+    import ssl
+    from pathlib import Path
+    import signal
+    import subprocess
+    import time
+    from urllib.parse import urlencode
+
+    from alpha_market_baseline import require, summarize
+    from alpha_session_execution import (execute_schedule, execute_day, safe_root, publish,
+        read_record, verify_destination)
+    from provider_gateway_contract import canonical, content_hash, utc
+    from provider_gateway_https import bounded_https
+    from truth_spine_process_identity import inspect_macos, validate_inspection_diagnostic
+    from alpha_radar_admission import (SCOPE, AUTHORITY, SyntheticCapability, admit,
+        envelope, verify_envelope, store, verify_inputs)
+except Exception:
+    if __name__ == '__main__':
+        early_diagnostic('IMPORT_FAILED')
+        sys.exit(1)
+    raise
+early_diagnostic('IMPORT_COMPLETE')
 
 # Diagnostics are observations only; none of these records grant authority.
 STAGES = frozenset(('LAUNCH_INTENT', 'PROCESS_CREATE', 'OWNERSHIP_REGISTER',
@@ -102,6 +125,10 @@ class StderrCapture:
                 'DESTINATION_EXISTS', 'OS_ERROR', 'IMPORT_ERROR', 'UNCLASSIFIED_ERROR'}
             if code in {v.encode('ascii') for v in allowed}:
                 value = 'STDERR_' + code.decode('ascii')
+        for stage in EARLY_STAGES:
+            if raw == ('RADAR_EARLY: ' + stage).encode('ascii'):
+                value = 'UNTRUSTED_EARLY_' + stage
+                break
         size = len(value) + 4
         if self.retained + size <= 8192:
             self.lines.append(value)
@@ -452,9 +479,41 @@ class OwnedProcesses:
             self.safe_evidence({'event': 'REGISTRATION_FAILED', **primary})
             raise
 
+    def inspection_status(self, entry, phase):
+        # A failed poll/publication must not replace the primary inspector error.
+        try:
+            require(phase in ('BEFORE', 'AFTER'), 'DIAGNOSTIC_PUBLICATION_FAILED')
+            self.evidence({'event': 'INSPECTION_CHILD_STATUS', 'phase': phase,
+                'pid': entry['child'].pid, 'launch_parent': entry.get('launch_parent'),
+                'status': child_status(entry['child']), 'ownership_authority': False})
+        except Exception:
+            self.diagnostic_failures.append('DIAGNOSTIC_STATUS_UNAVAILABLE')
+
     def observe(self, entry, *, allow_launcher=False):
         checked_capability(self.cap)
-        observed = self.inspect(entry['child'].pid)
+        self.inspection_status(entry, 'BEFORE')
+        require(not self.diagnostic_failures, 'DIAGNOSTIC_PUBLICATION_FAILED')
+        count = 0
+        def diagnostic(row):
+            nonlocal count
+            try:
+                count += 1
+                require(count <= 16, 'DIAGNOSTIC_OVERFLOW')
+                value = validate_inspection_diagnostic(row)
+                self.evidence({'event': 'INSPECTION_QUERY', 'pid': entry['child'].pid,
+                    'launch_parent': entry.get('launch_parent'), 'diagnostic': value,
+                    'ownership_authority': False})
+            except Exception:
+                self.diagnostic_failures.append('DIAGNOSTIC_PUBLICATION_FAILED')
+                raise
+        try:
+            if self.inspect is inspect_macos:
+                observed = self.inspect(entry['child'].pid, diagnostic=diagnostic)
+            else:
+                observed = self.inspect(entry['child'].pid)  # Explicit offline injection.
+        finally:
+            self.inspection_status(entry, 'AFTER')
+        require(not self.diagnostic_failures, 'DIAGNOSTIC_PUBLICATION_FAILED')
         require(observed is not None, 'PROCESS_ABSENT')
         actual = asdict(observed)
         self.safe_evidence({'event': 'OWNERSHIP_OBSERVATION', 'observed': observed_diagnostic(entry, actual),
@@ -775,11 +834,13 @@ def child_main(launch, role, launch_parent):
     require(set(launch) == {'scope', 'authority', 'descriptor', 'output_identity', 'role', 'parent_pid', 'created_at'} and
             launch['scope'] == SCOPE and launch['authority'] == AUTHORITY and
             launch['role'] == role and launch['parent_pid'] == os.getppid(), 'CHILD_LAUNCH')
+    early_diagnostic('CHILD_ADMISSION_BEGIN')
     d = launch['descriptor']
     descriptor_schema(d)
     identities = verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
     cap = SyntheticCapability(canonical(d['package']), canonical(d['runtime']), canonical(d['expected']),
                               d['authorized_root'], identities, tuple(launch['output_identity']))
+    early_diagnostic('CHILD_ADMISSION_VERIFIED')
     diagnostic = ChildDiagnostics(cap, role, launch_parent)
     try:
         diagnostic.emit('RUNTIME_VERIFY')
@@ -851,7 +912,9 @@ def main():
     parser.add_argument('--expected-descriptor', required=True)
     parser.add_argument('--child', choices=('fixture', 'worker'))
     args = parser.parse_args()
+    early_diagnostic('DESCRIPTOR_READ')
     d = read_descriptor(args.descriptor, args.expected_descriptor)
+    early_diagnostic('DESCRIPTOR_VERIFIED')
     if args.child:
         return child_main(d, args.child, args.expected_descriptor)
     descriptor_schema(d)

@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import time
 
 
 class IdentityFailure(ValueError):
@@ -79,33 +80,133 @@ def kernel_argv(pid):
     return tuple(argv)
 
 
-def inspect_macos(pid):
+INSPECTION_QUERIES = frozenset(('PS_START', 'PS_PARENT', 'PS_EXECUTABLE', 'LSOF_CWD',
+    'KERNEL_ARGV', 'PARENT_PARSE', 'START_PARSE', 'EXECUTABLE_RESOLVE',
+    'EXECUTABLE_HASH', 'CWD_RESOLVE'))
+INSPECTION_FAILURES = frozenset(('NONE', 'ABSENT', 'TOOL_EXIT', 'EMPTY_OUTPUT',
+    'CWD_CARDINALITY', 'EXECUTABLE_NOT_ABSOLUTE', 'OVERSIZE', 'TIMEOUT',
+    'PERMISSION', 'OS_ERROR', 'INVALID_VALUE', 'OTHER'))
+
+
+def validate_inspection_diagnostic(value):
+    """Positive vocabulary only. No raw tool output, exception, path or hash."""
+    keys = {'query', 'started_at', 'ended_at', 'monotonic_start', 'monotonic_end',
+            'returncode', 'signal', 'stdout_empty', 'cwd_records', 'failure'}
+    if type(value) is not dict or set(value) != keys:
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    if (type(value['query']) is not str or value['query'] not in INSPECTION_QUERIES or
+            type(value['failure']) is not str or value['failure'] not in INSPECTION_FAILURES):
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    for key in ('started_at', 'ended_at'):
+        stamp = value[key]
+        if (type(stamp) is not str or
+                re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00', stamp) is None):
+            raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+        datetime.fromisoformat(stamp)
+    for key in ('monotonic_start', 'monotonic_end'):
+        if type(value[key]) not in (int, float) or not 0 <= value[key] < 10**12:
+            raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    if value['monotonic_end'] < value['monotonic_start']:
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    code = value['returncode']
+    if code is not None and (type(code) is not int or not -255 <= code <= 255):
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    if value['signal'] != (-code if code is not None and code < 0 else None):
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    if value['signal'] is not None and type(value['signal']) is not int:
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    if value['stdout_empty'] is not None and type(value['stdout_empty']) is not bool:
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    count = value['cwd_records']
+    if count is not None and (type(count) is not int or not 0 <= count <= 129):
+        raise IdentityFailure('INSPECTION_DIAGNOSTIC_INVALID')
+    return dict(value)
+
+
+def inspect_macos(pid, *, diagnostic=None):
+    """Existing identity predicates; optional non-authorizing query telemetry."""
     env = {'PATH': '/usr/bin:/bin:/usr/sbin', 'LC_ALL': 'C', 'TZ': 'UTC'}
-    def read(argv):
+    meta = None
+
+    def begin(query):
+        nonlocal meta
+        meta = {'query': query, 'started_at': datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                'monotonic_start': time.monotonic(), 'returncode': None, 'signal': None,
+                'stdout_empty': None, 'cwd_records': None, 'failure': 'NONE'}
+
+    def emit(*, primary=False):
+        if diagnostic is None or meta is None:
+            return
+        row = {**meta, 'ended_at': datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+               'monotonic_end': time.monotonic()}
+        try:
+            diagnostic(validate_inspection_diagnostic(row))
+        except Exception:
+            if not primary:
+                raise IdentityFailure('DIAGNOSTIC_PUBLICATION_FAILED') from None
+
+    def read(query, argv):
+        begin(query)
         result = subprocess.run(argv, capture_output=True, text=True, timeout=1, env=env)
+        meta['returncode'] = result.returncode
+        meta['signal'] = -result.returncode if result.returncode < 0 else None
         if len(result.stdout) > 65536:
+            meta['failure'] = 'OVERSIZE'
             raise IdentityFailure('PROCESS_INSPECTION_OVERSIZE')
-        return result.returncode, result.stdout.strip()
-    code, stamp = read(['/bin/ps', '-ww', '-p', str(pid), '-o', 'lstart='])
-    if code == 1 and not stamp:
-        return None
-    if code != 0 or not stamp:
+        value = result.stdout.strip()
+        meta['stdout_empty'] = not value
+        return result.returncode, value
+
+    def reject(predicate):
+        meta['failure'] = predicate
         raise IdentityFailure('PROCESS_INSPECTION_FAILED')
-    values = []
-    for field in ('ppid=', 'comm='):
-        code, value = read(['/bin/ps', '-ww', '-p', str(pid), '-o', field])
-        if code != 0 or not value:
-            raise IdentityFailure('PROCESS_INSPECTION_FAILED')
-        values.append(value)
-    code, paths = read(['/usr/sbin/lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'])
-    cwd = [line[1:] for line in paths.splitlines() if line.startswith('n')]
-    executable = Path(values[1])
-    if code != 0 or len(cwd) != 1 or not executable.is_absolute():
-        raise IdentityFailure('PROCESS_INSPECTION_FAILED')
-    argv = kernel_argv(pid)
-    return ProcessObservation(pid, int(values[0]), utc_stamp(stamp), ' '.join(argv),
-                              str(executable.resolve()), file_hash(executable),
-                              str(Path(cwd[0]).resolve()), argv)
+
+    def step(query, call):
+        begin(query)
+        result = call()
+        emit()
+        return result
+
+    try:
+        code, stamp = read('PS_START', ['/bin/ps', '-ww', '-p', str(pid), '-o', 'lstart='])
+        if code == 1 and not stamp:
+            meta['failure'] = 'ABSENT'
+            emit()
+            return None
+        if code != 0 or not stamp:
+            reject('TOOL_EXIT' if code != 0 else 'EMPTY_OUTPUT')
+        emit()
+        values = []
+        for query, field in (('PS_PARENT', 'ppid='), ('PS_EXECUTABLE', 'comm=')):
+            code, value = read(query, ['/bin/ps', '-ww', '-p', str(pid), '-o', field])
+            if code != 0 or not value:
+                reject('TOOL_EXIT' if code != 0 else 'EMPTY_OUTPUT')
+            values.append(value)
+            emit()
+        code, paths = read('LSOF_CWD', ['/usr/sbin/lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'])
+        cwd = [line[1:] for line in paths.splitlines() if line.startswith('n')]
+        meta['cwd_records'] = min(len(cwd), 129)
+        executable = Path(values[1])
+        if code != 0 or len(cwd) != 1 or not executable.is_absolute():
+            reject('TOOL_EXIT' if code != 0 else
+                   'CWD_CARDINALITY' if len(cwd) != 1 else 'EXECUTABLE_NOT_ABSOLUTE')
+        emit()
+        argv = step('KERNEL_ARGV', lambda: kernel_argv(pid))
+        parent = step('PARENT_PARSE', lambda: int(values[0]))
+        start = step('START_PARSE', lambda: utc_stamp(stamp))
+        command = ' '.join(argv)
+        resolved = step('EXECUTABLE_RESOLVE', lambda: str(executable.resolve()))
+        hashed = step('EXECUTABLE_HASH', lambda: file_hash(executable))
+        directory = step('CWD_RESOLVE', lambda: str(Path(cwd[0]).resolve()))
+        return ProcessObservation(pid, parent, start, command, resolved, hashed, directory, argv)
+    except BaseException as error:
+        if meta is not None and meta['failure'] == 'NONE':
+            meta['failure'] = ('TIMEOUT' if isinstance(error, subprocess.TimeoutExpired) else
+                'PERMISSION' if isinstance(error, PermissionError) else
+                'OS_ERROR' if isinstance(error, OSError) else
+                'INVALID_VALUE' if isinstance(error, ValueError) else 'OTHER')
+        emit(primary=True)
+        raise
 
 
 def safe(value, root):

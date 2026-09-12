@@ -299,6 +299,120 @@ class ReceiptTests(unittest.TestCase):
             self.assertFalse(list(root.glob('*.staging')))
 
 
+class InspectionDiagnosticTests(unittest.TestCase):
+    """Queries are mocked, including every disappearance/permission boundary."""
+    def results(self):
+        return [subprocess.CompletedProcess([], 0, value, 'discarded-sensitive-stderr') for value in
+                ('Sat Sep 12 04:28:48 2026', '900000', '/synthetic/python', 'p900001\nn/synthetic/cwd')]
+
+    def inspect(self, results, diagnostic=None):
+        with patch.object(identity.subprocess, 'run', side_effect=results) as run, \
+             patch.object(identity, 'kernel_argv', return_value=('synthetic',)), \
+             patch.object(identity, 'file_hash', return_value='a'*64):
+            result = identity.inspect_macos(900001, diagnostic=diagnostic)
+        return result, run.call_args_list
+
+    def test_success_same_identity_commands_and_no_raw_diagnostic_content(self):
+        plain, commands = self.inspect(self.results())
+        rows = []
+        observed, diagnosed_commands = self.inspect(self.results(), rows.append)
+        self.assertEqual(observed, plain)
+        self.assertEqual(commands, diagnosed_commands)
+        self.assertEqual([r['query'] for r in rows[:4]],
+                         ['PS_START', 'PS_PARENT', 'PS_EXECUTABLE', 'LSOF_CWD'])
+        self.assertTrue(all(r['failure'] == 'NONE' for r in rows))
+        for row in rows:identity.validate_inspection_diagnostic(row)
+        body = json.dumps(rows)
+        for forbidden in ('synthetic/python', 'synthetic/cwd', 'sensitive-stderr', 'a'*64):
+            self.assertNotIn(forbidden, body)
+        for call in commands:
+            self.assertEqual(call.kwargs['timeout'], 1)
+            self.assertEqual(call.kwargs['env'], {'PATH':'/usr/bin:/bin:/usr/sbin','LC_ALL':'C','TZ':'UTC'})
+
+    def test_first_query_absence_preserves_none_and_no_later_queries(self):
+        rows = []
+        result, calls = self.inspect([subprocess.CompletedProcess([], 1, '', '')], rows.append)
+        self.assertIsNone(result);self.assertEqual(len(calls), 1)
+        self.assertEqual((rows[-1]['query'], rows[-1]['failure']), ('PS_START', 'ABSENT'))
+
+    def test_each_query_nonzero_or_empty_keeps_failure_and_exact_identifier(self):
+        for index, query in enumerate(('PS_START', 'PS_PARENT', 'PS_EXECUTABLE', 'LSOF_CWD')):
+            for code, output in ((2, ''), (0, '')):
+                rows = [];results = self.results();results[index] = subprocess.CompletedProcess([], code, output, 'secret')
+                with self.subTest(query=query, code=code), self.assertRaisesRegex(identity.IdentityFailure, '^PROCESS_INSPECTION_FAILED$'):
+                    self.inspect(results, rows.append)
+                self.assertEqual(rows[-1]['query'], query)
+                expected = 'TOOL_EXIT' if code else 'CWD_CARDINALITY' if index == 3 else 'EMPTY_OUTPUT'
+                self.assertEqual(rows[-1]['failure'], expected)
+                self.assertEqual(rows[-1]['returncode'], code)
+
+    def test_disappearance_between_every_query_is_not_initial_absence(self):
+        for index in (1, 2, 3):
+            rows = [];results = self.results();results[index] = subprocess.CompletedProcess([], 1, '', '')
+            with self.assertRaisesRegex(identity.IdentityFailure, '^PROCESS_INSPECTION_FAILED$'):
+                self.inspect(results, rows.append)
+            self.assertEqual(len(rows), index+1)
+            self.assertEqual(rows[-1]['failure'], 'TOOL_EXIT')
+
+    def test_cwd_cardinality_and_nonabsolute_executable_distinguished(self):
+        for output, count in [('p900001', 0), ('n/one\nn/two', 2), ('n/x\n'*200, 129)]:
+            rows=[];results=self.results();results[3].stdout=output
+            with self.assertRaises(identity.IdentityFailure):self.inspect(results,rows.append)
+            self.assertEqual(rows[-1]['cwd_records'],count)
+            self.assertEqual(rows[-1]['failure'],'CWD_CARDINALITY')
+        rows=[];results=self.results();results[2].stdout='relative-python'
+        with self.assertRaises(identity.IdentityFailure):self.inspect(results,rows.append)
+        self.assertEqual(rows[-1]['failure'],'EXECUTABLE_NOT_ABSOLUTE')
+
+    def test_spawn_timeout_and_permission_do_not_stringify_exception(self):
+        for error, category in [(PermissionError('secret /private/path'), 'PERMISSION'),
+                                (subprocess.TimeoutExpired('secret command', 1), 'TIMEOUT'),
+                                (OSError('secret filename'), 'OS_ERROR')]:
+            rows=[]
+            with self.assertRaises(type(error)) as caught:self.inspect([error],rows.append)
+            self.assertIs(caught.exception,error)
+            self.assertEqual(rows[-1]['failure'],category)
+            self.assertIsNone(rows[-1]['returncode'])
+            self.assertNotIn('secret',json.dumps(rows))
+
+    def test_oversize_and_signaled_tool_report_sanitized_status(self):
+        rows=[];results=self.results();results[0].stdout='x'*65537
+        with self.assertRaisesRegex(identity.IdentityFailure,'^PROCESS_INSPECTION_OVERSIZE$'):
+            self.inspect(results,rows.append)
+        self.assertEqual(rows[-1]['failure'],'OVERSIZE')
+        rows=[];results=self.results();results[1].returncode=-9
+        with self.assertRaises(identity.IdentityFailure):self.inspect(results,rows.append)
+        self.assertEqual(rows[-1]['signal'],9)
+
+    def test_bad_parent_and_start_parsing_preserve_original_failure(self):
+        for index, query in [(0,'START_PARSE'),(1,'PARENT_PARSE')]:
+            rows=[];results=self.results();results[index].stdout='invalid-sensitive-input'
+            with self.assertRaises(ValueError):self.inspect(results,rows.append)
+            self.assertEqual(rows[-1]['query'],query)
+            self.assertEqual(rows[-1]['failure'],'INVALID_VALUE')
+            self.assertNotIn('invalid-sensitive',json.dumps(rows))
+
+    def test_sink_failure_never_masks_primary_or_permits_success(self):
+        def sink(_):raise RuntimeError('unretained diagnostic secret')
+        with self.assertRaisesRegex(identity.IdentityFailure,'^DIAGNOSTIC_PUBLICATION_FAILED$'):
+            self.inspect(self.results(),sink)
+        original=PermissionError('unretained original')
+        with self.assertRaises(PermissionError) as caught:self.inspect([original],sink)
+        self.assertIs(caught.exception,original)
+
+    def test_untrusted_metadata_rejected_before_hash_or_retention(self):
+        rows=[];self.inspect(self.results(),rows.append)
+        mutations={'query':'/private/secret','failure':'credential-value','returncode':True,
+                   'monotonic_end':float('nan'),'started_at':'private timestamp',
+                   'cwd_records':130,'stdout_empty':'secret','signal':True}
+        for key,value in mutations.items():
+            row={**rows[0],key:value}
+            with self.subTest(key=key),self.assertRaises((ValueError,TypeError)):
+                identity.validate_inspection_diagnostic(row)
+        with self.assertRaises(identity.IdentityFailure):
+            identity.validate_inspection_diagnostic({**rows[0],'raw':'forbidden'})
+
+
 @unittest.skipUnless(sys.platform=='darwin' and os.environ.get('IIOS_EPHEMERAL_IDENTITY_TEST')=='1',
                      'opt-in own-child macOS process inspection only; no services or network')
 class EphemeralMacOSTests(unittest.TestCase):

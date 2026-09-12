@@ -768,3 +768,144 @@ class StartupDiagnosticsTests(unittest.TestCase):
         path=Path(p['root'])/'fixture-diagnostic-0001.json';before=path.read_bytes()
         with self.assertRaises(FileExistsError):ChildDiagnostics(cap,'fixture','a'*64).emit('TLS_WRAP')
         self.assertEqual(path.read_bytes(),before)
+
+
+class QueryDiagnosticTests(unittest.TestCase):
+    def capability(self):
+        return StartupDiagnosticsTests.capability(self)
+
+    def records(self, cap):
+        return StartupDiagnosticsTests.records(self, cap)
+
+    def test_observed_exit65_pattern_brackets_failed_query_without_authority(self):
+        import subprocess
+        import truth_spine_process_identity as identity
+        cap=self.capability();child=MagicMock(pid=28326)
+        statuses=iter([None,None,65]);child.poll.side_effect=lambda:next(statuses,65)
+        owned=OwnedProcesses(cap,pause=lambda _:None)
+        replies=[subprocess.CompletedProcess([],0,'Sat Sep 12 04:28:48 2026',''),
+                 subprocess.CompletedProcess([],1,'','unretained inspector text')]
+        with patch.object(identity.subprocess,'run',side_effect=replies) as run:
+            with self.assertRaisesRegex(identity.IdentityFailure,'^PROCESS_INSPECTION_FAILED$'):
+                owned.register('fixture',child,argv=('synthetic',),cwd=cap.documents()[0]['root'],
+                               executable='/synthetic/python',executable_hash='a'*64,launch_parent='b'*64)
+        self.assertEqual(run.call_count,2)
+        capture=owned.children['fixture']['capture']
+        capture.feed((b'x'*33+b'\n')*5+b'x'*37+b'\n');capture.finish()
+        result=owned.cleanup(lambda:True)
+        records=self.records(cap)
+        bracket=[v for v in records if v['event']=='INSPECTION_CHILD_STATUS']
+        self.assertEqual([v['phase'] for v in bracket],['BEFORE','AFTER'])
+        self.assertEqual([v['status']['returncode'] for v in bracket],[None,65])
+        query=[v for v in records if v['event']=='INSPECTION_QUERY']
+        self.assertEqual(query[-1]['diagnostic']['query'],'PS_PARENT')
+        self.assertEqual(query[-1]['diagnostic']['failure'],'TOOL_EXIT')
+        self.assertTrue(all(v['launch_parent']=='b'*64 and not v['ownership_authority'] for v in query+bracket))
+        self.assertEqual(capture.snapshot()['untrusted_stderr_hints'],['REDACTED_UNRECOGNIZED']*6)
+        self.assertEqual(capture.received,208)
+        self.assertEqual(owned.primary_failures[0]['category'],'PROCESS_INSPECTION_FAILED')
+        self.assertFalse(result['clean']);self.assertTrue(result['port_clear'])
+        child.terminate.assert_not_called();child.kill.assert_not_called()
+        out=Path(cap.documents()[0]['root'])
+        self.assertFalse((out/'worker-launch.json').exists());self.assertFalse((out/'journal').exists())
+        self.assertFalse(any(v['event']=='OWNERSHIP' for v in records))
+        self.assertNotIn('unretained inspector',json.dumps(records))
+
+    def test_status_or_query_publication_failure_keeps_original_error(self):
+        import truth_spine_process_identity as identity
+        cap=self.capability();child=MagicMock(pid=12345);child.poll.return_value=65
+        owned=OwnedProcesses(cap,pause=lambda _:None)
+        write=owned.evidence
+        def failing(value):
+            if value['event']=='INSPECTION_QUERY' or (value['event']=='INSPECTION_CHILD_STATUS' and value['phase']=='AFTER'):
+                raise PermissionError('private diagnostic failure')
+            write(value)
+        original=PermissionError('private inspector failure')
+        with patch.object(owned,'evidence',side_effect=failing),patch.object(identity.subprocess,'run',side_effect=original):
+            with self.assertRaises(PermissionError) as caught:
+                owned.register('fixture',child,argv=(),cwd=cap.documents()[0]['root'],
+                               executable='/synthetic',executable_hash='a'*64,launch_parent='b'*64)
+        self.assertIs(caught.exception,original)
+        self.assertIn('DIAGNOSTIC_PUBLICATION_FAILED',owned.diagnostic_failures)
+        self.assertIn('DIAGNOSTIC_STATUS_UNAVAILABLE',owned.diagnostic_failures)
+        self.assertFalse(owned.cleanup(lambda:True)['clean'])
+        child.terminate.assert_not_called();child.kill.assert_not_called()
+
+    def test_forged_query_metadata_is_rejected_before_publication(self):
+        import alpha_radar_runner as runner
+        cap=self.capability();child=MagicMock(pid=12345);child.poll.return_value=65
+        def inspector(pid,*,diagnostic):
+            diagnostic({'raw':'secret /private/forged'})
+        with patch.object(runner,'inspect_macos',inspector):
+            owned=OwnedProcesses(cap,inspect=inspector,pause=lambda _:None)
+            with self.assertRaises(ValueError):
+                owned.register('fixture',child,argv=(),cwd=cap.documents()[0]['root'],
+                               executable='/synthetic',executable_hash='a'*64,launch_parent='b'*64)
+        body=json.dumps(self.records(cap))
+        self.assertNotIn('secret',body);self.assertNotIn('/private/forged',body)
+        self.assertNotIn('INSPECTION_QUERY',body)
+        self.assertFalse(owned.cleanup(lambda:True)['clean'])
+
+    def test_bootstrap_import_failure_retains_only_fixed_early_hints(self):
+        import builtins,io
+        import alpha_radar_runner as runner
+        source=Path(runner.__file__).read_text().split('# Diagnostics are observations only;')[0]
+        real_import=builtins.__import__
+        error=ImportError('secret /private/path')
+        def importing(name,*args,**kwargs):
+            if name=='alpha_market_baseline':raise error
+            return real_import(name,*args,**kwargs)
+        stderr=io.StringIO()
+        with patch('sys.stderr',stderr),patch('builtins.__import__',side_effect=importing):
+            with self.assertRaises(SystemExit) as caught:
+                exec(compile(source,'synthetic-bootstrap','exec'),{'__name__':'__main__'})
+        self.assertEqual(caught.exception.code,1)
+        self.assertEqual(stderr.getvalue().splitlines(),['RADAR_EARLY: PYTHON_ENTRY',
+                         'RADAR_EARLY: IMPORT_BEGIN','RADAR_EARLY: IMPORT_FAILED'])
+        self.assertNotIn('secret',stderr.getvalue())
+        with patch('builtins.__import__',side_effect=importing):
+            with self.assertRaises(ImportError) as imported:
+                exec(compile(source,'synthetic-bootstrap','exec'),{'__name__':'offline_import'})
+        self.assertIs(imported.exception,error)
+
+    def test_early_descriptor_failure_stage_does_not_claim_admission(self):
+        import io
+        import alpha_radar_runner as runner
+        stderr=io.StringIO()
+        with patch.object(runner,'__name__','__main__'),patch('sys.stderr',stderr), \
+             patch('sys.argv',['runner','--descriptor','/synthetic/descriptor','--expected-descriptor','a'*64]), \
+             patch.object(runner,'read_descriptor',side_effect=PermissionError('secret')), \
+             patch.object(runner,'child_main') as child,patch.object(runner,'admit') as admission:
+            with self.assertRaises(PermissionError):runner.main()
+        self.assertEqual(stderr.getvalue(),'RADAR_EARLY: DESCRIPTOR_READ\n')
+        child.assert_not_called();admission.assert_not_called()
+
+    def test_early_hints_are_chunk_safe_and_never_accept_appended_values(self):
+        from alpha_radar_runner import StderrCapture,EARLY_STAGES
+        for width in (1,7,4096):
+            capture=StderrCapture()
+            data=b''.join(('RADAR_EARLY: '+stage+'\n').encode() for stage in sorted(EARLY_STAGES))
+            data+=b'RADAR_EARLY: IMPORT_FAILED secret /private/path\n'
+            for at in range(0,len(data),width):capture.feed(data[at:at+width])
+            capture.finish()
+            hints=capture.snapshot()['untrusted_stderr_hints']
+            self.assertEqual(hints[:-1],['UNTRUSTED_EARLY_'+stage for stage in sorted(EARLY_STAGES)])
+            self.assertEqual(hints[-1],'REDACTED_UNRECOGNIZED')
+            self.assertNotIn('secret',json.dumps(capture.snapshot()))
+            self.assertFalse(capture.overflow)
+
+    def test_early_admission_failure_never_emits_verified_stage(self):
+        import io
+        import alpha_radar_runner as runner
+        cap=self.capability();p,r,pins=cap.documents()
+        launch={'scope':SCOPE,'authority':AUTHORITY,'role':'fixture','parent_pid':os.getppid(),
+                'created_at':'synthetic','output_identity':list(cap.output_identity),
+                'descriptor':{'package':p,'runtime':r,'expected':pins,'authorized_root':cap.authorized_root,
+                              'native_tools':{},'clock_mode':'ACCELERATED_LOGICAL_TIME','maximum_duration_seconds':60}}
+        stderr=io.StringIO()
+        with patch.object(runner,'__name__','__main__'),patch('sys.stderr',stderr), \
+             patch.object(runner,'verify_inputs',side_effect=ValueError('synthetic rejection')), \
+             patch.object(runner,'ChildDiagnostics') as diagnostic:
+            with self.assertRaises(ValueError):runner.child_main(launch,'fixture','a'*64)
+        self.assertEqual(stderr.getvalue(),'RADAR_EARLY: CHILD_ADMISSION_BEGIN\n')
+        diagnostic.assert_not_called()
