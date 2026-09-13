@@ -1504,6 +1504,726 @@ def lifecycle_main(d, expected, child):
     return 0 if result['classification'] == 'LIFECYCLE_PASS' else 1
 
 
+# This capability is deliberately not a lifecycle or confinement qualification.
+FULL_SCOPE = 'CI_SYNTHETIC_FULL_SESSION_ONLY'
+FULL_TIMING = 'ACCELERATED_LOGICAL_TIME_ONLY'
+FULL_FLAGS = {'scope': FULL_SCOPE, 'production_qualified': False,
+    'os_confinement': 'UNQUALIFIED', 'credential_access': False, 'provider_access': False,
+    'timing_proof': FULL_TIMING, **AUTHORITY}
+
+
+def full_descriptor(d):
+    require(type(d) is dict and set(d) == {'schema', 'execution_mode', 'package', 'runtime',
+        'expected', 'authorized_root', 'native_tools', 'maximum_duration_seconds', 'context',
+        'session_package', 'session_package_parent'}, 'FULL_DESCRIPTOR')
+    require(d['schema'] == 'iios-ci-full-session-descriptor-v1' and d['execution_mode'] == FULL_SCOPE
+        and type(d['maximum_duration_seconds']) is int and 180 <= d['maximum_duration_seconds'] <= 900,
+        'FULL_DESCRIPTOR')
+    lifecycle_environment(d['context'])
+    require(d['package']['source_commit'] == d['context']['GITHUB_SHA'], 'FULL_SOURCE')
+    verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
+    verify_tools(d['native_tools'])
+    expected = full_package(d['package'], d['expected'])
+    require(d['session_package'] == expected and content_hash(expected) == d['session_package_parent'],
+            'FULL_PACKAGE')
+    require(Path(d['package']['root']).name == 'full-session-output', 'FULL_OUTPUT')
+    return {**d['expected'], 'session_package': d['session_package_parent'], 'full_descriptor': content_hash(d)}
+
+
+def full_package(p, pins):
+    # Independently pinned synthetic membership; never market-universe proof.
+    symbols = [f'S{i:03}' for i in range(517)]
+    plan = p['plan']; rows = plan['rows']
+    require(plan['universe'] == {'symbols': symbols} and
+        content_hash(plan['universe']) == pins['universe'] and len(rows) == 475, 'FULL_UNIVERSE')
+    from alpha_market_baseline import verify_plan
+    from provider_gateway_contract import PILOT
+    # Reconstruct the accepted schedule, including the preflight window and
+    # phase/slot identities. A rehashed mutation is not an independent binding.
+    verify_plan(plan, pins['plan'])
+    pilot = list(PILOT)
+    opening = utc(plan['calendar']['open'])
+    preflight = {'slot': 0, 'id': 'PREFLIGHT-0', 'phase': 'PREFLIGHT', 'batch': 0,
+        'symbols': pilot, 'symbol_hash': content_hash(pilot),
+        'valid_from': (opening - timedelta(minutes=10)).isoformat(),
+        'expires_at': (opening - timedelta(minutes=5)).isoformat(),
+        'root': str(Path(plan['root']) / 'PREFLIGHT-0')}
+    require(rows[0] == preflight and len(pilot) == len(set(pilot)) == 10 and
+            not set(pilot) & set(symbols) and plan['preflight_requests'] == 1 and
+            plan['maximum_requests'] == 475 and plan['collection_requests'] == 474,
+            'FULL_PREFLIGHT')
+    for cycle in range(79):
+        chunk = rows[1+cycle*6:1+(cycle+1)*6]
+        require([len(row['symbols']) for row in chunk] == [100,100,100,100,100,17] and
+                [symbol for row in chunk for symbol in row['symbols']] == symbols, 'FULL_BATCH_ORDER')
+    require(len({row['root'] for row in rows}) == 475 and
+            len({row['id'] for row in rows}) == 475, 'FULL_SLOT_IDENTITY')
+    return {'schema': 'iios-ci-synthetic-full-session-package-v1', **FULL_FLAGS,
+        'source_commit': p['source_commit'], 'input_parents': dict(pins),
+        'ordered_universe': symbols, 'preflight_symbols': rows[0]['symbols'],
+        'preflight': {'identifier': 'PILOT', 'request_count': 1,
+            'symbols': pilot, 'symbol_hash': content_hash(pilot),
+            'phase': preflight['phase'], 'slot': preflight['slot'],
+            'schedule_id': preflight['id'], 'row_parent': content_hash(preflight),
+            'valid_from': preflight['valid_from'], 'expires_at': preflight['expires_at']},
+        'cycles': 79, 'batch_sizes': [100,100,100,100,100,17], 'maximum_requests': 475,
+        'starts_per_rolling_minute': 3, 'timeout_seconds': 20, 'response_limit': 1_000_000,
+        'retries': 0, 'redirects': 0, 'pagination': 0, 'fallback': 0, 'backfill': 0,
+        'enrichment_requests': 0, 'slot_parents': [content_hash(row) for row in rows]}
+
+
+def full_envelope(value, parents, *, logical_time=None, actual_utc=None, monotonic_seconds=None):
+    from alpha_radar_admission import synthetic_document
+    synthetic_document(value)
+    if logical_time is not None: utc(logical_time)
+    actual = actual_utc if actual_utc is not None else datetime.now(timezone.utc).isoformat()
+    utc(actual)
+    tick = time.monotonic() if monotonic_seconds is None else monotonic_seconds
+    import math
+    require(type(tick) in (int, float) and math.isfinite(tick) and tick >= 0, 'FULL_CLOCK')
+    doc = {'schema': 'iios-ci-full-session-receipt-v1', **FULL_FLAGS,
+        'parents': parents, 'logical_time': logical_time, 'actual_utc': actual,
+        'monotonic_seconds': tick, 'value': value}
+    return {**doc, 'content_hash': content_hash(doc)}
+
+
+def verify_full_receipt(doc, expected, parents):
+    require(type(expected) is str and re.fullmatch('[a-f0-9]{64}', expected) and
+            type(doc) is dict and content_hash(doc) == expected, 'FULL_RECEIPT_PIN')
+    require(set(doc) == {'schema', *FULL_FLAGS, 'parents', 'logical_time', 'actual_utc',
+        'monotonic_seconds', 'value', 'content_hash'} and doc['parents'] == parents and
+        all(type(doc[k]) is type(v) and doc[k] == v for k,v in FULL_FLAGS.items()), 'FULL_RECEIPT_SCOPE')
+    require(doc == full_envelope(doc['value'], parents, logical_time=doc['logical_time'],
+        actual_utc=doc['actual_utc'], monotonic_seconds=doc['monotonic_seconds']), 'FULL_RECEIPT_HASH')
+    return doc['value']
+
+
+def full_store(cap, parents, name, value, *, logical_time=None):
+    p, _, _ = checked_capability(cap)
+    fd = safe_root(p['root'])
+    try:
+        st = os.fstat(fd)
+        require((st.st_dev, st.st_ino) == cap.output_identity, 'OUTPUT_REPLACED')
+        verify_destination(fd, p['root'])
+        return publish(fd, name, full_envelope(value, parents, logical_time=logical_time))
+    finally: os.close(fd)
+
+
+def full_read(cap, parents, name, *, expected=None, value=None):
+    fd = safe_root(cap.documents()[0]['root'])
+    try: doc = read_record(fd, name, expected_hash=expected)
+    finally: os.close(fd)
+    # Unpinned handshakes additionally require the independently constructed value.
+    require(expected is not None or value is not None, 'FULL_INDEPENDENT_PARENT')
+    result = verify_full_receipt(doc, expected or content_hash(doc), parents)
+    if value is not None: require(result == value, 'FULL_ACK_BINDING')
+    return result, content_hash(doc)
+
+
+class FullPacing:
+    def __init__(self): self.starts = []; self.last = None
+
+    def reserve(self, now):
+        import math
+        require(type(now) in (int,float) and math.isfinite(now) and now >= 0 and
+                (self.last is None or now >= self.last), 'FULL_CLOCK_ROLLBACK')
+        self.last = now
+        require(sum(0 <= now-v < 60 for v in self.starts) < 3, 'FULL_ROLLING_RATE')
+        self.starts.append(now)
+
+
+def full_real_clock_boundary(*, monotonic=time.monotonic, pause=time.sleep):
+    """Native-only caller; no networking. Offline tests inject both clock and wait."""
+    gate = FullPacing(); start = monotonic(); observed = []
+    for _ in range(3):
+        tick = monotonic(); gate.reserve(tick); observed.append(tick)
+    require(monotonic()-start < 1, 'FULL_REAL_CLOCK_START')
+    try: gate.reserve(monotonic())
+    except ValueError as error: require(error.args == ('FULL_ROLLING_RATE',), 'FULL_REAL_CLOCK_REJECTION')
+    else: raise ValueError('FULL_FOURTH_START_ALLOWED')
+    last = start
+    while True:
+        now = monotonic(); require(now >= last, 'FULL_CLOCK_ROLLBACK'); last = now
+        if now-start >= 60: break
+        pause(min(.1,60-(now-start)))
+    tick = monotonic(); require(60 <= tick-start <= 65, 'FULL_REAL_CLOCK_DEADLINE'); gate.reserve(tick)
+    return {'scenario': 'REAL_CLOCK_ROLLING_MINUTE_BOUNDARY', 'first_three': observed,
+        'fourth_start_rejected': True, 'next_start': tick, 'elapsed_seconds': tick-start,
+        'market_requests': 0, 'full_day_wall_clock_proven': False}
+
+
+class FullSession(Session):
+    def __init__(self, cap, parents, *, clock, wait, stop, exchange=fixture_exchange):
+        super().__init__(cap, clock=clock, wait=wait, stop=stop, exchange=exchange)
+        full_package(self.p, self.pins)
+        self.full_parents = parents; self.documents = {}; self.next_slot = 0; self.rate = FullPacing()
+        self.attempted = 0; self.completed = 0; self.receipt_pins = []
+
+    def document(self, value):
+        key = canonical(value)
+        if key not in self.documents:
+            self.documents[key] = full_envelope(value, self.full_parents, logical_time=self.clock())
+        return self.documents[key]
+
+    def hash(self, value): return content_hash(self.document(value))
+
+    def write(self, fd, name, value):
+        checked_capability(self.cap); self.verify_fd(fd)
+        return publish(fd, name, self.document(value))
+
+    def read(self, fd, name, *, expected_hash=None):
+        self.verify_fd(fd)
+        doc = read_record(fd, name, expected_hash=expected_hash)
+        value = verify_full_receipt(doc, expected_hash or content_hash(doc), self.full_parents)
+        key = canonical(value)
+        # Recovery may use only records independently witnessed in this process.
+        require(key in self.documents and self.documents[key] == doc, 'FULL_RECOVERY_PIN')
+        return value
+
+    def verify(self, receipt, expected, *, parents):
+        require(receipt['scope'] == FULL_SCOPE and receipt['authority'] == AUTHORITY and
+            receipt['parents'] == parents and self.hash(receipt) == expected and
+            receipt['source_commit'] == self.p['source_commit'], 'FULL_RECEIPT_BINDING')
+
+    def request(self, slot):
+        request = super().request(slot); request['manifest']['role'] = FULL_SCOPE
+        return request
+
+    def execute(self, request, previous):
+        slot = self.next_slot
+        require(slot < 475 and request == self.request(slot), 'FULL_REQUEST_ORDER')
+        checked_capability(self.cap)
+        m,a = request['manifest'],request['account']
+        def dispatch(day_fd, index, reserved):
+            require(index == slot, 'FULL_REQUEST_ORDER')
+            at = self.clock(); self.rate.reserve(utc(at).timestamp())
+            row = self.p['plan']['rows'][slot]; fd = self.open_root(row['root'])
+            receipt = {'scope': FULL_SCOPE, 'authority': AUTHORITY, 'source_commit': m['source_commit'],
+                'root': m['root'], 'role': FULL_SCOPE, 'parents': {**request['expected'],'reservation':reserved},
+                'result': 'AMBIGUOUS_OR_UNVERIFIED_STOP', 'retry_count': 0,
+                'credential_selector_access_count': 0, 'billing': 'SYNTHETIC_NO_CHARGE',
+                'bulk_checks': {}, 'dispatch_time': at, 'response_time': None,
+                'actual_dispatch_time': datetime.now(timezone.utc).isoformat(), 'actual_response_time': None,
+                'dispatch_monotonic': time.monotonic(), 'response_monotonic': None,
+                'timing_proof': FULL_TIMING}
+            self.attempted += 1
+            try:
+                response = self.exchange(self.cap,slot,at)
+                receipt.update(response_time=self.clock(), actual_response_time=response.response_end,
+                    response_monotonic=time.monotonic(), http_status=response.status)
+                require(response.status == 200 and len(response.body) <= 1_000_000, 'HTTP_OR_SIZE')
+                def unique(pairs):
+                    out = {}
+                    for k,v in pairs:
+                        require(k not in out,'DUPLICATE_JSON'); out[k] = v
+                    return out
+                payload = json.loads(response.body,object_pairs_hook=unique)
+                checks = summarize(payload,row['symbols'],received_at=receipt['response_time'],maximum_age_seconds=60)
+                receipt['bulk_checks'] = checks
+                require(checks['coverage'] == 'COMPLETE' and checks['freshness'] == 'WITHIN_AGE_BOUND'
+                        and [v['symbol'] for v in payload['data']] == row['symbols'],'OBSERVATION_FAILED')
+                start,end = utc(at),utc(receipt['response_time'])
+                require(utc(row['valid_from']) <= start <= end < utc(row['expires_at']) and
+                        (end-start).total_seconds() <= 20,'RESPONSE_DEADLINE')
+                require(0 <= (utc(response.response_end)-utc(response.request_start)).total_seconds() <= 20
+                    and 0 <= receipt['response_monotonic']-receipt['dispatch_monotonic'] <= 20,'WIRE_DEADLINE')
+                receipt['result'] = 'OBSERVED'; self.completed += 1
+            except Exception:
+                receipt['failure'] = 'SYNTHETIC_REQUEST_UNVERIFIED'
+            finally:
+                try: self.write(fd,'ALPHA_VANTAGE.receipt.json',receipt)
+                finally: os.close(fd)
+            return receipt
+        result = execute_day(m,a,clock=self.clock,expected_bulk_previous=previous,dispatch=dispatch,
+            verify_receipt=self.verify,write=self.write,read=self.read,record_hash=self.hash,open_root=self.open_root)
+        self.next_slot += 1; self.receipt_pins.append(self.hash(result))
+        return result
+
+    def run(self):
+        journal = Path(self.p['plan']['root']); journal.mkdir(mode=0o700)
+        for row in self.p['plan']['rows']: Path(row['root']).mkdir(mode=0o700)
+        requests = [self.request(i) for i in range(475)]
+        def verify(receipt,request):
+            require(receipt['parents'] == {**request['expected'],'reservation':receipt['parents']['reservation']},'RECEIPT_PARENTS')
+            self.verify(receipt,self.hash(receipt),parents=receipt['parents'])
+        receipts, reason = execute_schedule(self.p['plan'],requests,clock=self.clock,wait=self.wait,
+            executor=self.execute,stop=self.stop,verify=verify,completion_parent=self.completion)
+        complete = reason is None and len(receipts) == self.attempted == self.completed == self.next_slot == 475 and utc(self.clock()) <= utc(self.p['plan']['finalization_deadline'])
+        value = {'classification':'FULL_SYNTHETIC_PASS' if complete else 'FULL_SYNTHETIC_FAILED',
+            'attempted':self.attempted,'completed':self.completed,'reservations':self.next_slot,
+            'receipt_parents':self.receipt_pins,'stop_reason':reason,'worker_launches':1,
+            'provider_requests':0,'credential_accesses':0,'full_day_wall_clock_proven':False}
+        parent = full_store(self.cap,self.full_parents,'fs-session.json',value,logical_time=self.clock())
+        return value,parent
+
+
+def full_accounting(cap, parents, session):
+    """Reconstruct all 1,425 records against independently received session pins."""
+    p,_,pins = checked_capability(cap); rows = p['plan']['rows']
+    require(session['classification'] == 'FULL_SYNTHETIC_PASS' and
+        session['attempted'] == session['completed'] == session['reservations'] == 475 and
+        len(session['receipt_parents']) == len(set(session['receipt_parents'])) == 475,'FULL_ACCOUNTING')
+    fd = safe_root(p['plan']['root']); previous = None; rate = FullPacing()
+    try:
+        require(set(os.listdir(fd)) == {'day.lock'} | {row['id'] for row in rows} |
+            {f'{i}.{kind}.json' for i in range(475) for kind in ('reserved','complete')},'FULL_ACCOUNTING')
+        for i,row in enumerate(rows):
+            reservation_doc = read_record(fd,f'{i}.reserved.json')
+            reservation = verify_full_receipt(reservation_doc,content_hash(reservation_doc),parents)
+            require(reservation == {'plan':pins['plan'],'slot':i,'source_commit':p['source_commit'],'previous':previous},'FULL_RESERVATION')
+            child = safe_root(row['root'])
+            try:
+                require(os.listdir(child) == ['ALPHA_VANTAGE.receipt.json'],'FULL_ACCOUNTING')
+                receipt_doc = read_record(child,'ALPHA_VANTAGE.receipt.json',expected_hash=session['receipt_parents'][i])
+            finally: os.close(child)
+            receipt = verify_full_receipt(receipt_doc,session['receipt_parents'][i],parents)
+            require(receipt['parents'] == {**pins,'slot':content_hash({'slot':i,'row':row}),
+                'reservation':content_hash(reservation_doc)} and receipt['root'] == row['root'] and
+                receipt['source_commit'] == p['source_commit'] and receipt['scope'] == receipt['role'] == FULL_SCOPE
+                and receipt['authority'] == AUTHORITY and receipt['result'] == 'OBSERVED'
+                and receipt['retry_count'] == receipt['credential_selector_access_count'] == 0,'FULL_ACCOUNTING')
+            rate.reserve(utc(receipt['dispatch_time']).timestamp())
+            complete_doc = read_record(fd,f'{i}.complete.json')
+            complete = verify_full_receipt(complete_doc,content_hash(complete_doc),parents)
+            require(complete == {'slot':i,'previous':previous,'reservation':content_hash(reservation_doc),
+                'receipt':session['receipt_parents'][i],'result':'OBSERVED'},'FULL_COMPLETION')
+            previous = content_hash(complete_doc)
+    finally: os.close(fd)
+    return {'requests':475,'reservations':475,'completions':475,'receipts':475,
+        'cycles':79,'ordered_symbols':517,'last_completion_parent':previous}
+
+
+def full_startup(cap, role, launch_parent, identity):
+    return {**lifecycle_startup_value(cap,launch_parent,identity),'role':role}
+
+
+class FullRoleInspection(OwnedProcesses):
+    """Same inspector and immutable expectations, with failure state per child.
+
+    Evidence still uses the owner's exclusive, monotonically numbered publisher.
+    Prior failures for this child are never cleared or hidden; other roles cannot
+    inherit them as a reason to skip their independent ownership inspection.
+    """
+    def __init__(self, owner, entry):
+        self.cap = owner.cap
+        self.inspect = owner.inspect
+        self.evidence = owner.evidence
+        self.diagnostic_failures = entry.setdefault('inspection_diagnostic_failures', [])
+
+
+class FullOwnedProcesses(LifecycleOwnedProcesses):
+    def observe(self,entry,*,allow_launcher=False):
+        inspector = FullRoleInspection(self,entry)
+        before = len(inspector.diagnostic_failures)
+        try:
+            return inspector.observe(entry,allow_launcher=allow_launcher)
+        finally:
+            # Aggregate for final failure classification without using one
+            # child's diagnostics as another child's inspection admission gate.
+            self.diagnostic_failures.extend(inspector.diagnostic_failures[before:])
+
+    def evidence(self,value):
+        self.counter += 1
+        full_store(self.cap,self.lifecycle_parents,f'fs-event-{self.counter:06d}.json',value)
+
+    def verify(self,role,*,require_startup=True):
+        require(role in ('fixture','worker'),'FULL_ROLE')
+        entry = self.children[role]; self.pump(entry)
+        require(entry['observation'] is not None and self.observe(entry) == entry['observation'],'PROCESS_IDENTITY')
+        require(not require_startup or role in self.startup_pins,'STARTUP_RECEIPT_REQUIRED')
+        if role in self.startup_pins:
+            launch,expected = self.startup_pins[role]
+            full_read(self.cap,self.lifecycle_parents,f'fs-{role}-startup.json',expected=expected,
+                value=full_startup(self.cap,role,launch,entry['observation']))
+        return entry['child']
+
+    def cleanup(self,port_clear,*,supervisor_check=None):
+        exits = []; roles = {}; supervisor_failures = []; listener_failures = []
+        # The supervisor observation is an independent gate, not permission to
+        # suppress each child's own pinned ownership verification. No signals.
+        if supervisor_check is not None:
+            try: supervisor_check()
+            except Exception as error:
+                supervisor_failures.append({'stage':'SUPERVISOR_IDENTITY','category':failure_category(error)})
+        for role in reversed(list(self.children)):
+            entry = self.children[role]; child = entry['child']
+            finding = {'ownership_verified':False, 'exit_verified':False,
+                'primary_failures':[v for v in self.primary_failures if v['role']==role],
+                'cleanup_failures':[], 'diagnostic_failures':[], 'signals':0}
+            roles[role] = finding
+            def failed(stage,error):
+                category = ('DIAGNOSTIC_INCOMPLETE' if error.args == ('DIAGNOSTIC_INCOMPLETE',)
+                            else failure_category(error))
+                item = {'role':role,'stage':stage,'category':category}
+                finding['cleanup_failures'].append(item); self.failures.append(item)
+            stage = 'OWNERSHIP_VERIFY'
+            try:
+                self.verify(role); finding['ownership_verified'] = True
+                stage = 'COOPERATIVE_STOP'
+                full_store(self.cap,self.lifecycle_parents,f'fs-{role}-stop.json',
+                    {'event':'STOP','role':role,'launch_parent':entry['launch_parent']})
+                child.wait(timeout=25)
+                stage = 'EXIT_VERIFY'
+                require(child.poll() == 0 and entry['observation'] is not None,'COOPERATIVE_SHUTDOWN')
+                full_read(self.cap,self.lifecycle_parents,f'fs-{role}-exit.json',
+                    value={'role':role,'returncode':0,'launch_parent':entry['launch_parent']})
+                finding['exit_verified'] = True
+                exits.append({'role':role,'pid':child.pid,'returncode':0,'ownership_verified':True})
+                del self.children[role]
+            except Exception as error: failed(stage,error)
+            finally:
+                capture = entry.get('capture')
+                try:
+                    if capture:
+                        capture.drain(); capture.check()
+                        require(child.poll() is not None and capture.eof,'DIAGNOSTIC_INCOMPLETE')
+                except Exception as error: failed('STREAM_COMPLETION',error)
+                finally:
+                    if capture:
+                        try: capture.close()
+                        except Exception as error: failed('STREAM_CLOSE',error)
+                # Snapshot/status/publication can fail independently. Preserve
+                # each failure and continue with the next role in every case.
+                status = None; diagnostics = None
+                try: status = child_status(child)
+                except Exception as error: failed('FINAL_STATUS',error)
+                try: diagnostics = capture.snapshot() if capture else None
+                except Exception as error: failed('DIAGNOSTIC_SNAPSHOT',error)
+                try:
+                    self.evidence({'event':'FINAL_CHILD_STATUS','role':role,'status':status,
+                                   'diagnostics':diagnostics})
+                except Exception as error: failed('FINAL_STATUS_PUBLICATION',error)
+                finding['diagnostic_failures'] = list(entry.get('inspection_diagnostic_failures',[]))
+        observations = []
+        for ordinal in range(3):
+            try: observations.append(port_clear() is True)
+            except Exception as error:
+                observations.append(False)
+                listener_failures.append({'observation':ordinal,'category':failure_category(error)})
+            try: self.pause(.2)
+            except Exception as error:
+                listener_failures.append({'observation':ordinal,'category':failure_category(error)})
+        required = {'worker','fixture'}
+        clean = (set(roles)==required and len(exits)==2 and not self.children and
+            not self.failures and not self.primary_failures and not self.diagnostic_failures and
+            all(v['ownership_verified'] and v['exit_verified'] and not v['cleanup_failures'] and
+                not v['diagnostic_failures'] for v in roles.values()) and
+            not supervisor_failures and not listener_failures and observations==[True,True,True])
+        return {'exits':exits,'remaining':sorted(self.children),'failures':self.failures,
+            'primary_failures':list(self.primary_failures),'role_findings':roles,
+            'supervisor':{'checked':supervisor_check is not None,'failures':supervisor_failures},
+            'listener':{'failures':listener_failures,'stable_clear':observations==[True,True,True]},
+            'diagnostic_failures':list(self.diagnostic_failures),'port_clear_observations':observations,
+            'signals':0,'clean':clean}
+
+def full_lexical_path(path, *, roots, exact=(), parent=None):
+    """Pure component admission. Never resolve, expand aliases or touch a path.
+
+    Roots and exact files are supplied by the independently admitted run.
+    Custom PathLike objects are rejected: __fspath__ could perform arbitrary IO.
+    Symlinks cannot be identified from spelling; admitted directory entries are
+    checked without following links by full_canonical_path before resolution.
+    """
+    from pathlib import PurePosixPath, PosixPath
+    def spelling(value):
+        require(type(value) in (str, PurePosixPath, PosixPath), 'FULL_PATH_LEXICAL')
+        text = os.fspath(value)
+        require(type(text) is str and text and not any(ord(c)<32 or ord(c)==127 for c in text)
+                and '\\' not in text and '~' not in text and '//' not in text,
+                'FULL_PATH_LEXICAL')
+        parts = text.split('/')
+        require(not any(v in ('.','..') for v in parts) and
+                not (len(text)>1 and text.endswith('/')), 'FULL_PATH_LEXICAL')
+        # No protected/home aliases, even if an untrusted caller lists a root.
+        folded = tuple(v.casefold() for v in parts)
+        require(not any(v in ('keychains','keychain','application support','l7','l8')
+                        for v in folded) and not text.startswith(('/Users/','/home/','/var/','/tmp/')),
+                'FULL_PATH_LEXICAL')
+        return PurePosixPath(text)
+    admitted = tuple(spelling(v) for v in roots)
+    singles = tuple(spelling(v) for v in exact)
+    require(admitted and all(v.is_absolute() and len(v.parts)>3 and
+            v.parts[:3]==('/','private','tmp') and
+            v.parts[3].startswith('iios-provider-connection-source-tests-') for v in admitted),
+            'FULL_PATH_LEXICAL')
+    value = spelling(path)
+    if parent is not None:
+        base = spelling(parent)
+        require(base.is_absolute() and any(base==v or base.is_relative_to(v) for v in admitted)
+                and not value.is_absolute(), 'FULL_PATH_LEXICAL')
+        value = base/value
+    require(value.is_absolute() and (value in singles or any(value==v or value.is_relative_to(v)
+            for v in admitted)), 'FULL_PATH_LEXICAL')
+    return Path(value)
+
+
+def full_canonical_path(path, *, roots, exact=()):
+    """Additional no-follow entry checks; only called after lexical admission."""
+    import stat
+    value = full_lexical_path(path, roots=roots, exact=exact)
+    # Walk from the pinned admitted root, never through a substituted symlink.
+    anchors = [Path(v) for v in roots if value==Path(v) or value.is_relative_to(Path(v))]
+    anchor = max(anchors,key=lambda p:len(p.parts)) if anchors else value
+    entries = [anchor]
+    for part in value.relative_to(anchor).parts: entries.append(entries[-1]/part)
+    for entry in entries:
+        try: mode = os.lstat(entry).st_mode
+        except FileNotFoundError: break
+        require(not stat.S_ISLNK(mode), 'FULL_PATH_ALIAS')
+    resolved = value.resolve()
+    require(resolved==value, 'FULL_PATH_ALIAS')
+    return resolved
+
+
+def full_audit(runtime, output, endpoint, role, *, plan, launch_commands=None, child_pids=lambda: (), context=None):
+    """Application-only guard, never evidence of OS confinement.
+
+    Child has no subprocess or signal allowance. Supervisor inspection uses
+    existing verified ownership logic; all lifecycle processes reject DNS and
+    public sockets. Descriptor-relative writes are resolved by the companion
+    checked-open wrapper, never by granting arbitrary relative names.
+    """
+    require(role in ('fixture', 'worker', 'supervisor') and endpoint[0] == '127.0.0.1'
+            and type(endpoint[1]) is int and 1024 <= endpoint[1] <= 65535, 'LOOPBACK_PIN_REQUIRED')
+    lexical_roots = (runtime, output)
+    root = full_canonical_path(runtime, roots=lexical_roots)
+    out = full_canonical_path(output, roots=lexical_roots)
+    read_exact = ('/dev/null','/bin/ps','/usr/sbin/lsof','/usr/bin/sandbox-exec')
+    active = []; directories = {}; original = os.open; launched = set()
+    commands = {k:tuple(v) for k,v in (launch_commands or {}).items()}
+    require(not commands or (role == 'supervisor' and set(commands) == {'fixture','worker'}), 'FULL_SPAWN')
+    for name, argv in commands.items():
+        require(len(argv)==10 and Path(argv[0]).is_relative_to(root) and Path(argv[2]).is_relative_to(root)
+            and Path(argv[2]).name=='alpha_radar_runner.py' and argv[1]=='-B'
+            and argv[3:7]==('--ci-full-session-only','--child',name,'--descriptor')
+            and argv[7]==str(out/f'fs-{name}-launch.json') and argv[8]=='--expected-descriptor'
+            and re.fullmatch('[a-f0-9]{64}',argv[9]), 'FULL_SPAWN')
+    permitted_dirs = {full_lexical_path(v, roots=(out,)) for v in
+                      [plan['root'], *[row['root'] for row in plan['rows']]]}
+    require(all(full_canonical_path(v,roots=(out,))==v and v.is_relative_to(out)
+                for v in permitted_dirs), 'FULL_WRITE_ROOT')
+    def checked_open(path, flags, mode=0o777, *, dir_fd=None):
+        resolved = None
+        if dir_fd is None:
+            resolved = full_lexical_path(path, roots=(root,out), exact=read_exact)
+        else:
+            require(dir_fd in directories, 'LIFECYCLE_DIRECTORY')
+            parent, identity = directories[dir_fd]
+            resolved = full_lexical_path(path, roots=(root,out), parent=parent)
+            st = os.fstat(dir_fd)
+            require((st.st_dev, st.st_ino) == identity, 'LIFECYCLE_DIRECTORY')
+
+        # Permission admission precedes fspath resolution and the actual open.
+        audit('open',(resolved,None,flags))
+        resolved = full_canonical_path(resolved,roots=(root,out),exact=read_exact)
+        active.append(resolved)
+        try: fd = original(path, flags, mode, dir_fd=dir_fd)
+        finally: active.pop()
+        import stat
+        st = os.fstat(fd)
+        if stat.S_ISDIR(st.st_mode): directories[fd] = (resolved, (st.st_dev, st.st_ino))
+        return fd
+    def audit(event, args):
+        if event.startswith('socket.get') or event in ('socket.sethostname', 'os.system', 'os.posix_spawn',
+                'os.kill', 'os.killpg', 'os.remove', 'os.rename', 'os.rmdir', 'os.link', 'os.symlink'):
+            raise PermissionError('LIFECYCLE_BOUNDARY')
+        if event == 'subprocess.Popen':
+            require(role == 'supervisor' and len(args) == 4, 'LIFECYCLE_BOUNDARY')
+            executable, argv, cwd, env = args
+            argv = tuple(argv)
+            matches = [k for k,v in commands.items() if argv == v]
+            if matches:
+                key = matches[0]
+                require(key not in launched and executable == argv[0] and str(cwd) == str(out)
+                    and env == lifecycle_environment(context), 'FULL_SPAWN')
+                launched.add(key)
+            else:
+                allowed = [('/usr/sbin/lsof','-nP','-iTCP:'+str(endpoint[1]),'-sTCP:LISTEN','-Fpn')]
+                for pid in child_pids():
+                    require(type(pid) is int and pid > 0,'FULL_PID')
+                    allowed += [('/bin/ps','-ww','-p',str(pid),'-o',field) for field in ('lstart=','ppid=','comm=')]
+                    allowed += [('/usr/sbin/lsof','-a','-p',str(pid),'-d','cwd','-Fn')]
+                require(argv in allowed and executable == argv[0] and cwd is None and
+                    env in (LIFECYCLE_ENV,{k:v for k,v in LIFECYCLE_ENV.items() if k!='TZ'}),'FULL_SPAWN')
+        if event == 'ctypes.dlopen':
+            require(role == 'supervisor' and args == ('/usr/lib/libSystem.B.dylib',), 'LIFECYCLE_BOUNDARY')
+        if event == 'socket.__new__':
+            require(args[1] == socket.AF_INET and args[2] == socket.SOCK_STREAM and args[3] in (0, 6), 'LIFECYCLE_BOUNDARY')
+        if event in ('socket.connect', 'socket.bind'):
+            require(tuple(args[1]) == tuple(endpoint) and
+                    ((event == 'socket.bind' and role == 'fixture') or
+                     (event == 'socket.connect' and role in ('supervisor','worker'))), 'LIFECYCLE_BOUNDARY')
+        if event == 'open' and not isinstance(args[0], int):
+            path, mode, flags = args
+            target = active[-1] if active else full_lexical_path(path, roots=(root,out), exact=read_exact)
+            writing = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
+                isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
+            if writing:
+                receipt = (target.parent == out and re.fullmatch(r'fs-[a-z0-9-]+\.json',target.name)) or (
+                    role == 'worker' and target.parent in permitted_dirs and (
+                        re.fullmatch(r'(?:[0-9]{1,3}\.(?:reserved|complete)|ALPHA_VANTAGE\.receipt)\.json',target.name)))
+                lock = role == 'worker' and target == Path(plan['root'])/'day.lock'
+                require((receipt and flags & os.O_EXCL and flags & os.O_NOFOLLOW) or
+                    (lock and flags == os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW),'FULL_WRITE')
+            else:
+                require(target.is_relative_to(root) or target.is_relative_to(out) or
+                    str(target) in read_exact,'FULL_READ')
+            require(full_canonical_path(target,roots=(root,out),exact=read_exact)==target,'FULL_PATH_ALIAS')
+        if event == 'os.mkdir':
+            target = full_lexical_path(args[0],roots=(out,))
+            require(role == 'worker' and target in permitted_dirs and args[1] == 0o700,'FULL_WRITE')
+            full_canonical_path(target,roots=(out,))
+        if event in ('os.chmod','os.truncate'): raise PermissionError('FULL_WRITE')
+    return audit, checked_open
+
+
+def full_child(launch,launch_parent):
+    require(set(launch)=={'descriptor','output_identity','parent_pid','role',*FULL_FLAGS} and
+        all(type(launch[k]) is type(v) and launch[k]==v for k,v in FULL_FLAGS.items()) and
+        launch['parent_pid']==os.getppid() and launch['role'] in ('fixture','worker'),'FULL_LAUNCH')
+    d=launch['descriptor']; parents=full_descriptor(d); role=launch['role']
+    require(dict(os.environ)==lifecycle_environment(d['context']),'FULL_ENVIRONMENT')
+    identities=verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
+    cap=SyntheticCapability(canonical(d['package']),canonical(d['runtime']),canonical(d['expected']),
+        d['authorized_root'],identities,tuple(launch['output_identity']))
+    native_identity(cap)
+    from alpha_radar_fixture import serve
+    native_identity(cap)
+    p,r,_=cap.documents()
+    audit,opened=full_audit(r['root'],p['root'],('127.0.0.1',p['fixture']['port']),role,
+        plan=p['plan'],context=d['context'])
+    os.open=opened; sys.addaudithook(audit)
+    deadline=time.monotonic()+d['maximum_duration_seconds']; sequence=[0]
+    def stage(value):
+        require(value in STAGES,'CHILD_DIAGNOSTIC_STAGE'); sequence[0]+=1
+        require(sequence[0]<=64,'DIAGNOSTIC_OVERFLOW')
+        full_store(cap,parents,f'fs-{role}-stage-{sequence[0]:04d}.json',{'stage':value})
+    def stop():
+        if time.monotonic()>=deadline: raise ValueError('NATIVE_SESSION_TIMEOUT')
+        try:
+            full_read(cap,parents,f'fs-{role}-stop.json',value={'event':'STOP','role':role,'launch_parent':launch_parent})
+            return True
+        except FileNotFoundError: return False
+    def ready():
+        value=full_startup(cap,role,launch_parent,{'pid':os.getpid(),'parent_pid':os.getppid(),
+            'argv':[sys.executable,'-B',*sys.argv],'cwd':str(Path.cwd())})
+        startup_parent=full_store(cap,parents,f'fs-{role}-startup.json',value)
+        until=time.monotonic()+10
+        while time.monotonic()<until:
+            try:
+                full_read(cap,parents,f'fs-{role}-ack.json',value={'event':'ACK','role':role,
+                    'launch_parent':launch_parent,'startup_parent':startup_parent})
+                return
+            except FileNotFoundError: time.sleep(.05)
+        raise ValueError('PARENT_ACK_TIMEOUT')
+    try:
+        if role=='fixture': serve(cap,stop,ready,stage=stage)
+        else:
+            ready(); now=[utc(p['plan']['rows'][0]['valid_from'])]
+            def wait(seconds):
+                require(0<=seconds<=1,'FULL_CLOCK'); now[0]+=timedelta(seconds=seconds)
+            value,parent=FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=stop).run()
+            full_store(cap,parents,'fs-worker-complete.json',{'session_parent':parent,'launch_parent':launch_parent})
+            # Stay owned/alive until the independently validating supervisor stops us.
+            while not stop(): time.sleep(.05)
+            require(value['classification']=='FULL_SYNTHETIC_PASS','FULL_SESSION_FAILED')
+        full_store(cap,parents,f'fs-{role}-exit.json',{'role':role,'returncode':0,'launch_parent':launch_parent})
+        return 0
+    except BaseException as error:
+        full_store(cap,parents,f'fs-{role}-failure.json',{'category':failure_category(error)})
+        raise
+
+
+def full_supervise(cap,d,*,popen=subprocess.Popen):
+    parents=full_descriptor(d); native_identity(cap)
+    require(dict(os.environ)==lifecycle_environment(d['context']),'FULL_ENVIRONMENT')
+    p,r,_=cap.documents(); out=Path(p['root']); runtime=Path(r['root'])
+    require(not listener_owners(p['fixture']['port']),'PORT_ALREADY_OWNED')
+    executable=runtime/r['interpreter']
+    script=next(runtime/n for n in r['source_files'] if Path(n).name=='alpha_radar_runner.py')
+    executable_hash=next(v['sha256'] for v in r['files'] if v['path']==r['interpreter'])
+    observed=asdict(inspect_macos(os.getpid()))
+    require(observed['pid']==os.getpid() and observed['parent_pid']==os.getppid() and
+        observed['argv']==tuple([sys.executable,'-B',*sys.argv]) and observed['cwd']==str(Path.cwd()) and
+        observed['executable']==str(executable) and observed['executable_hash']==executable_hash,'FULL_SUPERVISOR_IDENTITY')
+    def verify_self():
+        require(asdict(inspect_macos(os.getpid()))==observed,'FULL_SUPERVISOR_IDENTITY'); checked_capability(cap)
+    owned=FullOwnedProcesses(cap,parents); commands={}; launches={}
+    for role in ('fixture','worker'):
+        launch={**FULL_FLAGS,'descriptor':d,'output_identity':list(cap.output_identity),
+                'parent_pid':os.getpid(),'role':role}
+        launches[role]=full_store(cap,parents,f'fs-{role}-launch.json',launch)
+        commands[role]=[str(executable),'-B',str(script),'--ci-full-session-only','--child',role,
+            '--descriptor',str(out/f'fs-{role}-launch.json'),'--expected-descriptor',launches[role]]
+    audit,opened=full_audit(runtime,out,('127.0.0.1',p['fixture']['port']),'supervisor',plan=p['plan'],
+        launch_commands=commands,child_pids=lambda:[os.getpid(),*[v['child'].pid for v in owned.children.values()]],context=d['context'])
+    os.open=opened; sys.addaudithook(audit)
+    stage='REAL_CLOCK'; primary=None; cleanup_failure=None; tls=None; accounting=None; session_parent=None
+    start=time.monotonic()
+    try:
+        verify_self(); boundary=full_real_clock_boundary()
+        full_store(cap,parents,'fs-real-clock.json',boundary)
+        for role in ('fixture','worker'):
+            verify_self()
+            if role=='worker':
+                owned.verify('fixture'); require(tls is not None and tls['hostname_verified'] is True,'FULL_TLS_GATE')
+            stage='PROCESS_CREATE'
+            child=popen(commands[role],cwd=out,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,close_fds=True,env=lifecycle_environment(d['context']))
+            close_lifecycle_stdin(child); stage='OWNERSHIP_REGISTER'
+            owned.register(role,child,argv=commands[role],cwd=out,executable=executable,
+                executable_hash=executable_hash,stderr=child.stderr,launch_parent=launches[role])
+            stage='STARTUP_VERIFY'; until=time.monotonic()+10
+            while not (out/f'fs-{role}-startup.json').exists() and time.monotonic()<until:
+                owned.verify(role,require_startup=False); time.sleep(.05)
+            _,startup=full_read(cap,parents,f'fs-{role}-startup.json',
+                value=full_startup(cap,role,launches[role],owned.children[role]['observation']))
+            owned.startup_pins[role]=(launches[role],startup)
+            verify_self(); owned.verify(role)
+            if role=='fixture':
+                require(listener_owners(p['fixture']['port'])==[(child.pid,'127.0.0.1:'+str(p['fixture']['port']))], 'LISTENER_OWNER_MISMATCH')
+            full_store(cap,parents,f'fs-{role}-ack.json',{'event':'ACK','role':role,
+                'launch_parent':launches[role],'startup_parent':startup})
+            if role=='fixture': stage='TLS_HANDSHAKE'; tls=startup_tls(cap,owned)
+        stage='SESSION_WAIT'
+        while not (out/'fs-worker-complete.json').exists():
+            require(time.monotonic()-start<d['maximum_duration_seconds'],'NATIVE_SESSION_TIMEOUT')
+            verify_self(); owned.verify('fixture'); owned.verify('worker'); time.sleep(.2)
+        # A completion references the independently admitted worker launch. Validate
+        # every journal parent before accepting its session result.
+        fd=safe_root(out)
+        try: completion_doc=read_record(fd,'fs-worker-complete.json')
+        finally: os.close(fd)
+        completion=verify_full_receipt(completion_doc,content_hash(completion_doc),parents)
+        require(set(completion)=={'session_parent','launch_parent'} and completion['launch_parent']==launches['worker'],'FULL_COMPLETION')
+        session_parent=completion['session_parent']
+        session,_=full_read(cap,parents,'fs-session.json',expected=session_parent)
+        accounting=full_accounting(cap,parents,session)
+        verify_self(); owned.verify('fixture'); owned.verify('worker')
+    except BaseException as error: primary={'stage':stage,'category':failure_category(error)}
+    try:
+        cleanup=owned.cleanup(lambda:not listener_owners(p['fixture']['port']),supervisor_check=verify_self)
+        if not cleanup['clean']: cleanup_failure='FULL_CLEANUP_FAILED'
+    except Exception as error:
+        cleanup_failure=failure_category(error); cleanup={'clean':False,'remaining':sorted(owned.children)}
+    result={'classification':'FULL_SYNTHETIC_PASS' if primary is None and cleanup_failure is None else 'FULL_SYNTHETIC_FAILED',
+        'primary_failure':primary,'cleanup_failure':cleanup_failure,'cleanup':cleanup,'tls':tls,
+        'accounting':accounting,'session_parent':session_parent,'supervisor_identity':observed,
+        'worker_launches':int('worker' in owned.startup_pins),'provider_requests':0,'credential_accesses':0}
+    full_store(cap,parents,'fs-final.json',result)
+    return result
+
+
+def full_main(d,expected,child):
+    if child:
+        value=verify_full_receipt(d,expected,full_descriptor(d['value']['descriptor']))
+        require(child==value['role'],'FULL_ROLE')
+        return full_child(value,expected)
+    full_descriptor(d)
+    cap=admit(d['package'],d['runtime'],expected=d['expected'],authorized_root=d['authorized_root'])
+    return 0 if full_supervise(cap,d)['classification']=='FULL_SYNTHETIC_PASS' else 1
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -1511,10 +2231,14 @@ def main():
     parser.add_argument('--expected-descriptor', required=True)
     parser.add_argument('--child', choices=('fixture', 'worker'))
     parser.add_argument('--ci-lifecycle-only', action='store_true', default=False)
+    parser.add_argument('--ci-full-session-only', action='store_true', default=False)
     args = parser.parse_args()
+    require(not (args.ci_full_session_only and args.ci_lifecycle_only), 'FULL_MODE_EXCLUSION')
     early_diagnostic('DESCRIPTOR_READ')
     d = read_descriptor(args.descriptor, args.expected_descriptor)
     early_diagnostic('DESCRIPTOR_VERIFIED')
+    if args.ci_full_session_only:
+        return full_main(d, args.expected_descriptor, args.child)
     if args.ci_lifecycle_only:
         return lifecycle_main(d, args.expected_descriptor, args.child)
     if args.child:

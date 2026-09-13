@@ -13,6 +13,11 @@ on:
         type: boolean
         required: false
         default: false
+      full_session_only:
+        description: Separate synthetic 475-request qualification; never production or confinement acceptance
+        type: boolean
+        required: false
+        default: false
       expected_source_commit:
         description: Independently reviewed 40-character source commit; required for native execution
         type: string
@@ -61,17 +66,25 @@ jobs:
               stream.write('IIOS_RADAR_CI_ROOT='+str(root)+'\n')
           PY
       - name: Fetch the independently pinned disposable runtime archive
+        env:
+          IIOS_FULL_PREPARATION: ${{ github.event_name == 'workflow_dispatch' && inputs.full_session_only == true }}
         shell: bash
         run: |
           curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 \
             --output "$IIOS_RADAR_CI_ROOT/python-runtime.tar.gz" \
             'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
-          python -B tests/native/alpha_radar_ci.py prepare --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA"
+          full_args=()
+          if [ "$IIOS_FULL_PREPARATION" = true ]; then full_args=(--prepare-full-session); fi
+          python -B tests/native/alpha_radar_ci.py prepare --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA" "${full_args[@]}"
       - name: Verify immutable runtime, package, TLS and input closure
+        env:
+          IIOS_FULL_PREPARATION: ${{ github.event_name == 'workflow_dispatch' && inputs.full_session_only == true }}
         shell: bash
         run: |
+          full_args=()
+          if [ "$IIOS_FULL_PREPARATION" = true ]; then full_args=(--prepare-full-session); fi
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize \
-            --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA"
+            --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA" "${full_args[@]}"
       - name: Fresh-process evidence export regressions; no fixture or network
         shell: bash
         run: python -I -S -B tests/native/test_alpha_radar_export_process.py --root "$IIOS_RADAR_CI_ROOT"
@@ -81,7 +94,7 @@ jobs:
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py offline \
             --root "$IIOS_RADAR_CI_ROOT"
       - name: Exactly one confined fixture startup; never launch a worker
-        if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true && inputs.lifecycle_only != true
+        if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true && inputs.lifecycle_only != true && inputs.full_session_only != true
         shell: bash
         env:
           IIOS_EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
@@ -89,12 +102,18 @@ jobs:
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py execute --native-startup \
             --root "$IIOS_RADAR_CI_ROOT"
       - name: Manual lifecycle only; no sandbox or worker
-        if: github.event_name == 'workflow_dispatch' && inputs.lifecycle_only == true && inputs.native_startup != true
+        if: github.event_name == 'workflow_dispatch' && inputs.lifecycle_only == true && inputs.native_startup != true && inputs.full_session_only != true
         shell: bash
         env:
           IIOS_EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
         run: |
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py lifecycle --lifecycle-only \
+            --root "$IIOS_RADAR_CI_ROOT"
+      - name: Manual full synthetic session; no production or confinement qualification
+        if: github.event_name == 'workflow_dispatch' && inputs.full_session_only == true && inputs.native_startup != true && inputs.lifecycle_only != true
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py full-session --full-session-only \
             --root "$IIOS_RADAR_CI_ROOT"
       - name: Preserve structured diagnostics on success or failure
         if: always() && env.IIOS_RADAR_CI_ROOT != ''

@@ -370,13 +370,13 @@ def materialize(archive, destination, expected=ARCHIVE_SHA256):
                 put(path, content, 0o500 if source.mode & 0o111 else 0o400)
 
 
-def prepare(root, commit):
+def prepare(root, commit, *, full_session=False):
     hosted(); root_check(root)
     require(re.fullmatch('[a-f0-9]{40}', commit) and os.environ['GITHUB_SHA'] == commit,
             'SOURCE_PIN')
     require(command(['/usr/bin/git', 'rev-parse', 'HEAD'], cwd=REPO).decode().strip() == commit and
             command(['/usr/bin/git', 'status', '--porcelain'], cwd=REPO) == b'', 'SOURCE_STATE')
-    runtime, out, exported = root/'runtime', root/'execution-output', root/'export'
+    runtime, out, exported = root/'runtime', root/('full-session-output' if full_session else 'execution-output'), root/'export'
     require(not out.exists() and not (root/'confinement-denied-input').exists(), 'ATTEMPT_ALREADY_EXISTS')
     materialize(root/'python-runtime.tar.gz', runtime)
     source = runtime/'source'; source.mkdir(mode=0o700)
@@ -480,9 +480,9 @@ def dependency_rows(runtime, path, listing, install_ids, load_commands, known):
             'dependencies':linked}
 
 
-def finalize(root, commit):
+def finalize(root, commit, *, full_session=False):
     hosted(); root_check(root)
-    runtime=root/'runtime'; out=root/'execution-output'
+    runtime=root/'runtime'; out=root/('full-session-output' if full_session else 'execution-output')
     require(Path(sys.executable).resolve() == runtime/'python/bin/python3.13' and
             sys.prefix == str(runtime/'python') and platform.python_version() == PYTHON_VERSION,
             'RELOCATABLE_RUNTIME_IDENTITY')
@@ -550,6 +550,8 @@ def finalize(root, commit):
         'descriptor_sha256':content_hash(d),'parents':pins,'runtime':r,'address':'127.0.0.1','port':38493,
         'openssl':ssl.OPENSSL_VERSION,'python':platform.python_version(),'authority':AUTHORITY,
         'execution_mode':STARTUP_MODE,'http_requests':0,'worker_launches':0,'production':'NOT_QUALIFIED'})
+
+    if full_session: prepare_full_descriptor(root,d)
 
 
 def offline_partition(suite):
@@ -839,10 +841,130 @@ def export_dependencies(root):
     return LIFECYCLE_FLAGS, verify_lifecycle_receipt, content_hash
 
 
+def full_execution_allowed(event_name,event,explicit_request):
+    if event_name!='workflow_dispatch' or explicit_request is not True or type(event) is not dict: return False
+    inputs=event.get('inputs')
+    if type(inputs) is not dict or set(inputs)-{'full_session_only','lifecycle_only','native_startup','expected_source_commit'}: return False
+    def boolean(key,expected):
+        value=inputs.get(key,False)
+        return type(value) in (bool,str) and value in ((True,'true') if expected else (False,'false'))
+    return boolean('full_session_only',True) and boolean('native_startup',False) and boolean('lifecycle_only',False)
+
+
+def full_event(explicit):
+    event_path=Path(os.environ.get('GITHUB_EVENT_PATH',''))
+    require(event_path.is_file() and not event_path.is_symlink() and event_path.stat().st_size<=1_000_000,
+        'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    def unique(pairs):
+        result={}
+        for k,v in pairs:
+            require(k not in result,'NATIVE_EXECUTION_NOT_AUTHORIZED'); result[k]=v
+        return result
+    event=json.loads(event_path.read_bytes(),object_pairs_hook=unique)
+    require(full_execution_allowed(os.environ.get('GITHUB_EVENT_NAME'),event,explicit),'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    require_execution_source(event['inputs'].get('expected_source_commit'),os.environ.get('GITHUB_SHA'),os.environ.get('GITHUB_REF'))
+    return event
+
+
+def prepare_full_descriptor(root,old):
+    from alpha_radar_runner import FULL_SCOPE,full_package,full_descriptor,LIFECYCLE_CONTEXT
+    from provider_gateway_contract import content_hash
+    d={k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools')}
+    package=full_package(old['package'],old['expected'])
+    d.update(schema='iios-ci-full-session-descriptor-v1',execution_mode=FULL_SCOPE,
+        maximum_duration_seconds=900,context={k:os.environ[k] for k in LIFECYCLE_CONTEXT},
+        session_package=package,session_package_parent=content_hash(package))
+    parents=full_descriptor(d)
+    document(root/'full-descriptor.json',d)
+    document(root/'export/full-pins.json',{'descriptor':d,'descriptor_parent':content_hash(d),
+        'parents':parents,'preparation_descriptor_parent':content_hash(old)})
+
+
+def execute_full(root,*,explicit_request=False):
+    full_event(explicit_request); hosted(); root_check(root)
+    runtime=root/'runtime'; out=root/'full-session-output'
+    require(not any((root/name).exists() for name in ('full-session-output','full-attempt.json',
+        'execution-output','native-attempt.json','lifecycle-attempt.json')),'ATTEMPT_ALREADY_EXISTS')
+    sys.path.insert(0,str(runtime/'source'))
+    from alpha_radar_runner import (read_descriptor,full_descriptor,FULL_FLAGS,lifecycle_environment,
+        LifecycleStreams,close_lifecycle_stdin,verify_full_receipt)
+    pins=json.loads((root/'export/full-pins.json').read_bytes())
+    d=read_descriptor(root/'full-descriptor.json',pins['descriptor_parent']); parents=full_descriptor(d)
+    require(parents==pins['parents'] and d['package']['source_commit']==os.environ['GITHUB_SHA'],'SOURCE_PIN')
+    result=json.loads((root/'export/offline-results.json').read_bytes())
+    require(result['success'] is True and not result['skipped'] and result['executed']==result['collected'],'OFFLINE_REQUIRED')
+    verify_bindings(result['source_bindings'])
+    fresh=json.loads((root/'export/fresh-export-results.json').read_bytes())
+    require(fresh['success'] is True and fresh['skipped']==0 and fresh['collected']==fresh['executed'],'OFFLINE_REQUIRED')
+    verify_bindings(fresh['source_bindings'])
+    argv=[str(runtime/'python/bin/python3.13'),'-B',str(runtime/'source/alpha_radar_runner.py'),
+        '--ci-full-session-only','--descriptor',str(root/'full-descriptor.json'),'--expected-descriptor',pins['descriptor_parent']]
+    env=lifecycle_environment(d['context']); launched=[False]
+    document(root/'full-attempt.json',{**FULL_FLAGS,'descriptor_parent':pins['descriptor_parent'],'attempt':1})
+    def boundary(name,args):
+        if name=='subprocess.Popen':
+            require(not launched[0] and len(args)==4 and args[0]==argv[0] and list(args[1])==argv
+                and Path(args[2])==root and args[3]==env,'PREPARATION_SPAWN_REJECTED')
+            launched[0]=True
+        else: preparation_audit(name,args)
+    sys.addaudithook(boundary)
+    child=subprocess.Popen(argv,cwd=root,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,close_fds=True,env=env)
+    close_lifecycle_stdin(child); capture=LifecycleStreams(child); start=time.monotonic()
+    while child.poll() is None and time.monotonic()-start<1020:
+        capture.drain(); time.sleep(.05)
+    capture.drain()
+    if child.poll() is not None: capture.close()
+    document(root/'export/full-supervisor.json',{**FULL_FLAGS,'descriptor_parent':pins['descriptor_parent'],
+        'supervisor_pid':child.pid,'returncode':child.returncode,'diagnostics':capture.snapshot()})
+    require(child.returncode==0 and capture.eof and not capture.overflow and capture.stdout.received==0,'SUPERVISOR_FAILED')
+    doc=json.loads((out/'fs-final.json').read_bytes())
+    value=verify_full_receipt(doc,digest(canonical(doc)),parents)
+    require(value['classification']=='FULL_SYNTHETIC_PASS' and value['cleanup']['clean'] is True and
+        value['accounting']['requests']==475 and value['tls']['hostname_verified'] is True,'SUPERVISOR_FAILED')
+
+
+def export_full(root):
+    # No child bytes become import authority: compare the complete source closure
+    # with this exact checked-out revision before importing its verifier.
+    pins=json.loads((root/'export/full-pins.json').read_bytes()); d=pins['descriptor']; r=d['runtime']
+    require(digest(canonical(d))==pins['descriptor_parent'] and
+        json.loads((root/'full-descriptor.json').read_bytes())==d,'SOURCE_PIN')
+    rows={v['path']:v for v in r['files']}; source=root/'runtime/source'
+    require({p.name for p in source.iterdir()}==set(SOURCE_NAMES),'IMPORT_CLOSURE')
+    for name in SOURCE_NAMES:
+        path=source/name; row=rows['source/'+name]; st=path.lstat()
+        relative=('tests/native/' if name.startswith('alpha_radar') else 'BACK END/backend/')+name
+        require(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and not st.st_mode&0o222 and
+            st.st_uid==os.getuid() and digest(path.read_bytes())==row['sha256'] and
+            path.read_bytes()==(REPO/relative).read_bytes(),'IMPORT_CLOSURE')
+    sys.dont_write_bytecode=True; sys.path.insert(0,str(source))
+    from alpha_radar_runner import full_descriptor,verify_full_receipt
+    parents=full_descriptor(d); require(parents==pins['parents'],'EVIDENCE_SCOPE')
+    out=root/'full-session-output'; manifest=[]; total=0
+    files=sorted(out.rglob('*.json'))
+    require(len(files)<=50000,'EVIDENCE_FILE')
+    for path in files:
+        st=path.lstat(); relative=path.relative_to(out).as_posix()
+        require(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_uid==os.getuid() and
+            stat.S_IMODE(st.st_mode)==0o400 and st.st_size<=8_000_000 and path.resolve()==path,'EVIDENCE_FILE')
+        raw=path.read_bytes(); total+=len(raw); require(total<=256_000_000,'EVIDENCE_FILE')
+        doc=json.loads(raw); verify_full_receipt(doc,digest(raw),parents)
+        allowed=(path.parent==out and re.fullmatch(r'fs-[a-z0-9-]+\.json',path.name)) or (
+            path.parent==Path(d['package']['plan']['root']) and re.fullmatch(r'[0-9]{1,3}\.(reserved|complete)\.json',path.name)) or (
+            str(path.parent) in {row['root'] for row in d['package']['plan']['rows']} and path.name=='ALPHA_VANTAGE.receipt.json')
+        require(allowed,'EVIDENCE_NAME')
+        name='full-record-'+str(len(manifest)).zfill(5)+'.json'
+        document(root/'export'/name,doc)
+        manifest.append({'source_relative_path':relative,'export_path':name,'sha256':digest(raw),'size':len(raw)})
+    document(root/'export/full-record-inventory.json',manifest)
+
+
 def export(root):
     """Only structured synthetic records and positively sanitized diagnostics."""
     root_check(root); destination=root/'export'
     out=root/'execution-output'
+    if (root/'full-session-output').exists(): export_full(root)
     dependencies = None
     if out.is_dir() and not out.is_symlink():
         for path in sorted(out.glob('*.json')):
@@ -1230,24 +1352,35 @@ def profile_probe(root):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle'))
+    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
     parser.add_argument('--native-startup', action='store_true', default=False)
     parser.add_argument('--lifecycle-only', action='store_true', default=False)
+    parser.add_argument('--full-session-only',action='store_true',default=False)
+    parser.add_argument('--prepare-full-session',action='store_true',default=False)
     args=parser.parse_args();root=Path(args.root)
     try:
-        if args.phase not in ('execute', 'profile-probe', 'lifecycle'):
+        if args.phase not in ('execute', 'profile-probe', 'lifecycle', 'full-session'):
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             sys.addaudithook(preparation_audit)
+        require(not args.full_session_only or args.phase=='full-session','NATIVE_EXECUTION_NOT_AUTHORIZED')
+        require(not args.prepare_full_session or args.phase in ('prepare','finalize'),'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        require(not ((args.full_session_only or args.prepare_full_session) and (args.native_startup or args.lifecycle_only)), 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        if args.prepare_full_session: full_event(True)
         require(not args.lifecycle_only or args.phase == 'lifecycle', 'NATIVE_EXECUTION_NOT_AUTHORIZED')
-        if args.phase == 'lifecycle':
+        if args.phase == 'full-session':
+            require(not args.native_startup and not args.lifecycle_only,'NATIVE_EXECUTION_NOT_AUTHORIZED')
+            execute_full(root,explicit_request=args.full_session_only)
+        elif args.phase == 'lifecycle':
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             execute_lifecycle(root, explicit_request=args.lifecycle_only)
         elif args.phase == 'profile-probe':
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             profile_probe(root)
         elif args.phase == 'execute': execute(root, native_startup=args.native_startup)
-        elif args.phase in ('prepare','finalize'): globals()[args.phase](root,args.commit)
+        elif args.phase in ('prepare','finalize'):
+            if args.prepare_full_session: globals()[args.phase](root,args.commit,full_session=True)
+            else: globals()[args.phase](root,args.commit)
         else: globals()[args.phase](root)
         return 0
     except Exception as error:
@@ -1258,7 +1391,12 @@ def main():
         root_check(root)
         failure = {'scope':'SYNTHETIC_TEST_ONLY','phase':args.phase,'category':category,'code':code,
                    'production':'NOT_QUALIFIED','raw_error_retained':False}
-        if args.phase == 'lifecycle':
+        if args.phase == 'full-session':
+            failure.update(scope='CI_SYNTHETIC_FULL_SESSION_ONLY', production_qualified=False,
+                os_confinement='UNQUALIFIED', provider_access=False, credential_access=False,
+                timing_proof='ACCELERATED_LOGICAL_TIME_ONLY', broker_connected=False,
+                paper_order_permission=False, trade_execution_permission=False, live_execution=False)
+        elif args.phase == 'lifecycle':
             failure.update(scope='CI_NATIVE_LIFECYCLE_ONLY', production_qualified=False,
                 os_confinement='UNQUALIFIED', provider_access=False, credential_access=False,
                 worker_launches=0, requests_attempted=0, broker_connected=False,

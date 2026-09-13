@@ -2436,3 +2436,692 @@ class FreshStdioAdmissionTests(unittest.TestCase):
                  patch.object(ci,phase,side_effect=lambda *a:order.append('HANDLER')):
                 self.assertEqual(ci.main(),0)
             self.assertEqual(order,['AUDIT','HANDLER'])
+
+
+class FullSessionModeTests(unittest.TestCase):
+    context = LifecycleOnlyTests.context
+
+    def inputs(self):
+        import alpha_radar_runner as run
+        root,p,r,e=fixture();out=Path(p['root']).with_name('full-session-output')
+        universe=p['plan']['universe'];cal=CALENDAR
+        proposal=schedule(universe,content_hash(universe),cal,content_hash(cal),mode='FULL_OPPORTUNITY_RADAR',root=str(out/'journal'))
+        p['root']=str(out)
+        p['plan']=radar_plan(universe,content_hash(universe),cal,content_hash(cal),root=str(out/'journal'),
+            opportunity_schedule=proposal,schedule_hash=content_hash(proposal))
+        e['schedule']=content_hash(proposal);repin(p,r,e)
+        package=run.full_package(p,e)
+        d={'schema':'iios-ci-full-session-descriptor-v1','execution_mode':run.FULL_SCOPE,
+            'package':p,'runtime':r,'expected':e,'authorized_root':str(root),'native_tools':{},
+            'maximum_duration_seconds':900,'context':self.context(),'session_package':package,
+            'session_package_parent':content_hash(package)}
+        parents={**e,'session_package':content_hash(package),'full_descriptor':content_hash(d)}
+        return root,p,r,e,d,parents
+
+    def session(self):
+        import alpha_radar_runner as run
+        root,p,r,e,d,parents=self.inputs();cap=admit(p,r,expected=e,authorized_root=root)
+        now=[utc(p['plan']['rows'][0]['valid_from'])];calls=[]
+        def wait(seconds): now[0]+=timedelta(seconds=seconds)
+        def exchange(cap,slot,at):
+            from urllib.parse import urlencode
+            calls.append(slot);status,body=response(cap,f'/slot/{slot}?'+urlencode({'at':at}))
+            return Response(status,body,'2026-09-14T12:00:00+00:00','2026-09-14T12:00:00+00:00')
+        session=run.FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=lambda:False,exchange=exchange)
+        return session,now,calls,d
+
+    def journal(self,s):
+        Path(s.p['plan']['root']).mkdir(mode=0o700)
+        for row in s.p['plan']['rows']:Path(row['root']).mkdir(mode=0o700)
+
+    def test_full_descriptor_exact_pins_and_distinct_package(self):
+        import alpha_radar_runner as run
+        root,p,r,e,d,parents=self.inputs()
+        with patch.object(run,'verify_tools'):
+            self.assertEqual(run.full_descriptor(d),parents)
+        self.assertEqual(d['session_package']['maximum_requests'],475)
+        self.assertEqual(d['session_package']['batch_sizes'],[100,100,100,100,100,17])
+        with self.assertRaises(ValueError):run.lifecycle_descriptor(d)
+        with self.assertRaises(ValueError):run.descriptor_schema(d)
+
+    def test_each_independent_pin_is_required_before_output(self):
+        import alpha_radar_runner as run
+        for key in ('package','runtime','plan','universe','schedule','fixture','confinement'):
+            root,p,r,e,d,_=self.inputs();d['expected'][key]='0'*64
+            with patch.object(run,'verify_tools'),self.assertRaises(ValueError):run.full_descriptor(d)
+            self.assertFalse(Path(p['root']).exists())
+
+    def test_source_schema_mode_deadline_and_outer_package_mutations(self):
+        import alpha_radar_runner as run
+        for key,value in [('schema','other'),('execution_mode',run.LIFECYCLE_SCOPE),('maximum_duration_seconds',0),
+                ('maximum_duration_seconds',901),('session_package_parent','0'*64)]:
+            _,_,_,_,d,_=self.inputs();d[key]=value
+            with patch.object(run,'verify_tools'),self.assertRaises(ValueError):run.full_descriptor(d)
+        _,_,_,_,d,_=self.inputs();d['context']['GITHUB_SHA']='b'*40
+        with patch.object(run,'verify_tools'),self.assertRaises(ValueError):run.full_descriptor(d)
+
+    def test_universe_and_each_batch_mutation(self):
+        import alpha_radar_runner as run
+        for mutate in (lambda p:p['plan']['universe']['symbols'].pop(),
+            lambda p:p['plan']['universe']['symbols'].reverse(),
+            lambda p:p['plan']['universe']['symbols'].__setitem__(1,'S000'),
+            lambda p:p['plan']['universe']['symbols'].__setitem__(1,'MU'),
+            lambda p:p['plan']['universe']['symbols'].append('EXTRA'),
+            lambda p:p['plan']['rows'].pop(),lambda p:p['plan']['rows'].append(deepcopy(p['plan']['rows'][0])),
+            lambda p:p['plan']['rows'][1]['symbols'].reverse(),
+            lambda p:p['plan']['rows'][6]['symbols'].append('S000'),
+            lambda p:p['plan']['rows'].__setitem__(2,deepcopy(p['plan']['rows'][1]))):
+            _,p,_,e,_,_=self.inputs();mutate(p)
+            with self.assertRaises(ValueError):run.full_package(p,e)
+
+    def test_manual_exact_boolean_mutual_exclusion(self):
+        import alpha_radar_ci as ci
+        for enabled in (True,'true'):
+            self.assertTrue(ci.full_execution_allowed('workflow_dispatch',{'inputs':{'full_session_only':enabled}},True))
+        for bad in (False,'false',1,None,'TRUE','yes',{},[]):
+            self.assertFalse(ci.full_execution_allowed('workflow_dispatch',{'inputs':{'full_session_only':bad}},True))
+        for key in ('native_startup','lifecycle_only','unexpected'):
+            self.assertFalse(ci.full_execution_allowed('workflow_dispatch',{'inputs':{'full_session_only':True,key:True}},True))
+        for event in ('push','pull_request','schedule',''):
+            self.assertFalse(ci.full_execution_allowed(event,{'inputs':{'full_session_only':True}},True))
+        self.assertFalse(ci.full_execution_allowed('workflow_dispatch',{'inputs':{'full_session_only':True}},False))
+
+    def test_scope_replay_and_self_consistent_relabeling_rejected(self):
+        import alpha_radar_runner as run
+        _,_,_,_,_,parents=self.inputs();doc=run.full_envelope({'event':'SYNTHETIC'},parents,logical_time=CALENDAR['open'])
+        self.assertEqual(run.verify_full_receipt(doc,content_hash(doc),parents),{'event':'SYNTHETIC'})
+        for value in ({**parents,'full_descriptor':'0'*64},{**parents,'session_package':'0'*64}):
+            with self.assertRaises(ValueError):run.verify_full_receipt(doc,content_hash(doc),value)
+        for scope in (SCOPE,run.LIFECYCLE_SCOPE,'LIVE_QUALIFICATION'):
+            forged={**doc,'scope':scope};forged['content_hash']=content_hash({k:v for k,v in forged.items() if k!='content_hash'})
+            with self.assertRaises(ValueError):run.verify_full_receipt(forged,content_hash(forged),parents)
+        with self.assertRaises(ValueError):run.verify_lifecycle_receipt(doc,content_hash(doc),parents)
+        with self.assertRaises(ValueError):verify_envelope(doc,content_hash(doc),parents=parents)
+        from provider_gateway_contract import verify_receipt
+        with self.assertRaises(ValueError):verify_receipt(doc,content_hash(doc),parents=parents)
+
+    def test_timing_evidence_separates_logical_actual_and_monotonic(self):
+        import alpha_radar_runner as run
+        _,_,_,_,_,parents=self.inputs()
+        doc=run.full_envelope({'event':'SYNTHETIC'},parents,logical_time=CALENDAR['open'],
+            actual_utc='2026-09-13T00:00:00+00:00',monotonic_seconds=42)
+        self.assertEqual(doc['timing_proof'],'ACCELERATED_LOGICAL_TIME_ONLY')
+        self.assertNotEqual(doc['logical_time'],doc['actual_utc']);self.assertEqual(doc['monotonic_seconds'],42)
+        self.assertFalse(doc['production_qualified']);self.assertEqual(doc['os_confinement'],'UNQUALIFIED')
+        for name in AUTHORITY:self.assertIs(doc[name],False)
+        for bad in (-1,float('nan'),float('inf'),True):
+            with self.assertRaises(ValueError):run.full_envelope({},parents,monotonic_seconds=bad)
+
+    def test_pacing_fourth_start_boundary_and_rollback(self):
+        import alpha_radar_runner as run
+        gate=run.FullPacing()
+        for tick in (0,0,0):gate.reserve(tick)
+        for tick in (0,59.999):
+            with self.assertRaisesRegex(ValueError,'FULL_ROLLING_RATE'):gate.reserve(tick)
+        gate.reserve(60)
+        with self.assertRaisesRegex(ValueError,'FULL_CLOCK_ROLLBACK'):gate.reserve(59)
+        for bad in (-1,float('nan'),float('inf'),True):
+            with self.assertRaises(ValueError):run.FullPacing().reserve(bad)
+
+    def test_real_clock_scenario_mocked_only(self):
+        import alpha_radar_runner as run
+        clock=[100.0]
+        def pause(seconds):clock[0]+=seconds
+        value=run.full_real_clock_boundary(monotonic=lambda:clock[0],pause=pause)
+        self.assertTrue(value['fourth_start_rejected']);self.assertGreaterEqual(value['elapsed_seconds'],60)
+        self.assertFalse(value['full_day_wall_clock_proven']);self.assertEqual(value['market_requests'],0)
+        ticks=iter([100,100,100,100,100,100,99])
+        with self.assertRaisesRegex(ValueError,'FULL_CLOCK_ROLLBACK'):
+            run.full_real_clock_boundary(monotonic=lambda:next(ticks),pause=lambda _:None)
+
+    def test_runtime_fixture_public_path_and_credential_mutations(self):
+        import alpha_radar_runner as run
+        for mutate in (lambda d:d['package']['fixture'].update(address='8.8.8.8'),
+            lambda d:d['package']['fixture'].update(server_name='localhost'),
+            lambda d:d['package'].update(selector='IIOS_ALPHA_VANTAGE_API_KEY'),
+            lambda d:d['package'].update(root='/Library/Application Support/IIOS'),
+            lambda d:d['runtime'].update(tls='OTHER'),lambda d:d['session_package'].update(retries=1)):
+            _,p,r,e,d,_=self.inputs();mutate(d)
+            with patch.object(run,'verify_tools'),self.assertRaises(ValueError):run.full_descriptor(d)
+            self.assertFalse(Path(d['authorized_root'],'full-session-output').exists())
+
+    def test_environment_rejects_proxy_credentials_and_wrong_host(self):
+        import alpha_radar_runner as run
+        for key,value in [('HTTPS_PROXY','SYNTHETIC'),('API_KEY','SYNTHETIC'),('GH_TOKEN','SYNTHETIC'),
+                          ('RUNNER_ENVIRONMENT','self-hosted'),('RUNNER_OS','Linux'),('GITHUB_RUN_ATTEMPT','2')]:
+            context={**self.context(),key:value}
+            with self.assertRaises(ValueError):run.lifecycle_environment(context)
+
+    def test_guard_rejects_routes_dns_processes_signals_and_devnull_writes(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs()
+        for role in ('fixture','worker'):
+            guard,_=run.full_audit(r['root'],p['root'],('127.0.0.1',38493),role,plan=p['plan'])
+            for event,args in [('socket.getaddrinfo',()),('socket.gethostbyname',()),('os.kill',(99999999,15)),
+                ('os.system',('SYNTHETIC',)),('subprocess.Popen',('SYNTHETIC',['SYNTHETIC'],None,{}))]:
+                with self.assertRaises((ValueError,PermissionError)):guard(event,args)
+            for address in ('8.8.8.8','localhost','::1','127.0.0.2'):
+                with self.assertRaises(ValueError):guard('socket.connect',(None,(address,38493)))
+            with self.assertRaises(ValueError):guard('open',('/dev/null',None,os.O_RDWR))
+            with self.assertRaises(ValueError):guard('open',('/Library/Keychains/login.keychain-db','r',os.O_RDONLY))
+        for address in ('8.8.8.8','localhost','::1'):
+            with self.assertRaises(ValueError):run.full_audit(r['root'],p['root'],(address,38493),'worker',plan=p['plan'])
+
+    def test_guard_exact_worker_command_and_mutations(self):
+        import alpha_radar_runner as run
+        _,p,r,_,d,_=self.inputs();out=Path(p['root']);runtime=Path(r['root'])
+        commands={role:[str(runtime/'python'),'-B',str(runtime/'alpha_radar_runner.py'),'--ci-full-session-only',
+            '--child',role,'--descriptor',str(out/f'fs-{role}-launch.json'),'--expected-descriptor','a'*64] for role in ('fixture','worker')}
+        guard,_=run.full_audit(runtime,out,('127.0.0.1',38493),'supervisor',plan=p['plan'],launch_commands=commands,context=d['context'])
+        argv=commands['worker'];env=run.lifecycle_environment(d['context'])
+        for index in range(len(argv)):
+            altered=list(argv);altered[index]='ALTERED'
+            with self.assertRaises(ValueError):guard('subprocess.Popen',(altered[0],altered,out,env))
+        for cwd,environment in ((out.parent,env),(out,{**env,'TOKEN':'SYNTHETIC'})):
+            with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,cwd,environment))
+        guard('subprocess.Popen',(argv[0],argv,out,env))
+        with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,out,env))
+
+    def test_guard_only_exact_journal_directories_and_exclusive_receipts(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs();out=Path(p['root'])
+        guard,_=run.full_audit(r['root'],out,('127.0.0.1',38493),'worker',plan=p['plan'])
+        for path in (out/'OTHER.json',out.parent/'fs-secret.json',Path(p['plan']['root'])/'OTHER.json'):
+            with self.assertRaises(ValueError):guard('open',(str(path),None,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW))
+        for path in (out/'fs-session.json',Path(p['plan']['root'])/'0.reserved.json'):
+            with self.assertRaises(ValueError):guard('open',(str(path),None,os.O_WRONLY|os.O_CREAT))
+        with self.assertRaises(ValueError):guard('os.mkdir',(str(out/'OTHER'),0o700,-1))
+        guard('os.mkdir',(p['plan']['root'],0o700,-1))
+
+    def test_exact_request_and_independent_previous_parent_zero_dispatch_on_mutation(self):
+        s,now,calls,_=self.session();self.journal(s)
+        for mutate in (lambda r:r['account'].update(bulk_slot=1),lambda r:r['manifest'].update(role=SCOPE),
+                       lambda r:r['expected'].update(slot='0'*64)):
+            request=deepcopy(s.request(0));mutate(request)
+            with self.assertRaises(ValueError):s.execute(request,None)
+        with self.assertRaises(ValueError):s.execute(s.request(0),'0'*64)
+        self.assertEqual(calls,[])
+        receipt=s.execute(s.request(0),None);self.assertEqual(receipt['result'],'OBSERVED')
+        with self.assertRaises(ValueError):s.execute(s.request(0),None)
+        self.assertEqual(calls,[0])
+
+    def test_interrupted_request_consumes_budget_and_never_retries(self):
+        s,_,calls,_=self.session()
+        def fail(*_):calls.append(0);raise TimeoutError('SYNTHETIC')
+        s.exchange=fail;value,_=s.run()
+        self.assertEqual(calls,[0]);self.assertEqual(value['attempted'],1);self.assertEqual(value['completed'],0)
+        self.assertEqual(value['classification'],'FULL_SYNTHETIC_FAILED')
+        self.assertTrue((Path(s.p['plan']['root'])/'0.reserved.json').is_file())
+        with self.assertRaises(FileExistsError):s.run()
+        self.assertEqual(calls,[0])
+
+    def test_journal_recovery_requires_previously_witnessed_document(self):
+        import alpha_radar_runner as run
+        from alpha_session_execution import publish
+        s,_,_,_=self.session();self.journal(s);fd=s.open_root(s.p['plan']['root'])
+        try:
+            value={'event':'SYNTHETIC'};doc=run.full_envelope(value,s.full_parents)
+            publish(fd,'0.reserved.json',doc)
+            with self.assertRaisesRegex(ValueError,'FULL_RECOVERY_PIN'):s.read(fd,'0.reserved.json')
+        finally:os.close(fd)
+
+    def test_forged_ack_parent_rejected_and_duplicate_publication(self):
+        import alpha_radar_runner as run
+        s,_,_,_=self.session();expected={'event':'ACK','role':'worker','launch_parent':'a'*64,'startup_parent':'b'*64}
+        run.full_store(s.cap,s.full_parents,'fs-worker-ack.json',{**expected,'launch_parent':'c'*64})
+        with self.assertRaises(ValueError):run.full_read(s.cap,s.full_parents,'fs-worker-ack.json',value=expected)
+        with self.assertRaises(FileExistsError):run.full_store(s.cap,s.full_parents,'fs-worker-ack.json',expected)
+
+    def test_http_schema_coverage_order_and_timeout_fail_closed(self):
+        for kind in ('missing','duplicate','unexpected','stale','malformed','oversize','redirect','throttle','error','order','wire-time'):
+            s,_,calls,_=self.session();original=s.exchange
+            def exchange(cap,slot,at,kind=kind):
+                value=original(cap,slot,at)
+                if kind=='oversize':return Response(200,b' '*1_000_001,value.request_start,value.response_end)
+                if kind=='malformed':return Response(200,b'{',value.request_start,value.response_end)
+                if kind in ('redirect','throttle','error'):return Response({'redirect':302,'throttle':429,'error':500}[kind],b'',value.request_start,value.response_end)
+                if kind=='wire-time':return Response(200,value.body,value.request_start,'2026-09-14T12:00:21+00:00')
+                payload=json.loads(value.body)
+                if kind=='missing':payload['data'].pop()
+                if kind=='duplicate':payload['data'].append(payload['data'][0])
+                if kind=='unexpected':payload['data'][0]['symbol']='OTHER'
+                if kind=='stale':payload['data'][0]['timestamp']='2026-09-14T00:00:00+00:00'
+                if kind=='order':payload['data'].reverse()
+                return Response(200,canonical(payload),value.request_start,value.response_end)
+            s.exchange=exchange;result,_=s.run()
+            with self.subTest(kind=kind):
+                self.assertEqual(result['classification'],'FULL_SYNTHETIC_FAILED');self.assertEqual(calls,[0])
+
+    def test_full_475_mocked_session_accounting_and_every_record_scope(self):
+        import alpha_radar_runner as run
+        s,_,calls,_=self.session();result,parent=s.run()
+        self.assertEqual(calls,list(range(475)));self.assertEqual(result['classification'],'FULL_SYNTHETIC_PASS')
+        self.assertEqual(run.full_accounting(s.cap,s.full_parents,result)['receipts'],475)
+        for path in Path(s.p['root']).rglob('*.json'):
+            doc=json.loads(path.read_bytes())
+            self.assertEqual(doc['scope'],run.FULL_SCOPE);self.assertEqual(doc['timing_proof'],run.FULL_TIMING)
+            for key in AUTHORITY:self.assertIs(doc[key],False)
+        for change in (lambda r:r.update(attempted=476),lambda r:r['receipt_parents'].pop(),
+                       lambda r:r['receipt_parents'].reverse(),lambda r:r['receipt_parents'].__setitem__(1,r['receipt_parents'][0])):
+            bad=deepcopy(result);change(bad)
+            with self.assertRaises(ValueError):run.full_accounting(s.cap,s.full_parents,bad)
+        value,_=run.full_read(s.cap,s.full_parents,'fs-session.json',expected=parent)
+        self.assertEqual(value,result)
+
+    def test_workflow_default_false_manual_exclusive_no_push_execution(self):
+        import alpha_radar_ci as ci
+        text=(ci.REPO/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        entry=text.split('      full_session_only:')[1].split('      expected_source_commit:')[0]
+        self.assertIn('type: boolean',entry);self.assertIn('default: false',entry)
+        step=text.split('- name: Manual full synthetic session;')[1].split('- name:')[0]
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.full_session_only == true && inputs.native_startup != true && inputs.lifecycle_only != true",step)
+        self.assertIn('full-session --full-session-only',step)
+        self.assertIn('contents: read',text);self.assertIn('persist-credentials: false',text)
+        self.assertNotIn('alpha_radar_ci.py profile-probe',text)
+
+    def test_cli_full_failure_does_not_retry_or_reach_other_modes(self):
+        import alpha_radar_ci as ci
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        (root/'export').mkdir(exist_ok=True)
+        with patch('sys.argv',['ci','full-session','--full-session-only','--root',str(root)]), \
+            patch.object(ci,'execute_full',side_effect=ValueError('SUPERVISOR_FAILED')) as execute, \
+            patch.object(ci,'execute') as native,patch.object(ci,'execute_lifecycle') as lifecycle:
+            self.assertEqual(ci.main(),1)
+        execute.assert_called_once();native.assert_not_called();lifecycle.assert_not_called()
+        failure=json.loads(next((root/'export').glob('*failure*')).read_bytes())
+        self.assertEqual(failure['scope'],'CI_SYNTHETIC_FULL_SESSION_ONLY')
+
+    def test_full_preparation_cli_installs_guard_before_handler(self):
+        import alpha_radar_ci as ci
+        for phase in ('prepare','finalize'):
+            order=[]
+            with patch('sys.argv',['ci',phase,'--prepare-full-session','--root','/not-accessed']), \
+                patch.object(ci.sys,'addaudithook',side_effect=lambda _:order.append('AUDIT')), \
+                patch.object(ci,'full_event',side_effect=lambda _:order.append('EVENT')), \
+                patch.object(ci,phase,side_effect=lambda *a,**kw:order.append(('HANDLER',kw))):
+                self.assertEqual(ci.main(),0)
+            self.assertEqual(order,['AUDIT','EVENT',('HANDLER',{'full_session':True})])
+
+    def owned(self):
+        import alpha_radar_runner as run
+        s,_,_,_=self.session();p,r,_=s.cap.documents();observations={}
+        owned=run.FullOwnedProcesses(s.cap,s.full_parents,inspect=lambda pid:observations[pid],pause=lambda _:None)
+        for index,role in enumerate(('fixture','worker')):
+            exe=str(Path(r['root'])/r['interpreter']);pid=12345+index
+            obs=ProcessObservation(pid,os.getpid(),'2026-09-14T12:00:00+00:00',exe,exe,
+                r['files'][0]['sha256'],p['root'],(exe,));observations[pid]=obs
+            child=MagicMock();child.pid=pid;child.poll.return_value=None
+            capture=run.LifecycleStreams(type('Streams',(),{'stdout':None,'stderr':None})())
+            entry={'child':child,'expected':{'pid':pid,'parent_pid':os.getpid(),'argv':(exe,),
+                'cwd':p['root'],'executable':exe,'executable_hash':obs.executable_hash},
+                'observation':dict(obs.__dict__),'launch_parent':str(index+1)*64,'capture':capture}
+            owned.children[role]=entry
+            value=run.full_startup(s.cap,role,entry['launch_parent'],entry['observation'])
+            parent=run.full_store(s.cap,s.full_parents,f'fs-{role}-startup.json',value)
+            owned.startup_pins[role]=(entry['launch_parent'],parent)
+            def wait(timeout,role=role,entry=entry):
+                run.full_store(s.cap,s.full_parents,f'fs-{role}-exit.json',
+                    {'role':role,'returncode':0,'launch_parent':entry['launch_parent']})
+                entry['child'].poll.return_value=0
+                return 0
+            child.wait.side_effect=wait
+        return owned,observations
+
+    def test_full_owned_cooperative_cleanup_both_roles(self):
+        owned,_=self.owned();children=[v['child'] for v in owned.children.values()]
+        result=owned.cleanup(lambda:True)
+        self.assertTrue(result['clean']);self.assertEqual(result['remaining'],[])
+        self.assertEqual([v['role'] for v in result['exits']],['worker','fixture'])
+        self.assertEqual(result['signals'],0)
+        for child in children:child.kill.assert_not_called();child.terminate.assert_not_called()
+
+    def test_full_cleanup_continues_after_worker_or_fixture_failure(self):
+        for role in ('worker','fixture'):
+            owned,_=self.owned();children=dict(owned.children)
+            children[role]['child'].wait.side_effect=TimeoutError('SYNTHETIC')
+            result=owned.cleanup(lambda:True)
+            self.assertFalse(result['clean']);self.assertIn(role,result['remaining'])
+            self.assertEqual(len(result['exits']),1);self.assertEqual(result['port_clear_observations'],[True]*3)
+            for entry in children.values():entry['child'].kill.assert_not_called();entry['child'].terminate.assert_not_called()
+
+    def test_full_pid_reuse_identity_mismatch_and_early_exit_fail_cleanup(self):
+        for field,value in [('start_time','2026-09-14T12:00:01+00:00'),('parent_pid',1),('executable_hash','f'*64)]:
+            owned,observations=self.owned();entry=owned.children['worker'];pid=entry['child'].pid
+            observations[pid]=replace(observations[pid],**{field:value})
+            result=owned.cleanup(lambda:True)
+            self.assertFalse(result['clean']);entry['child'].wait.assert_not_called()
+            self.assertFalse((Path(owned.cap.documents()[0]['root'])/'fs-worker-stop.json').exists())
+        owned,_=self.owned();entry=owned.children['worker'];entry['observation']=None;entry['child'].poll.return_value=65
+        self.assertFalse(owned.cleanup(lambda:True)['clean']);entry['child'].wait.assert_not_called()
+
+    def test_full_cleanup_listener_survival_unstable_clearance(self):
+        for values in ([False,False,False],[True,False,True]):
+            owned,_=self.owned();samples=iter(values)
+            result=owned.cleanup(lambda:next(samples));self.assertFalse(result['clean'])
+            self.assertEqual(len(result['exits']),2);self.assertEqual(result['port_clear_observations'],values)
+
+    def test_full_forged_startup_and_duplicate_role_rejected(self):
+        owned,_=self.owned();entry=owned.children['worker']
+        owned.startup_pins['worker']=(entry['launch_parent'],'0'*64)
+        with self.assertRaises(ValueError):owned.verify('worker')
+        with self.assertRaises(ValueError):owned.register('worker',entry['child'],argv=[],cwd='unused',
+            executable='unused',executable_hash='0'*64)
+
+    def test_full_tls_mismatch_before_worker_launch_gate(self):
+        import alpha_radar_runner as run,inspect
+        s,_,_,_=self.session();owned=MagicMock();ctx=MagicMock();ctx.check_hostname=True;ctx.verify_mode=2
+        channel=ctx.wrap_socket.return_value.__enter__.return_value;channel.getpeercert.return_value=b'WRONG_SYNTHETIC'
+        with patch.object(run.ssl,'create_default_context',return_value=ctx), \
+             patch.object(run.ssl,'PEM_cert_to_DER_cert',return_value=b'EXPECTED_SYNTHETIC'),patch.object(run.socket,'socket'):
+            with self.assertRaises(ValueError):run.startup_tls(s.cap,owned)
+        source=inspect.getsource(run.full_supervise)
+        self.assertIn("require(tls is not None and tls['hostname_verified'] is True,'FULL_TLS_GATE')",source)
+        self.assertNotIn('sandbox-exec',source);self.assertNotIn('DEVNULL',source)
+        self.assertLess(source.index("'FULL_TLS_GATE'"),source.index('child=popen('))
+
+    def test_full_child_and_lifecycle_cli_mutually_exclusive_before_read(self):
+        import alpha_radar_runner as run
+        with patch('sys.argv',['runner','--descriptor','not-read','--expected-descriptor','0'*64,
+            '--ci-lifecycle-only','--ci-full-session-only']),patch.object(run,'read_descriptor') as read:
+            with self.assertRaisesRegex(ValueError,'FULL_MODE_EXCLUSION'):run.main()
+        read.assert_not_called()
+
+    def test_full_guard_no_arbitrary_python_shell_or_confinement_command(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs()
+        for argv in (['/bin/sh','-c','pass'],['/usr/bin/sandbox-exec'],[r['root']+'/python','-c','pass']):
+            with self.assertRaises(ValueError):run.full_audit(r['root'],p['root'],('127.0.0.1',38493),
+                'supervisor',plan=p['plan'],launch_commands={'fixture':argv,'worker':argv})
+
+
+class FullPilotBindingTests(unittest.TestCase):
+    context = FullSessionModeTests.context
+    inputs = FullSessionModeTests.inputs
+    def test_pilot_identity_separate_from_scan_universe(self):
+        import alpha_radar_runner as run
+        from provider_gateway_contract import PILOT
+        _,p,_,e,_,_=self.inputs();package=run.full_package(p,e)
+        pilot=package['preflight']
+        self.assertEqual(pilot['identifier'],'PILOT')
+        self.assertEqual(pilot['symbols'],list(PILOT));self.assertEqual(pilot['symbol_hash'],content_hash(list(PILOT)))
+        self.assertEqual(pilot['request_count'],1);self.assertEqual(pilot['slot'],0)
+        self.assertEqual(pilot['phase'],'PREFLIGHT');self.assertEqual(pilot['schedule_id'],'PREFLIGHT-0')
+        self.assertEqual(pilot['row_parent'],content_hash(p['plan']['rows'][0]))
+        self.assertEqual(pilot['valid_from'],'2026-09-14T13:20:00+00:00')
+        self.assertEqual(pilot['expires_at'],'2026-09-14T13:25:00+00:00')
+        self.assertFalse(set(PILOT)&set(package['ordered_universe']))
+        self.assertNotIn('PILOT',package['ordered_universe'])
+        self.assertEqual(1+package['cycles']*len(package['batch_sizes']),475)
+
+    def test_every_pilot_symbol_and_order_mutation_even_when_rehashed(self):
+        import alpha_radar_runner as run
+        for index in range(10):
+            for mode in ('replace','remove','duplicate','swap'):
+                _,p,r,e,_,_=self.inputs();members=p['plan']['rows'][0]['symbols']
+                if mode=='replace':members[index]='S000'
+                elif mode=='remove':members.pop(index)
+                elif mode=='duplicate':members[index]=members[(index+1)%10]
+                else:members[index],members[(index+1)%10]=members[(index+1)%10],members[index]
+                p['plan']['rows'][0]['symbol_hash']=content_hash(members)
+                repin(p,r,e)
+                with self.subTest(index=index,mode=mode),self.assertRaises(ValueError):run.full_package(p,e)
+
+    def test_pilot_hash_phase_slot_identity_and_time_mutations(self):
+        import alpha_radar_runner as run
+        mutations=[('symbol_hash','0'*64),('phase','SCAN'),('id','PILOT'),('slot',1),('batch',1),
+            ('valid_from','2026-09-14T13:21:00+00:00'),('expires_at','2026-09-14T13:26:00+00:00')]
+        for key,value in mutations:
+            _,p,r,e,_,_=self.inputs();p['plan']['rows'][0][key]=value;repin(p,r,e)
+            with self.subTest(key=key),self.assertRaises(ValueError):run.full_package(p,e)
+
+    def test_pilot_cannot_replace_any_normal_batch_or_enter_universe(self):
+        import alpha_radar_runner as run
+        for batch in range(6):
+            _,p,r,e,_,_=self.inputs();p['plan']['rows'][batch+1]=deepcopy(p['plan']['rows'][0]);repin(p,r,e)
+            with self.assertRaises(ValueError):run.full_package(p,e)
+        for symbol in ('PILOT','MU'):
+            _,p,r,e,_,_=self.inputs();p['plan']['universe']['symbols'][0]=symbol
+            e['universe']=content_hash(p['plan']['universe']);repin(p,r,e)
+            with self.assertRaises(ValueError):run.full_package(p,e)
+
+    def test_s_batch_cannot_substitute_for_pilot_even_with_ten_members(self):
+        import alpha_radar_runner as run
+        for complete in (False,True):
+            _,p,r,e,_,_=self.inputs()
+            if complete:p['plan']['rows'][0]=deepcopy(p['plan']['rows'][1])
+            else:
+                p['plan']['rows'][0]['symbols']=[f'S{i:03}' for i in range(10)]
+                p['plan']['rows'][0]['symbol_hash']=content_hash(p['plan']['rows'][0]['symbols'])
+            repin(p,r,e)
+            with self.assertRaises(ValueError):run.full_package(p,e)
+
+    def test_missing_duplicate_pilot_and_request_count_mutations(self):
+        import alpha_radar_runner as run
+        for mutation in ('missing','duplicate','replace','preflight_count','total_count','scan_count'):
+            _,p,r,e,_,_=self.inputs();plan=p['plan']
+            if mutation=='missing':plan['rows'].pop(0)
+            elif mutation=='duplicate':plan['rows'].insert(1,deepcopy(plan['rows'][0]))
+            elif mutation=='replace':plan['rows'][1]=deepcopy(plan['rows'][0])
+            elif mutation=='preflight_count':plan['preflight_requests']=2
+            elif mutation=='total_count':plan['maximum_requests']=474
+            else:plan['collection_requests']=473
+            repin(p,r,e)
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):run.full_package(p,e)
+
+    def test_rehashed_embedded_preflight_window_not_an_independent_pin(self):
+        import alpha_radar_runner as run
+        _,p,r,e,_,_=self.inputs();plan=p['plan']
+        for row in (plan['rows'][0],plan['opportunity_schedule']['preflight']):
+            row['valid_from']='2026-09-14T13:21:00+00:00'
+        plan['schedule_parent']=content_hash(plan['opportunity_schedule']);e['schedule']=plan['schedule_parent']
+        repin(p,r,e)
+        with self.assertRaises(ValueError):run.full_package(p,e)
+
+
+class FullCleanupIsolationTests(unittest.TestCase):
+    context = FullSessionModeTests.context
+    inputs = FullSessionModeTests.inputs
+    session = FullSessionModeTests.session
+    owned = FullSessionModeTests.owned
+
+    def test_each_role_inspection_failure_still_inspects_other_role(self):
+        for failed_role in ('worker','fixture'):
+            owned,observations=self.owned();children=dict(owned.children);calls=[]
+            failed_pid=children[failed_role]['child'].pid
+            def inspect(pid):
+                calls.append(pid)
+                if pid==failed_pid:raise ValueError('PROCESS_INSPECTION_FAILED')
+                return observations[pid]
+            owned.inspect=inspect
+            result=owned.cleanup(lambda:True)
+            self.assertEqual(set(calls),set(observations))
+            self.assertEqual(len(result['exits']),1);self.assertFalse(result['clean'])
+            self.assertEqual(result['remaining'],[failed_role])
+            self.assertEqual(result['role_findings'][failed_role]['cleanup_failures'][0]['category'],'PROCESS_INSPECTION_FAILED')
+            children[failed_role]['child'].wait.assert_not_called()
+            for entry in children.values():
+                entry['child'].kill.assert_not_called();entry['child'].terminate.assert_not_called()
+
+    def test_role_specific_diagnostic_publication_failure_is_not_shared(self):
+        owned,observations=self.owned();children=dict(owned.children);worker=children['worker']['child'].pid
+        original=owned.evidence;calls=[]
+        def evidence(value):
+            if value.get('event')=='INSPECTION_CHILD_STATUS' and value.get('pid')==worker:
+                raise OSError('SYNTHETIC_PUBLICATION_FAILURE')
+            original(value)
+        owned.evidence=evidence
+        owned.inspect=lambda pid:(calls.append(pid) or observations[pid])
+        result=owned.cleanup(lambda:True)
+        self.assertFalse(result['clean']);self.assertEqual([v['role'] for v in result['exits']],['fixture'])
+        self.assertEqual(calls,[children['fixture']['child'].pid])
+        self.assertTrue(result['role_findings']['worker']['diagnostic_failures'])
+        self.assertEqual(result['role_findings']['fixture']['diagnostic_failures'],[])
+        self.assertTrue(result['diagnostic_failures'])
+
+    def test_prior_child_diagnostics_remain_sticky_without_poisoning_other_role(self):
+        owned,_=self.owned();children=dict(owned.children)
+        children['worker']['inspection_diagnostic_failures']=['DIAGNOSTIC_PUBLICATION_FAILED']
+        result=owned.cleanup(lambda:True)
+        self.assertFalse(result['clean']);self.assertEqual([v['role'] for v in result['exits']],['fixture'])
+        self.assertEqual(result['role_findings']['worker']['diagnostic_failures'],['DIAGNOSTIC_PUBLICATION_FAILED'])
+        children['worker']['child'].wait.assert_not_called()
+
+    def test_both_role_failures_aggregate_and_clear_port_never_overrides_identity(self):
+        import alpha_radar_runner as run
+        owned,_=self.owned();children=dict(owned.children)
+        def inspect(_):raise ValueError('PROCESS_IDENTITY')
+        owned.inspect=inspect
+        result=owned.cleanup(lambda:True)
+        self.assertFalse(result['clean']);self.assertEqual(result['exits'],[])
+        self.assertEqual(set(result['remaining']),{'worker','fixture'})
+        self.assertEqual(result['port_clear_observations'],[True]*3)
+        for role,entry in children.items():
+            self.assertEqual(result['role_findings'][role]['cleanup_failures'][0]['category'],'PROCESS_IDENTITY')
+            self.assertFalse(result['role_findings'][role]['ownership_verified'])
+            entry['child'].wait.assert_not_called();entry['child'].kill.assert_not_called();entry['child'].terminate.assert_not_called()
+            self.assertFalse((Path(owned.cap.documents()[0]['root'])/f'fs-{role}-stop.json').exists())
+        parent=run.full_store(owned.cap,owned.lifecycle_parents,'fs-cleanup-review.json',result)
+        value,_=run.full_read(owned.cap,owned.lifecycle_parents,'fs-cleanup-review.json',expected=parent)
+        self.assertEqual(value,result)
+
+    def test_stream_snapshot_and_final_publication_exceptions_continue_cleanup(self):
+        for failure in ('snapshot','publication'):
+            owned,_=self.owned();worker=owned.children['worker'];original=owned.evidence
+            if failure=='snapshot':worker['capture'].snapshot=MagicMock(side_effect=OSError('SYNTHETIC'))
+            else:
+                def evidence(value):
+                    if value.get('event')=='FINAL_CHILD_STATUS' and value.get('role')=='worker':raise OSError('SYNTHETIC')
+                    original(value)
+                owned.evidence=evidence
+            result=owned.cleanup(lambda:True)
+            self.assertFalse(result['clean']);self.assertEqual(len(result['exits']),2)
+            self.assertTrue(result['role_findings']['worker']['cleanup_failures'])
+            self.assertEqual(result['role_findings']['fixture']['cleanup_failures'],[])
+
+    def test_supervisor_failure_does_not_suppress_child_cleanup_or_listener_checks(self):
+        owned,_=self.owned();calls=[]
+        def supervisor():raise ValueError('PROCESS_IDENTITY')
+        result=owned.cleanup(lambda:(calls.append('LISTENER') or True),supervisor_check=supervisor)
+        self.assertFalse(result['clean']);self.assertEqual(len(result['exits']),2)
+        self.assertEqual(calls,['LISTENER']*3)
+        self.assertEqual(result['supervisor']['failures'],[{'stage':'SUPERVISOR_IDENTITY','category':'PROCESS_IDENTITY'}])
+
+    def test_listener_inspection_and_pause_failures_are_independent_and_preserved(self):
+        owned,_=self.owned();calls=[]
+        def listener():
+            calls.append('LISTENER')
+            if len(calls)==1:raise ValueError('LISTENER_INSPECTION')
+            return True
+        def pause(_):raise OSError('SYNTHETIC_PAUSE')
+        owned.pause=pause
+        result=owned.cleanup(listener)
+        self.assertFalse(result['clean']);self.assertEqual(len(result['exits']),2)
+        self.assertEqual(calls,['LISTENER']*3);self.assertEqual(result['port_clear_observations'],[False,True,True])
+        self.assertEqual(len(result['listener']['failures']),4)
+
+    def test_success_requires_both_owned_exits_and_stable_listener(self):
+        owned,_=self.owned();checks=[]
+        result=owned.cleanup(lambda:True,supervisor_check=lambda:checks.append('SUPERVISOR'))
+        self.assertTrue(result['clean']);self.assertEqual(checks,['SUPERVISOR'])
+        self.assertEqual(set(result['role_findings']),{'worker','fixture'})
+        self.assertTrue(all(v['ownership_verified'] and v['exit_verified'] for v in result['role_findings'].values()))
+        self.assertEqual(result['failures'],[]);self.assertEqual(result['signals'],0)
+        self.assertTrue(result['listener']['stable_clear'])
+
+
+class FullLexicalAdmissionTests(unittest.TestCase):
+    inputs = FullSessionModeTests.inputs
+    context = FullSessionModeTests.context
+
+    def instrument(self):
+        from contextlib import ExitStack
+        import builtins, io, glob
+        stack = ExitStack(); calls = []
+        def forbidden(*args, **kwargs):
+            calls.append('FILESYSTEM_CALL')
+            raise AssertionError('FILESYSTEM_BEFORE_LEXICAL_ADMISSION')
+        for owner, names in ((Path, ('resolve','stat','lstat','exists','is_file','is_dir','is_symlink',
+                                    'open','glob','rglob','iterdir','readlink')),
+                             (os, ('stat','lstat','open','fstat','listdir','scandir','readlink')),
+                             (builtins, ('open',)), (io, ('open',)), (glob, ('glob','iglob'))):
+            for name in names: stack.enter_context(patch.object(owner,name,side_effect=forbidden))
+        return stack, calls
+
+    def denied(self, root):
+        from pathlib import PureWindowsPath
+        class UnsafePath:
+            def __fspath__(self): raise AssertionError('CUSTOM_FSPATH_CALLED')
+        return ['/Library/Keychains', '/Library/Keychains/login.keychain-db',
+            '/System/Library/Keychains/child', '/Users/owner/Library/Keychains/child',
+            '/home/owner/L7/data', '~/Library/Keychains/child', '/var/ledger/L8',
+            str(root)+'/../protected', str(root)+'ish/file', str(root)+'//file',
+            str(root)+'/./file', str(root)+'/L7/child', str(root)+'/L8/child',
+            '../escape', 'relative', '', '\x00', str(root)+'/bad\x00file',
+            '/dev/fd/4', '/proc/self/fd/4', '/tmp/alias',
+            str(root)+'/alias/../../protected', b'/Library/Keychains', None,
+            PureWindowsPath('C:/protected'), UnsafePath()]
+
+    def test_denied_inputs_have_zero_filesystem_calls_in_both_entrypoints(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs()
+        guard,opened=run.full_audit(r['root'],p['root'],('127.0.0.1',38493),'worker',plan=p['plan'])
+        for value in self.denied(Path(p['root'])):
+            for entry in (lambda v:guard('open',(v,'r',os.O_RDONLY)),lambda v:opened(v,os.O_RDONLY)):
+                stack,calls=self.instrument()
+                with stack, self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+                    entry(value)
+                self.assertEqual(calls,[])
+
+    def test_shared_helper_is_pure_and_component_based(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs(); roots=(r['root'],p['root'])
+        good=str(Path(p['root'])/'fs-session.json')
+        stack,calls=self.instrument()
+        with stack:
+            self.assertEqual(str(run.full_lexical_path(good,roots=roots)),good)
+            self.assertEqual(str(run.full_lexical_path('fs-session.json',roots=roots,parent=p['root'])),good)
+            for bad in [*self.denied(Path(p['root'])),1]:
+                with self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+                    run.full_lexical_path(bad,roots=roots)
+        self.assertEqual(calls,[])
+
+    def test_relative_descriptor_escape_rejected_before_fstat(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs();out=Path(p['root']);out.mkdir()
+        _,opened=run.full_audit(r['root'],out,('127.0.0.1',38493),'worker',plan=p['plan'])
+        fd=opened(out,os.O_RDONLY|os.O_DIRECTORY)
+        try:
+            for path in ('../escape','a/../../escape','./file','a//b','/Library/Keychains'):
+                stack,calls=self.instrument()
+                with stack,self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+                    opened(path,os.O_RDONLY,dir_fd=fd)
+                self.assertEqual(calls,[])
+        finally:os.close(fd)
+
+    def test_admitted_symlink_entry_rejected_without_resolution_or_target_access(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs();out=Path(p['root']);out.mkdir()
+        # Synthetic dangling target only. Creating a symlink does not read it.
+        link=out/'fs-alias.json';link.symlink_to(out.parent/'SYNTHETIC-UNADMITTED')
+        guard,_=run.full_audit(r['root'],out,('127.0.0.1',38493),'worker',plan=p['plan'])
+        calls=[];actual=os.lstat
+        def observe(path,*args,**kwargs):
+            self.assertIn(Path(path),(out,link));calls.append(Path(path))
+            return actual(path,*args,**kwargs)
+        with patch.object(Path,'resolve',side_effect=AssertionError('SYMLINK_RESOLVED')) as resolve, \
+             patch.object(os,'readlink',side_effect=AssertionError('SYMLINK_FOLLOWED')) as readlink, \
+             patch.object(os,'lstat',side_effect=observe),self.assertRaisesRegex(ValueError,'^FULL_PATH_ALIAS$'):
+            guard('open',(str(link),'r',os.O_RDONLY))
+        self.assertEqual(calls,[out,link]);resolve.assert_not_called();readlink.assert_not_called()
+
+    def test_valid_root_paths_keep_canonical_and_exclusive_checks(self):
+        import alpha_radar_runner as run
+        _,p,r,_,_,_=self.inputs();out=Path(p['root']);out.mkdir()
+        guard,opened=run.full_audit(r['root'],out,('127.0.0.1',38493),'worker',plan=p['plan'])
+        path=out/'fs-example.json'
+        flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW
+        fd=opened(path,flags,0o600);os.close(fd)
+        with self.assertRaises(FileExistsError):opened(path,flags,0o600)
+        with self.assertRaisesRegex(ValueError,'FULL_WRITE'):guard('open',(str(path),None,os.O_WRONLY))
+        with patch.object(Path,'resolve',return_value=out.parent),self.assertRaisesRegex(ValueError,'FULL_PATH_ALIAS'):
+            guard('open',(str(path),'r',os.O_RDONLY))
