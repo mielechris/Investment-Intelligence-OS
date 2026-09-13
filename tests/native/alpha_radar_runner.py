@@ -68,7 +68,8 @@ FAILURE_CODES = frozenset(('PROCESS_ABSENT', 'PROCESS_IDENTITY',
     'COOPERATIVE_SHUTDOWN', 'NATIVE_SESSION_TIMEOUT', 'WORKER_FAILED',
     'SESSION_INCOMPLETE', 'OS_CONFINEMENT_REQUIRED', 'GENERAL_NETWORK_MUST_BE_DENIED',
     'CONFINEMENT_SENTINEL_MISSING', 'IMPORTED_CLOSURE', 'NATIVE_RUNTIME',
-    'DIAGNOSTIC_PUBLICATION_FAILED', 'DIAGNOSTIC_OVERFLOW', 'DIAGNOSTIC_PIPE_FAILED'))
+    'DIAGNOSTIC_PUBLICATION_FAILED', 'DIAGNOSTIC_OVERFLOW', 'DIAGNOSTIC_PIPE_FAILED',
+    'LIFECYCLE_ENVIRONMENT'))
 
 
 def failure_category(error):
@@ -1105,7 +1106,9 @@ def lifecycle_environment(context):
             and re.fullmatch('[a-f0-9]{40}', context['GITHUB_SHA'])
             and context['GITHUB_REF'] == 'refs/heads/feature/iios-provider-gateway-superbatch-1',
             'LIFECYCLE_HOSTED_ONLY')
-    return {**LIFECYCLE_ENV, **context}
+    # macOS initializes this field in a fresh interpreter. Pin its nonsensitive
+    # value from the current UID; never inherit an ambient value or allow extras.
+    return {**LIFECYCLE_ENV, '__CF_USER_TEXT_ENCODING': f'0x{os.getuid():X}:0x0:0x0', **context}
 
 
 def lifecycle_descriptor(d):

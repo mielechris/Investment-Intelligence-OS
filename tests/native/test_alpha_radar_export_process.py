@@ -60,6 +60,21 @@ class FreshExportTests(unittest.TestCase):
         if not success:
             self.assertTrue((self.root/'export/export-failure.json').exists())
 
+    def test_fresh_interpreter_preserves_exact_lifecycle_environment(self):
+        from alpha_radar_runner import lifecycle_environment
+        context = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+            'RUNNER_OS': 'macOS', 'RUNNER_ARCH': 'ARM64', 'GITHUB_RUN_ATTEMPT': '1',
+            'GITHUB_RUN_ID': '12345', 'GITHUB_SHA': 'a'*40,
+            'GITHUB_REF': 'refs/heads/feature/iios-provider-gateway-superbatch-1'}
+        expected = lifecycle_environment(context)
+        # This child only reports its supplied environment. It never imports the
+        # runner, calls a hosted/native entrypoint, binds a socket or launches a fixture.
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c',
+            'import os,json; print(json.dumps(dict(os.environ)))'], env=expected,
+            cwd=self.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=30, check=True)
+        self.assertEqual(json.loads(result.stdout), expected)
+
     def test_fresh_isolated_export(self):
         self.run_export(True)
         self.assertEqual(json.loads((self.root/'export/lc-final.json').read_bytes()), self.receipt)

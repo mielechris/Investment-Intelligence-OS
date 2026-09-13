@@ -2008,8 +2008,14 @@ class LifecycleOnlyTests(unittest.TestCase):
 
     def test_environment_positive_membership_rejects_proxy_and_credentials(self):
         from alpha_radar_runner import lifecycle_environment,LIFECYCLE_ENV
-        env=lifecycle_environment(self.context());self.assertEqual(set(env),set(self.context())|set(LIFECYCLE_ENV))
-        for key in ('HTTPS_PROXY','ALL_PROXY','GITHUB_TOKEN','API_KEY','KEYCHAIN_SELECTOR','DYLD_INSERT_LIBRARIES'):
+        env=lifecycle_environment(self.context())
+        self.assertEqual(set(env),set(self.context())|set(LIFECYCLE_ENV)|{'__CF_USER_TEXT_ENCODING'})
+        self.assertEqual(env['__CF_USER_TEXT_ENCODING'],f'0x{os.getuid():X}:0x0:0x0')
+        with patch.dict(os.environ,{'__CF_USER_TEXT_ENCODING':'SYNTHETIC_REJECT'}):
+            self.assertEqual(lifecycle_environment(self.context()),env)
+        from alpha_radar_runner import failure_category
+        self.assertEqual(failure_category(ValueError('LIFECYCLE_ENVIRONMENT')),'LIFECYCLE_ENVIRONMENT')
+        for key in ('HTTPS_PROXY','ALL_PROXY','GITHUB_TOKEN','API_KEY','KEYCHAIN_SELECTOR','DYLD_INSERT_LIBRARIES','__CF_USER_TEXT_ENCODING'):
             with self.assertRaises(ValueError):lifecycle_environment({**self.context(),key:'SYNTHETIC_REJECT'})
         for key,value in (('RUNNER_ENVIRONMENT','self-hosted'),('GITHUB_RUN_ATTEMPT','2'),('GITHUB_SHA','main'),('RUNNER_OS','Linux')):
             with self.assertRaises(ValueError):lifecycle_environment({**self.context(),key:value})
