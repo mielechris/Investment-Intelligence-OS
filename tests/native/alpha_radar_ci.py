@@ -39,7 +39,7 @@ FAILURES = frozenset(('EXACT_ROOT','ROOT_OWNERSHIP','HOSTED_IDENTITY','PROXY_REJ
     'PREPARATION_SHELL_REJECTED','PREPARATION_SPAWN_REJECTED',
     'PROFILE_PROBE_EVENT','PROFILE_PROBE_PROFILE','PROFILE_PROBE_LIMIT','PROFILE_PROBE_SPAWN',
     'PROFILE_PROBE_TIMEOUT','PROFILE_PROBE_SANITIZATION',
-    'SUPERVISOR_FAILED','WORKER_EVIDENCE_FORBIDDEN','EVIDENCE_FILE','EVIDENCE_SCOPE','EVIDENCE_NAME'))
+    'FRESH_STDIO_FAILED','SUPERVISOR_FAILED','WORKER_EVIDENCE_FORBIDDEN','EVIDENCE_FILE','EVIDENCE_SCOPE','EVIDENCE_NAME'))
 SOURCE_NAMES = (
     'alpha_session_execution.py', 'provider_gateway_https.py', 'alpha_market_baseline.py',
     'alpha_session_readiness.py', 'opportunity_spine_contract.py', 'provider_gateway_contract.py',
@@ -135,9 +135,113 @@ def require_native_execution(explicit_request):
             'NATIVE_EXECUTION_NOT_AUTHORIZED')
 
 
+FRESH_STDIO_CODE=r'''
+import sys,os,json,time,subprocess
+from pathlib import Path
+sys.path[:0]=[sys.argv[1],sys.argv[2]]
+from alpha_radar_runner import lifecycle_audit,lifecycle_environment,LifecycleStreams,close_lifecycle_stdin,failure_category
+mode=sys.argv[3];out=Path(sys.argv[4])
+context={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'macOS',
+'RUNNER_ARCH':'ARM64','GITHUB_RUN_ATTEMPT':'1','GITHUB_RUN_ID':'12345','GITHUB_SHA':'a'*40,
+'GITHUB_REF':'refs/heads/feature/iios-provider-gateway-superbatch-1'}
+child_code="import sys; assert sys.stdin.buffer.read(1)==b''; sys.stderr.write('RADAR_DIAGNOSTIC: LIFECYCLE_WRITE\\n'); sys.stderr.flush()"
+if mode=='stdout':child_code+="; sys.stdout.write('SYNTHETIC_UNEXPECTED'); sys.stdout.flush()"
+if mode=='overflow':child_code+="; sys.stderr.write('x'*70000); sys.stderr.flush()"
+argv=[sys.executable,'-I','-S','-B','-c',child_code]
+audit,opened=lifecycle_audit(sys.base_prefix,out,('127.0.0.1',38493),'supervisor',launch_argv=argv,context=context)
+os.open=opened;events=[]
+def boundary(event,args):
+    audit(event,args)
+    if event=='subprocess.Popen':events.append('ADMITTED_CHILD')
+sys.addaudithook(boundary)
+child=None;category=None;capture=None;stdin_closed=False
+try:
+    child=subprocess.Popen(argv,cwd=out,env=lifecycle_environment(context),close_fds=True,
+        stdin=subprocess.DEVNULL if mode=='devnull' else subprocess.PIPE,
+        stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    close_lifecycle_stdin(child);stdin_closed=child.stdin.closed
+    capture=LifecycleStreams(child);until=time.monotonic()+10
+    while child.poll() is None and time.monotonic()<until:
+        capture.drain();time.sleep(.005)
+    assert child.poll()==0
+    capture.drain();assert capture.eof
+    capture.check()
+except Exception as error:category=failure_category(error)
+finally:
+    if capture:capture.close()
+print(json.dumps({'mode':mode,'category':category,'admitted_children':len(events),
+'child_returncode':child.poll() if child else None,'stdin_closed':stdin_closed,
+'diagnostics':capture.snapshot() if capture else None,'fixture_launches':0,'worker_launches':0,'requests':0}))
+'''
+
+
+def fresh_stdio_shape(event, args, *, invocation=None):
+    """Exact harmless command eligibility; no generic Python or phase bypass."""
+    invocation = tuple(sys.argv) if invocation is None else tuple(invocation)
+    require(len(invocation) == 4 and Path(invocation[0]).resolve() == Path(__file__).resolve()
+            and invocation[1:3] == ('offline', '--root'), 'PREPARATION_SPAWN_REJECTED')
+    root = Path(invocation[3]); root_check(root)
+    require(event == 'subprocess.Popen' and len(args) == 4, 'PREPARATION_SPAWN_REJECTED')
+    executable, argv, cwd, env = args
+    require(type(argv) in (tuple, list) and len(argv) == 10 and
+            tuple(argv[:6]) == (sys.executable, '-I', '-S', '-B', '-c', FRESH_STDIO_CODE) and
+            executable == sys.executable and
+            tuple(argv[6:8]) == (str(REPO/'tests/native'), str(REPO/'BACK END/backend')) and
+            argv[8] in ('devnull','pipes','stdout','overflow') and
+            env == {'PATH':'/usr/bin:/bin','LC_ALL':'C'}, 'PREPARATION_SPAWN_REJECTED')
+    case = Path(cwd)
+    require(case.parent == root and case.resolve() == case and not case.is_symlink() and
+            argv[9] == str(case) and re.fullmatch('stdio-'+argv[8]+'-[a-z0-9_]{8}',case.name) is not None,
+            'PREPARATION_SPAWN_REJECTED')
+    st=case.stat()
+    require(stat.S_ISDIR(st.st_mode) and st.st_uid==os.getuid() and not st.st_mode & 0o077,
+            'PREPARATION_SPAWN_REJECTED')
+    return True
+
+
+def fresh_stdio_boundary(root, cases, bindings):
+    """Frozen per-command pins supplement the always-installed preparation hook."""
+    root_check(root); verify_bindings(bindings)
+    frozen_bindings=tuple(sorted(bindings.items()))
+    executable=Path(sys.executable).resolve(); executable_pin=digest(executable.read_bytes())
+    root_stat=root.stat(); root_identity=(root_stat.st_dev,root_stat.st_ino)
+    admitted=[]
+    for mode,expected,case,argv in cases:
+        fresh_stdio_shape('subprocess.Popen',(argv[0],argv,case,{'PATH':'/usr/bin:/bin','LC_ALL':'C'}))
+        st=case.stat(); admitted.append((tuple(argv),str(case),st.st_dev,st.st_ino))
+    admitted=tuple(admitted)
+    require(len(admitted)==4 and len({v[0][8] for v in admitted})==4,'PREPARATION_SPAWN_REJECTED')
+    def boundary(event,args):
+        if event == 'subprocess.Popen':
+            fresh_stdio_shape(event,args)
+            verify_bindings(dict(frozen_bindings))
+            require(digest(executable.read_bytes())==executable_pin,'PREPARATION_SPAWN_REJECTED')
+            st=root.stat(); require((st.st_dev,st.st_ino)==root_identity,'PREPARATION_SPAWN_REJECTED')
+            st=Path(args[2]).stat()
+            require((tuple(args[1]),str(args[2]),st.st_dev,st.st_ino) in admitted,
+                    'PREPARATION_SPAWN_REJECTED')
+        else:
+            preparation_audit(event,args)
+    return boundary
+
+
+def spawn_fresh_stdio(boundary, argv, cwd, env, **options):
+    require(options == {'stdin':subprocess.PIPE,'stdout':subprocess.PIPE,
+                       'stderr':subprocess.PIPE,'close_fds':True},'PREPARATION_SPAWN_REJECTED')
+    boundary('subprocess.Popen',(argv[0],argv,cwd,env))
+    child=subprocess.Popen(argv,cwd=cwd,env=env,**options)
+    # Verify parent pipe endpoints; CPython creates the corresponding child ends.
+    identities=[]
+    for stream in (child.stdin,child.stdout,child.stderr):
+        st=os.fstat(stream.fileno()); require(stat.S_ISFIFO(st.st_mode),'PREPARATION_SPAWN_REJECTED')
+        identities.append((st.st_dev,st.st_ino))
+    require(len(set(identities))==3,'PREPARATION_SPAWN_REJECTED')
+    return child
+
+
 def preparation_audit(event, args):
     """Defense in depth: preparation can inspect/build inputs, never launch native targets."""
-    if event in ('socket.__new__', 'socket.connect', 'socket.bind'):
+    if event.startswith('socket.get') or event in ('socket.__new__', 'socket.connect', 'socket.bind'):
         raise PermissionError('PREPARATION_SOCKET_REJECTED')
     if event == 'ctypes.dlopen':
         raise PermissionError('PREPARATION_CTYPES_REJECTED')
@@ -151,6 +255,9 @@ def preparation_audit(event, args):
         if len(args) < 2:
             raise PermissionError('PREPARATION_SPAWN_REJECTED')
         executable, argv = args[:2]
+        if executable == sys.executable:
+            fresh_stdio_shape(event,args)
+            return
         allowed = {'/usr/bin/git': {'rev-parse', 'status', 'show'},
                    '/usr/bin/otool': {'-L', '-D', '-l'},
                    '/usr/bin/sw_vers': {'-productVersion', '-buildVersion'},
@@ -484,6 +591,12 @@ def offline(root):
     """Every native-harness test is mocked; an audit hook rejects OS dispatch."""
     root_check(root)
     bindings_before=source_bindings()
+    # Explicit fresh-process stdio gate precedes the mocked no-subprocess guard.
+    # It launches only a fixed harmless test command, never a fixture or worker.
+    sys.path[:0]=[str(REPO/'tests/native'),str(REPO/'BACK END/backend')]
+    from test_alpha_radar_native import fresh_stdio_validation
+    fresh_stdio_validation(root)
+    verify_bindings(bindings_before)
     test_root=Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-ci-offline-',dir='/private/tmp'))
     root_check(test_root)
     sys.path[:0]=[str(REPO/'tests/native'),str(REPO/'BACK END/backend')]
@@ -619,7 +732,7 @@ def execute_lifecycle(root, *, explicit_request=False):
     runtime = root/'runtime'; out = root/'execution-output'
     sys.path[:0] = [str(runtime/'source')]
     from alpha_radar_runner import (read_descriptor, descriptor_schema, startup_only, lifecycle_descriptor,
-        lifecycle_environment, LIFECYCLE_CONTEXT, LIFECYCLE_FLAGS, LIFECYCLE_SCOPE, StderrCapture,
+        lifecycle_environment, LIFECYCLE_CONTEXT, LIFECYCLE_FLAGS, LIFECYCLE_SCOPE, LifecycleStreams, close_lifecycle_stdin,
         verify_lifecycle_receipt)
     from provider_gateway_contract import content_hash
     pins = json.loads((root/'export/prepared-pins.json').read_bytes())
@@ -654,17 +767,19 @@ def execute_lifecycle(root, *, explicit_request=False):
                     args[3] == child_env, 'PREPARATION_SPAWN_REJECTED')
         else: preparation_audit(name, args)
     sys.addaudithook(boundary)
-    child = subprocess.Popen(argv, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    child = subprocess.Popen(argv, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, close_fds=True, env=child_env)
-    capture = StderrCapture(child.stderr); started = time.monotonic()
+    close_lifecycle_stdin(child)
+    capture = LifecycleStreams(child); started = time.monotonic()
     while child.poll() is None and time.monotonic()-started < 180:
         capture.drain(); time.sleep(.05)
     capture.drain()
-    if child.poll() is not None: capture.finish()
+    if child.poll() is not None: capture.close()
     document(root/'export/lifecycle-supervisor.json', {**LIFECYCLE_FLAGS,
         'descriptor_parent': content_hash(d), 'supervisor_pid': child.pid, 'returncode': child.returncode,
         'supervisor_exited': child.returncode is not None, 'diagnostics': capture.snapshot()})
-    require(child.returncode == 0 and not capture.overflow, 'SUPERVISOR_FAILED')
+    require(child.returncode == 0 and capture.eof and not capture.overflow and
+            capture.stdout.received == 0, 'SUPERVISOR_FAILED')
     doc = json.loads((out/'lc-final.json').read_bytes())
     value = verify_lifecycle_receipt(doc, content_hash(doc), parents)
     require(value['classification'] == 'LIFECYCLE_PASS' and value['cleanup']['clean'] is True and

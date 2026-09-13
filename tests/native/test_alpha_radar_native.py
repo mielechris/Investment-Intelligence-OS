@@ -2164,7 +2164,8 @@ class LifecycleOnlyTests(unittest.TestCase):
         d={'schema':'iios-ci-native-lifecycle-v1','execution_mode':run.LIFECYCLE_SCOPE,'package':p,'runtime':r,
            'expected':e,'authorized_root':cap.authorized_root,'native_tools':{},'maximum_duration_seconds':120,'context':self.context()}
         parents={**e,'lifecycle_descriptor':content_hash(d)}
-        child=MagicMock();child.pid=12345;child.stderr=None;code=[None];child.poll.side_effect=lambda:code[0]
+        child=MagicMock();child.pid=12345;child.stderr=None;child.stdout=None
+        child.stdin.closed=True;code=[None];child.poll.side_effect=lambda:code[0]
         observed=[None];owned_type=run.LifecycleOwnedProcesses
         def spawn(argv,**kwargs):
             self.assertNotIn('/usr/bin/sandbox-exec',argv);self.assertNotIn('worker',argv)
@@ -2238,3 +2239,200 @@ class ExportDependencyBoundaryTests(unittest.TestCase):
         import inspect
         self.assertIn("'subprocess.Popen'", inspect.getsource(ci.offline))
         self.assertIn("'OFFLINE_NATIVE_BOUNDARY'", inspect.getsource(ci.offline))
+
+
+class LifecycleStdioTests(unittest.TestCase):
+    def test_stdio_is_pipes_and_stdin_closed_before_registration(self):
+        import inspect, alpha_radar_runner as run, alpha_radar_ci as ci
+        text=inspect.getsource(run.lifecycle_supervise)
+        self.assertNotIn('DEVNULL',text.split('child = popen')[1].split("stage = 'OWNERSHIP_REGISTER'")[0].split('#')[0])
+        self.assertIn('stdin=subprocess.PIPE, stdout=subprocess.PIPE',text)
+        self.assertLess(text.index('close_lifecycle_stdin(child)'),text.index("owned.register('fixture'"))
+        self.assertNotIn('subprocess.DEVNULL',inspect.getsource(ci.execute_lifecycle))
+        child=MagicMock();child.stdin.closed=True
+        run.close_lifecycle_stdin(child);child.stdin.close.assert_called_once_with()
+        child.stdin.closed=False
+        with self.assertRaisesRegex(ValueError,'^LIFECYCLE_STDIO$'):run.close_lifecycle_stdin(child)
+
+    def test_both_streams_nonblocking_sanitized_and_bounded(self):
+        import alpha_radar_runner as run
+        child=MagicMock();child.stdout.fileno.return_value=71;child.stderr.fileno.return_value=72
+        with patch.object(run.os,'set_blocking') as nonblocking:
+            capture=run.LifecycleStreams(child)
+        self.assertEqual(nonblocking.call_args_list,[unittest.mock.call(71,False),unittest.mock.call(72,False)])
+        capture.stderr.feed(b'RADAR_DIAG');capture.stderr.feed(b'NOSTIC: LIFECYCLE_WRITE\n')
+        capture.stderr.feed(b'SYNTHETIC_SECRET_VALUE /synthetic/private/path\n')
+        doc=json.dumps(capture.snapshot())
+        self.assertNotIn('SYNTHETIC_SECRET_VALUE',doc);self.assertNotIn('/synthetic/private/path',doc)
+        self.assertIn('STDERR_LIFECYCLE_WRITE',doc)
+        capture.stdout.feed(b'unexpected\n')
+        with self.assertRaisesRegex(ValueError,'^LIFECYCLE_STDOUT_UNEXPECTED$'):capture.check()
+        for stream in (capture.stdout,capture.stderr):
+            stream.feed(b'x'*70000)
+            self.assertTrue(stream.overflow);self.assertLessEqual(len(stream.pending),2048)
+            self.assertLessEqual(stream.retained,8192)
+        with self.assertRaisesRegex(ValueError,'^DIAGNOSTIC_OVERFLOW$'):capture.check()
+
+    def test_stream_drain_and_close_continue_after_individual_failure(self):
+        import alpha_radar_runner as run
+        child=MagicMock();child.stdout=None;child.stderr=None
+        capture=run.LifecycleStreams(child)
+        with patch.object(capture.stdout,'drain',side_effect=OSError),patch.object(capture.stderr,'drain') as second:
+            with self.assertRaisesRegex(ValueError,'DIAGNOSTIC_PIPE_FAILED'):capture.drain()
+            second.assert_called_once_with()
+        capture.stdout.stream=MagicMock();capture.stderr.stream=MagicMock()
+        capture.stdout.stream.close.side_effect=OSError
+        with self.assertRaisesRegex(ValueError,'DIAGNOSTIC_PIPE_FAILED'):capture.close()
+        capture.stderr.stream.close.assert_called_once_with()
+
+    def test_fixed_startup_category_and_no_devnull_write_allowance(self):
+        import alpha_radar_runner as run
+        self.assertEqual(run.failure_category(ValueError('LIFECYCLE_WRITE')),'LIFECYCLE_WRITE')
+        audit,_=run.lifecycle_audit('/synthetic/runtime','/synthetic/out',('127.0.0.1',38493),'supervisor')
+        for path in ('/dev/null','/dev/zero','/synthetic/other'):
+            with self.assertRaisesRegex(ValueError,'^LIFECYCLE_WRITE$'):
+                audit('open',(path,None,os.O_RDWR))
+
+    def test_cleanup_stream_failure_preserves_other_cleanup_and_port_evidence(self):
+        import alpha_radar_runner as run
+        owned,child,_=LifecycleOnlyTests.owned(self)
+        capture=run.LifecycleStreams(type('Child',(),{'stdout':None,'stderr':None})())
+        capture.stdout.feed(b'UNEXPECTED\n');owned.children['fixture']['capture']=capture
+        result=owned.cleanup(lambda:True)
+        self.assertFalse(result['clean']);self.assertEqual(result['port_clear_observations'],[True]*3)
+        self.assertIn('LIFECYCLE_STDOUT_UNEXPECTED',result['diagnostic_failures'])
+        child.kill.assert_not_called();child.terminate.assert_not_called()
+
+    cap=LifecycleOnlyTests.cap
+
+
+def fresh_stdio_validation(root):
+    """Separate fresh-process gate; no fixture, worker, listener or provider.
+
+    Each isolated parent installs the exact lifecycle audit. Its one admitted
+    child is a fixed Python stdio command. The former DEVNULL failure must
+    occur before subprocess.Popen's audit event (zero child launches).
+    """
+    import sys, subprocess, alpha_radar_ci as ci
+    root=Path(root);ci.root_check(root)
+    bindings=ci.source_bindings()
+    code=ci.FRESH_STDIO_CODE
+    rows=[];cases=[]
+    expected_env={'PATH':'/usr/bin:/bin','LC_ALL':'C'}
+    for mode,expected in [('devnull','LIFECYCLE_WRITE'),('pipes',None),
+                          ('stdout','LIFECYCLE_STDOUT_UNEXPECTED'),('overflow','DIAGNOSTIC_OVERFLOW')]:
+        case=Path(tempfile.mkdtemp(prefix='stdio-'+mode+'-',dir=root))
+        argv=[sys.executable,'-I','-S','-B','-c',code,str(ci.REPO/'tests/native'),str(ci.REPO/'BACK END/backend'),mode,str(case)]
+        cases.append((mode,expected,case,argv))
+    boundary=ci.fresh_stdio_boundary(root,cases,bindings)
+    sys.addaudithook(boundary)
+    for mode,expected,case,argv in cases:
+        proc=ci.spawn_fresh_stdio(boundary,argv,case,expected_env,
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
+        proc.stdin.close();proc.stdin=None
+        raw,err=proc.communicate(timeout=30)
+        # Only fixed sanitized output leaves memory, including on test failure.
+        from alpha_radar_runner import StderrCapture
+        diag=StderrCapture();diag.feed(err);diag.finish()
+        valid=False;value=None
+        try:
+            value=json.loads(raw)
+            valid=(proc.returncode==0 and value['category']==expected and
+                   value['admitted_children']==(0 if mode=='devnull' else 1) and
+                   value['child_returncode']==(None if mode=='devnull' else 0) and
+                   value['stdin_closed']==(mode!='devnull') and
+                   all(value[k]==0 for k in ('fixture_launches','worker_launches','requests')))
+            if mode=='pipes':valid=valid and 'STDERR_LIFECYCLE_WRITE' in value['diagnostics']['stderr']['untrusted_stderr_hints']
+        except (ValueError,KeyError,TypeError):pass
+        row={'mode':mode,'success':valid,'parent_returncode':proc.returncode,'diagnostics':diag.snapshot(),
+             'child_category':value.get('category') if isinstance(value,dict) and value.get('category') in (None,'LIFECYCLE_WRITE','LIFECYCLE_STDOUT_UNEXPECTED','DIAGNOSTIC_OVERFLOW') else 'UNCLASSIFIED_ERROR'}
+        ci.document(root/'export'/('fresh-stdio-'+mode+'.json'),row);rows.append(row)
+        ci.require(valid,'FRESH_STDIO_FAILED')
+    ci.verify_bindings(bindings)
+    ci.document(root/'export/fresh-stdio-results.json',{'scope':'FRESH_PROCESS_STDIO_ONLY','collected':4,
+        'executed':len(rows),'success':True,'source_bindings':bindings,'fixture_launches':0,'worker_launches':0,'requests':0})
+
+
+class FreshStdioAdmissionTests(unittest.TestCase):
+    def inputs(self):
+        import sys,alpha_radar_ci as ci
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        case=Path(tempfile.mkdtemp(prefix='stdio-pipes-',dir=root))
+        argv=[sys.executable,'-I','-S','-B','-c',ci.FRESH_STDIO_CODE,
+              str(ci.REPO/'tests/native'),str(ci.REPO/'BACK END/backend'),'pipes',str(case)]
+        invocation=[str(Path(ci.__file__).resolve()),'offline','--root',str(root)]
+        env={'PATH':'/usr/bin:/bin','LC_ALL':'C'}
+        return ci,root,case,argv,invocation,env
+
+    def test_exact_phase_command_and_every_argv_mutation(self):
+        ci,root,case,argv,invocation,env=self.inputs()
+        args=(argv[0],argv,case,env)
+        self.assertTrue(ci.fresh_stdio_shape('subprocess.Popen',args,invocation=invocation))
+        for phase in ('execute','lifecycle','prepare','export','profile-probe','finalize'):
+            with self.subTest(phase=phase),self.assertRaises(ValueError):
+                ci.fresh_stdio_shape('subprocess.Popen',args,invocation=[invocation[0],phase,*invocation[2:]])
+        for i in range(len(argv)):
+            bad=list(argv);bad[i]='SYNTHETIC_ALTERED'
+            with self.subTest(index=i),self.assertRaises(ValueError):
+                ci.fresh_stdio_shape('subprocess.Popen',(argv[0],bad,case,env),invocation=invocation)
+        for code in ('pass','import os; os.system("false")','alpha_radar_fixture.py',
+                     'alpha_radar_runner.py','--child worker','security find-generic-password'):
+            bad=list(argv);bad[5]=code
+            with self.assertRaises(ValueError):ci.fresh_stdio_shape('subprocess.Popen',(argv[0],bad,case,env),invocation=invocation)
+
+    def test_cwd_environment_alias_and_non_test_roots_rejected(self):
+        ci,root,case,argv,invocation,env=self.inputs()
+        for extra in ({'API_KEY':'SYNTHETIC'},{'HTTPS_PROXY':'https://invalid.example'},
+                      {'PYTHONPATH':'/synthetic'},{'KEYCHAIN_SELECTOR':'SYNTHETIC'}):
+            with self.assertRaises(ValueError):ci.fresh_stdio_shape('subprocess.Popen',(argv[0],argv,case,{**env,**extra}),invocation=invocation)
+        for target in (root,root/'missing','/synthetic/outside'):
+            with self.assertRaises(ValueError):ci.fresh_stdio_shape('subprocess.Popen',(argv[0],argv,target,env),invocation=invocation)
+        alias=root/('stdio-pipes-'+'a'*8);alias.symlink_to(case,target_is_directory=True)
+        bad=[*argv[:-1],str(alias)]
+        with self.assertRaises(ValueError):ci.fresh_stdio_shape('subprocess.Popen',(argv[0],bad,alias,env),invocation=invocation)
+        for event in ('os.posix_spawn','execute','socket.connect'):
+            with self.assertRaises(ValueError):ci.fresh_stdio_shape(event,(argv[0],argv,case,env),invocation=invocation)
+
+    def test_preparation_hook_rejects_dns_sockets_signals_and_fixture_commands(self):
+        import alpha_radar_ci as ci
+        for event in ('socket.getaddrinfo','socket.gethostbyname','socket.__new__','socket.connect','socket.bind'):
+            with self.assertRaises(PermissionError):ci.preparation_audit(event,())
+        for event,args in [('os.system',('SYNTHETIC',)),('os.kill',(99999999,15)),
+                           ('os.killpg',(99999999,15))]:
+            with self.assertRaises(PermissionError):ci.preparation_audit(event,args)
+        for exe in ('/bin/sh','/usr/bin/security','/synthetic/alpha_radar_fixture.py','/synthetic/worker'):
+            with self.assertRaises(ValueError):ci.preparation_audit('subprocess.Popen',(exe,[exe],None,{}))
+
+    def test_pipe_options_are_mandatory_before_any_spawn(self):
+        import alpha_radar_ci as ci,subprocess
+        options={'stdin':subprocess.PIPE,'stdout':subprocess.PIPE,'stderr':subprocess.PIPE,'close_fds':True}
+        for field in options:
+            for bad in (None,subprocess.DEVNULL,False):
+                altered={**options,field:bad}
+                with patch.object(ci.subprocess,'Popen') as spawn:
+                    with self.assertRaises(ValueError):ci.spawn_fresh_stdio(lambda *_:None,['SYNTHETIC'],Path('/synthetic'),{},**altered)
+                    spawn.assert_not_called()
+
+    def test_frozen_boundary_rejects_substitution_and_changed_source(self):
+        import sys,alpha_radar_ci as ci
+        ci,root,case,argv,invocation,env=self.inputs();cases=[]
+        for mode in ('devnull','pipes','stdout','overflow'):
+            target=case if mode=='pipes' else Path(tempfile.mkdtemp(prefix='stdio-'+mode+'-',dir=root))
+            cases.append((mode,None,target,[*argv[:8],mode,str(target)]))
+        with patch.object(sys,'argv',invocation):
+            guard=ci.fresh_stdio_boundary(root,cases,ci.source_bindings())
+            guard('subprocess.Popen',(argv[0],argv,case,env))
+            other=Path(tempfile.mkdtemp(prefix='stdio-pipes-',dir=root))
+            with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],[*argv[:-1],str(other)],other,env))
+            with patch.object(ci,'verify_bindings',side_effect=ValueError('OFFLINE_SOURCE_BINDING')):
+                with self.assertRaisesRegex(ValueError,'OFFLINE_SOURCE_BINDING'):guard('subprocess.Popen',(argv[0],argv,case,env))
+
+    def test_cli_installs_audit_before_mocked_handler_for_every_preparation_phase(self):
+        import alpha_radar_ci as ci
+        for phase in ('prepare','finalize','offline','export'):
+            order=[]
+            with patch('sys.argv',['ci',phase,'--root','/not-accessed']), \
+                 patch.object(ci.sys,'addaudithook',side_effect=lambda _:order.append('AUDIT')), \
+                 patch.object(ci,phase,side_effect=lambda *a:order.append('HANDLER')):
+                self.assertEqual(ci.main(),0)
+            self.assertEqual(order,['AUDIT','HANDLER'])

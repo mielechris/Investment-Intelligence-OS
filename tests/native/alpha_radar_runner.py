@@ -69,7 +69,8 @@ FAILURE_CODES = frozenset(('PROCESS_ABSENT', 'PROCESS_IDENTITY',
     'SESSION_INCOMPLETE', 'OS_CONFINEMENT_REQUIRED', 'GENERAL_NETWORK_MUST_BE_DENIED',
     'CONFINEMENT_SENTINEL_MISSING', 'IMPORTED_CLOSURE', 'NATIVE_RUNTIME',
     'DIAGNOSTIC_PUBLICATION_FAILED', 'DIAGNOSTIC_OVERFLOW', 'DIAGNOSTIC_PIPE_FAILED',
-    'LIFECYCLE_ENVIRONMENT'))
+    'LIFECYCLE_ENVIRONMENT', 'LIFECYCLE_WRITE', 'LIFECYCLE_STDIO',
+    'LIFECYCLE_STDOUT_UNEXPECTED'))
 
 
 def failure_category(error):
@@ -289,6 +290,58 @@ class StderrCapture:
         return {'untrusted_stderr_hints': list(self.lines),
                 'launcher_observations': list(self.observations), 'bytes_seen': self.received,
                 'overflow': self.overflow, 'eof': self.eof, 'raw_retained': False}
+
+
+class LifecycleStreams:
+    """Two bounded nonblocking pipes; stdout is forbidden, stderr is sanitized."""
+    def __init__(self, child):
+        self.stdout = StderrCapture(child.stdout)
+        self.stderr = StderrCapture(child.stderr)
+        for capture in (self.stdout, self.stderr):
+            if capture.stream is None: capture.finish()
+
+    @property
+    def overflow(self):
+        return self.stdout.overflow or self.stderr.overflow
+
+    @property
+    def eof(self):
+        return self.stdout.eof and self.stderr.eof
+
+    def drain(self):
+        # Drain both even if the first stream fails. Never persist raw bytes.
+        errors = []
+        for capture in (self.stdout, self.stderr):
+            try: capture.drain()
+            except Exception: errors.append('DIAGNOSTIC_PIPE_FAILED')
+        require(not errors, 'DIAGNOSTIC_PIPE_FAILED')
+
+    def check(self):
+        require(not self.overflow, 'DIAGNOSTIC_OVERFLOW')
+        require(self.stdout.received == 0, 'LIFECYCLE_STDOUT_UNEXPECTED')
+
+    def close(self):
+        errors = []
+        for capture in (self.stdout, self.stderr):
+            capture.pending.clear()
+            try:
+                if capture.stream is not None: capture.stream.close()
+                else: capture.finish()
+            except Exception: errors.append('DIAGNOSTIC_PIPE_FAILED')
+        require(not errors, 'DIAGNOSTIC_PIPE_FAILED')
+
+    def snapshot(self):
+        return {'stdout': self.stdout.snapshot(), 'stderr': self.stderr.snapshot(),
+                'raw_retained': False}
+
+
+def close_lifecycle_stdin(child):
+    try:
+        require(child.stdin is not None, 'LIFECYCLE_STDIO')
+        child.stdin.close()
+        require(child.stdin.closed is True, 'LIFECYCLE_STDIO')
+    except Exception:
+        raise ValueError('LIFECYCLE_STDIO') from None
 
 
 def child_status(child):
@@ -545,6 +598,9 @@ class OwnedProcesses:
         if capture is not None:
             capture.drain()
 
+    def capture_for(self, child, stderr):
+        return StderrCapture(stderr, profile=self.profile, profile_path=self.profile_path)
+
     def register(self, role, child, *, argv, cwd, executable, executable_hash, launcher=None,
                  stderr=None, launch_parent=None):
         require(role in ('worker', 'fixture') and role not in self.children, 'CHILD_ROLE')
@@ -553,7 +609,7 @@ class OwnedProcesses:
             'executable_hash': executable_hash}, 'observation': None, 'launcher': launcher, 'launch_parent': launch_parent}
         self.children[role] = entry  # Keep partial startup registered even on failure.
         try:
-            entry['capture'] = StderrCapture(stderr, profile=self.profile, profile_path=self.profile_path)
+            entry['capture'] = self.capture_for(child, stderr)
             self.evidence({'event': 'PROCESS_CREATED', 'role': role, 'pid': child.pid,
                 'expected_parent_pid': os.getpid(), 'launch_parent': launch_parent,
                 'identity_status': 'CHILD_CREATED_UNOBSERVED',
@@ -1179,6 +1235,14 @@ class LifecycleOwnedProcesses(OwnedProcesses):
         super().__init__(cap, **kwargs)
         self.lifecycle_parents = parents
 
+    def capture_for(self, child, stderr):
+        return LifecycleStreams(child)
+
+    def pump(self, entry):
+        super().pump(entry)
+        capture = entry.get('capture')
+        if isinstance(capture, LifecycleStreams): capture.check()
+
     def evidence(self, value):
         self.counter += 1
         lifecycle_store(self.cap, self.lifecycle_parents, f'lc-event-{self.counter:04d}.json',
@@ -1216,15 +1280,26 @@ class LifecycleOwnedProcesses(OwnedProcesses):
             except Exception as error:
                 self.failures.append({'role': role, 'category': failure_category(error)})
             finally:
-                self.pump(entry)
                 capture = entry.get('capture')
-                if capture and child.poll() is not None:
-                    capture.drain()
-                    if capture.overflow: self.diagnostic_failures.append('DIAGNOSTIC_OVERFLOW')
-                    if capture.stream is not None:
-                        if not capture.eof: self.diagnostic_failures.append('DIAGNOSTIC_INCOMPLETE')
-                        capture.pending.clear(); capture.stream.close()
-                    else: capture.finish()
+                try:
+                    self.pump(entry)
+                    if capture and child.poll() is not None:
+                        capture.drain()
+                        if capture.overflow: self.diagnostic_failures.append('DIAGNOSTIC_OVERFLOW')
+                        if isinstance(capture, LifecycleStreams):
+                            if not capture.eof: self.diagnostic_failures.append('DIAGNOSTIC_INCOMPLETE')
+                        elif capture.stream is not None and not capture.eof:
+                            self.diagnostic_failures.append('DIAGNOSTIC_INCOMPLETE')
+                except Exception as error:
+                    self.diagnostic_failures.append(failure_category(error))
+                finally:
+                    try:
+                        if isinstance(capture, LifecycleStreams): capture.close()
+                        elif capture and capture.stream is not None:
+                            capture.pending.clear(); capture.stream.close()
+                        elif capture: capture.finish()
+                    except Exception as error:
+                        self.diagnostic_failures.append(failure_category(error))
                 self.safe_evidence({'event': 'FINAL_CHILD_STATUS', 'status': child_status(child),
                                     'diagnostics': capture.snapshot() if capture else None})
         clear = []
@@ -1385,8 +1460,10 @@ def lifecycle_supervise(cap, d, *, popen=subprocess.Popen):
         launch_argv=argv, child_pid=lambda: child.pid if child is not None else None, context=d['context'])
     os.open = opened; sys.addaudithook(audit)
     try:
-        child = popen(argv, cwd=out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        child = popen(argv, cwd=out, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                       stderr=subprocess.PIPE, close_fds=True, env=lifecycle_environment(d['context']))
+        # Immediate EOF; no child input and no DEVNULL device permission.
+        close_lifecycle_stdin(child)
         stage = 'OWNERSHIP_REGISTER'
         owned.register('fixture', child, argv=argv, cwd=out, executable=executable,
             executable_hash=next(v['sha256'] for v in r['files'] if v['path'] == r['interpreter']),
