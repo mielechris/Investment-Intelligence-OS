@@ -608,7 +608,7 @@ def export(root):
 
 
 # Separate compiler/launcher experiment: never a fixture qualification attempt.
-PROBE_LIMIT = 12
+PROBE_LIMIT = 10
 PROBE_STDERR_LIMIT = 4096
 PROBE_SECONDS = 10
 PROBE_TAIL = ('-I', '-S', '-B', '-c', 'pass')
@@ -623,7 +623,7 @@ PROBE_WORDS = frozenset(('sandbox-exec profile compilation compile failed error 
     'local ip exit runtime library load loading image dyld Library loaded Reason tried '
     'Operation permitted undefined identifier reference evaluate failure read open '
     'RUNTIME WORKSPACE TEMP PROFILE INTERPRETER OUTPUT SYSTEM_LIBRARY USR_LIB DEVICE '
-    'ROOT python3.13').split())
+    'ROOT python3.13 DIAGNOSTIC_EXECUTABLE tcp').split())
 
 
 def sanitize_probe_stderr(raw, replacements, *, overflow=False):
@@ -743,6 +743,97 @@ def profile_matrix(exact):
     return variants
 
 
+# Diagnostic executable is an OS-owned no-op, not Python or an adapter. Its
+# dynamic loader dependencies remain bound to the observed signed OS image.
+PROBE_EXECUTABLE = '/usr/bin/true'
+
+
+def fixed_probe_executable():
+    path = Path(PROBE_EXECUTABLE)
+    st = path.lstat()
+    require(path.resolve() == path and stat.S_ISREG(st.st_mode) and st.st_uid == 0
+            and st.st_nlink == 1 and not st.st_mode & 0o022 and st.st_mode & 0o111
+            and os.statvfs(path).f_flag & os.ST_RDONLY,
+            'STATIC_IDENTITY')
+    data = path.read_bytes()
+    after = path.lstat()
+    require((st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) ==
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns), 'STATIC_IDENTITY')
+    return {'path': PROBE_EXECUTABLE, 'sha256': digest(data), 'size': len(data),
+            'device': st.st_dev, 'inode': st.st_ino, 'mode': stat.S_IMODE(st.st_mode),
+            'owner': st.st_uid, 'mtime_ns': st.st_mtime_ns, 'system_volume_readonly': True}
+
+
+def grammar_matrix(exact):
+    # Validate and preserve the original profile independently. These diagnostic
+    # profiles do not replace it. Bare operations use DENY, testing registration
+    # without admitting any outbound/inbound address. No profile allows writes.
+    forms = profile_clauses(exact)
+    core = ('(version 1)\n(deny default)\n'
+            '(allow file-read* (literal "/usr/bin/true") '
+            '(subpath "/System/Library") (subpath "/usr/lib"))\n')
+    execute = '(allow process-exec (literal "/usr/bin/true"))\n'
+    tcp = ('(allow network-outbound (remote tcp "127.0.0.1:38493"))',
+           '(allow network-inbound (local tcp "127.0.0.1:38493"))',
+           '(allow network-bind (local tcp "127.0.0.1:38493"))')
+    variants = [('MINIMAL', ''), ('BARE_OUTBOUND', '(deny network-outbound)'),
+        ('TCP_OUTBOUND', tcp[0]), ('BARE_INBOUND', '(deny network-inbound)'),
+        ('TCP_INBOUND', tcp[1]), ('BARE_BIND', '(deny network-bind)'),
+        ('TCP_BIND', tcp[2]), ('TCP_COMBINED', '\n'.join(tcp)),
+        ('IP_NEGATIVE_CONTROL', '\n'.join(forms[7:10]))]
+    # Only the three exact legacy loopback forms are admitted as negative input.
+    require(tuple(forms[7:10]) == tuple(v.replace(' tcp ', ' ip ') for v in tcp),
+            'PROFILE_PROBE_PROFILE')
+    result = [(name, core+execute+extra+'\n') for name, extra in variants]
+    result.append(('EXEC_DENIED_CONTROL', core))
+    require(len(result) == PROBE_LIMIT == 10, 'PROFILE_PROBE_LIMIT')
+    return result
+
+
+def classify_probe(sanitized, code, eof, profile):
+    """Observation and interpretation are separate; numeric exits aren't grammar.
+
+    Zero from the pinned no-op establishes command execution and compilation.
+    An exact retained execvp denial establishes the execution boundary. A source
+    location alone or SIGABRT establishes neither compilation nor its cause.
+    Positive language here is diagnostic interpretation, not a claimed private
+    compiler message template. Incomplete/contradictory context stays UNKNOWN.
+    """
+    result = {'profile_compilation': 'UNKNOWN', 'command': 'UNKNOWN',
+              'source_locations': [], 'basis': 'INSUFFICIENT_EVIDENCE'}
+    if sanitized.get('status') not in ('SANITIZED', 'PARTIALLY_SANITIZED') or not eof:
+        return result
+    text = sanitized.get('diagnostic') or ''
+    lines = profile.splitlines()
+    for line, column in re.findall(r'(?m)^<PROFILE>:(\d{1,5}):(\d{1,5}):$', text):
+        a, b = int(line), int(column)
+        if 1 <= a <= len(lines) and 1 <= b <= len(lines[a-1])+1:
+            result['source_locations'].append({'line': a, 'column': b})
+    complete = sanitized.get('status') == 'SANITIZED'
+    if type(code) is not int:
+        return result
+    if code == 0 and not text:
+        return {**result, 'profile_compilation': 'PROFILE_COMPILE_ACCEPTED',
+                'command': 'COMMAND_EXECUTED', 'basis': 'PINNED_NOOP_ZERO_EXIT'}
+    if code < 0:
+        return {**result, 'command': 'COMMAND_ABORTED',
+                'basis': 'SIGNAL_OBSERVED_STAGE_UNKNOWN'}
+    denial = "sandbox-exec: execvp() of '<DIAGNOSTIC_EXECUTABLE>' failed: Operation not permitted"
+    if complete and code == 71 and text.strip() == denial:
+        return {**result, 'profile_compilation': 'PROFILE_COMPILE_ACCEPTED',
+                'command': 'COMMAND_DENIED', 'basis': 'EXACT_EXECVP_DENIAL_OBSERVED'}
+    # Require a full isolated compile-error statement, consistent exit, valid
+    # source location, and complete sanitized context. Never match substrings.
+    allowed = re.compile(r'(?:sandbox-exec: |error: )?(?:unbound variable: '
+        r'(?:remote|local|ip|tcp|network-bind)|profile compilation failed|syntax error)')
+    semantic = [line for line in text.splitlines() if line and
+                not re.fullmatch(r'<PROFILE>:\d{1,5}:\d{1,5}:', line)]
+    if complete and code == 65 and result['source_locations'] and len(semantic) == 1 and allowed.fullmatch(semantic[0]):
+        return {**result, 'profile_compilation': 'PROFILE_COMPILE_REJECTED',
+                'basis': 'COMPLETE_COMPILE_DIAGNOSTIC_OBSERVED'}
+    return result
+
+
 def probe_spawn_audit(argv, cwd):
     """Closure admits one exact immutable command; no mutable execution mode."""
     exact = tuple(argv); directory = str(cwd)
@@ -811,8 +902,18 @@ def profile_probe(root):
     require(exact.encode() == (runtime/'confinement.sb').read_bytes() and
             digest(exact.encode()) == d['expected']['confinement'], 'PROFILE_PROBE_PROFILE')
     probe_root = root/'profile-probes'; probe_root.mkdir(mode=0o700)  # exclusive series marker
-    variants = profile_matrix(exact)
-    replacements = {str(interpreter): 'INTERPRETER', str(runtime): 'RUNTIME', str(REPO): 'WORKSPACE',
+    variants = grammar_matrix(exact)
+    executable_pin = fixed_probe_executable()
+    libraries = command(['/usr/bin/otool', '-L', PROBE_EXECUTABLE]).decode('ascii')
+    require(all(line.strip().startswith(('/usr/lib/', '/System/Library/'))
+                for line in libraries.splitlines()[1:]), 'DYNAMIC_DEPENDENCY')
+    document(root/'export/profile-executable.json', {'executable': executable_pin,
+        'library_listing_sha256': digest(libraries.encode()),
+        'environment_parent': digest(canonical(environment)),
+        'source_commit': environment['source_commit'],
+        'original_profile_sha256': digest(exact.encode()),
+        'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY'})
+    replacements = {PROBE_EXECUTABLE: 'DIAGNOSTIC_EXECUTABLE', str(interpreter): 'INTERPRETER', str(runtime): 'RUNTIME', str(REPO): 'WORKSPACE',
         str(root/'execution-output'): 'OUTPUT', str(root): 'ROOT', '/System/Library': 'SYSTEM_LIBRARY',
         '/usr/lib': 'USR_LIB', '/dev/null': 'DEVICE', '/dev/urandom': 'DEVICE', '/dev/random': 'DEVICE'}
     # This phase's process boundary is installed once, with a finite immutable
@@ -821,7 +922,7 @@ def profile_probe(root):
     for index, (_, profile) in enumerate(variants):
         path = probe_root/(str(index)+'.sb'); put(path, profile.encode())
         replacements[str(path)] = 'PROFILE'
-        commands.append(('/usr/bin/sandbox-exec', '-f', str(path), str(interpreter), *PROBE_TAIL))
+        commands.append(('/usr/bin/sandbox-exec', '-f', str(path), PROBE_EXECUTABLE))
     admitted = tuple(commands)
     def boundary(event, args):
         if event == 'subprocess.Popen':
@@ -836,13 +937,18 @@ def profile_probe(root):
         verify_tools(d['native_tools'])
         interpreter_row = next(row for row in d['runtime']['files'] if row['path'] == d['runtime']['interpreter'])
         require(digest(interpreter.read_bytes()) == interpreter_row['sha256'], 'STATIC_IDENTITY')
+        require(fixed_probe_executable() == executable_pin, 'STATIC_IDENTITY')
         raw, overflow, code, eof = probe_child(list(argv), probe_root)
         sanitized = sanitize_probe_lines(raw, replacements, overflow=overflow)
         del raw
         result = {'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY', 'ordinal': index+1, 'profile': name,
             'profile_sha256': digest(profile.encode()), 'command_shape_sha256': digest(canonical(
-                ['sandbox-exec', '-f', '<PROFILE>', '<INTERPRETER>', *PROBE_TAIL])),
-            'exit_code': code, 'eof': eof, 'diagnostic': sanitized, 'raw_stderr_retained': False,
+                ['sandbox-exec', '-f', '<PROFILE>', '<DIAGNOSTIC_EXECUTABLE>'])),
+            'exit_code': code if code is None or code >= 0 else None,
+            'returncode': code, 'signal': -code if code is not None and code < 0 else None,
+            'classification': classify_probe(sanitized, code, eof, profile),
+            'executable_parent': digest((root/'export/profile-executable.json').read_bytes()),
+            'eof': eof, 'diagnostic': sanitized, 'raw_stderr_retained': False,
             'root_cause': 'NOT_ESTABLISHED', 'fixture_launches': 0, 'worker_launches': 0,
             'authority': d['package']['authority'], 'environment_parent': digest(canonical(environment)),
             'descriptor_parent': pins['descriptor_sha256'], 'source_commit': environment['source_commit']}
@@ -850,7 +956,6 @@ def profile_probe(root):
         results.append(result)
         require(code is not None and eof, 'PROFILE_PROBE_TIMEOUT')
         require(sanitized['status'] in ('SANITIZED', 'PARTIALLY_SANITIZED'), 'PROFILE_PROBE_SANITIZATION')
-        if index == 0 and code == 0: break
     document(root/'export/profile-probe-summary.json', {'scope': 'SYNTHETIC_PROFILE_DIAGNOSTIC_ONLY',
         'count': len(results), 'maximum': PROBE_LIMIT, 'results': [digest(canonical(r)) for r in results],
         'fixture_series': 'CLOSED_RED_THREE_ATTEMPTS_CONSUMED', 'new_fixture_attempt': False,

@@ -1742,7 +1742,8 @@ class ProfileProbeTests(unittest.TestCase):
         env = {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/heads/feature/iios-provider-gateway-superbatch-1',
                'GITHUB_SHA': commit}
         with patch.dict(os.environ, env), patch.object(ci, 'hosted'), patch.object(ci, 'root_check'), \
-             patch.object(ci, 'command', side_effect=[commit.encode(), b'']), patch.object(ci, 'verify_bindings'), \
+             patch.object(ci, 'command', side_effect=[commit.encode(), b'', b'/usr/bin/true:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n']), \
+             patch.object(ci, 'fixed_probe_executable', return_value={'sha256': 'd'*64}), patch.object(ci, 'verify_bindings'), \
              patch('alpha_radar_runner.read_descriptor', return_value=d), patch('alpha_radar_runner.descriptor_schema'), \
              patch('alpha_radar_admission.verify_inputs'), patch('alpha_radar_runner.verify_tools'), \
              patch.object(ci.sys, 'executable', str(interpreter)), patch.object(ci.sys, 'addaudithook') as boundary, \
@@ -1752,12 +1753,12 @@ class ProfileProbeTests(unittest.TestCase):
             except ValueError as exc: error = exc.args[0]
             fixture.assert_not_called(); boundary.assert_called_once()
             for call in child.call_args_list:
-                self.assertEqual(tuple(call.args[0][-5:]), ci.PROBE_TAIL)
+                self.assertEqual(tuple(call.args[0][3:]), ('/usr/bin/true',))
             return root, child.call_count, error
 
-    def test_successful_exact_profile_stops_after_one_minimal_command(self):
-        root, count, error = self.mocked_matrix([(b'', False, 0, True)])
-        self.assertIsNone(error); self.assertEqual(count, 1)
+    def test_successful_core_still_runs_complete_independent_grammar_matrix(self):
+        root, count, error = self.mocked_matrix([(b'', False, 0, True)]*10)
+        self.assertIsNone(error); self.assertEqual(count, 10)
         value = json.loads((root/'export/profile-probe-summary.json').read_text())
         self.assertFalse(value['new_fixture_attempt']); self.assertEqual(value['authority'], AUTHORITY)
         self.assertFalse((root/'execution-output').exists())
@@ -1849,3 +1850,129 @@ class ProfileProbeLineFramingTests(unittest.TestCase):
         self.assertEqual(value['diagnostic']['status'], 'PARTIALLY_SANITIZED')
         self.assertEqual(value['diagnostic']['rejected_lines'], [{'line': 2, 'reason': 'CONTROL'}])
         self.assertEqual(value['root_cause'], 'NOT_ESTABLISHED')
+
+
+class SeatbeltGrammarTests(unittest.TestCase):
+    def matrix(self):
+        from alpha_radar_ci import grammar_matrix
+        from alpha_radar_runner import confinement_profile
+        return grammar_matrix(confinement_profile(Path('/synthetic/runtime'), Path('/synthetic/output'),
+            Path('/synthetic/runtime/python'), 38493))
+
+    def test_ten_independent_profiles_and_no_broad_network_grant(self):
+        rows = self.matrix()
+        self.assertEqual([n for n, _ in rows], ['MINIMAL', 'BARE_OUTBOUND', 'TCP_OUTBOUND',
+            'BARE_INBOUND', 'TCP_INBOUND', 'BARE_BIND', 'TCP_BIND', 'TCP_COMBINED',
+            'IP_NEGATIVE_CONTROL', 'EXEC_DENIED_CONTROL'])
+        for name, text in rows:
+            self.assertIn('(deny default)', text)
+            self.assertNotIn('file-write', text)
+            self.assertNotIn('python', text)
+            for line in text.splitlines():
+                if line.startswith('(allow network-'):
+                    self.assertIn('"127.0.0.1:38493"', line)
+                    self.assertIn(' tcp ' if name != 'IP_NEGATIVE_CONTROL' else ' ip ', line)
+            self.assertEqual(text.count('(allow process-exec'), 0 if name == 'EXEC_DENIED_CONTROL' else 1)
+        for index, op in ((1, 'outbound'), (3, 'inbound'), (5, 'bind')):
+            self.assertIn('(deny network-'+op+')', rows[index][1])
+            self.assertNotIn('(allow network-', rows[index][1])
+        self.assertEqual(rows[7][1].count('(allow network-'), 3)
+        self.assertEqual(rows[8][1].count(' ip '), 3)
+
+    def test_negative_control_cannot_substitute_public_address(self):
+        from alpha_radar_ci import grammar_matrix
+        from alpha_radar_runner import confinement_profile
+        exact = confinement_profile(Path('/synthetic/runtime'), Path('/synthetic/output'),
+                                    Path('/synthetic/runtime/python'), 38493)
+        for value in (exact.replace('127.0.0.1', '0.0.0.0'), exact.replace('38493', '443'),
+                      exact.replace(' ip ', ' tcp ')):
+            with self.assertRaisesRegex(ValueError, 'PROFILE_PROBE_PROFILE'): grammar_matrix(value)
+
+    def classified(self, text='', code=65, eof=True, status='SANITIZED'):
+        from alpha_radar_ci import classify_probe
+        return classify_probe({'status': status, 'diagnostic': text}, code, eof, self.matrix()[2][1])
+
+    def test_zero_exit_of_pinned_noop_proves_execution_and_compile(self):
+        value = self.classified(code=0)
+        self.assertEqual(value['profile_compilation'], 'PROFILE_COMPILE_ACCEPTED')
+        self.assertEqual(value['command'], 'COMMAND_EXECUTED')
+
+    def test_exact_execution_denial_is_not_syntax_failure(self):
+        value = self.classified("sandbox-exec: execvp() of '<DIAGNOSTIC_EXECUTABLE>' failed: Operation not permitted\n", 71)
+        self.assertEqual(value['profile_compilation'], 'PROFILE_COMPILE_ACCEPTED')
+        self.assertEqual(value['command'], 'COMMAND_DENIED')
+
+    def test_numeric_exits_empty_stderr_and_timeout_preserve_unknown(self):
+        for code, eof in ((65, True), (71, True), (1, True), (None, False), (0, False), (True, True)):
+            value = self.classified(code=code, eof=eof)
+            self.assertEqual(value['profile_compilation'], 'UNKNOWN')
+            self.assertEqual(value['command'], 'UNKNOWN')
+
+    def test_sigabrt_never_proves_compilation_or_command_bootstrap_stage(self):
+        for text in ('', '<PROFILE>:5:26:', 'profile compilation failed'):
+            value = self.classified(text, -6)
+            self.assertEqual(value['profile_compilation'], 'UNKNOWN')
+            self.assertEqual(value['command'], 'COMMAND_ABORTED')
+            self.assertEqual(value['basis'], 'SIGNAL_OBSERVED_STAGE_UNKNOWN')
+
+    def test_location_without_semantic_evidence_remains_unknown(self):
+        value = self.classified('<PROFILE>:5:26:')
+        self.assertEqual(value['source_locations'], [{'line': 5, 'column': 26}])
+        self.assertEqual(value['profile_compilation'], 'UNKNOWN')
+
+    def test_location_bounds_and_no_private_path_retention(self):
+        for text in ('<PROFILE>:0:1:', '<PROFILE>:99999:1:', '<PROFILE>:5:99999:',
+                     '<PROFILE>:5:-1:', '/unreviewed/location:5:1:'):
+            value = self.classified(text)
+            self.assertEqual(value['source_locations'], [])
+            self.assertNotIn('/unreviewed', json.dumps(value))
+
+    def test_complete_consistent_compile_diagnostic_only(self):
+        text = '<PROFILE>:5:26:\nerror: unbound variable: remote'
+        value = self.classified(text)
+        self.assertEqual(value['profile_compilation'], 'PROFILE_COMPILE_REJECTED')
+        self.assertEqual(value['command'], 'UNKNOWN')
+        for changed, code, status in ((text, 0, 'SANITIZED'), (text, 71, 'SANITIZED'),
+                (text, 65, 'PARTIALLY_SANITIZED'), ('prefix '+text, 65, 'SANITIZED'),
+                (text+'\nsandbox-exec: execvp', 65, 'SANITIZED')):
+            value = self.classified(changed, code, status=status)
+            self.assertEqual(value['profile_compilation'], 'UNKNOWN')
+            self.assertEqual(value['command'], 'UNKNOWN')
+
+    def test_sensitive_malformed_and_oversize_output_never_classified(self):
+        from alpha_radar_ci import sanitize_probe_lines, classify_probe
+        for raw in (b'api_key=SYNTHETIC', b'x'*4097, b'\x00', b'\xff', b'/unknown/path:5:1:'):
+            value = sanitize_probe_lines(raw, {})
+            self.assertEqual(value['status'], 'REJECTED')
+            result = classify_probe(value, 0, True, self.matrix()[0][1])
+            self.assertEqual(result['profile_compilation'], 'UNKNOWN')
+            self.assertEqual(result['command'], 'UNKNOWN')
+
+    def test_fixed_executable_identity_rejects_writes_aliases_and_replacement(self):
+        import alpha_radar_ci as ci
+        from types import SimpleNamespace
+        def identity(**kwargs):
+            return SimpleNamespace(**dict({'st_mode': 0o100555, 'st_uid': 0, 'st_nlink': 1,
+                'st_dev': 1, 'st_ino': 2, 'st_size': 4, 'st_mtime_ns': 5}, **kwargs))
+        path = Path(ci.PROBE_EXECUTABLE)
+        with patch.object(Path, 'resolve', return_value=path), patch.object(Path, 'read_bytes', return_value=b'noop'), \
+             patch.object(ci.os, 'statvfs', return_value=SimpleNamespace(f_flag=ci.os.ST_RDONLY)):
+            with patch.object(Path, 'lstat', return_value=identity()):
+                self.assertEqual(ci.fixed_probe_executable()['sha256'], ci.digest(b'noop'))
+            for bad in (identity(st_mode=0o100775), identity(st_uid=501), identity(st_nlink=2),
+                        identity(st_mode=0o120555)):
+                with patch.object(Path, 'lstat', return_value=bad):
+                    with self.assertRaisesRegex(ValueError, 'STATIC_IDENTITY'): ci.fixed_probe_executable()
+            with patch.object(Path, 'lstat', side_effect=[identity(), identity(st_ino=3)]):
+                with self.assertRaisesRegex(ValueError, 'STATIC_IDENTITY'): ci.fixed_probe_executable()
+
+    def test_fixed_executable_requires_readonly_system_volume(self):
+        import alpha_radar_ci as ci
+        from types import SimpleNamespace
+        st = SimpleNamespace(st_mode=0o100755, st_uid=0, st_nlink=1)
+        with patch.object(Path, 'resolve', return_value=Path(ci.PROBE_EXECUTABLE)), \
+             patch.object(Path, 'lstat', return_value=st), \
+             patch.object(ci.os, 'statvfs', return_value=SimpleNamespace(f_flag=0)), \
+             patch.object(Path, 'read_bytes') as read:
+            with self.assertRaisesRegex(ValueError, 'STATIC_IDENTITY'): ci.fixed_probe_executable()
+            read.assert_not_called()

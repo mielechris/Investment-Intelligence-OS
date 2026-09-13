@@ -79,6 +79,8 @@ jobs:
         run: |
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py execute --native-startup \
             --root "$IIOS_RADAR_CI_ROOT"
+      # Fresh ten-probe grammar matrix; fixed /usr/bin/true, no Python child.
+      # Bare network operations are deny-only grammar controls.
       - name: Separate bounded profile diagnostics; no fixture or worker
         if: github.event_name == 'push'
         shell: bash
