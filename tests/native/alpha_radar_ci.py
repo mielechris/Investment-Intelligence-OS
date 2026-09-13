@@ -588,6 +588,86 @@ def execute(root, *, native_startup=False):
             not (out/'journal').exists(),'WORKER_EVIDENCE_FORBIDDEN')
 
 
+def lifecycle_execution_allowed(event_name, event, explicit_request):
+    if event_name != 'workflow_dispatch' or explicit_request is not True or type(event) is not dict:
+        return False
+    values = event.get('inputs')
+    return (type(values) is dict and values.get('lifecycle_only') in (True, 'true') and
+            type(values.get('lifecycle_only')) in (bool, str) and
+            type(values.get('native_startup', 'false')) in (bool, str) and
+            values.get('native_startup', 'false') in (False, 'false'))
+
+
+def execute_lifecycle(root, *, explicit_request=False):
+    require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and explicit_request is True,
+            'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    event_path = Path(os.environ['GITHUB_EVENT_PATH'])
+    require(event_path.is_file() and not event_path.is_symlink() and event_path.stat().st_size <= 1_000_000,
+            'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, 'NATIVE_EXECUTION_NOT_AUTHORIZED'); value[key] = item
+        return value
+    event = json.loads(event_path.read_bytes(), object_pairs_hook=unique)
+    require(lifecycle_execution_allowed(os.environ['GITHUB_EVENT_NAME'], event, explicit_request),
+            'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    require_execution_source(os.environ.get('IIOS_EXPECTED_SOURCE_COMMIT'), os.environ.get('GITHUB_SHA'),
+                             os.environ.get('GITHUB_REF'))
+    hosted(); root_check(root)
+    runtime = root/'runtime'; out = root/'execution-output'
+    sys.path[:0] = [str(runtime/'source')]
+    from alpha_radar_runner import (read_descriptor, descriptor_schema, startup_only, lifecycle_descriptor,
+        lifecycle_environment, LIFECYCLE_CONTEXT, LIFECYCLE_FLAGS, LIFECYCLE_SCOPE, StderrCapture,
+        verify_lifecycle_receipt)
+    from provider_gateway_contract import content_hash
+    pins = json.loads((root/'export/prepared-pins.json').read_bytes())
+    old = read_descriptor(root/'descriptor.json', pins['descriptor_sha256'])
+    descriptor_schema(old); require(startup_only(old), 'STARTUP_ONLY_REQUIRED')
+    require(not out.exists() and not (root/'lifecycle-attempt.json').exists() and
+            not (root/'native-attempt.json').exists(), 'ATTEMPT_ALREADY_EXISTS')
+    result = json.loads((root/'export/offline-results.json').read_bytes())
+    require(result['success'] and not result['skipped'] and result['executed'] == result['collected'], 'OFFLINE_REQUIRED')
+    verify_bindings(result['source_bindings'])
+    d = {k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools','maximum_duration_seconds')}
+    d.update(schema='iios-ci-native-lifecycle-v1', execution_mode=LIFECYCLE_SCOPE,
+             context={k:os.environ[k] for k in LIFECYCLE_CONTEXT})
+    parents = lifecycle_descriptor(d)
+    document(root/'lifecycle-descriptor.json', d)
+    document(root/'export/lifecycle-pins.json', {**LIFECYCLE_FLAGS, 'descriptor': d,
+        'descriptor_sha256': content_hash(d), 'parents': parents,
+        'preparation_descriptor_parent': pins['descriptor_sha256']})
+    argv = [str(runtime/'python/bin/python3.13'), '-B', str(runtime/'source/alpha_radar_runner.py'),
+            '--ci-lifecycle-only', '--descriptor', str(root/'lifecycle-descriptor.json'),
+            '--expected-descriptor', content_hash(d)]
+    child_env = lifecycle_environment(d['context'])  # Construct only from fixed nonsensitive fields.
+    document(root/'lifecycle-attempt.json', {**LIFECYCLE_FLAGS, 'descriptor_parent': content_hash(d), 'attempt': 1})
+    def boundary(name, args):
+        if name == 'subprocess.Popen':
+            require(args[0] == argv[0] and list(args[1]) == argv and Path(args[2]) == root and
+                    args[3] == child_env, 'PREPARATION_SPAWN_REJECTED')
+        else: preparation_audit(name, args)
+    sys.addaudithook(boundary)
+    child = subprocess.Popen(argv, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE, close_fds=True, env=child_env)
+    capture = StderrCapture(child.stderr); started = time.monotonic()
+    while child.poll() is None and time.monotonic()-started < 180:
+        capture.drain(); time.sleep(.05)
+    capture.drain()
+    if child.poll() is not None: capture.finish()
+    document(root/'export/lifecycle-supervisor.json', {**LIFECYCLE_FLAGS,
+        'descriptor_parent': content_hash(d), 'supervisor_pid': child.pid, 'returncode': child.returncode,
+        'supervisor_exited': child.returncode is not None, 'diagnostics': capture.snapshot()})
+    require(child.returncode == 0 and not capture.overflow, 'SUPERVISOR_FAILED')
+    doc = json.loads((out/'lc-final.json').read_bytes())
+    value = verify_lifecycle_receipt(doc, content_hash(doc), parents)
+    require(value['classification'] == 'LIFECYCLE_PASS' and value['cleanup']['clean'] is True and
+            value['fixture_status']['exit_code'] == 0 and value['tls']['hostname_verified'] is True
+            and value['tls']['http_requests'] == 0 and value['startup_parent'] is not None,
+            'SUPERVISOR_FAILED')
+    require(not any((out/n).exists() for n in ('worker-launch.json','session.json','journal')), 'WORKER_EVIDENCE_FORBIDDEN')
+
+
 def export(root):
     """Only structured synthetic records and positively sanitized diagnostics."""
     root_check(root); destination=root/'export'
@@ -596,6 +676,18 @@ def export(root):
         for path in sorted(out.glob('*.json')):
             require(not path.is_symlink() and path.stat().st_size<=8_000_000,'EVIDENCE_FILE')
             value=json.loads(path.read_bytes())
+            if value.get('scope') == 'CI_NATIVE_LIFECYCLE_ONLY':
+                from alpha_radar_runner import LIFECYCLE_FLAGS, verify_lifecycle_receipt
+                from provider_gateway_contract import content_hash
+                require(all(type(value.get(k)) is type(v) and value[k] == v for k,v in LIFECYCLE_FLAGS.items()), 'EVIDENCE_SCOPE')
+                require(re.fullmatch(r'lc-(launch|startup|ack|stop|final|child-exit|child-failure|event-[0-9]{4}|child-[0-9]{4})\.json', path.name), 'EVIDENCE_NAME')
+                pins = json.loads((destination/'lifecycle-pins.json').read_bytes())
+                if path.name != 'lc-launch.json':
+                    verify_lifecycle_receipt(value, content_hash(value), pins['parents'])
+                else:
+                    require(value['descriptor'] == pins['descriptor'], 'EVIDENCE_SCOPE')
+                document(destination/path.name, value)
+                continue
             require(value.get('scope')=='SYNTHETIC_TEST_ONLY','EVIDENCE_SCOPE')
             # Receipt producers have positive schemas; no arbitrary child files or TLS keys.
             allowed=(re.fullmatch(r'(fixture-launch|fixture-startup|fixture-ack|native-failure|final-audit|'
@@ -965,15 +1057,20 @@ def profile_probe(root):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe'))
+    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
     parser.add_argument('--native-startup', action='store_true', default=False)
+    parser.add_argument('--lifecycle-only', action='store_true', default=False)
     args=parser.parse_args();root=Path(args.root)
     try:
-        if args.phase not in ('execute', 'profile-probe'):
+        if args.phase not in ('execute', 'profile-probe', 'lifecycle'):
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             sys.addaudithook(preparation_audit)
-        if args.phase == 'profile-probe':
+        require(not args.lifecycle_only or args.phase == 'lifecycle', 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        if args.phase == 'lifecycle':
+            require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+            execute_lifecycle(root, explicit_request=args.lifecycle_only)
+        elif args.phase == 'profile-probe':
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             profile_probe(root)
         elif args.phase == 'execute': execute(root, native_startup=args.native_startup)
@@ -986,9 +1083,14 @@ def main():
                      FileNotFoundError,TimeoutError,subprocess.TimeoutExpired) else 'UNCLASSIFIED_ERROR'
         code=error.args[0] if error.args and type(error.args[0]) is str and error.args[0] in FAILURES else 'UNCLASSIFIED_ERROR'
         root_check(root)
-        document(root/'export'/(args.phase+'-failure.json'),
-                 {'scope':'SYNTHETIC_TEST_ONLY','phase':args.phase,'category':category,'code':code,
-                  'production':'NOT_QUALIFIED','raw_error_retained':False})
+        failure = {'scope':'SYNTHETIC_TEST_ONLY','phase':args.phase,'category':category,'code':code,
+                   'production':'NOT_QUALIFIED','raw_error_retained':False}
+        if args.phase == 'lifecycle':
+            failure.update(scope='CI_NATIVE_LIFECYCLE_ONLY', production_qualified=False,
+                os_confinement='UNQUALIFIED', provider_access=False, credential_access=False,
+                worker_launches=0, requests_attempted=0, broker_connected=False,
+                paper_order_permission=False, trade_execution_permission=False, live_execution=False)
+        document(root/'export'/(args.phase+'-failure.json'), failure)
         print('SYNTHETIC_CI_PHASE_FAILED: '+args.phase)
         return 1
 

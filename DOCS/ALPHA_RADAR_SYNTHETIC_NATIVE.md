@@ -1,7 +1,7 @@
 # Alpha Radar synthetic native adapter
 
-This is a test-only execution path. Every accepted adapter input and retained
-receipt is SYNTHETIC_TEST_ONLY. Synthetic success cannot qualify a provider,
+This is a test-only execution path. Every accepted confinement-adapter input and retained
+receipt is SYNTHETIC_TEST_ONLY. The separate lifecycle-only mode below has its own non-promotable receipt scope. Synthetic success cannot qualify a provider,
 account, live runtime, Factory/Northstar integration or production installation.
 Both production guards CLI_LIVE_ONLY and RADAR_NATIVE_ADAPTER_PENDING remain.
 
@@ -84,3 +84,49 @@ verification fails; that persistence path cannot grant a dispatch capability.
 Synthetic journal verification caches only immutable canonical document bytes.
 Every disk read still checks the actual file identity and expected hash; changed
 bytes cannot reuse a cached verification result.
+
+
+## CI_NATIVE_LIFECYCLE_ONLY — separate, manual, non-production
+
+The three-attempt sandboxed fixture series is CLOSED RED. OS confinement remains
+UNQUALIFIED. Push runs perform preparation and offline tests only; the exhausted
+Seatbelt compiler matrix is no longer run on push. Existing confinement code and
+policy remain intact and are not invoked by this separate lifecycle path.
+
+The manual `lifecycle_only` input defaults false. It requires workflow_dispatch,
+explicit true, native_startup false, an independently supplied exact source SHA,
+a fresh GitHub-hosted macOS ARM64 runner and run_attempt 1. Missing, conflicting,
+malformed or moving source inputs fail closed. There is no automatic retry.
+
+Fresh immutable synthetic inputs remain under their original synthetic input
+scope. Lifecycle output receipts are created as CI_NATIVE_LIFECYCLE_ONLY with
+production_qualified=false, os_confinement=UNQUALIFIED, provider_access=false,
+credential_access=false, worker_launches=0, requests_attempted=0 and all four
+trading authorities false. They use a separate schema and descriptor parent.
+Legacy synthetic, live and production admission cannot consume these receipts.
+Rehashing or relabeling old evidence never creates independent acceptance.
+
+Only the pinned fixture is started, without sandbox-exec. The parent passes a
+positive nonsensitive environment; no repository token, provider selector, proxy
+or credential field is forwarded. The fixture requires this exact environment.
+An application audit guard rejects DNS, non-pinned addresses, external sockets,
+child subprocesses, signals and unauthorized writes. This is application defense
+in depth, not an OS sandbox or a claim of hostile-code isolation. The supervisor
+admits only its exact one fixture launch and bounded ps/lsof observations.
+
+PID, PPID, start time, exact argv/cwd, executable bytes, immutable runtime/fixture
+and independently computed startup/acknowledgment parents must agree. A pinned
+numeric-loopback TLS handshake sends no HTTP request. No worker, market schedule,
+provider transport, broker, ledger, installation or arming path is invoked.
+
+Shutdown is cooperative through an exclusive hash-bound stop receipt. There is
+no signal fallback in this mode: if cooperative shutdown fails, cleanup stays
+failed. Verified zero exit, child-exit receipt, prior listener ownership and three
+stable port-clear observations are required together. Early child exit or missing
+ownership never becomes successful cleanup merely because a port is clear.
+Primary failure and cleanup failure are retained separately with bounded sanitized
+child hints. A passing lifecycle is not SYNTHETIC_NATIVE_QUALIFIED, confinement
+qualification, Monday readiness, or production acceptance.
+
+A later full 475-request synthetic loopback session requires a new explicit
+review and authorization. Lifecycle-only selection cannot launch its worker.

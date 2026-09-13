@@ -1086,16 +1086,357 @@ def read_descriptor(path, expected):
         os.close(fd)
 
 
+# Explicitly separate from every confinement-qualified descriptor and receipt.
+LIFECYCLE_SCOPE = 'CI_NATIVE_LIFECYCLE_ONLY'
+LIFECYCLE_FLAGS = {'scope': LIFECYCLE_SCOPE, 'production_qualified': False,
+    'os_confinement': 'UNQUALIFIED', 'provider_access': False, 'credential_access': False,
+    'worker_launches': 0, 'requests_attempted': 0, **AUTHORITY}
+LIFECYCLE_ENV = {'PATH': '/usr/bin:/bin:/usr/sbin', 'LC_ALL': 'C', 'TZ': 'UTC'}
+LIFECYCLE_CONTEXT = {'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'RUNNER_OS', 'RUNNER_ARCH',
+                     'GITHUB_RUN_ATTEMPT', 'GITHUB_RUN_ID', 'GITHUB_SHA', 'GITHUB_REF'}
+
+
+def lifecycle_environment(context):
+    require(type(context) is dict and set(context) == LIFECYCLE_CONTEXT and
+            all(type(v) is str for v in context.values()), 'LIFECYCLE_ENVIRONMENT')
+    require(context['GITHUB_ACTIONS'] == 'true' and context['RUNNER_ENVIRONMENT'] == 'github-hosted'
+            and context['RUNNER_OS'] == 'macOS' and context['RUNNER_ARCH'] == 'ARM64'
+            and context['GITHUB_RUN_ATTEMPT'] == '1' and re.fullmatch(r'[1-9][0-9]{0,19}', context['GITHUB_RUN_ID'])
+            and re.fullmatch('[a-f0-9]{40}', context['GITHUB_SHA'])
+            and context['GITHUB_REF'] == 'refs/heads/feature/iios-provider-gateway-superbatch-1',
+            'LIFECYCLE_HOSTED_ONLY')
+    return {**LIFECYCLE_ENV, **context}
+
+
+def lifecycle_descriptor(d):
+    require(type(d) is dict and set(d) == {'schema', 'execution_mode', 'package', 'runtime',
+        'expected', 'authorized_root', 'native_tools', 'maximum_duration_seconds', 'context'}, 'LIFECYCLE_DESCRIPTOR')
+    require(d['schema'] == 'iios-ci-native-lifecycle-v1' and d['execution_mode'] == LIFECYCLE_SCOPE
+            and type(d['maximum_duration_seconds']) is int and 1 <= d['maximum_duration_seconds'] <= 120,
+            'LIFECYCLE_DESCRIPTOR')
+    lifecycle_environment(d['context'])
+    require(d['package']['source_commit'] == d['context']['GITHUB_SHA'], 'LIFECYCLE_SOURCE')
+    verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
+    verify_tools(d['native_tools'])  # hash only; sandbox-exec is never launched here
+    return {**d['expected'], 'lifecycle_descriptor': content_hash(d)}
+
+
+def lifecycle_envelope(value, parents):
+    from alpha_radar_admission import synthetic_document
+    synthetic_document(value)
+    doc = {'schema': 'iios-ci-native-lifecycle-receipt-v1', **LIFECYCLE_FLAGS,
+           'parents': parents, 'value': value}
+    return {**doc, 'content_hash': content_hash(doc)}
+
+
+def verify_lifecycle_receipt(doc, expected, parents):
+    require(content_hash(doc) == expected and type(doc) is dict and set(doc) ==
+            {'schema', 'parents', 'value', 'content_hash', *LIFECYCLE_FLAGS}, 'LIFECYCLE_RECEIPT')
+    require(all(type(doc[k]) is type(v) and doc[k] == v for k, v in LIFECYCLE_FLAGS.items())
+            and doc['parents'] == parents and doc['schema'] == 'iios-ci-native-lifecycle-receipt-v1',
+            'LIFECYCLE_RECEIPT')
+    require(doc == lifecycle_envelope(doc['value'], parents), 'LIFECYCLE_RECEIPT')
+    return doc['value']
+
+
+def lifecycle_store(cap, parents, name, value):
+    require(type(cap) is SyntheticCapability, 'SYNTHETIC_CAPABILITY_REQUIRED')
+    p, _, _ = cap.documents()
+    fd = safe_root(p['root'])
+    try:
+        st = os.fstat(fd)
+        require((st.st_dev, st.st_ino) == cap.output_identity, 'OUTPUT_REPLACED')
+        verify_destination(fd, p['root'])
+        return publish(fd, name, lifecycle_envelope(value, parents))
+    finally:
+        os.close(fd)
+
+
+def lifecycle_read(cap, parents, name, expected_value):
+    expected = lifecycle_envelope(expected_value, parents)
+    fd = safe_root(cap.documents()[0]['root'])
+    try:
+        doc = read_record(fd, name, expected_hash=content_hash(expected))
+    finally:
+        os.close(fd)
+    verify_lifecycle_receipt(doc, content_hash(expected), parents)
+    return content_hash(expected)
+
+
+def lifecycle_startup_value(cap, launch_parent, identity):
+    p, _, pins = cap.documents()
+    return {'event': 'STARTUP', 'launch_parent': launch_parent, 'pid': identity['pid'],
+        'parent_pid': identity['parent_pid'], 'argv': list(identity['argv']), 'cwd': identity['cwd'],
+        'runtime_parent': pins['runtime'], 'fixture_parent': pins['fixture'],
+        'package_parent': pins['package'], 'port': p['fixture']['port']}
+
+
+class LifecycleOwnedProcesses(OwnedProcesses):
+    def __init__(self, cap, parents, **kwargs):
+        super().__init__(cap, **kwargs)
+        self.lifecycle_parents = parents
+
+    def evidence(self, value):
+        self.counter += 1
+        lifecycle_store(self.cap, self.lifecycle_parents, f'lc-event-{self.counter:04d}.json',
+                        {**value, 'recorded_at': datetime.now(timezone.utc).isoformat()})
+
+    def verify(self, role, *, require_startup=True):
+        require(role == 'fixture', 'LIFECYCLE_WORKER_FORBIDDEN')
+        entry = self.children[role]
+        self.pump(entry)
+        require(entry['observation'] is not None and self.observe(entry) == entry['observation'], 'PROCESS_IDENTITY')
+        require(not require_startup or role in self.startup_pins, 'STARTUP_RECEIPT_REQUIRED')
+        if role in self.startup_pins:
+            launch, expected = self.startup_pins[role]
+            require(lifecycle_read(self.cap, self.lifecycle_parents, 'lc-startup.json',
+                lifecycle_startup_value(self.cap, launch, entry['observation'])) == expected, 'STARTUP_RECEIPT_CHANGED')
+        return entry['child']
+
+    def cleanup(self, port_clear):
+        exits = []
+        # No signals in lifecycle-only mode. A failed cooperative stop remains
+        # failed; there is no unverified termination fallback.
+        for role, entry in list(self.children.items()):
+            child = entry['child']
+            try:
+                self.pump(entry)
+                if child.poll() is None:
+                    self.verify(role)
+                    lifecycle_store(self.cap, self.lifecycle_parents, 'lc-stop.json',
+                        {'event': 'STOP', 'launch_parent': entry['launch_parent']})
+                    child.wait(timeout=10)
+                require(child.poll() == 0 and entry['observation'] is not None, 'COOPERATIVE_SHUTDOWN')
+                lifecycle_read(self.cap, self.lifecycle_parents, 'lc-child-exit.json', {'returncode': 0})
+                exits.append({'pid': child.pid, 'returncode': child.poll(), 'ownership_verified': True})
+                del self.children[role]
+            except Exception as error:
+                self.failures.append({'role': role, 'category': failure_category(error)})
+            finally:
+                self.pump(entry)
+                capture = entry.get('capture')
+                if capture and child.poll() is not None:
+                    capture.drain()
+                    if capture.overflow: self.diagnostic_failures.append('DIAGNOSTIC_OVERFLOW')
+                    if capture.stream is not None:
+                        if not capture.eof: self.diagnostic_failures.append('DIAGNOSTIC_INCOMPLETE')
+                        capture.pending.clear(); capture.stream.close()
+                    else: capture.finish()
+                self.safe_evidence({'event': 'FINAL_CHILD_STATUS', 'status': child_status(child),
+                                    'diagnostics': capture.snapshot() if capture else None})
+        clear = []
+        for _ in range(3):
+            try: clear.append(port_clear() is True)
+            except Exception: clear.append(False)
+            self.pause(.2)
+        return {'scope': LIFECYCLE_SCOPE, 'exits': exits, 'remaining': sorted(self.children),
+            'failures': self.failures, 'diagnostic_failures': self.diagnostic_failures,
+            'port_clear_observations': clear, 'signals': 0,
+            'clean': bool(exits) and not self.children and not self.failures and
+                     not self.diagnostic_failures and clear == [True, True, True]}
+
+
+def lifecycle_audit(runtime, output, endpoint, role, *, launch_argv=None, child_pid=lambda: None, context=None):
+    """Application-only guard, never evidence of OS confinement.
+
+    Child has no subprocess or signal allowance. Supervisor inspection uses
+    existing verified ownership logic; all lifecycle processes reject DNS and
+    public sockets. Descriptor-relative writes are resolved by the companion
+    checked-open wrapper, never by granting arbitrary relative names.
+    """
+    require(role in ('fixture', 'supervisor') and endpoint[0] == '127.0.0.1'
+            and type(endpoint[1]) is int and 1024 <= endpoint[1] <= 65535, 'LOOPBACK_PIN_REQUIRED')
+    root, out = Path(runtime).resolve(), Path(output).resolve()
+    active = []; directories = {}; original = os.open; launched = [False]
+    def checked_open(path, flags, mode=0o777, *, dir_fd=None):
+        resolved = None
+        if dir_fd is None:
+            resolved = Path(path).resolve()
+        else:
+            require(dir_fd in directories, 'LIFECYCLE_DIRECTORY')
+            parent, identity = directories[dir_fd]
+            st = os.fstat(dir_fd)
+            require((st.st_dev, st.st_ino) == identity, 'LIFECYCLE_DIRECTORY')
+            resolved = (parent / path).resolve()
+        active.append(resolved)
+        try: fd = original(path, flags, mode, dir_fd=dir_fd)
+        finally: active.pop()
+        import stat
+        st = os.fstat(fd)
+        if stat.S_ISDIR(st.st_mode): directories[fd] = (resolved, (st.st_dev, st.st_ino))
+        return fd
+    def audit(event, args):
+        if event.startswith('socket.get') or event in ('socket.sethostname', 'os.system', 'os.posix_spawn',
+                'os.kill', 'os.killpg', 'os.remove', 'os.rename', 'os.rmdir', 'os.link', 'os.symlink'):
+            raise PermissionError('LIFECYCLE_BOUNDARY')
+        if event == 'subprocess.Popen':
+            require(role == 'supervisor' and len(args) == 4, 'LIFECYCLE_BOUNDARY')
+            executable, argv, cwd, env = args
+            argv = tuple(argv)
+            if launch_argv is not None and argv == tuple(launch_argv):
+                require(not launched[0] and executable == launch_argv[0] and str(cwd) == str(out)
+                        and env == lifecycle_environment(context), 'LIFECYCLE_BOUNDARY')
+                launched[0] = True
+            else:
+                pid = child_pid()
+                commands = [('/usr/sbin/lsof', '-nP', '-iTCP:'+str(endpoint[1]), '-sTCP:LISTEN', '-Fpn')]
+                if type(pid) is int and pid > 0:
+                    commands += [('/bin/ps', '-ww', '-p', str(pid), '-o', field)
+                                 for field in ('lstart=', 'ppid=', 'comm=')]
+                    commands += [('/usr/sbin/lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn')]
+                require(argv in commands and executable == argv[0] and cwd is None and
+                        env in (LIFECYCLE_ENV, {k:v for k,v in LIFECYCLE_ENV.items() if k != 'TZ'}),
+                        'LIFECYCLE_BOUNDARY')
+        if event == 'ctypes.dlopen':
+            require(role == 'supervisor' and args == ('/usr/lib/libSystem.B.dylib',), 'LIFECYCLE_BOUNDARY')
+        if event == 'socket.__new__':
+            require(args[1] == socket.AF_INET and args[2] == socket.SOCK_STREAM and args[3] in (0, 6), 'LIFECYCLE_BOUNDARY')
+        if event in ('socket.connect', 'socket.bind'):
+            require(tuple(args[1]) == tuple(endpoint) and
+                    ((event == 'socket.bind' and role == 'fixture') or
+                     (event == 'socket.connect' and role == 'supervisor')), 'LIFECYCLE_BOUNDARY')
+        if event == 'open' and not isinstance(args[0], int):
+            path, mode, flags = args
+            target = active[-1] if active else Path(path).resolve()
+            writing = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
+                isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
+            if writing:
+                require(target.parent == out and re.fullmatch(r'lc-[a-z0-9-]+\.json', target.name)
+                        and flags & os.O_EXCL and flags & os.O_NOFOLLOW, 'LIFECYCLE_WRITE')
+            else:
+                require(target.is_relative_to(root) or target.is_relative_to(out) or
+                        str(target) in ('/dev/null', '/bin/ps', '/usr/sbin/lsof', '/usr/bin/sandbox-exec'), 'LIFECYCLE_READ')
+        if event in ('os.mkdir', 'os.chmod', 'os.truncate'):
+            raise PermissionError('LIFECYCLE_WRITE')
+    return audit, checked_open
+
+
+def lifecycle_child(launch, launch_parent):
+    require(set(launch) == {'descriptor', 'output_identity', 'parent_pid', *LIFECYCLE_FLAGS}
+            and all(type(launch[k]) is type(v) and launch[k] == v for k, v in LIFECYCLE_FLAGS.items())
+            and launch['parent_pid'] == os.getppid(), 'LIFECYCLE_LAUNCH')
+    d = launch['descriptor']; parents = lifecycle_descriptor(d)
+    expected_environment = lifecycle_environment(d['context'])
+    require(set(os.environ) == set(expected_environment), 'LIFECYCLE_ENVIRONMENT')
+    require(all(os.environ[k] == v for k,v in expected_environment.items()), 'LIFECYCLE_ENVIRONMENT')
+    identities = verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
+    cap = SyntheticCapability(canonical(d['package']), canonical(d['runtime']), canonical(d['expected']),
+        d['authorized_root'], identities, tuple(launch['output_identity']))
+    native_identity(cap)
+    from alpha_radar_fixture import serve
+    native_identity(cap)
+    p, r, _ = cap.documents()
+    audit, opened = lifecycle_audit(r['root'], p['root'], ('127.0.0.1', p['fixture']['port']), 'fixture')
+    os.open = opened; sys.addaudithook(audit)
+    deadline = time.monotonic() + d['maximum_duration_seconds']
+    sequence = [0]
+    def stage(value):
+        require(value in STAGES, 'CHILD_DIAGNOSTIC_STAGE'); sequence[0] += 1
+        require(sequence[0] <= 64, 'DIAGNOSTIC_OVERFLOW')
+        lifecycle_store(cap, parents, f'lc-child-{sequence[0]:04d}.json', {'stage': value})
+    def stop():
+        if time.monotonic() >= deadline: return True
+        try:
+            lifecycle_read(cap, parents, 'lc-stop.json', {'event': 'STOP', 'launch_parent': launch_parent})
+            return True
+        except FileNotFoundError: return False
+    def ready():
+        value = lifecycle_startup_value(cap, launch_parent, {'pid': os.getpid(), 'parent_pid': os.getppid(),
+            'argv': [sys.executable, '-B', *sys.argv], 'cwd': str(Path.cwd())})
+        startup_parent = lifecycle_store(cap, parents, 'lc-startup.json', value)
+        until = time.monotonic() + 10
+        while time.monotonic() < until:
+            try:
+                lifecycle_read(cap, parents, 'lc-ack.json', {'event': 'ACK', 'launch_parent': launch_parent,
+                                                         'startup_parent': startup_parent})
+                return
+            except FileNotFoundError: time.sleep(.05)
+        raise ValueError('PARENT_ACK_TIMEOUT')
+    try:
+        serve(cap, stop, ready, stage=stage)
+        lifecycle_store(cap, parents, 'lc-child-exit.json', {'returncode': 0})
+        return 0
+    except BaseException as error:
+        lifecycle_store(cap, parents, 'lc-child-failure.json', {'category': failure_category(error)})
+        raise
+
+
+def lifecycle_supervise(cap, d, *, popen=subprocess.Popen):
+    parents = lifecycle_descriptor(d); native_identity(cap)
+    expected_environment = lifecycle_environment(d['context'])
+    require(set(os.environ) == set(expected_environment), 'LIFECYCLE_ENVIRONMENT')
+    require(all(os.environ[k] == v for k,v in expected_environment.items()), 'LIFECYCLE_ENVIRONMENT')
+    p, r, _ = cap.documents(); out = Path(p['root']); runtime = Path(r['root'])
+    require(not listener_owners(p['fixture']['port']), 'PORT_ALREADY_OWNED')
+    owned = LifecycleOwnedProcesses(cap, parents)
+    launch = {**LIFECYCLE_FLAGS, 'descriptor': d, 'output_identity': list(cap.output_identity), 'parent_pid': os.getpid()}
+    fd = safe_root(out)
+    try: launch_parent = publish(fd, 'lc-launch.json', launch)
+    finally: os.close(fd)
+    executable = runtime / r['interpreter']; script = next(runtime/name for name in r['source_files'] if Path(name).name == 'alpha_radar_runner.py')
+    argv = [str(executable), '-B', str(script), '--ci-lifecycle-only', '--child', 'fixture',
+            '--descriptor', str(out/'lc-launch.json'), '--expected-descriptor', launch_parent]
+    child = None; primary = None; cleanup_failure = None; tls = None; startup_parent = None; listener = None
+    stage = 'PROCESS_CREATE'
+    audit, opened = lifecycle_audit(runtime, out, ('127.0.0.1', p['fixture']['port']), 'supervisor',
+        launch_argv=argv, child_pid=lambda: child.pid if child is not None else None, context=d['context'])
+    os.open = opened; sys.addaudithook(audit)
+    try:
+        child = popen(argv, cwd=out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                      stderr=subprocess.PIPE, close_fds=True, env=lifecycle_environment(d['context']))
+        stage = 'OWNERSHIP_REGISTER'
+        owned.register('fixture', child, argv=argv, cwd=out, executable=executable,
+            executable_hash=next(v['sha256'] for v in r['files'] if v['path'] == r['interpreter']),
+            stderr=child.stderr, launch_parent=launch_parent)
+        stage = 'STARTUP_VERIFY'; until = time.monotonic()+10
+        while not (out/'lc-startup.json').exists() and time.monotonic() < until:
+            owned.verify('fixture', require_startup=False); time.sleep(.05)
+        startup_parent = lifecycle_read(cap, parents, 'lc-startup.json',
+            lifecycle_startup_value(cap, launch_parent, owned.children['fixture']['observation']))
+        owned.startup_pins['fixture'] = (launch_parent, startup_parent)
+        stage = 'LISTENER_VERIFY'; listener = listener_owners(p['fixture']['port'])
+        require(listener == [(child.pid, '127.0.0.1:'+str(p['fixture']['port']))], 'LISTENER_OWNER_MISMATCH')
+        lifecycle_store(cap, parents, 'lc-ack.json', {'event': 'ACK', 'launch_parent': launch_parent,
+                                                   'startup_parent': startup_parent})
+        stage = 'TLS_HANDSHAKE'; tls = startup_tls(cap, owned)
+    except BaseException as error:
+        primary = {'stage': stage, 'category': failure_category(error)}
+    try:
+        cleanup = owned.cleanup(lambda: not listener_owners(p['fixture']['port']))
+        if not cleanup['clean']: cleanup_failure = 'LIFECYCLE_CLEANUP_FAILED'
+    except Exception as error:
+        cleanup_failure = failure_category(error); cleanup = {'clean': False}
+    result = {'classification': 'LIFECYCLE_PASS' if primary is None and cleanup_failure is None and cleanup['clean'] else 'LIFECYCLE_FAILED',
+        'primary_failure': primary, 'cleanup_failure': cleanup_failure, 'cleanup': cleanup,
+        'fixture_status': child_status(child) if child else None, 'startup_parent': startup_parent,
+        'tls': tls, 'listener': listener, 'descriptor_parent': content_hash(d)}
+    lifecycle_store(cap, parents, 'lc-final.json', result)
+    return result
+
+
+def lifecycle_main(d, expected, child):
+    if child:
+        require(child == 'fixture', 'LIFECYCLE_WORKER_FORBIDDEN')
+        return lifecycle_child(d, expected)
+    lifecycle_descriptor(d)
+    cap = admit(d['package'], d['runtime'], expected=d['expected'], authorized_root=d['authorized_root'])
+    result = lifecycle_supervise(cap, d)
+    return 0 if result['classification'] == 'LIFECYCLE_PASS' else 1
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--descriptor', required=True)
     parser.add_argument('--expected-descriptor', required=True)
     parser.add_argument('--child', choices=('fixture', 'worker'))
+    parser.add_argument('--ci-lifecycle-only', action='store_true', default=False)
     args = parser.parse_args()
     early_diagnostic('DESCRIPTOR_READ')
     d = read_descriptor(args.descriptor, args.expected_descriptor)
     early_diagnostic('DESCRIPTOR_VERIFIED')
+    if args.ci_lifecycle_only:
+        return lifecycle_main(d, args.expected_descriptor, args.child)
     if args.child:
         return child_main(d, args.child, args.expected_descriptor)
     descriptor_schema(d)

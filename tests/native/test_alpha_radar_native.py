@@ -1700,13 +1700,13 @@ class ProfileProbeTests(unittest.TestCase):
              patch.object(ci, 'profile_probe') as handler, patch.object(ci, 'execute') as fixture:
             self.assertEqual(ci.main(), 0); handler.assert_called_once(); fixture.assert_not_called()
 
-    def test_workflow_probe_is_separate_push_only_after_offline(self):
+    def test_workflow_push_no_longer_dispatches_closed_compiler_series(self):
         text = (Path(__file__).resolve().parents[2]/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
-        step = text.split('- name: Separate bounded profile diagnostics; no fixture or worker')[1].split('- name:')[0]
-        self.assertIn("if: github.event_name == 'push'", step)
-        self.assertIn('alpha_radar_ci.py profile-probe', step)
-        self.assertNotIn('--native-startup', step)
-        self.assertLess(text.index('alpha_radar_ci.py offline'), text.index('alpha_radar_ci.py profile-probe'))
+        self.assertNotIn('alpha_radar_ci.py profile-probe', text)
+        step = text.split('- name: Manual lifecycle only; no sandbox or worker')[1].split('- name:')[0]
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.lifecycle_only == true && inputs.native_startup != true", step)
+        self.assertIn('alpha_radar_ci.py lifecycle --lifecycle-only', step)
+        self.assertLess(text.index('alpha_radar_ci.py offline'), text.index('alpha_radar_ci.py lifecycle'))
 
     def test_probe_call_graph_cannot_invoke_fixture_or_worker(self):
         import ast
@@ -1976,3 +1976,241 @@ class SeatbeltGrammarTests(unittest.TestCase):
              patch.object(Path, 'read_bytes') as read:
             with self.assertRaisesRegex(ValueError, 'STATIC_IDENTITY'): ci.fixed_probe_executable()
             read.assert_not_called()
+
+
+class LifecycleOnlyTests(unittest.TestCase):
+    def context(self):
+        return {'GITHUB_ACTIONS':'true', 'RUNNER_ENVIRONMENT':'github-hosted', 'RUNNER_OS':'macOS',
+            'RUNNER_ARCH':'ARM64','GITHUB_RUN_ATTEMPT':'1','GITHUB_RUN_ID':'12345',
+            'GITHUB_SHA':'a'*40,'GITHUB_REF':'refs/heads/feature/iios-provider-gateway-superbatch-1'}
+
+    def cap(self):
+        root,p,r,e=fixture();cap=admit(p,r,expected=e,authorized_root=root)
+        return cap, {**e,'lifecycle_descriptor':'c'*64}
+
+    def test_manual_mode_requires_exact_true_and_rejects_conflicts(self):
+        from alpha_radar_ci import lifecycle_execution_allowed
+        for enabled in (True,'true'):
+            self.assertTrue(lifecycle_execution_allowed('workflow_dispatch',{'inputs':{'lifecycle_only':enabled,'native_startup':'false'}},True))
+        for event in ('push','schedule','pull_request',''):
+            self.assertFalse(lifecycle_execution_allowed(event,{'inputs':{'lifecycle_only':True}},True))
+        for bad in (False,'false',1,0,None,'TRUE',[],{}):
+            self.assertFalse(lifecycle_execution_allowed('workflow_dispatch',{'inputs':{'lifecycle_only':bad}},True))
+        for bad in (True,'true',0,1,None):
+            self.assertFalse(lifecycle_execution_allowed('workflow_dispatch',{'inputs':{'lifecycle_only':True,'native_startup':bad}},True))
+
+    def test_push_or_missing_selection_fails_before_access(self):
+        import alpha_radar_ci as ci
+        for event,flag in (('push',True),('workflow_dispatch',False)):
+            with patch.dict(os.environ,{'GITHUB_EVENT_NAME':event},clear=True), patch.object(Path,'read_bytes') as read, patch.object(ci.subprocess,'Popen') as child:
+                with self.assertRaises(ValueError):ci.execute_lifecycle(Path('/not-accessed'),explicit_request=flag)
+                read.assert_not_called();child.assert_not_called()
+
+    def test_environment_positive_membership_rejects_proxy_and_credentials(self):
+        from alpha_radar_runner import lifecycle_environment,LIFECYCLE_ENV
+        env=lifecycle_environment(self.context());self.assertEqual(set(env),set(self.context())|set(LIFECYCLE_ENV))
+        for key in ('HTTPS_PROXY','ALL_PROXY','GITHUB_TOKEN','API_KEY','KEYCHAIN_SELECTOR','DYLD_INSERT_LIBRARIES'):
+            with self.assertRaises(ValueError):lifecycle_environment({**self.context(),key:'SYNTHETIC_REJECT'})
+        for key,value in (('RUNNER_ENVIRONMENT','self-hosted'),('GITHUB_RUN_ATTEMPT','2'),('GITHUB_SHA','main'),('RUNNER_OS','Linux')):
+            with self.assertRaises(ValueError):lifecycle_environment({**self.context(),key:value})
+
+    def test_guard_rejects_nonloopback_dns_sockets_processes_and_signals(self):
+        import alpha_radar_runner as run
+        for host in ('localhost','127.0.0.2','::1','192.0.2.1','0.0.0.0'):
+            with self.assertRaises(ValueError):run.lifecycle_audit('/synthetic/runtime','/synthetic/out',(host,38493),'fixture')
+        audit,_=run.lifecycle_audit('/synthetic/runtime','/synthetic/out',('127.0.0.1',38493),'fixture')
+        audit('socket.bind',(None,('127.0.0.1',38493)))
+        audit('socket.__new__',(None,run.socket.AF_INET,run.socket.SOCK_STREAM,0))
+        for event,args in [('socket.connect',(None,('127.0.0.1',38493))),('socket.bind',(None,('127.0.0.1',38494))),
+            ('socket.bind',(None,('192.0.2.1',38493))),('socket.getaddrinfo',('localhost',38493)),
+            ('socket.gethostbyaddr',('127.0.0.1',)),('subprocess.Popen',('/bin/sh',[],None,{})),
+            ('os.kill',(12345,15)),('os.killpg',(12345,9)),('ctypes.dlopen',('/usr/lib/libSystem.B.dylib',))]:
+            with self.assertRaises((ValueError,PermissionError)):audit(event,args)
+
+    def test_guard_write_containment_and_unregistered_descriptor(self):
+        from alpha_radar_runner import lifecycle_audit
+        audit,opened=lifecycle_audit('/synthetic/runtime','/synthetic/out',('127.0.0.1',38493),'fixture')
+        flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW
+        audit('open',('/synthetic/out/lc-startup.json',None,flags))
+        for path,bits in [('/synthetic/runtime/lc-bad.json',flags),('/synthetic/out/../lc-bad.json',flags),
+                          ('/synthetic/out/lc-bad.json',os.O_WRONLY|os.O_TRUNC),('/synthetic/out/raw.log',flags)]:
+            with self.assertRaises(ValueError):audit('open',(path,None,bits))
+        with self.assertRaises(ValueError):opened('lc-bad.json',flags,dir_fd=987654)
+        with self.assertRaises(ValueError):audit('open',('/Library/Keychains/login.keychain-db','r',os.O_RDONLY))
+
+    def test_supervisor_guard_one_child_and_bounded_inspection_only(self):
+        from alpha_radar_runner import lifecycle_audit,lifecycle_environment,LIFECYCLE_ENV
+        argv=['/synthetic/runtime/python','-B','/synthetic/runtime/runner','--ci-lifecycle-only']
+        audit,_=lifecycle_audit('/synthetic/runtime','/synthetic/out',('127.0.0.1',38493),'supervisor',
+            launch_argv=argv,child_pid=lambda:12345,context=self.context())
+        args=(argv[0],argv,'/synthetic/out',lifecycle_environment(self.context()))
+        audit('subprocess.Popen',args)
+        with self.assertRaises(ValueError):audit('subprocess.Popen',args)
+        audit('subprocess.Popen',('/bin/ps',['/bin/ps','-ww','-p','12345','-o','lstart='],None,LIFECYCLE_ENV))
+        for cmd in (['/bin/ps','-e'],['/bin/ps','-ww','-p','1','-o','lstart='],['/usr/bin/sandbox-exec','-p','synthetic'],['/bin/sh','-c','synthetic']):
+            with self.assertRaises(ValueError):audit('subprocess.Popen',(cmd[0],cmd,None,LIFECYCLE_ENV))
+
+    def test_receipt_scope_fields_cannot_be_relabelled_or_used_in_production(self):
+        from alpha_radar_runner import lifecycle_envelope,verify_lifecycle_receipt,LIFECYCLE_FLAGS,verify_startup_result
+        parents={'lifecycle_descriptor':'a'*64};doc=lifecycle_envelope({'classification':'LIFECYCLE_PASS'},parents)
+        self.assertEqual(verify_lifecycle_receipt(doc,content_hash(doc),parents),doc['value'])
+        for key,value in LIFECYCLE_FLAGS.items():self.assertIs(type(doc[key]),type(value));self.assertEqual(doc[key],value)
+        with self.assertRaises(ValueError):verify_envelope(doc,content_hash(doc),parents=parents)
+        with self.assertRaises((ValueError,KeyError)):verify_startup_result(doc['value'],'a'*64)
+        for scope in ('SYNTHETIC_TEST_ONLY','SYNTHETIC_NATIVE_QUALIFIED','LIVE_QUALIFICATION'):
+            bad={**doc,'scope':scope}
+            with self.assertRaises(ValueError):verify_lifecycle_receipt(bad,content_hash(bad),parents)
+        with self.assertRaises(ValueError):verify_lifecycle_receipt(doc,content_hash(doc),{'lifecycle_descriptor':'b'*64})
+
+    def test_independently_computed_ack_hash_rejects_forgery_and_duplicate_publication(self):
+        from alpha_radar_runner import lifecycle_store,lifecycle_read
+        cap,parents=self.cap();value={'event':'ACK','launch_parent':'a'*64,'startup_parent':'b'*64}
+        lifecycle_store(cap,parents,'lc-ack.json',value)
+        lifecycle_read(cap,parents,'lc-ack.json',value)
+        with self.assertRaises(ValueError):lifecycle_read(cap,parents,'lc-ack.json',{**value,'startup_parent':'c'*64})
+        with self.assertRaises(FileExistsError):lifecycle_store(cap,parents,'lc-ack.json',value)
+
+    def test_lifecycle_runtime_and_fixture_changes_rejected(self):
+        from alpha_radar_runner import lifecycle_descriptor,LIFECYCLE_SCOPE
+        for change in ('runtime','fixture'):
+            root,p,r,e=fixture()
+            d={'schema':'iios-ci-native-lifecycle-v1','execution_mode':LIFECYCLE_SCOPE,'package':p,'runtime':r,
+               'expected':e,'authorized_root':str(root),'native_tools':{},'maximum_duration_seconds':120,'context':self.context()}
+            if change=='runtime':r['files'][0]['sha256']='b'*64
+            else:p['fixture']['certificate_sha256']='b'*64
+            with self.assertRaises(ValueError):lifecycle_descriptor(d)
+            self.assertFalse(Path(p['root']).exists())
+
+    def owned(self):
+        from alpha_radar_runner import LifecycleOwnedProcesses,StderrCapture,lifecycle_store,lifecycle_startup_value
+        cap,parents=self.cap();p,r,e=cap.documents();exe=str(Path(r['root'])/r['interpreter'])
+        obs=ProcessObservation(12345,os.getpid(),'2026-09-14T12:00:00+00:00',exe,exe,r['files'][0]['sha256'],p['root'],(exe,))
+        owned=LifecycleOwnedProcesses(cap,parents,inspect=lambda _:obs,pause=lambda _:None)
+        child=MagicMock();child.pid=12345;child.poll.return_value=0
+        entry={'child':child,'expected':{'pid':12345,'parent_pid':os.getpid(),'argv':(exe,),
+            'cwd':p['root'],'executable':exe,'executable_hash':obs.executable_hash},'observation':dict(obs.__dict__),
+            'launch_parent':'a'*64,'capture':StderrCapture()}
+        owned.children['fixture']=entry
+        value=lifecycle_startup_value(cap,'a'*64,entry['observation'])
+        h=lifecycle_store(cap,parents,'lc-startup.json',value);owned.startup_pins['fixture']=('a'*64,h)
+        lifecycle_store(cap,parents,'lc-child-exit.json',{'returncode':0})
+        return owned,child,obs
+
+    def test_cleanup_requires_owned_zero_exit_and_three_stable_observations(self):
+        owned,child,_=self.owned();result=owned.cleanup(lambda:True)
+        self.assertTrue(result['clean']);self.assertEqual(result['signals'],0)
+        self.assertEqual(result['port_clear_observations'],[True]*3)
+        child.terminate.assert_not_called();child.kill.assert_not_called()
+
+    def test_surviving_listener_or_unstable_clearance_fails(self):
+        for samples in ([False]*3,[True,False,True]):
+            owned,child,_=self.owned();values=iter(samples)
+            self.assertFalse(owned.cleanup(lambda:next(values))['clean'])
+            child.terminate.assert_not_called();child.kill.assert_not_called()
+
+    def test_early_exit_does_not_turn_port_clear_into_cleanup(self):
+        owned,child,_=self.owned();child.poll.return_value=65;owned.children['fixture']['observation']=None
+        result=owned.cleanup(lambda:True);self.assertFalse(result['clean'])
+        self.assertEqual(result['remaining'],['fixture']);child.terminate.assert_not_called()
+
+    def test_pid_reuse_and_identity_mismatch_prevent_stop_or_signal(self):
+        for field,value in [('start_time','2026-09-14T12:00:01+00:00'),('parent_pid',1),('executable_hash','f'*64)]:
+            owned,child,obs=self.owned();child.poll.return_value=None
+            owned.inspect=lambda _,o=replace(obs,**{field:value}):o
+            result=owned.cleanup(lambda:True);self.assertFalse(result['clean'])
+            self.assertFalse((Path(owned.cap.documents()[0]['root'])/'lc-stop.json').exists())
+            child.wait.assert_not_called();child.terminate.assert_not_called();child.kill.assert_not_called()
+
+    def test_cooperative_shutdown_failure_is_preserved_without_signal_fallback(self):
+        import subprocess
+        owned,child,_=self.owned();child.poll.return_value=None;child.wait.side_effect=subprocess.TimeoutExpired('SYNTHETIC',10)
+        result=owned.cleanup(lambda:True);self.assertFalse(result['clean']);self.assertTrue(result['failures'])
+        child.terminate.assert_not_called();child.kill.assert_not_called()
+
+    def test_tls_mismatch_keeps_scope_unqualified(self):
+        from alpha_radar_runner import startup_tls
+        cap,_=self.cap();owned=MagicMock();ctx=MagicMock();ctx.check_hostname=True;ctx.verify_mode=2
+        channel=ctx.wrap_socket.return_value.__enter__.return_value;channel.getpeercert.return_value=b'WRONG_SYNTHETIC'
+        with patch('alpha_radar_runner.ssl.create_default_context',return_value=ctx), \
+             patch('alpha_radar_runner.ssl.PEM_cert_to_DER_cert',return_value=b'EXPECTED_SYNTHETIC'), \
+             patch('alpha_radar_runner.socket.socket'):
+            with self.assertRaises(ValueError):startup_tls(cap,owned)
+
+    def test_lifecycle_call_graph_has_no_confinement_or_worker_execution(self):
+        import ast,alpha_radar_runner as runner
+        tree=ast.parse(Path(runner.__file__).read_text())
+        for node in tree.body:
+            if isinstance(node,ast.FunctionDef) and node.name in ('lifecycle_child','lifecycle_supervise','lifecycle_main'):
+                calls=[v.func.id if isinstance(v.func,ast.Name) else getattr(v.func,'attr','') for v in ast.walk(node) if isinstance(v,ast.Call)]
+                for bad in ('require_confinement','Session','fixture_exchange','supervise','child_main','kill','terminate'):
+                    self.assertNotIn(bad,calls)
+        self.assertIn('require_confinement(cap)',Path(runner.__file__).read_text())
+
+    def test_live_admission_rejects_lifecycle_receipt(self):
+        from alpha_radar_runner import lifecycle_envelope
+        from provider_gateway_live_contract import verify_qualification_receipt
+        doc=lifecycle_envelope({'result':'OBSERVED'},{'lifecycle_descriptor':'a'*64})
+        with self.assertRaises((ValueError,KeyError,TypeError)):verify_qualification_receipt(doc,content_hash(doc),parents=doc['parents'])
+
+    def orchestrated(self, failure=None):
+        import alpha_radar_runner as run
+        cap,unused=self.cap();p,r,e=cap.documents()
+        d={'schema':'iios-ci-native-lifecycle-v1','execution_mode':run.LIFECYCLE_SCOPE,'package':p,'runtime':r,
+           'expected':e,'authorized_root':cap.authorized_root,'native_tools':{},'maximum_duration_seconds':120,'context':self.context()}
+        parents={**e,'lifecycle_descriptor':content_hash(d)}
+        child=MagicMock();child.pid=12345;child.stderr=None;code=[None];child.poll.side_effect=lambda:code[0]
+        observed=[None];owned_type=run.LifecycleOwnedProcesses
+        def spawn(argv,**kwargs):
+            self.assertNotIn('/usr/bin/sandbox-exec',argv);self.assertNotIn('worker',argv)
+            self.assertEqual(kwargs['env'],run.lifecycle_environment(self.context()))
+            observed[0]=ProcessObservation(child.pid,os.getpid(),'2026-09-14T12:00:00+00:00',' '.join(argv),
+                argv[0],r['files'][0]['sha256'],str(kwargs['cwd']),tuple(argv))
+            if failure=='early':
+                code[0]=65;observed[0]=None
+            else:
+                run.lifecycle_store(cap,parents,'lc-startup.json',run.lifecycle_startup_value(cap,argv[-1],observed[0].__dict__))
+            return child
+        def waited(timeout):
+            if failure=='shutdown':raise run.subprocess.TimeoutExpired('SYNTHETIC',timeout)
+            run.lifecycle_store(cap,parents,'lc-child-exit.json',{'returncode':0});code[0]=0;return 0
+        child.wait.side_effect=waited
+        def ownership(cap,parents):return owned_type(cap,parents,inspect=lambda _:observed[0],pause=lambda _:None)
+        listeners=[[],[(12345,'127.0.0.1:'+str(p['fixture']['port']))],[],[],[]]
+        if failure=='early':listeners=[[],[],[],[]]
+        with patch.dict(os.environ,run.lifecycle_environment(self.context()),clear=True), \
+             patch.object(run,'verify_tools'),patch.object(run,'native_identity'), \
+             patch.object(run,'LifecycleOwnedProcesses',side_effect=ownership), \
+             patch.object(run,'lifecycle_audit',return_value=(lambda *_:None,os.open)), \
+             patch.object(run.sys,'addaudithook'),patch.object(run,'listener_owners',side_effect=listeners), \
+             patch.object(run,'startup_tls',side_effect=run.ssl.SSLError('SYNTHETIC') if failure=='tls' else None,
+                          return_value={'hostname_verified':True,'http_requests':0,'protocol':'TLSv1.3'}) as tls:
+            result=run.lifecycle_supervise(cap,d,popen=spawn)
+            if failure=='early':tls.assert_not_called()
+        child.kill.assert_not_called();child.terminate.assert_not_called()
+        for path in Path(p['root']).glob('*.json'):
+            doc=json.loads(path.read_text())
+            for key,value in run.LIFECYCLE_FLAGS.items():self.assertEqual(doc[key],value)
+        return result
+
+    def test_mocked_complete_lifecycle_requires_every_gate(self):
+        result=self.orchestrated()
+        self.assertEqual(result['classification'],'LIFECYCLE_PASS')
+        self.assertTrue(result['cleanup']['clean']);self.assertEqual(result['fixture_status']['exit_code'],0)
+        self.assertIsNone(result['primary_failure']);self.assertIsNone(result['cleanup_failure'])
+
+    def test_mocked_tls_failure_preserved_separately_from_successful_cleanup(self):
+        result=self.orchestrated('tls')
+        self.assertEqual(result['classification'],'LIFECYCLE_FAILED')
+        self.assertEqual(result['primary_failure'],{'stage':'TLS_HANDSHAKE','category':'TLS_ERROR'})
+        self.assertTrue(result['cleanup']['clean'])
+
+    def test_mocked_early_exit_preserves_failure_without_claiming_cleanup(self):
+        result=self.orchestrated('early')
+        self.assertEqual(result['classification'],'LIFECYCLE_FAILED')
+        self.assertEqual(result['fixture_status']['exit_code'],65)
+        self.assertFalse(result['cleanup']['clean']);self.assertIsNotNone(result['primary_failure'])
+
+    def test_mocked_cooperative_shutdown_failure_stays_failed(self):
+        result=self.orchestrated('shutdown')
+        self.assertEqual(result['classification'],'LIFECYCLE_FAILED')
+        self.assertIsNone(result['primary_failure']);self.assertEqual(result['cleanup_failure'],'LIFECYCLE_CLEANUP_FAILED')
