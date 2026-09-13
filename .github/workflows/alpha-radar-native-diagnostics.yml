@@ -24,6 +24,7 @@ on:
       - .github/workflows/alpha-radar-native-diagnostics.yml
       - tests/native/alpha_radar_*.py
       - tests/native/test_alpha_radar_native.py
+      - tests/native/test_alpha_radar_export_process.py
       - tests/native/alpha_radar.sb.in
       - BACK END/backend/truth_spine_process_identity.py
       - BACK END/backend/test_truth_spine_process_identity.py
@@ -71,6 +72,9 @@ jobs:
         run: |
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize \
             --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA"
+      - name: Fresh-process evidence export regressions; no fixture or network
+        shell: bash
+        run: python -I -S -B tests/native/test_alpha_radar_export_process.py --root "$IIOS_RADAR_CI_ROOT"
       - name: Complete mocked harness and process-inspector regressions
         shell: bash
         run: |

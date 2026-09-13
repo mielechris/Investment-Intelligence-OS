@@ -465,6 +465,7 @@ def binding_paths():
     return sorted({('tests/native/' if name.startswith('alpha_radar') else 'BACK END/backend/')+name
                    for name in SOURCE_NAMES} | {
         'tests/native/alpha_radar_ci.py', 'tests/native/test_alpha_radar_native.py',
+        'tests/native/test_alpha_radar_export_process.py',
         'BACK END/backend/test_truth_spine_process_identity.py',
         '.github/workflows/alpha-radar-native-diagnostics.yml'})
 
@@ -629,6 +630,11 @@ def execute_lifecycle(root, *, explicit_request=False):
     result = json.loads((root/'export/offline-results.json').read_bytes())
     require(result['success'] and not result['skipped'] and result['executed'] == result['collected'], 'OFFLINE_REQUIRED')
     verify_bindings(result['source_bindings'])
+    fresh = json.loads((root/'export/fresh-export-results.json').read_bytes())
+    require(fresh['scope'] == 'FRESH_PROCESS_EXPORT_ONLY' and fresh['success'] is True and
+            fresh['skipped'] == 0 and fresh['collected'] == fresh['executed'] and
+            fresh['executed'] > 0, 'OFFLINE_REQUIRED')
+    verify_bindings(fresh['source_bindings'])
     d = {k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools','maximum_duration_seconds')}
     d.update(schema='iios-ci-native-lifecycle-v1', execution_mode=LIFECYCLE_SCOPE,
              context={k:os.environ[k] for k in LIFECYCLE_CONTEXT})
@@ -668,17 +674,69 @@ def execute_lifecycle(root, *, explicit_request=False):
     require(not any((out/n).exists() for n in ('worker-launch.json','session.json','journal')), 'WORKER_EVIDENCE_FORBIDDEN')
 
 
+def export_dependencies(root):
+    """Bootstrap receipt verification from pinned source, before any local import.
+
+    Export runs in a new host Python, not the disposable runtime interpreter.
+    Only the immutable source closure is needed; never read TLS private bytes.
+    """
+    def read(path):
+        st = path.lstat()
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and
+                st.st_nlink == 1 and st.st_size <= 8_000_000, 'IMPORT_CLOSURE')
+        return path.read_bytes()
+    pins = json.loads(read(root/'export/prepared-pins.json'))
+    d = json.loads(read(root/'descriptor.json'))
+    require(digest(canonical(d)) == pins['descriptor_sha256'], 'SOURCE_PIN')
+    runtime = root/'runtime'; source = runtime/'source'; r = d['runtime']
+    require(r == pins['runtime'] and digest(canonical(r)) == d['expected']['runtime'] and
+            d['expected'] == pins['parents'] and r['root'] == str(runtime) and
+            r['source_commit'] == pins['source_commit'], 'IMPORT_CLOSURE')
+    for directory in (runtime, source):
+        st = directory.lstat()
+        require(stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and
+                not st.st_mode & 0o222, 'IMPORT_CLOSURE')
+    names = {'source/'+name for name in SOURCE_NAMES}
+    require(set(r['source_files']) == names and len(r['source_files']) == len(names) and
+            {p.name for p in source.iterdir()} == set(SOURCE_NAMES), 'IMPORT_CLOSURE')
+    rows = {row['path']: row for row in r['files']}
+    require(len(rows) == len(r['files']) and names <= rows.keys(), 'IMPORT_CLOSURE')
+    for name in SOURCE_NAMES:
+        path = source/name; row = rows['source/'+name]; data = read(path)
+        relative = ('tests/native/' if name.startswith('alpha_radar') else 'BACK END/backend/')+name
+        require(len(data) == row['size'] and digest(data) == row['sha256'] and
+                stat.S_IMODE(path.stat().st_mode) == row['mode'] and not row['mode'] & 0o222 and
+                data == (REPO/relative).read_bytes(), 'IMPORT_CLOSURE')
+        module = sys.modules.get(Path(name).stem)
+        require(module is None or getattr(module, '__file__', None) == str(path), 'IMPORT_CLOSURE')
+    lifecycle = json.loads(read(root/'export/lifecycle-pins.json'))
+    ld = json.loads(read(root/'lifecycle-descriptor.json'))
+    require(lifecycle['preparation_descriptor_parent'] == pins['descriptor_sha256'] and
+            lifecycle['descriptor'] == ld and digest(canonical(ld)) == lifecycle['descriptor_sha256'] and
+            lifecycle['parents'] == {**d['expected'], 'lifecycle_descriptor': digest(canonical(ld))} and
+            all(ld[k] == d[k] for k in ('package', 'runtime', 'expected', 'authorized_root',
+                                       'native_tools', 'maximum_duration_seconds')),
+            'EVIDENCE_SCOPE')
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(source))
+    from alpha_radar_runner import LIFECYCLE_FLAGS, verify_lifecycle_receipt
+    from provider_gateway_contract import content_hash
+    return LIFECYCLE_FLAGS, verify_lifecycle_receipt, content_hash
+
+
 def export(root):
     """Only structured synthetic records and positively sanitized diagnostics."""
     root_check(root); destination=root/'export'
     out=root/'execution-output'
+    dependencies = None
     if out.is_dir() and not out.is_symlink():
         for path in sorted(out.glob('*.json')):
             require(not path.is_symlink() and path.stat().st_size<=8_000_000,'EVIDENCE_FILE')
             value=json.loads(path.read_bytes())
             if value.get('scope') == 'CI_NATIVE_LIFECYCLE_ONLY':
-                from alpha_radar_runner import LIFECYCLE_FLAGS, verify_lifecycle_receipt
-                from provider_gateway_contract import content_hash
+                if dependencies is None:
+                    dependencies = export_dependencies(root)
+                LIFECYCLE_FLAGS, verify_lifecycle_receipt, content_hash = dependencies
                 require(all(type(value.get(k)) is type(v) and value[k] == v for k,v in LIFECYCLE_FLAGS.items()), 'EVIDENCE_SCOPE')
                 require(re.fullmatch(r'lc-(launch|startup|ack|stop|final|child-exit|child-failure|event-[0-9]{4}|child-[0-9]{4})\.json', path.name), 'EVIDENCE_NAME')
                 pins = json.loads((destination/'lifecycle-pins.json').read_bytes())

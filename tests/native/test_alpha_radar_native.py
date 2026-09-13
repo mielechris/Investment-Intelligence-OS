@@ -2214,3 +2214,21 @@ class LifecycleOnlyTests(unittest.TestCase):
         result=self.orchestrated('shutdown')
         self.assertEqual(result['classification'],'LIFECYCLE_FAILED')
         self.assertIsNone(result['primary_failure']);self.assertEqual(result['cleanup_failure'],'LIFECYCLE_CLEANUP_FAILED')
+
+
+class ExportDependencyBoundaryTests(unittest.TestCase):
+    def test_export_rejects_unpinned_dependencies_before_import(self):
+        import alpha_radar_ci as ci
+        root = Path(tempfile.mkdtemp(prefix='export-unpinned-'))
+        (root/'export').mkdir()
+        with self.assertRaises(FileNotFoundError):
+            ci.export_dependencies(root)
+
+    def test_fresh_export_gate_is_separate_from_mocked_offline(self):
+        import alpha_radar_ci as ci
+        workflow = (ci.REPO/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        self.assertIn('python -I -S -B tests/native/test_alpha_radar_export_process.py', workflow)
+        self.assertIn('tests/native/test_alpha_radar_export_process.py', ci.binding_paths())
+        import inspect
+        self.assertIn("'subprocess.Popen'", inspect.getsource(ci.offline))
+        self.assertIn("'OFFLINE_NATIVE_BOUNDARY'", inspect.getsource(ci.offline))
