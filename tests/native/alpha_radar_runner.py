@@ -71,7 +71,8 @@ FAILURE_CODES = frozenset(('PROCESS_ABSENT', 'PROCESS_IDENTITY',
     'DIAGNOSTIC_PUBLICATION_FAILED', 'DIAGNOSTIC_OVERFLOW', 'DIAGNOSTIC_PIPE_FAILED',
     'LIFECYCLE_ENVIRONMENT', 'LIFECYCLE_WRITE', 'LIFECYCLE_STDIO',
     'LIFECYCLE_STDOUT_UNEXPECTED','FULL_JOB_BUDGET','FULL_INSUFFICIENT_BUDGET',
-    'FULL_CANCELLED','FULL_CLEANUP_DEADLINE','FULL_VALIDATION_PARENT'))
+    'FULL_CANCELLED','FULL_CLEANUP_DEADLINE','FULL_VALIDATION_PARENT',
+    'FULL_INDEPENDENT_PARENT'))
 
 
 def failure_category(error):
@@ -1544,6 +1545,15 @@ def full_launch_budget(d, *, monotonic=time.monotonic):
     return b
 
 
+def full_startup_deadline(d):
+    """One descriptor-bound deadline shared by child and supervisor startup."""
+    b = full_budget(d)
+    deadline = b['work_deadline'] - b['work_seconds']
+    require(deadline == b['prepared_monotonic'] + b['real_clock_seconds'] + 100 and
+            deadline < b['work_deadline'], 'FULL_JOB_BUDGET')
+    return deadline
+
+
 def advance_full_clock(session, now, seconds):
     """Jump only to the scheduler's exact next eligible target; no real sleep.
 
@@ -1900,6 +1910,105 @@ class FullRoleInspection(OwnedProcesses):
 
 
 class FullOwnedProcesses(LifecycleOwnedProcesses):
+    def registration_admission(self, descriptor, deadline):
+        """Pin the expensive immutable inputs once before timed observation."""
+        require(type(deadline) in (int,float) and deadline == full_startup_deadline(descriptor)
+                and self.monotonic() < deadline,
+                'STARTUP_STABILIZATION_TIMEOUT')
+        p,r,pins = checked_capability(self.cap)
+        require(p == descriptor['package'] and r == descriptor['runtime'] and
+                pins == descriptor['expected'] and self.lifecycle_parents == {
+                    **pins, 'session_package': descriptor['session_package_parent'],
+                    'full_descriptor': content_hash(descriptor)}, 'FULL_INDEPENDENT_PARENT')
+        require(content_hash(descriptor['session_package']) == descriptor['session_package_parent'],
+                'FULL_INDEPENDENT_PARENT')
+        fd = safe_root(p['root'])
+        try:
+            st = os.fstat(fd)
+            require((st.st_dev,st.st_ino) == self.cap.output_identity, 'OUTPUT_REPLACED')
+            verify_destination(fd,p['root'])
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def registration_evidence(self, fd, value):
+        self.counter += 1
+        return publish(fd,f'fs-event-{self.counter:06d}.json',
+            full_envelope(value,self.lifecycle_parents))
+
+    def registration_observation(self, entry, diagnostics, *, allow_launcher=False):
+        """Collect one complete OS observation without disk publication or re-admission."""
+        sample = {'before':child_status(entry['child']), 'queries':[]}
+        count = 0
+        def diagnostic(row):
+            nonlocal count
+            count += 1
+            require(count <= 16, 'DIAGNOSTIC_OVERFLOW')
+            sample['queries'].append(validate_inspection_diagnostic(row))
+        try:
+            if self.inspect is inspect_macos:
+                observed = self.inspect(entry['child'].pid,diagnostic=diagnostic)
+            else:
+                observed = self.inspect(entry['child'].pid)
+        finally:
+            sample['after'] = child_status(entry['child'])
+        require(observed is not None, 'PROCESS_ABSENT')
+        actual = asdict(observed)
+        sample['observed'] = observed_diagnostic(entry,actual)
+        diagnostics.append(sample)
+        require(actual['start_time'] and actual['command'] == ' '.join(actual['argv']),
+                'PROCESS_IDENTITY')
+        expected = entry['expected']
+        if allow_launcher and entry.get('launcher') and actual['executable'] == entry['launcher']['executable']:
+            expected = {**expected,**entry['launcher']}
+        for key,value in expected.items(): require(actual[key] == value,'PROCESS_IDENTITY')
+        return actual
+
+    def register(self,role,child,*,argv,cwd,executable,executable_hash,launcher=None,
+                 stderr=None,launch_parent=None,descriptor=None,deadline=None):
+        require(role in ('worker','fixture') and role not in self.children,'CHILD_ROLE')
+        require(type(descriptor) is dict and deadline is not None,'FULL_INDEPENDENT_PARENT')
+        entry={'child':child,'expected':{'pid':child.pid,'parent_pid':os.getpid(),
+            'argv':tuple(argv),'cwd':str(cwd),'executable':str(executable),
+            'executable_hash':executable_hash},'observation':None,'launcher':launcher,
+            'launch_parent':launch_parent}
+        self.children[role]=entry
+        fd=None; diagnostics=[]
+        try:
+            entry['capture']=self.capture_for(child,stderr)
+            fd=self.registration_admission(descriptor,deadline)
+            self.registration_evidence(fd,{'event':'PROCESS_CREATED','role':role,'pid':child.pid,
+                'expected_parent_pid':os.getpid(),'launch_parent':launch_parent,
+                'identity_status':'CHILD_CREATED_UNOBSERVED','status':child_status(child)})
+            observations=[]
+            for _ in range(3):
+                require(self.monotonic()<deadline,'STARTUP_STABILIZATION_TIMEOUT')
+                self.pump(entry); require(not entry['capture'].overflow,'DIAGNOSTIC_OVERFLOW')
+                observations.append(self.registration_observation(entry,diagnostics,allow_launcher=True))
+                require(self.monotonic()<deadline,'STARTUP_STABILIZATION_TIMEOUT')
+                self.pause(.05)
+            require(observations[0] == observations[1] == observations[2],
+                    'STARTUP_IDENTITY_CHANGED')
+            entry['observation']=observations[-1]
+            self.registration_evidence(fd,{'event':'OWNERSHIP_INSPECTION_BATCH','role':role,
+                'pid':child.pid,'launch_parent':launch_parent,'sample_count':3,'samples':diagnostics,
+                'ownership_authority':False})
+            self.registration_evidence(fd,{'event':'OWNERSHIP','role':role,
+                'observed':observed_diagnostic(entry,entry['observation'])})
+            require(self.monotonic()<deadline,'STARTUP_STABILIZATION_TIMEOUT')
+        except BaseException as error:
+            primary={'role':role,'stage':'OWNERSHIP_REGISTER','category':failure_category(error),
+                'pid':child.pid,'launch_parent':launch_parent}
+            self.primary_failures.append(primary)
+            if fd is not None:
+                try:self.registration_evidence(fd,{'event':'REGISTRATION_FAILED',**primary})
+                except Exception:self.diagnostic_failures.append('DIAGNOSTIC_PUBLICATION_FAILED')
+            else:self.safe_evidence({'event':'REGISTRATION_FAILED',**primary})
+            raise
+        finally:
+            if fd is not None: os.close(fd)
+
     def observe(self,entry,*,allow_launcher=False):
         inspector = FullRoleInspection(self,entry)
         before = len(inspector.diagnostic_failures)
@@ -2199,7 +2308,7 @@ def full_child(launch,launch_parent,*,cancelled=lambda:False):
         value=full_startup(cap,role,launch_parent,{'pid':os.getpid(),'parent_pid':os.getppid(),
             'argv':[sys.executable,'-B',*sys.argv],'cwd':str(Path.cwd())})
         startup_parent=full_store(cap,parents,f'fs-{role}-startup.json',value)
-        until=time.monotonic()+10
+        until=full_startup_deadline(d)
         while time.monotonic()<until:
             try:
                 full_read(cap,parents,f'fs-{role}-ack.json',value={'event':'ACK','role':role,
@@ -2226,6 +2335,26 @@ def full_child(launch,launch_parent,*,cancelled=lambda:False):
     except BaseException as error:
         full_store(cap,parents,f'fs-{role}-failure.json',{'category':failure_category(error)})
         raise
+
+
+def full_verify_startup_listener(role,child,port):
+    require(role in ('fixture','worker'),'FULL_ROLE')
+    if role=='fixture':
+        require(listener_owners(port)==[(child.pid,'127.0.0.1:'+str(port))],
+                'LISTENER_OWNER_MISMATCH')
+        return True
+    return None
+
+
+def full_publish_startup_ack(cap,parents,role,launch_parent,startup_parent,deadline,
+                             listener_verified,*,monotonic=time.monotonic):
+    require(role in ('fixture','worker') and
+            listener_verified is (True if role=='fixture' else None),'LISTENER_OWNER_MISMATCH')
+    require(monotonic()<deadline,'PARENT_ACK_TIMEOUT')
+    parent=full_store(cap,parents,f'fs-{role}-ack.json',{'event':'ACK','role':role,
+        'launch_parent':launch_parent,'startup_parent':startup_parent})
+    require(monotonic()<deadline,'PARENT_ACK_TIMEOUT')
+    return parent
 
 
 def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
@@ -2262,6 +2391,7 @@ def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
                 'supervisor_pid':os.getpid(),'descriptor_parent':content_hash(d)})
         except FileNotFoundError: return
         raise ValueError('FULL_CANCELLED')
+    startup_deadline=full_startup_deadline(d)
     try:
         running(); verify_self(); boundary=full_real_clock_boundary()
         full_store(cap,parents,'fs-real-clock.json',boundary)
@@ -2274,18 +2404,23 @@ def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
                 stderr=subprocess.PIPE,close_fds=True,env=lifecycle_environment(d['context']))
             close_lifecycle_stdin(child); stage='OWNERSHIP_REGISTER'
             owned.register(role,child,argv=commands[role],cwd=out,executable=executable,
-                executable_hash=executable_hash,stderr=child.stderr,launch_parent=launches[role])
-            stage='STARTUP_VERIFY'; until=time.monotonic()+10
-            while not (out/f'fs-{role}-startup.json').exists() and time.monotonic()<until:
+                executable_hash=executable_hash,stderr=child.stderr,launch_parent=launches[role],
+                descriptor=d,deadline=startup_deadline)
+            stage='STARTUP_VERIFY'
+            while not (out/f'fs-{role}-startup.json').exists() and time.monotonic()<startup_deadline:
                 owned.verify(role,require_startup=False); time.sleep(.05)
+            require(time.monotonic()<startup_deadline,'PARENT_ACK_TIMEOUT')
             _,startup=full_read(cap,parents,f'fs-{role}-startup.json',
                 value=full_startup(cap,role,launches[role],owned.children[role]['observation']))
             owned.startup_pins[role]=(launches[role],startup)
             verify_self(); owned.verify(role)
+            listener_verified=None
             if role=='fixture':
-                require(listener_owners(p['fixture']['port'])==[(child.pid,'127.0.0.1:'+str(p['fixture']['port']))], 'LISTENER_OWNER_MISMATCH')
-            full_store(cap,parents,f'fs-{role}-ack.json',{'event':'ACK','role':role,
-                'launch_parent':launches[role],'startup_parent':startup})
+                stage='LISTENER_VERIFY'
+                listener_verified=full_verify_startup_listener(role,child,p['fixture']['port'])
+            stage='PARENT_ACK'
+            full_publish_startup_ack(cap,parents,role,launches[role],startup,
+                startup_deadline,listener_verified)
             if role=='fixture': stage='TLS_HANDSHAKE'; tls=startup_tls(cap,owned)
         stage='SESSION_WAIT'
         while not (out/'fs-worker-complete.json').exists():

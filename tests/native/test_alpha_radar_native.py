@@ -2818,6 +2818,123 @@ class FullSessionModeTests(unittest.TestCase):
         with self.assertRaises(ValueError):owned.register('worker',entry['child'],argv=[],cwd='unused',
             executable='unused',executable_hash='0'*64)
 
+    def registration_case(self, *, inspect=None, monotonic=None, pause=lambda _:None):
+        import alpha_radar_runner as run
+        s,_,_,d=self.session();p,r,_=s.cap.documents()
+        exe=str(Path(r['root'])/r['interpreter']);pid=23456
+        observation=ProcessObservation(pid,os.getpid(),'2026-09-14T12:00:00+00:00',exe,exe,
+            next(v['sha256'] for v in r['files'] if v['path']==r['interpreter']),p['root'],(exe,))
+        child=MagicMock();child.pid=pid;child.poll.return_value=None;child.stdout=None;child.stderr=None
+        observed=(lambda _:observation) if inspect is None else inspect
+        owned=run.FullOwnedProcesses(s.cap,s.full_parents,inspect=observed,
+            monotonic=monotonic or (lambda:102),pause=pause)
+        return run,s,d,owned,child,observation,exe
+
+    def test_full_registration_admits_once_then_buffers_three_complete_observations(self):
+        run,s,d,owned,child,observation,exe=self.registration_case();calls=[]
+        original=run.checked_capability
+        def checked(cap):calls.append('ADMISSION');return original(cap)
+        started=__import__('time').monotonic()
+        with patch.object(run,'checked_capability',side_effect=checked):
+            owned.register('fixture',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,stderr=None,launch_parent='1'*64,
+                descriptor=d,deadline=run.full_startup_deadline(d))
+        elapsed=__import__('time').monotonic()-started
+        self.assertEqual(calls,['ADMISSION']);self.assertLess(elapsed,1)
+        self.assertEqual(owned.children['fixture']['observation'],dict(observation.__dict__))
+        files=sorted(Path(s.p['root']).glob('fs-event-*.json'))
+        self.assertEqual(len(files),3)
+        values=[json.loads(path.read_bytes())['value'] for path in files]
+        batch=next(v for v in values if v['event']=='OWNERSHIP_INSPECTION_BATCH')
+        self.assertEqual(batch['sample_count'],3);self.assertEqual(len(batch['samples']),3)
+        self.assertTrue(all(v['observed']['field_matches'] and v['before']['state']=='CHILD_RUNNING'
+            and v['after']['state']=='CHILD_RUNNING' for v in batch['samples']))
+
+    def test_full_registration_buffers_bounded_sanitized_query_diagnostics(self):
+        import alpha_radar_runner as run
+        run,s,d,owned,child,observation,exe=self.registration_case()
+        def inspect(pid,*,diagnostic):
+            self.assertEqual(pid,child.pid)
+            diagnostic({'query':'PS_START','started_at':'2026-09-14T12:00:00.000000+00:00',
+                'ended_at':'2026-09-14T12:00:00.000001+00:00','monotonic_start':1,
+                'monotonic_end':2,'returncode':0,'signal':None,'stdout_empty':False,
+                'cwd_records':None,'failure':'NONE'})
+            return observation
+        with patch.object(run,'inspect_macos',side_effect=inspect) as native:
+            owned.inspect=native
+            owned.register('fixture',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,launch_parent='1'*64,
+                descriptor=d,deadline=run.full_startup_deadline(d))
+        docs=[json.loads(path.read_bytes())['value'] for path in Path(s.p['root']).glob('fs-event-*.json')]
+        batch=next(v for v in docs if v['event']=='OWNERSHIP_INSPECTION_BATCH')
+        self.assertEqual([len(v['queries']) for v in batch['samples']],[1,1,1])
+        self.assertEqual(batch['samples'][0]['queries'][0]['query'],'PS_START')
+
+    def test_full_registration_rejects_pid_reuse_and_each_identity_mismatch(self):
+        for field,value in [('pid',999),('parent_pid',1),('start_time','2026-09-14T12:00:01+00:00'),
+                ('executable','/wrong'),('executable_hash','f'*64),('argv',('/wrong',)),('cwd','/wrong')]:
+            samples=[]
+            def inspect(_):
+                samples.append(1)
+                return observation if len(samples)<2 else replace(observation,**{field:value})
+            run,s,d,owned,child,observation,exe=self.registration_case(inspect=inspect)
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                owned.register('fixture',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                    executable_hash=observation.executable_hash,launch_parent='1'*64,
+                    descriptor=d,deadline=run.full_startup_deadline(d))
+            self.assertIsNone(owned.children['fixture']['observation'])
+
+    def test_full_registration_deadline_and_slow_publication_fail_closed(self):
+        ticks=[102]
+        run,s,d,owned,child,observation,exe=self.registration_case(monotonic=lambda:ticks[0])
+        deadline=run.full_startup_deadline(d);original=owned.registration_evidence
+        def slow(fd,value):
+            result=original(fd,value)
+            if value['event']=='OWNERSHIP_INSPECTION_BATCH':ticks[0]=deadline
+            return result
+        owned.registration_evidence=slow
+        with self.assertRaisesRegex(ValueError,'STARTUP_STABILIZATION_TIMEOUT'):
+            owned.register('fixture',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,launch_parent='1'*64,
+                descriptor=d,deadline=deadline)
+        self.assertIsNotNone(owned.children['fixture']['observation'])
+
+    def test_full_registration_rejects_altered_descriptor_parents_before_inspection(self):
+        run,s,d,owned,child,observation,exe=self.registration_case();calls=[]
+        owned.lifecycle_parents={**owned.lifecycle_parents,'full_descriptor':'0'*64}
+        owned.inspect=lambda pid:(calls.append(pid) or observation)
+        with self.assertRaisesRegex(ValueError,'FULL_INDEPENDENT_PARENT'):
+            owned.register('fixture',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,launch_parent='1'*64,
+                descriptor=d,deadline=run.full_startup_deadline(d))
+        self.assertEqual(calls,[])
+
+    def test_full_shared_deadline_covers_registration_listener_and_ack_order(self):
+        import alpha_radar_runner as run,inspect
+        d=self.inputs()[4]
+        self.assertEqual(run.full_startup_deadline(d),266)
+        child_source=inspect.getsource(run.full_child);supervisor=inspect.getsource(run.full_supervise)
+        self.assertIn('until=full_startup_deadline(d)',child_source)
+        self.assertNotIn('time.monotonic()+10',child_source)
+        self.assertNotIn('time.monotonic()+10',supervisor)
+        ack=supervisor.index('full_publish_startup_ack(')
+        self.assertLess(supervisor.index('owned.register('),ack)
+        self.assertLess(supervisor.index("_,startup=full_read"),ack)
+        self.assertLess(supervisor.index("'FULL_TLS_GATE'"),supervisor.index("child=popen("))
+
+    def test_listener_mismatch_prevents_ack_and_worker_launch_gate_remains(self):
+        import alpha_radar_runner as run,inspect
+        run,s,d,owned,child,observation,exe=self.registration_case();published=MagicMock()
+        with patch.object(run,'listener_owners',return_value=[(child.pid,'127.0.0.1:1')]), \
+             patch.object(run,'full_store',published),self.assertRaisesRegex(ValueError,'LISTENER_OWNER_MISMATCH'):
+            verified=run.full_verify_startup_listener('fixture',child,38491)
+            run.full_publish_startup_ack(s.cap,s.full_parents,'fixture','1'*64,'2'*64,
+                run.full_startup_deadline(d),verified,monotonic=lambda:102)
+        published.assert_not_called()
+        source=inspect.getsource(run.full_supervise)
+        self.assertLess(source.index('full_publish_startup_ack('),source.index("stage='TLS_HANDSHAKE'"))
+        self.assertLess(source.index("'FULL_TLS_GATE'"),source.index('child=popen('))
+
     def test_full_tls_mismatch_before_worker_launch_gate(self):
         import alpha_radar_runner as run,inspect
         s,_,_,_=self.session();owned=MagicMock();ctx=MagicMock();ctx.check_hostname=True;ctx.verify_mode=2
