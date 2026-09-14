@@ -1164,7 +1164,9 @@ class HostedPreparationTests(unittest.TestCase):
         self.assertNotIn('secrets.',text)
         self.assertNotIn('self-hosted',text)
         uses=re.findall(r'uses: ([^\n]+)',text)
-        self.assertEqual(len(uses),3)
+        self.assertEqual(len(uses),6)
+        self.assertEqual(len(set(uses)),3)
+        for value in set(uses): self.assertEqual(uses.count(value),2)
         for value in uses:self.assertRegex(value,r'^actions/[a-z-]+@[a-f0-9]{40}$')
         self.assertLess(text.index('alpha_radar_ci.py offline'),text.index('alpha_radar_ci.py execute'))
         self.assertIn('/export/',text)
@@ -2451,23 +2453,30 @@ class FullSessionModeTests(unittest.TestCase):
             opportunity_schedule=proposal,schedule_hash=content_hash(proposal))
         e['schedule']=content_hash(proposal);repin(p,r,e)
         package=run.full_package(p,e)
-        d={'schema':'iios-ci-full-session-descriptor-v1','execution_mode':run.FULL_SCOPE,
+        d={'schema':'iios-ci-full-session-descriptor-v2','execution_mode':run.FULL_SCOPE,
             'package':p,'runtime':r,'expected':e,'authorized_root':str(root),'native_tools':{},
-            'maximum_duration_seconds':900,'context':self.context(),'session_package':package,
+            'maximum_duration_seconds':2700,'context':self.context(),'session_package':package,
             'session_package_parent':content_hash(package)}
+        d['validation_parent']='a'*64
+        d['budget']={'schema':'iios-native-job-budget-v1','source_commit':d['context']['GITHUB_SHA'],
+            'run_id':d['context']['GITHUB_RUN_ID'],'run_attempt':1,'start_monotonic':100,
+            'prepared_monotonic':101,'hard_deadline':3640,'work_deadline':2966,'cleanup_deadline':3146,
+            'cleanup_seconds':180,'export_seconds':180,'real_clock_seconds':65,'work_seconds':2700}
         parents={**e,'session_package':content_hash(package),'full_descriptor':content_hash(d)}
         return root,p,r,e,d,parents
 
     def session(self):
         import alpha_radar_runner as run
         root,p,r,e,d,parents=self.inputs();cap=admit(p,r,expected=e,authorized_root=root)
-        now=[utc(p['plan']['rows'][0]['valid_from'])];calls=[]
-        def wait(seconds): now[0]+=timedelta(seconds=seconds)
+        now=[utc(p['plan']['rows'][0]['valid_from'])];calls=[];waits=[]
+        def wait(seconds):
+            waits.append(seconds);run.advance_full_clock(session,now,seconds)
         def exchange(cap,slot,at):
             from urllib.parse import urlencode
             calls.append(slot);status,body=response(cap,f'/slot/{slot}?'+urlencode({'at':at}))
             return Response(status,body,'2026-09-14T12:00:00+00:00','2026-09-14T12:00:00+00:00')
         session=run.FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=lambda:False,exchange=exchange)
+        session.logical_waits=waits
         return session,now,calls,d
 
     def journal(self,s):
@@ -2697,6 +2706,8 @@ class FullSessionModeTests(unittest.TestCase):
         s,_,calls,_=self.session();result,parent=s.run()
         self.assertEqual(calls,list(range(475)));self.assertEqual(result['classification'],'FULL_SYNTHETIC_PASS')
         self.assertEqual(run.full_accounting(s.cap,s.full_parents,result)['receipts'],475)
+        self.assertLessEqual(len(s.logical_waits),474)
+        self.assertGreater((utc(s.clock())-utc(s.p['plan']['rows'][0]['valid_from'])).total_seconds(),6*3600)
         for path in Path(s.p['root']).rglob('*.json'):
             doc=json.loads(path.read_bytes())
             self.assertEqual(doc['scope'],run.FULL_SCOPE);self.assertEqual(doc['timing_proof'],run.FULL_TIMING)
@@ -3125,3 +3136,209 @@ class FullLexicalAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'FULL_WRITE'):guard('open',(str(path),None,os.O_WRONLY))
         with patch.object(Path,'resolve',return_value=out.parent),self.assertRaisesRegex(ValueError,'FULL_PATH_ALIAS'):
             guard('open',(str(path),'r',os.O_RDONLY))
+
+class QualificationBudgetTests(unittest.TestCase):
+    def descriptor(self): return FullSessionModeTests().inputs()[4]
+
+    def proof(self):
+        import alpha_radar_ci as ci
+        partition=ci.collect_validation()
+        value={'schema':'iios-offline-validation-v1','scope':ci.VALIDATION_SCOPE,
+            **ci.validation_identity(),'job':'validation','source_bindings':ci.source_bindings(),
+            'collection_parent':ci.digest(ci.canonical(partition)),
+            'offline':{'executed':len(partition['offline']),'passed':len(partition['offline']),
+                'failed':0,'errors':0,'skipped':0,'native_not_run':partition['native_not_run']},
+            'fresh_stdio':4,'fresh_export':10,'result_parents':{n:'a'*64 for n in (
+                'offline-results.json','fresh-stdio-results.json','fresh-export-results.json','python-syntax.json','workflow-syntax.json')},
+            'runtime_archive_sha256':ci.ARCHIVE_SHA256}
+        return value
+
+    def test_validation_parent_commit_run_source_collection_and_all_counts(self):
+        import alpha_radar_ci as ci
+        with patch.dict(os.environ,{'GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1'}):
+            value=self.proof();parent=ci.digest(ci.canonical(value))
+            self.assertEqual(ci.check_validation_proof(value,parent),value)
+            with self.assertRaises(ValueError):ci.check_validation_proof(value,'b'*64)
+            mutations=[lambda v:v.update(source_commit='b'*40),lambda v:v.update(run_id='2'),
+                lambda v:v.update(run_attempt=2),lambda v:v.update(job='native'),
+                lambda v:v.update(collection_parent='b'*64),lambda v:v.update(source_bindings={}),
+                lambda v:v['offline'].update(passed=0),lambda v:v['offline'].update(skipped=1),
+                lambda v:v['offline'].update(failed=1),lambda v:v['offline'].update(executed=0),
+                lambda v:v.update(fresh_stdio=0),lambda v:v.update(fresh_export=0),
+                lambda v:v.update(result_parents={}),lambda v:v.update(runtime_archive_sha256='b'*64)]
+            for mutate in mutations:
+                bad=deepcopy(value);mutate(bad)
+                with self.assertRaises(ValueError):ci.check_validation_proof(bad,ci.digest(ci.canonical(bad)))
+
+    def test_validation_import_rejects_noncanonical_duplicate_or_bad_parent(self):
+        import alpha_radar_ci as ci,base64
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        with patch.dict(os.environ,{'GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'native'}),patch.object(ci,'hosted'):
+            value=self.proof();raw=ci.canonical(value)
+            for data,expected in [(raw,'b'*64),(b'{"a":1,"a":2}',ci.digest(b'{"a":1,"a":2}')),
+                                  (b' '+raw,ci.digest(raw)),(b'not-json','a'*64)]:
+                with patch.dict(os.environ,{'IIOS_VALIDATION_PROOF':base64.b64encode(data).decode(),
+                                          'IIOS_EXPECTED_VALIDATION_SHA256':expected}),patch.object(ci,'put') as publish:
+                    with self.assertRaises(ValueError):ci.import_validation(root)
+                    publish.assert_not_called()
+
+    def test_new_preparation_phases_install_audit_before_dispatch(self):
+        import alpha_radar_ci as ci
+        for phase,handler in [('validation-proof','publish_validation'),('accept-validation','import_validation')]:
+            order=[]
+            with patch('sys.argv',['ci',phase,'--root','/not-accessed']), \
+                patch.object(ci.sys,'addaudithook',side_effect=lambda _:order.append('AUDIT')), \
+                patch.object(ci,handler,side_effect=lambda _:order.append('HANDLER')), \
+                patch.object(ci,'execute_full') as execute:
+                self.assertEqual(ci.main(),0)
+            self.assertEqual(order,['AUDIT','HANDLER']);execute.assert_not_called()
+
+    def test_budget_requires_cleanup_export_and_real_clock_reserves(self):
+        import alpha_radar_runner as run
+        d=self.descriptor();b=run.full_launch_budget(d,monotonic=lambda:101)
+        self.assertEqual(b['real_clock_seconds'],65);self.assertEqual(b['cleanup_seconds'],180)
+        self.assertLessEqual(b['cleanup_deadline']+b['export_seconds'],b['hard_deadline'])
+        for tick in (100,202,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):run.full_launch_budget(d,monotonic=lambda:tick)
+        for key,val in [('cleanup_seconds',0),('export_seconds',0),('real_clock_seconds',60),
+            ('work_seconds',900),('hard_deadline',5000),('cleanup_deadline',5000),
+            ('work_deadline',5000),('prepared_monotonic',float('nan'))]:
+            bad=deepcopy(d);bad['budget'][key]=val
+            with self.assertRaises(ValueError):run.full_budget(bad)
+        bad=deepcopy(d);bad['validation_parent']=''
+        with self.assertRaises(ValueError):run.full_budget(bad)
+
+    def test_insufficient_budget_prevents_admission_or_process_creation(self):
+        import alpha_radar_runner as run
+        d=self.descriptor()
+        with patch.object(run,'full_descriptor'),patch.object(run,'full_launch_budget',side_effect=ValueError('FULL_INSUFFICIENT_BUDGET')), \
+            patch.object(run,'admit') as admit_mock,patch.object(run,'full_supervise') as supervise:
+            with self.assertRaisesRegex(ValueError,'FULL_INSUFFICIENT_BUDGET'):run.full_main(d,content_hash(d),None)
+        admit_mock.assert_not_called();supervise.assert_not_called()
+
+    def test_cancellation_handlers_only_request_and_restore_without_signals(self):
+        import alpha_radar_runner as run,signal
+        with patch.object(signal,'getsignal',return_value='previous'),patch.object(signal,'signal') as register, \
+            patch.object(os,'kill') as kill:
+            with run.FullCancellation() as cancel:
+                self.assertFalse(cancel());cancel.request(signal.SIGTERM,None);self.assertTrue(cancel())
+            self.assertEqual(register.call_count,4);kill.assert_not_called()
+            self.assertEqual(register.call_args_list[-1].args[1],'previous')
+
+    def test_cancel_receipt_requires_independent_launch_and_parent(self):
+        import alpha_radar_runner as run
+        root,p,r,e,d,parents=FullSessionModeTests().inputs();cap=admit(p,r,expected=e,authorized_root=root)
+        launch={**run.FULL_FLAGS,'descriptor':d,'output_identity':list(cap.output_identity),'parent_pid':12345,'role':'fixture'}
+        run.full_store(cap,parents,'fs-fixture-launch.json',launch)
+        with patch.object(run,'verify_tools'):
+            with self.assertRaises(ValueError):run.request_full_cancel(d,'b'*64,12345)
+            with self.assertRaises(ValueError):run.request_full_cancel(d,content_hash(d),12346)
+            self.assertFalse((Path(p['root'])/'fs-cancel.json').exists())
+            run.request_full_cancel(d,content_hash(d),12345)
+            raw=(Path(p['root'])/'fs-cancel.json').read_bytes()
+            run.request_full_cancel(d,content_hash(d),12345)
+            self.assertEqual((Path(p['root'])/'fs-cancel.json').read_bytes(),raw)
+
+    def test_logical_jump_exact_target_rate_and_no_actual_sleep(self):
+        import alpha_radar_runner as run,time
+        s,now,_,_=FullSessionModeTests().session();s.next_slot=1
+        before=now[0];target=utc(s.p['plan']['rows'][1]['valid_from'])
+        with patch.object(time,'sleep',side_effect=AssertionError('REAL_WAIT')):
+            run.advance_full_clock(s,now,1)
+        self.assertEqual(now[0],target);self.assertGreater((target-before).total_seconds(),60)
+        for seconds in (0,-1,2,float('nan')):
+            with self.assertRaises(ValueError):run.advance_full_clock(s,now,seconds)
+        s.rate.starts=[target.timestamp()]*3;now[0]=target
+        run.advance_full_clock(s,now,1);self.assertEqual(now[0],target+timedelta(seconds=60))
+        with self.assertRaises(ValueError):run.advance_full_clock(s,now,1)
+
+    def test_cleanup_expired_budget_preserves_failure_and_continues_both_roles(self):
+        import alpha_radar_runner as run
+        owned,observations=FullSessionModeTests().owned()
+        # This test uses the same independent role setup and mocked process boundary.
+        with patch.object(owned,'monotonic',return_value=1000):
+            result=owned.cleanup(lambda:True,deadline=999)
+        self.assertFalse(result['clean']);self.assertEqual(set(result['role_findings']),{'fixture','worker'})
+        for value in result['role_findings'].values():
+            self.assertTrue(value['ownership_verified']);self.assertFalse(value['exit_verified'])
+            self.assertTrue(value['cleanup_failures']);self.assertEqual(value['signals'],0)
+        self.assertEqual(result['port_clear_observations'],[True,True,True])
+
+    def test_workflow_validates_once_and_native_requires_same_commit_proof(self):
+        import alpha_radar_ci as ci,ast
+        text=(ci.REPO/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        validation,native=text.split('\n  native:\n')
+        self.assertEqual(text.count('alpha_radar_ci.py offline'),1)
+        self.assertIn('needs: validation',native);self.assertNotIn('alpha_radar_ci.py offline',native)
+        self.assertNotIn('test_alpha_radar_export_process.py',native)
+        self.assertIn('needs.validation.outputs.proof_sha256',native)
+        self.assertIn('needs.validation.outputs.proof',native)
+        self.assertIn("github.event_name == 'workflow_dispatch'",native)
+        self.assertIn('timeout-minutes: 60',native);self.assertIn('timeout-minutes: 60',validation)
+        source=Path(ci.__file__).read_text();tree=ast.parse(source)
+        for name in ('execute','execute_lifecycle','execute_full'):
+            f=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
+            calls=[n.func.id for n in ast.walk(f) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)]
+            self.assertIn('require_validation',calls);self.assertNotIn('offline',calls)
+
+    def test_native_job_budget_rejects_slow_preparation_and_clock_rollback(self):
+        import alpha_radar_ci as ci
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        env={'GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1',
+             'GITHUB_JOB':'native','IIOS_NATIVE_JOB_START':'100'}
+        with patch.dict(os.environ,env),patch.object(ci,'document') as publish:
+            for tick in (99,401,float('nan')):
+                with patch.object(ci.time,'monotonic',return_value=tick),self.assertRaises(ValueError):
+                    ci.prepare_job_budget(root)
+            publish.assert_not_called()
+            with patch.object(ci.time,'monotonic',return_value=101):b=ci.prepare_job_budget(root)
+            self.assertEqual(b['work_seconds'],2700)
+            self.assertEqual(b['work_deadline']-b['prepared_monotonic'],2865)
+            self.assertLessEqual(b['cleanup_deadline']+180,b['hard_deadline'])
+            publish.assert_called_once()
+
+    def test_publish_validation_requires_complete_records_and_exclusive_receipt(self):
+        import alpha_radar_ci as ci
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        (root/'export').mkdir(exist_ok=True)
+        env={'GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'validation'}
+        with patch.dict(os.environ,env),patch.object(ci,'hosted'):
+            partition=ci.collect_validation();binding=ci.source_bindings();count=len(partition['offline'])
+            records={'offline-collection.json':partition,
+                'offline-results.json':{'scope':'MOCKED_OFFLINE_ONLY','success':True,'collected':count,
+                    'executed':count,'passed':count,'skipped':[],'source_bindings':binding,
+                    'timings':[{'node':n} for n in partition['offline']]},
+                'fresh-stdio-results.json':{'scope':'FRESH_PROCESS_STDIO_ONLY','success':True,'collected':4,
+                    'executed':4,'source_bindings':binding},
+                'fresh-export-results.json':{'scope':'FRESH_PROCESS_EXPORT_ONLY','success':True,'collected':10,
+                    'executed':10,'skipped':0,'source_bindings':binding},
+                'python-syntax.json':{'scope':'STATIC_SYNTAX_ONLY','success':True,'skipped':0,
+                    'collected':len([n for n in ci.binding_paths() if n.endswith('.py')]),
+                    'executed':len([n for n in ci.binding_paths() if n.endswith('.py')]),'source_bindings':binding},
+                'workflow-syntax.json':{'scope':'STATIC_SYNTAX_ONLY','success':True,'scripts':18,'executed_commands':0}}
+            for name,record in records.items():ci.document(root/'export'/name,record)
+            ci.publish_validation(root)
+            receipt=json.loads((root/'export/validation-proof.json').read_bytes())
+            self.assertEqual(receipt['offline']['executed'],count)
+            for name,parent in receipt['result_parents'].items():
+                self.assertEqual(parent,ci.digest((root/'export'/name).read_bytes()))
+            with self.assertRaises(FileExistsError):ci.publish_validation(root)
+            with patch.object(ci,'verify_bindings',side_effect=ValueError('OFFLINE_SOURCE_BINDING')):
+                with self.assertRaises(ValueError):ci.publish_validation(root)
+
+    def test_validation_record_rejects_aliases_modes_and_unknown_names_before_open(self):
+        import alpha_radar_ci as ci,stat
+        from types import SimpleNamespace
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        directory=SimpleNamespace(st_mode=stat.S_IFDIR|0o700,st_uid=os.getuid())
+        regular=SimpleNamespace(st_mode=stat.S_IFREG|0o400,st_uid=os.getuid(),st_nlink=1,st_size=10)
+        for changed in ({'st_mode':stat.S_IFLNK|0o400},{'st_mode':stat.S_IFREG|0o600},
+                        {'st_nlink':2},{'st_size':1_000_001},{'st_uid':os.getuid()+1}):
+            bad=SimpleNamespace(**{**regular.__dict__,**changed})
+            with patch.object(ci,'root_check'),patch.object(Path,'lstat',side_effect=[directory,bad]), \
+                patch.object(ci.os,'open') as opened:
+                with self.assertRaises(ValueError):ci.validation_record(root,'validation-proof.json')
+                opened.assert_not_called()
+        with patch.object(Path,'lstat') as metadata,patch.object(ci.os,'open') as opened:
+            with self.assertRaises(ValueError):ci.validation_record(root,'../not-admitted')
+            metadata.assert_not_called();opened.assert_not_called()

@@ -589,6 +589,175 @@ def verify_bindings(expected):
     require(expected==source_bindings(),'OFFLINE_SOURCE_BINDING')
 
 
+# CI outputs are an independent parent from the successful validation job. They
+# never substitute validation-runner runtime identities for native-runner pins.
+FAILURES = frozenset((*FAILURES,'VALIDATION_PARENT','VALIDATION_COLLECTION','VALIDATION_RESULTS','NATIVE_JOB_BUDGET'))
+VALIDATION_SCOPE = 'MOCKED_AND_FRESH_PROCESS_VALIDATION_ONLY'
+NATIVE_JOB_SECONDS = 3600
+NATIVE_START_RESERVE = 60
+NATIVE_PREPARATION_SECONDS = 300
+NATIVE_STARTUP_SECONDS = 100
+REAL_CLOCK_SECONDS = 65
+FULL_WORK_SECONDS = 2700
+CLEANUP_SECONDS = 180
+EXPORT_SECONDS = 180
+
+
+def collect_validation():
+    sys.path[:0] = [str(REPO/'tests/native'), str(REPO/'BACK END/backend')]
+    _, partition = offline_partition(unittest.defaultTestLoader.loadTestsFromNames(
+        ['test_alpha_radar_native', 'test_truth_spine_process_identity']))
+    return partition
+
+
+def validation_identity():
+    require(re.fullmatch('[a-f0-9]{40}', os.environ.get('GITHUB_SHA', '')) and
+            re.fullmatch('[0-9]+', os.environ.get('GITHUB_RUN_ID', '')) and
+            os.environ.get('GITHUB_RUN_ATTEMPT') == '1', 'VALIDATION_PARENT')
+    return {'source_commit': os.environ['GITHUB_SHA'],
+            'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': 1}
+
+
+def validation_record(root, name):
+    require(name in ('offline-collection.json','offline-results.json','fresh-stdio-results.json',
+        'fresh-export-results.json','python-syntax.json','workflow-syntax.json','validation-proof.json'),
+        'VALIDATION_PARENT')
+    root_check(root)
+    directory=root/'export'; parent=directory.lstat()
+    require(stat.S_ISDIR(parent.st_mode) and parent.st_uid==os.getuid() and
+        not parent.st_mode & 0o022, 'VALIDATION_PARENT')
+    path=directory/name; before=path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_uid==os.getuid()
+        and stat.S_IMODE(before.st_mode)==0o400 and before.st_size<=1_000_000,'VALIDATION_PARENT')
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+    try:
+        actual=os.fstat(fd)
+        require((actual.st_dev,actual.st_ino)==(before.st_dev,before.st_ino),'VALIDATION_PARENT')
+        with os.fdopen(fd,'rb',closefd=False) as stream: raw=stream.read(1_000_001)
+        after=os.fstat(fd)
+    finally: os.close(fd)
+    require(len(raw)==before.st_size and (after.st_size,after.st_mtime_ns)==
+        (before.st_size,before.st_mtime_ns),'VALIDATION_PARENT')
+    return raw
+
+
+def check_validation_proof(value, expected):
+    require(type(expected) is str and re.fullmatch('[a-f0-9]{64}', expected) and
+            digest(canonical(value)) == expected, 'VALIDATION_PARENT')
+    require(type(value) is dict and set(value) == {'schema','scope','source_commit','run_id',
+        'run_attempt','job','source_bindings','collection_parent','offline','fresh_stdio',
+        'fresh_export','result_parents','runtime_archive_sha256'}, 'VALIDATION_PARENT')
+    require(value['schema'] == 'iios-offline-validation-v1' and value['scope'] == VALIDATION_SCOPE
+        and value['job'] == 'validation' and all(value[k] == v for k,v in validation_identity().items())
+        and value['runtime_archive_sha256'] == ARCHIVE_SHA256, 'VALIDATION_PARENT')
+    verify_bindings(value['source_bindings'])
+    partition = collect_validation()
+    require(value['collection_parent'] == digest(canonical(partition)), 'VALIDATION_COLLECTION')
+    require(value['offline'] == {'executed':len(partition['offline']), 'passed':len(partition['offline']),
+        'failed':0, 'errors':0, 'skipped':0, 'native_not_run':partition['native_not_run']} and
+        value['fresh_stdio'] == 4 and value['fresh_export'] == 10, 'VALIDATION_RESULTS')
+    require(type(value['result_parents']) is dict and set(value['result_parents']) == {
+        'offline-results.json','fresh-stdio-results.json','fresh-export-results.json','python-syntax.json','workflow-syntax.json'} and
+        all(type(v) is str and re.fullmatch('[a-f0-9]{64}', v) for v in value['result_parents'].values()),
+        'VALIDATION_PARENT')
+    return value
+
+
+def publish_validation(root):
+    root_check(root); hosted()
+    require(os.environ.get('GITHUB_JOB') == 'validation', 'VALIDATION_PARENT')
+    partition = collect_validation()
+    require(json.loads(validation_record(root,'offline-collection.json')) == partition,
+        'VALIDATION_COLLECTION')
+    records = {n: json.loads(validation_record(root,n)) for n in
+        ('offline-results.json','fresh-stdio-results.json','fresh-export-results.json')}
+    for name, result in records.items():
+        verify_bindings(result['source_bindings'])
+        require(result['scope'] == {'offline-results.json':'MOCKED_OFFLINE_ONLY', 'fresh-stdio-results.json':'FRESH_PROCESS_STDIO_ONLY', 'fresh-export-results.json':'FRESH_PROCESS_EXPORT_ONLY'}[name], 'VALIDATION_RESULTS')
+        require(result['success'] is True and result['executed'] == result['collected']
+            and not result.get('skipped') and not result.get('errors') and not result.get('failed'),
+            'VALIDATION_RESULTS')
+    syntax=json.loads(validation_record(root,'python-syntax.json'))
+    workflow=json.loads(validation_record(root,'workflow-syntax.json'))
+    verify_bindings(syntax['source_bindings'])
+    require(syntax['scope']=='STATIC_SYNTAX_ONLY' and syntax['success'] is True and
+        syntax['executed']==syntax['collected']==len([n for n in binding_paths() if n.endswith('.py')])
+        and syntax['skipped']==0 and workflow['scope']=='STATIC_SYNTAX_ONLY' and
+        workflow['success'] is True and workflow['executed_commands']==0 and workflow['scripts']>0,
+        'VALIDATION_RESULTS')
+    off = records['offline-results.json']
+    require(off['executed'] == off['passed'] == len(partition['offline']) and
+        [r['node'] for r in off['timings']] == partition['offline'], 'VALIDATION_RESULTS')
+    value = {'schema':'iios-offline-validation-v1','scope':VALIDATION_SCOPE,**validation_identity(),
+        'job':'validation','source_bindings':source_bindings(),
+        'collection_parent':digest(canonical(partition)),
+        'offline':{'executed':off['executed'],'passed':off['passed'],'failed':0,'errors':0,'skipped':0,
+                   'native_not_run':partition['native_not_run']},
+        'fresh_stdio':records['fresh-stdio-results.json']['executed'],
+        'fresh_export':records['fresh-export-results.json']['executed'],
+        'result_parents':{n:digest(validation_record(root,n)) for n in (*records,'python-syntax.json','workflow-syntax.json')},
+        'runtime_archive_sha256':ARCHIVE_SHA256}
+    check_validation_proof(value,digest(canonical(value)))
+    document(root/'export/validation-proof.json',value)
+
+
+def import_validation(root):
+    import base64
+    root_check(root); hosted()
+    require(os.environ.get('GITHUB_JOB') == 'native', 'VALIDATION_PARENT')
+    encoded = os.environ.get('IIOS_VALIDATION_PROOF', '')
+    require(type(encoded) is str and 0 < len(encoded) <= 32000, 'VALIDATION_PARENT')
+    try: raw = base64.b64decode(encoded, validate=True); value = json.loads(raw)
+    except (ValueError, TypeError): raise ValueError('VALIDATION_PARENT') from None
+    expected = os.environ.get('IIOS_EXPECTED_VALIDATION_SHA256')
+    require(canonical(value) == raw, 'VALIDATION_PARENT')
+    check_validation_proof(value,expected)
+    put(root/'export/validation-proof.json',raw)
+
+
+def require_validation(root):
+    expected = os.environ.get('IIOS_EXPECTED_VALIDATION_SHA256')
+    value = json.loads(validation_record(root,'validation-proof.json'))
+    return check_validation_proof(value,expected)
+
+
+def prepare_job_budget(root):
+    require(os.environ.get('GITHUB_JOB') == 'native', 'NATIVE_JOB_BUDGET')
+    try: start = float(os.environ['IIOS_NATIVE_JOB_START'])
+    except (ValueError, KeyError): raise ValueError('NATIVE_JOB_BUDGET') from None
+    now = time.monotonic()
+    require(0 <= now-start <= NATIVE_PREPARATION_SECONDS and start > 0, 'NATIVE_JOB_BUDGET')
+    value = {'schema':'iios-native-job-budget-v1', **validation_identity(),
+        'start_monotonic':start,'prepared_monotonic':now,
+        'hard_deadline':start+NATIVE_JOB_SECONDS-NATIVE_START_RESERVE,
+        'work_deadline':now+NATIVE_STARTUP_SECONDS+REAL_CLOCK_SECONDS+FULL_WORK_SECONDS,
+        'cleanup_deadline':now+NATIVE_STARTUP_SECONDS+REAL_CLOCK_SECONDS+FULL_WORK_SECONDS+CLEANUP_SECONDS,
+        'cleanup_seconds':CLEANUP_SECONDS,'export_seconds':EXPORT_SECONDS,
+        'real_clock_seconds':REAL_CLOCK_SECONDS,'work_seconds':FULL_WORK_SECONDS}
+    require(value['cleanup_deadline']+EXPORT_SECONDS <= value['hard_deadline'], 'NATIVE_JOB_BUDGET')
+    document(root/'export/native-job-budget.json',value)
+    return value
+
+class TimedOfflineResult(unittest.TestResult):
+    """Measure real wall/CPU cost; never replace a test's injected clock."""
+    def __init__(self, destination):
+        super().__init__()
+        self.destination = destination
+        self.timings = []
+
+    def startTest(self, test):
+        super().startTest(test)
+        self.started = (time.perf_counter(), time.process_time())
+
+    def stopTest(self, test):
+        wall, cpu = self.started
+        row = {'node': test.id(), 'wall_seconds': time.perf_counter()-wall,
+               'cpu_seconds': time.process_time()-cpu}
+        self.timings.append(row)
+        document(self.destination/('test-duration-%04d.json' % len(self.timings)), row)
+        super().stopTest(test)
+
+
 def offline(root):
     """Every native-harness test is mocked; an audit hook rejects OS dispatch."""
     root_check(root)
@@ -640,7 +809,7 @@ def offline(root):
     suite,partition=offline_partition(unittest.defaultTestLoader.loadTestsFromNames(names))
     ids=partition['offline']
     document(root/'export'/'offline-collection.json',partition)
-    result=unittest.TestResult();result.failfast=True
+    result=TimedOfflineResult(root/'export');result.failfast=True
     suite.run(result)
     document(root/'export'/'offline-results.json',{'collected':len(ids),'executed':result.testsRun,
         'passed':result.testsRun-len(result.errors)-len(result.failures)-len(result.skipped),
@@ -648,7 +817,9 @@ def offline(root):
         'skipped':[t.id() for t,_ in result.skipped], 'success':result.wasSuccessful(),
         'scope':'MOCKED_OFFLINE_ONLY','test_root':str(test_root),
         'source_bindings':bindings_before,
-        'failure_text':'NOT_RETAINED_UNRESTRICTED'})
+        'failure_text':'NOT_RETAINED_UNRESTRICTED',
+        'timings':result.timings,
+        'slowest':sorted(result.timings,key=lambda row:row['wall_seconds'],reverse=True)[:20]})
     require(result.wasSuccessful() and result.testsRun==len(ids) and not result.skipped,'OFFLINE_FAILED')
     verify_bindings(bindings_before)
 
@@ -670,10 +841,7 @@ def execute(root, *, native_startup=False):
     verify_inputs(d['package'],d['runtime'],d['expected'],root);verify_tools(d['native_tools'])
     require(not out.exists() and not (root/'confinement-denied-input').exists() and
             not (root/'native-attempt.json').exists(),'ATTEMPT_ALREADY_EXISTS')
-    offline_result=json.loads((root/'export'/'offline-results.json').read_bytes())
-    require(offline_result['success'] is True and not offline_result['skipped'] and
-            offline_result['collected']==offline_result['executed'],'OFFLINE_REQUIRED')
-    verify_bindings(offline_result['source_bindings'])
+    require_validation(root)
     document(root/'native-attempt.json',{'descriptor_parent':pins['descriptor_sha256'],
                                        'attempt':1,'execution_mode':d['execution_mode']})
     argv=[str(runtime/'python/bin/python3.13'),'-B',str(runtime/'source/alpha_radar_runner.py'),
@@ -742,14 +910,7 @@ def execute_lifecycle(root, *, explicit_request=False):
     descriptor_schema(old); require(startup_only(old), 'STARTUP_ONLY_REQUIRED')
     require(not out.exists() and not (root/'lifecycle-attempt.json').exists() and
             not (root/'native-attempt.json').exists(), 'ATTEMPT_ALREADY_EXISTS')
-    result = json.loads((root/'export/offline-results.json').read_bytes())
-    require(result['success'] and not result['skipped'] and result['executed'] == result['collected'], 'OFFLINE_REQUIRED')
-    verify_bindings(result['source_bindings'])
-    fresh = json.loads((root/'export/fresh-export-results.json').read_bytes())
-    require(fresh['scope'] == 'FRESH_PROCESS_EXPORT_ONLY' and fresh['success'] is True and
-            fresh['skipped'] == 0 and fresh['collected'] == fresh['executed'] and
-            fresh['executed'] > 0, 'OFFLINE_REQUIRED')
-    verify_bindings(fresh['source_bindings'])
+    require_validation(root)
     d = {k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools','maximum_duration_seconds')}
     d.update(schema='iios-ci-native-lifecycle-v1', execution_mode=LIFECYCLE_SCOPE,
              context={k:os.environ[k] for k in LIFECYCLE_CONTEXT})
@@ -871,8 +1032,11 @@ def prepare_full_descriptor(root,old):
     from provider_gateway_contract import content_hash
     d={k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools')}
     package=full_package(old['package'],old['expected'])
-    d.update(schema='iios-ci-full-session-descriptor-v1',execution_mode=FULL_SCOPE,
-        maximum_duration_seconds=900,context={k:os.environ[k] for k in LIFECYCLE_CONTEXT},
+    require_validation(root)
+    budget=prepare_job_budget(root)
+    d.update(schema='iios-ci-full-session-descriptor-v2',execution_mode=FULL_SCOPE,
+        budget=budget,validation_parent=os.environ['IIOS_EXPECTED_VALIDATION_SHA256'],
+        maximum_duration_seconds=FULL_WORK_SECONDS,context={k:os.environ[k] for k in LIFECYCLE_CONTEXT},
         session_package=package,session_package_parent=content_hash(package))
     parents=full_descriptor(d)
     document(root/'full-descriptor.json',d)
@@ -887,16 +1051,13 @@ def execute_full(root,*,explicit_request=False):
         'execution-output','native-attempt.json','lifecycle-attempt.json')),'ATTEMPT_ALREADY_EXISTS')
     sys.path.insert(0,str(runtime/'source'))
     from alpha_radar_runner import (read_descriptor,full_descriptor,FULL_FLAGS,lifecycle_environment,
-        LifecycleStreams,close_lifecycle_stdin,verify_full_receipt)
+        LifecycleStreams,close_lifecycle_stdin,verify_full_receipt,full_launch_budget,FullCancellation,request_full_cancel)
     pins=json.loads((root/'export/full-pins.json').read_bytes())
     d=read_descriptor(root/'full-descriptor.json',pins['descriptor_parent']); parents=full_descriptor(d)
     require(parents==pins['parents'] and d['package']['source_commit']==os.environ['GITHUB_SHA'],'SOURCE_PIN')
-    result=json.loads((root/'export/offline-results.json').read_bytes())
-    require(result['success'] is True and not result['skipped'] and result['executed']==result['collected'],'OFFLINE_REQUIRED')
-    verify_bindings(result['source_bindings'])
-    fresh=json.loads((root/'export/fresh-export-results.json').read_bytes())
-    require(fresh['success'] is True and fresh['skipped']==0 and fresh['collected']==fresh['executed'],'OFFLINE_REQUIRED')
-    verify_bindings(fresh['source_bindings'])
+    require_validation(root)
+    require(d['validation_parent']==os.environ['IIOS_EXPECTED_VALIDATION_SHA256'],'VALIDATION_PARENT')
+    budget=full_launch_budget(d)
     argv=[str(runtime/'python/bin/python3.13'),'-B',str(runtime/'source/alpha_radar_runner.py'),
         '--ci-full-session-only','--descriptor',str(root/'full-descriptor.json'),'--expected-descriptor',pins['descriptor_parent']]
     env=lifecycle_environment(d['context']); launched=[False]
@@ -908,16 +1069,28 @@ def execute_full(root,*,explicit_request=False):
             launched[0]=True
         else: preparation_audit(name,args)
     sys.addaudithook(boundary)
-    child=subprocess.Popen(argv,cwd=root,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,close_fds=True,env=env)
-    close_lifecycle_stdin(child); capture=LifecycleStreams(child); start=time.monotonic()
-    while child.poll() is None and time.monotonic()-start<1020:
-        capture.drain(); time.sleep(.05)
-    capture.drain()
-    if child.poll() is not None: capture.close()
+    cancellation_failures=[]; cancel_sent=False
+    # SIGINT/SIGTERM request cooperative cancellation; no unverified PID is signaled.
+    with FullCancellation() as cancelled:
+        full_launch_budget(d)
+        child=subprocess.Popen(argv,cwd=root,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,close_fds=True,env=env)
+        close_lifecycle_stdin(child); capture=LifecycleStreams(child)
+        while child.poll() is None and time.monotonic()<budget['cleanup_deadline']:
+            capture.drain()
+            if (cancelled() or time.monotonic()>=budget['work_deadline']) and not cancel_sent:
+                try:
+                    request_full_cancel(d,pins['descriptor_parent'],child.pid); cancel_sent=True
+                except FileNotFoundError: pass  # child has not published its pinned launch yet
+                except Exception:
+                    cancellation_failures.append('COOPERATIVE_CANCEL_UNVERIFIED'); break
+            time.sleep(.05)
+        capture.drain()
+        if child.poll() is not None: capture.close()
     document(root/'export/full-supervisor.json',{**FULL_FLAGS,'descriptor_parent':pins['descriptor_parent'],
-        'supervisor_pid':child.pid,'returncode':child.returncode,'diagnostics':capture.snapshot()})
-    require(child.returncode==0 and capture.eof and not capture.overflow and capture.stdout.received==0,'SUPERVISOR_FAILED')
+        'supervisor_pid':child.pid,'returncode':child.returncode,'diagnostics':capture.snapshot(),
+        'budget':budget,'cancel_sent':cancel_sent,'cancellation_failures':cancellation_failures})
+    require(not cancellation_failures and child.returncode==0 and capture.eof and not capture.overflow and capture.stdout.received==0,'SUPERVISOR_FAILED')
     doc=json.loads((out/'fs-final.json').read_bytes())
     value=verify_full_receipt(doc,digest(canonical(doc)),parents)
     require(value['classification']=='FULL_SYNTHETIC_PASS' and value['cleanup']['clean'] is True and
@@ -1352,7 +1525,7 @@ def profile_probe(root):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session'))
+    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session','validation-proof','accept-validation'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
     parser.add_argument('--native-startup', action='store_true', default=False)
     parser.add_argument('--lifecycle-only', action='store_true', default=False)
@@ -1377,6 +1550,8 @@ def main():
         elif args.phase == 'profile-probe':
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             profile_probe(root)
+        elif args.phase == 'validation-proof': publish_validation(root)
+        elif args.phase == 'accept-validation': import_validation(root)
         elif args.phase == 'execute': execute(root, native_startup=args.native_startup)
         elif args.phase in ('prepare','finalize'):
             if args.prepare_full_session: globals()[args.phase](root,args.commit,full_session=True)

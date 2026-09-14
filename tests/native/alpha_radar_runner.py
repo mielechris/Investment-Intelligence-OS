@@ -70,7 +70,8 @@ FAILURE_CODES = frozenset(('PROCESS_ABSENT', 'PROCESS_IDENTITY',
     'CONFINEMENT_SENTINEL_MISSING', 'IMPORTED_CLOSURE', 'NATIVE_RUNTIME',
     'DIAGNOSTIC_PUBLICATION_FAILED', 'DIAGNOSTIC_OVERFLOW', 'DIAGNOSTIC_PIPE_FAILED',
     'LIFECYCLE_ENVIRONMENT', 'LIFECYCLE_WRITE', 'LIFECYCLE_STDIO',
-    'LIFECYCLE_STDOUT_UNEXPECTED'))
+    'LIFECYCLE_STDOUT_UNEXPECTED','FULL_JOB_BUDGET','FULL_INSUFFICIENT_BUDGET',
+    'FULL_CANCELLED','FULL_CLEANUP_DEADLINE','FULL_VALIDATION_PARENT'))
 
 
 def failure_category(error):
@@ -1512,13 +1513,99 @@ FULL_FLAGS = {'scope': FULL_SCOPE, 'production_qualified': False,
     'timing_proof': FULL_TIMING, **AUTHORITY}
 
 
+def full_budget(d):
+    """Pinned native-job deadlines; logical market time cannot extend them."""
+    import math
+    b = d['budget']
+    require(type(b) is dict and set(b) == {'schema','source_commit','run_id','run_attempt',
+        'start_monotonic','prepared_monotonic','hard_deadline','work_deadline','cleanup_deadline',
+        'cleanup_seconds','export_seconds','real_clock_seconds','work_seconds'}, 'FULL_JOB_BUDGET')
+    require(b['schema'] == 'iios-native-job-budget-v1' and
+        b['source_commit'] == d['context']['GITHUB_SHA'] and b['run_id'] == d['context']['GITHUB_RUN_ID']
+        and type(b['run_attempt']) is int and b['run_attempt'] == 1, 'FULL_JOB_BUDGET')
+    for key in ('start_monotonic','prepared_monotonic','hard_deadline','work_deadline','cleanup_deadline'):
+        require(type(b[key]) in (int,float) and math.isfinite(b[key]) and b[key] > 0,'FULL_JOB_BUDGET')
+    require(b['cleanup_seconds'] == b['export_seconds'] == 180 and b['real_clock_seconds'] == 65
+        and b['work_seconds'] == d['maximum_duration_seconds'] == 2700 and
+        0 <= b['prepared_monotonic']-b['start_monotonic'] <= 300 and
+        b['hard_deadline'] == b['start_monotonic']+3540 and
+        b['work_deadline'] == b['prepared_monotonic']+2865 and
+        b['cleanup_deadline'] == b['work_deadline']+180 and
+        b['cleanup_deadline']+180 <= b['hard_deadline'], 'FULL_JOB_BUDGET')
+    require(type(d['validation_parent']) is str and
+        re.fullmatch('[a-f0-9]{64}',d['validation_parent']), 'FULL_VALIDATION_PARENT')
+    return b
+
+
+def full_launch_budget(d, *, monotonic=time.monotonic):
+    b = full_budget(d); now = monotonic()
+    require(b['prepared_monotonic'] <= now and b['work_deadline']-now >= 2765,
+            'FULL_INSUFFICIENT_BUDGET')
+    return b
+
+
+def advance_full_clock(session, now, seconds):
+    """Jump only to the scheduler's exact next eligible target; no real sleep.
+
+    The shared scheduler still checks stop, window, order and pacing. Actual UTC,
+    monotonic wire timeouts and cleanup clocks are independent of this list.
+    """
+    require(type(session) is FullSession and type(seconds) in (int,float) and 0 < seconds <= 1,
+            'FULL_CLOCK')
+    require(0 <= session.next_slot < 475, 'FULL_REQUEST_ORDER')
+    target = utc(session.p['plan']['rows'][session.next_slot]['valid_from'])
+    if len(session.rate.starts) >= 3:
+        target = max(target,datetime.fromtimestamp(session.rate.starts[-3]+60,timezone.utc))
+    gap = (target-now[0]).total_seconds()
+    require(gap > 0 and seconds == min(1.0,gap), 'FULL_CLOCK')
+    now[0] = target
+
+
+class FullCancellation:
+    """Handlers request cooperative shutdown; never send a process signal."""
+    def __init__(self): self.requested = False; self.previous = {}
+    def __call__(self): return self.requested
+    def request(self, *_): self.requested = True
+    def __enter__(self):
+        import signal
+        for number in (signal.SIGINT,signal.SIGTERM):
+            self.previous[number] = signal.getsignal(number)
+            signal.signal(number,self.request)
+        return self
+    def __exit__(self,*_):
+        import signal
+        for number,handler in self.previous.items(): signal.signal(number,handler)
+
+
+def request_full_cancel(d, expected, supervisor_pid):
+    """A pinned cooperative message, not authority to signal any PID."""
+    require(content_hash(d) == expected and type(supervisor_pid) is int and supervisor_pid > 0,
+            'FULL_CANCEL_PARENT')
+    parents = full_descriptor(d); p,r = d['package'],d['runtime']
+    identities = verify_inputs(p,r,d['expected'],d['authorized_root'])
+    fd = safe_root(p['root'])
+    try:
+        st = os.fstat(fd); doc = read_record(fd,'fs-fixture-launch.json')
+    finally: os.close(fd)
+    launch = verify_full_receipt(doc,content_hash(doc),parents)
+    require(launch['descriptor'] == d and launch['parent_pid'] == supervisor_pid and
+        launch['role'] == 'fixture' and launch['output_identity'] == [st.st_dev,st.st_ino],
+        'FULL_CANCEL_PARENT')
+    cap = SyntheticCapability(canonical(p),canonical(r),canonical(d['expected']),
+        d['authorized_root'],identities,(st.st_dev,st.st_ino))
+    value = {'event':'CANCEL','supervisor_pid':supervisor_pid,'descriptor_parent':expected}
+    try: full_store(cap,parents,'fs-cancel.json',value)
+    except FileExistsError: full_read(cap,parents,'fs-cancel.json',value=value)
+
+
 def full_descriptor(d):
     require(type(d) is dict and set(d) == {'schema', 'execution_mode', 'package', 'runtime',
         'expected', 'authorized_root', 'native_tools', 'maximum_duration_seconds', 'context',
-        'session_package', 'session_package_parent'}, 'FULL_DESCRIPTOR')
-    require(d['schema'] == 'iios-ci-full-session-descriptor-v1' and d['execution_mode'] == FULL_SCOPE
-        and type(d['maximum_duration_seconds']) is int and 180 <= d['maximum_duration_seconds'] <= 900,
+        'session_package', 'session_package_parent', 'budget', 'validation_parent'}, 'FULL_DESCRIPTOR')
+    require(d['schema'] == 'iios-ci-full-session-descriptor-v2' and d['execution_mode'] == FULL_SCOPE
+        and type(d['maximum_duration_seconds']) is int and d['maximum_duration_seconds'] == 2700,
         'FULL_DESCRIPTOR')
+    full_budget(d)
     lifecycle_environment(d['context'])
     require(d['package']['source_commit'] == d['context']['GITHUB_SHA'], 'FULL_SOURCE')
     verify_inputs(d['package'], d['runtime'], d['expected'], d['authorized_root'])
@@ -1757,7 +1844,7 @@ class FullSession(Session):
         return value,parent
 
 
-def full_accounting(cap, parents, session):
+def full_accounting(cap, parents, session, *, check_deadline=lambda:None):
     """Reconstruct all 1,425 records against independently received session pins."""
     p,_,pins = checked_capability(cap); rows = p['plan']['rows']
     require(session['classification'] == 'FULL_SYNTHETIC_PASS' and
@@ -1768,6 +1855,7 @@ def full_accounting(cap, parents, session):
         require(set(os.listdir(fd)) == {'day.lock'} | {row['id'] for row in rows} |
             {f'{i}.{kind}.json' for i in range(475) for kind in ('reserved','complete')},'FULL_ACCOUNTING')
         for i,row in enumerate(rows):
+            check_deadline()
             reservation_doc = read_record(fd,f'{i}.reserved.json')
             reservation = verify_full_receipt(reservation_doc,content_hash(reservation_doc),parents)
             require(reservation == {'plan':pins['plan'],'slot':i,'source_commit':p['source_commit'],'previous':previous},'FULL_RESERVATION')
@@ -1837,7 +1925,7 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
                 value=full_startup(self.cap,role,launch,entry['observation']))
         return entry['child']
 
-    def cleanup(self,port_clear,*,supervisor_check=None):
+    def cleanup(self,port_clear,*,supervisor_check=None, deadline=None):
         exits = []; roles = {}; supervisor_failures = []; listener_failures = []
         # The supervisor observation is an independent gate, not permission to
         # suppress each child's own pinned ownership verification. No signals.
@@ -1862,7 +1950,9 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
                 stage = 'COOPERATIVE_STOP'
                 full_store(self.cap,self.lifecycle_parents,f'fs-{role}-stop.json',
                     {'event':'STOP','role':role,'launch_parent':entry['launch_parent']})
-                child.wait(timeout=25)
+                remaining=25 if deadline is None else min(25,deadline-self.monotonic())
+                require(remaining>0,'FULL_CLEANUP_DEADLINE')
+                child.wait(timeout=remaining)
                 stage = 'EXIT_VERIFY'
                 require(child.poll() == 0 and entry['observation'] is not None,'COOPERATIVE_SHUTDOWN')
                 full_read(self.cap,self.lifecycle_parents,f'fs-{role}-exit.json',
@@ -2077,7 +2167,7 @@ def full_audit(runtime, output, endpoint, role, *, plan, launch_commands=None, c
     return audit, checked_open
 
 
-def full_child(launch,launch_parent):
+def full_child(launch,launch_parent,*,cancelled=lambda:False):
     require(set(launch)=={'descriptor','output_identity','parent_pid','role',*FULL_FLAGS} and
         all(type(launch[k]) is type(v) and launch[k]==v for k,v in FULL_FLAGS.items()) and
         launch['parent_pid']==os.getppid() and launch['role'] in ('fixture','worker'),'FULL_LAUNCH')
@@ -2093,12 +2183,13 @@ def full_child(launch,launch_parent):
     audit,opened=full_audit(r['root'],p['root'],('127.0.0.1',p['fixture']['port']),role,
         plan=p['plan'],context=d['context'])
     os.open=opened; sys.addaudithook(audit)
-    deadline=time.monotonic()+d['maximum_duration_seconds']; sequence=[0]
+    deadline=full_budget(d)['cleanup_deadline']; sequence=[0]
     def stage(value):
         require(value in STAGES,'CHILD_DIAGNOSTIC_STAGE'); sequence[0]+=1
         require(sequence[0]<=64,'DIAGNOSTIC_OVERFLOW')
         full_store(cap,parents,f'fs-{role}-stage-{sequence[0]:04d}.json',{'stage':value})
     def stop():
+        if cancelled(): raise ValueError('FULL_CANCELLED')
         if time.monotonic()>=deadline: raise ValueError('NATIVE_SESSION_TIMEOUT')
         try:
             full_read(cap,parents,f'fs-{role}-stop.json',value={'event':'STOP','role':role,'launch_parent':launch_parent})
@@ -2120,9 +2211,12 @@ def full_child(launch,launch_parent):
         if role=='fixture': serve(cap,stop,ready,stage=stage)
         else:
             ready(); now=[utc(p['plan']['rows'][0]['valid_from'])]
-            def wait(seconds):
-                require(0<=seconds<=1,'FULL_CLOCK'); now[0]+=timedelta(seconds=seconds)
-            value,parent=FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=stop).run()
+            def wait(seconds): advance_full_clock(session,now,seconds)
+            def work_stop():
+                require(time.monotonic()<d['budget']['work_deadline'],'NATIVE_SESSION_TIMEOUT')
+                return stop()
+            session=FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=work_stop)
+            value,parent=session.run()
             full_store(cap,parents,'fs-worker-complete.json',{'session_parent':parent,'launch_parent':launch_parent})
             # Stay owned/alive until the independently validating supervisor stops us.
             while not stop(): time.sleep(.05)
@@ -2134,7 +2228,8 @@ def full_child(launch,launch_parent):
         raise
 
 
-def full_supervise(cap,d,*,popen=subprocess.Popen):
+def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
+    budget=full_launch_budget(d)
     parents=full_descriptor(d); native_identity(cap)
     require(dict(os.environ)==lifecycle_environment(d['context']),'FULL_ENVIRONMENT')
     p,r,_=cap.documents(); out=Path(p['root']); runtime=Path(r['root'])
@@ -2159,12 +2254,19 @@ def full_supervise(cap,d,*,popen=subprocess.Popen):
         launch_commands=commands,child_pids=lambda:[os.getpid(),*[v['child'].pid for v in owned.children.values()]],context=d['context'])
     os.open=opened; sys.addaudithook(audit)
     stage='REAL_CLOCK'; primary=None; cleanup_failure=None; tls=None; accounting=None; session_parent=None
-    start=time.monotonic()
+    def running():
+        require(not cancelled(),'FULL_CANCELLED')
+        require(time.monotonic()<budget['work_deadline'],'NATIVE_SESSION_TIMEOUT')
+        try:
+            full_read(cap,parents,'fs-cancel.json',value={'event':'CANCEL',
+                'supervisor_pid':os.getpid(),'descriptor_parent':content_hash(d)})
+        except FileNotFoundError: return
+        raise ValueError('FULL_CANCELLED')
     try:
-        verify_self(); boundary=full_real_clock_boundary()
+        running(); verify_self(); boundary=full_real_clock_boundary()
         full_store(cap,parents,'fs-real-clock.json',boundary)
         for role in ('fixture','worker'):
-            verify_self()
+            running(); verify_self()
             if role=='worker':
                 owned.verify('fixture'); require(tls is not None and tls['hostname_verified'] is True,'FULL_TLS_GATE')
             stage='PROCESS_CREATE'
@@ -2187,7 +2289,7 @@ def full_supervise(cap,d,*,popen=subprocess.Popen):
             if role=='fixture': stage='TLS_HANDSHAKE'; tls=startup_tls(cap,owned)
         stage='SESSION_WAIT'
         while not (out/'fs-worker-complete.json').exists():
-            require(time.monotonic()-start<d['maximum_duration_seconds'],'NATIVE_SESSION_TIMEOUT')
+            running()
             verify_self(); owned.verify('fixture'); owned.verify('worker'); time.sleep(.2)
         # A completion references the independently admitted worker launch. Validate
         # every journal parent before accepting its session result.
@@ -2198,17 +2300,18 @@ def full_supervise(cap,d,*,popen=subprocess.Popen):
         require(set(completion)=={'session_parent','launch_parent'} and completion['launch_parent']==launches['worker'],'FULL_COMPLETION')
         session_parent=completion['session_parent']
         session,_=full_read(cap,parents,'fs-session.json',expected=session_parent)
-        accounting=full_accounting(cap,parents,session)
-        verify_self(); owned.verify('fixture'); owned.verify('worker')
+        running(); accounting=full_accounting(cap,parents,session,check_deadline=running)
+        running(); verify_self(); owned.verify('fixture'); owned.verify('worker')
     except BaseException as error: primary={'stage':stage,'category':failure_category(error)}
     try:
-        cleanup=owned.cleanup(lambda:not listener_owners(p['fixture']['port']),supervisor_check=verify_self)
+        cleanup=owned.cleanup(lambda:not listener_owners(p['fixture']['port']),supervisor_check=verify_self,
+            deadline=budget['cleanup_deadline'])
         if not cleanup['clean']: cleanup_failure='FULL_CLEANUP_FAILED'
     except Exception as error:
         cleanup_failure=failure_category(error); cleanup={'clean':False,'remaining':sorted(owned.children)}
     result={'classification':'FULL_SYNTHETIC_PASS' if primary is None and cleanup_failure is None else 'FULL_SYNTHETIC_FAILED',
         'primary_failure':primary,'cleanup_failure':cleanup_failure,'cleanup':cleanup,'tls':tls,
-        'accounting':accounting,'session_parent':session_parent,'supervisor_identity':observed,
+        'accounting':accounting,'session_parent':session_parent,'supervisor_identity':observed,'budget':budget,
         'worker_launches':int('worker' in owned.startup_pins),'provider_requests':0,'credential_accesses':0}
     full_store(cap,parents,'fs-final.json',result)
     return result
@@ -2218,10 +2321,11 @@ def full_main(d,expected,child):
     if child:
         value=verify_full_receipt(d,expected,full_descriptor(d['value']['descriptor']))
         require(child==value['role'],'FULL_ROLE')
-        return full_child(value,expected)
-    full_descriptor(d)
+        with FullCancellation() as cancelled: return full_child(value,expected,cancelled=cancelled)
+    full_descriptor(d); full_launch_budget(d)
     cap=admit(d['package'],d['runtime'],expected=d['expected'],authorized_root=d['authorized_root'])
-    return 0 if full_supervise(cap,d)['classification']=='FULL_SYNTHETIC_PASS' else 1
+    with FullCancellation() as cancelled:
+        return 0 if full_supervise(cap,d,cancelled=cancelled)['classification']=='FULL_SYNTHETIC_PASS' else 1
 
 
 def main():

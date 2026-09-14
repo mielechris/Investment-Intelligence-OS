@@ -42,10 +42,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  startup-only:
+  validation:
     if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1'
     runs-on: macos-26
-    timeout-minutes: 40
+    # Measured 38m37s hosted; 60m leaves >50% headroom, independent of native work.
+    timeout-minutes: 60
+    outputs:
+      proof: ${{ steps.proof.outputs.proof }}
+      proof_sha256: ${{ steps.proof.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -67,6 +71,125 @@ jobs:
           PY
       - name: Fetch the independently pinned disposable runtime archive
         env:
+          IIOS_FULL_PREPARATION: 'false'
+        shell: bash
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 \
+            --output "$IIOS_RADAR_CI_ROOT/python-runtime.tar.gz" \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
+          full_args=()
+          if [ "$IIOS_FULL_PREPARATION" = true ]; then full_args=(--prepare-full-session); fi
+          python -B tests/native/alpha_radar_ci.py prepare --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA" "${full_args[@]}"
+      - name: Verify immutable runtime, package, TLS and input closure
+        env:
+          IIOS_FULL_PREPARATION: 'false'
+        shell: bash
+        run: |
+          full_args=()
+          if [ "$IIOS_FULL_PREPARATION" = true ]; then full_args=(--prepare-full-session); fi
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize \
+            --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA" "${full_args[@]}"
+      - name: Fresh-process evidence export regressions; no fixture or network
+        shell: bash
+        run: python -I -S -B tests/native/test_alpha_radar_export_process.py --root "$IIOS_RADAR_CI_ROOT"
+      - name: Complete mocked harness and process-inspector regressions
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py offline \
+            --root "$IIOS_RADAR_CI_ROOT"
+      - name: Python compilation and workflow shell syntax; never execute extracted commands
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import ast, hashlib, json, os, pathlib, py_compile, sys
+          sys.path.insert(0, 'tests/native')
+          import alpha_radar_ci as ci
+          root = pathlib.Path(os.environ['IIOS_RADAR_CI_ROOT'])
+          names = [name for name in ci.binding_paths() if name.endswith('.py')]
+          for index, name in enumerate(names):
+              ast.parse(pathlib.Path(name).read_bytes(), filename=name)
+              py_compile.compile(name, cfile=str(root/('syntax-%02d.pyc' % index)), doraise=True)
+          ci.document(root/'export/python-syntax.json', {'scope':'STATIC_SYNTAX_ONLY', 'success':True,
+              'collected':len(names), 'executed':len(names), 'skipped':0, 'source_bindings':ci.source_bindings()})
+          PYCODE
+          ruby -ryaml -rjson -ropen3 - <<'RUBY'
+          file = '.github/workflows/alpha-radar-native-diagnostics.yml'
+          data = YAML.safe_load(File.read(file), permitted_classes: [], aliases: false)
+          scripts = data.fetch('jobs').values.flat_map { |job| job.fetch('steps').map { |step| step['run'] }.compact }
+          scripts.each { |script| _, err, status = Open3.capture3('/bin/bash', '-n', stdin_data: script); raise 'SHELL_SYNTAX_REJECTED' unless status.success? }
+          root = ENV.fetch('IIOS_RADAR_CI_ROOT')
+          File.open(File.join(root, 'export', 'workflow-syntax.json'), 'wx', 0400) { |out| out.write(JSON.generate({'scope'=>'STATIC_SYNTAX_ONLY','success'=>true,'scripts'=>scripts.length,'executed_commands'=>0})) }
+          RUBY
+      - name: Bind successful validation to this exact commit and run
+        id: proof
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py validation-proof --root "$IIOS_RADAR_CI_ROOT"
+          python -B - <<'PYCODE'
+          import os, pathlib, base64, hashlib
+          data = (pathlib.Path(os.environ['IIOS_RADAR_CI_ROOT'])/'export/validation-proof.json').read_bytes()
+          assert len(data) < 24000
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write('proof='+base64.b64encode(data).decode()+'\n')
+              stream.write('sha256='+hashlib.sha256(data).hexdigest()+'\n')
+          PYCODE
+      - name: Preserve structured diagnostics on success or failure
+        if: always() && env.IIOS_RADAR_CI_ROOT != ''
+        shell: bash
+        run: |
+          python -B tests/native/alpha_radar_ci.py export --root "$IIOS_RADAR_CI_ROOT"
+      - name: Upload sanitized synthetic evidence only
+        if: always() && env.IIOS_RADAR_CI_ROOT != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: alpha-radar-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IIOS_RADAR_CI_ROOT }}/export/
+          if-no-files-found: error
+          retention-days: 30
+
+  native:
+    needs: validation
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && (inputs.native_startup == true || inputs.lifecycle_only == true || inputs.full_session_only == true)
+    runs-on: macos-26
+    # Fresh prep <=300s; startup 100s; real-clock 65s; session <=2700s;
+    # cleanup 180s + export 180s + runner-start margin 60s = 3585s < 60m.
+    timeout-minutes: 60
+    env:
+      IIOS_EXPECTED_VALIDATION_SHA256: ${{ needs.validation.outputs.proof_sha256 }}
+    steps:
+      - name: Record native-job clock before checkout or preparation
+        shell: bash
+        run: |
+          python3 -B - <<'PYCODE'
+          import os, time
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('IIOS_NATIVE_JOB_START='+str(time.monotonic())+'\n')
+          PYCODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Exclusive preparation root; reject reruns
+        shell: bash
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python -B - <<'PY'
+          import os, pathlib, tempfile
+          root = pathlib.Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-ci-startup-', dir='/private/tmp'))
+          (root/'export').mkdir(mode=0o700)
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('IIOS_RADAR_CI_ROOT='+str(root)+'\n')
+          PY
+      - name: Verify the independently pinned validation-job result
+        env:
+          IIOS_VALIDATION_PROOF: ${{ needs.validation.outputs.proof }}
+        shell: bash
+        run: python -B tests/native/alpha_radar_ci.py accept-validation --root "$IIOS_RADAR_CI_ROOT"
+      - name: Fetch the independently pinned disposable runtime archive
+        env:
           IIOS_FULL_PREPARATION: ${{ github.event_name == 'workflow_dispatch' && inputs.full_session_only == true }}
         shell: bash
         run: |
@@ -85,14 +208,6 @@ jobs:
           if [ "$IIOS_FULL_PREPARATION" = true ]; then full_args=(--prepare-full-session); fi
           "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize \
             --root "$IIOS_RADAR_CI_ROOT" --commit "$GITHUB_SHA" "${full_args[@]}"
-      - name: Fresh-process evidence export regressions; no fixture or network
-        shell: bash
-        run: python -I -S -B tests/native/test_alpha_radar_export_process.py --root "$IIOS_RADAR_CI_ROOT"
-      - name: Complete mocked harness and process-inspector regressions
-        shell: bash
-        run: |
-          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py offline \
-            --root "$IIOS_RADAR_CI_ROOT"
       - name: Exactly one confined fixture startup; never launch a worker
         if: github.event_name == 'workflow_dispatch' && inputs.native_startup == true && inputs.lifecycle_only != true && inputs.full_session_only != true
         shell: bash
@@ -124,7 +239,7 @@ jobs:
         if: always() && env.IIOS_RADAR_CI_ROOT != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: alpha-radar-startup-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: alpha-radar-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.IIOS_RADAR_CI_ROOT }}/export/
           if-no-files-found: error
           retention-days: 30
