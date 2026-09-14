@@ -1565,6 +1565,33 @@ def full_startup_deadline(d):
     return deadline
 
 
+
+def full_phase(descriptor, role, *, monotonic_ns=time.monotonic_ns):
+    """Fresh phase identity published inside the independently pinned launch."""
+    require(role in ('fixture','worker'), 'FULL_ROLE')
+    b=full_budget(descriptor); start=monotonic_ns()
+    phase={'schema':'iios-full-startup-phase-v1','role':role,
+        'descriptor_parent':content_hash(descriptor),'unit':FULL_DEADLINE_UNIT,
+        'start_ns':start,'deadline_ns':start+100*FULL_NANOSECONDS}
+    full_phase_deadline(descriptor,role,phase)
+    return phase
+
+
+def full_phase_deadline(descriptor, role, phase):
+    b=full_budget(descriptor)
+    require(type(phase) is dict and set(phase)=={
+        'schema','role','descriptor_parent','unit','start_ns','deadline_ns'} and
+        phase['schema']=='iios-full-startup-phase-v1' and phase['role']==role and
+        role in ('fixture','worker') and phase['descriptor_parent']==content_hash(descriptor) and
+        phase['unit']==FULL_DEADLINE_UNIT and
+        type(phase['start_ns']) is int and type(phase['deadline_ns']) is int and
+        b['prepared_monotonic_ns'] <= phase['start_ns'] < phase['deadline_ns'] <= 2**63-1 and
+        phase['deadline_ns']==phase['start_ns']+100*FULL_NANOSECONDS and
+        phase['deadline_ns'] < round(b['work_deadline']*FULL_NANOSECONDS),
+        'FULL_STARTUP_PHASE')
+    return phase['deadline_ns']/FULL_NANOSECONDS
+
+
 def advance_full_clock(session, now, seconds):
     """Jump only to the scheduler's exact next eligible target; no real sleep.
 
@@ -1921,9 +1948,10 @@ class FullRoleInspection(OwnedProcesses):
 
 
 class FullOwnedProcesses(LifecycleOwnedProcesses):
-    def registration_admission(self, descriptor, deadline):
+    def registration_admission(self, descriptor, deadline, phase=None, role=None):
         """Pin the expensive immutable inputs once before timed observation."""
-        require(type(deadline) in (int,float) and deadline == full_startup_deadline(descriptor)
+        require(type(deadline) in (int,float) and deadline == (full_startup_deadline(descriptor) if phase is None else
+                    full_phase_deadline(descriptor,role,phase))
                 and self.monotonic() < deadline,
                 'STARTUP_STABILIZATION_TIMEOUT')
         p,r,pins = checked_capability(self.cap)
@@ -1977,7 +2005,7 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
         return actual
 
     def register(self,role,child,*,argv,cwd,executable,executable_hash,launcher=None,
-                 stderr=None,launch_parent=None,descriptor=None,deadline=None):
+                 stderr=None,launch_parent=None,descriptor=None,deadline=None,phase=None):
         require(role in ('worker','fixture') and role not in self.children,'CHILD_ROLE')
         require(type(descriptor) is dict and deadline is not None,'FULL_INDEPENDENT_PARENT')
         entry={'child':child,'expected':{'pid':child.pid,'parent_pid':os.getpid(),
@@ -1988,7 +2016,7 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
         fd=None; diagnostics=[]
         try:
             entry['capture']=self.capture_for(child,stderr)
-            fd=self.registration_admission(descriptor,deadline)
+            fd=self.registration_admission(descriptor,deadline,phase,role)
             self.registration_evidence(fd,{'event':'PROCESS_CREATED','role':role,'pid':child.pid,
                 'expected_parent_pid':os.getpid(),'launch_parent':launch_parent,
                 'identity_status':'CHILD_CREATED_UNOBSERVED','status':child_status(child)})
@@ -2200,14 +2228,18 @@ def full_audit(runtime, output, endpoint, role, *, plan, launch_commands=None, c
     out = full_canonical_path(output, roots=lexical_roots)
     read_exact = ('/dev/null','/bin/ps','/usr/sbin/lsof','/usr/bin/sandbox-exec')
     active = []; directories = {}; original = os.open; launched = set()
-    commands = {k:tuple(v) for k,v in (launch_commands or {}).items()}
-    require(not commands or (role == 'supervisor' and set(commands) == {'fixture','worker'}), 'FULL_SPAWN')
-    for name, argv in commands.items():
+    commands = {}
+    require(not launch_commands or (role == 'supervisor' and set(launch_commands) == {'fixture','worker'}), 'FULL_SPAWN')
+    def admit_command(name, argv):
+        require(role=='supervisor' and name in ('fixture','worker') and name not in commands,'FULL_SPAWN')
+        argv=tuple(argv)
         require(len(argv)==10 and Path(argv[0]).is_relative_to(root) and Path(argv[2]).is_relative_to(root)
             and Path(argv[2]).name=='alpha_radar_runner.py' and argv[1]=='-B'
             and argv[3:7]==('--ci-full-session-only','--child',name,'--descriptor')
             and argv[7]==str(out/f'fs-{name}-launch.json') and argv[8]=='--expected-descriptor'
             and re.fullmatch('[a-f0-9]{64}',argv[9]), 'FULL_SPAWN')
+        commands[name]=argv
+    for name,argv in (launch_commands or {}).items(): admit_command(name,argv)
     permitted_dirs = {full_lexical_path(v, roots=(out,)) for v in
                       [plan['root'], *[row['root'] for row in plan['rows']]]}
     require(all(full_canonical_path(v,roots=(out,))==v and v.is_relative_to(out)
@@ -2284,14 +2316,17 @@ def full_audit(runtime, output, endpoint, role, *, plan, launch_commands=None, c
             require(role == 'worker' and target in permitted_dirs and args[1] == 0o700,'FULL_WRITE')
             full_canonical_path(target,roots=(out,))
         if event in ('os.chmod','os.truncate'): raise PermissionError('FULL_WRITE')
+    audit.admit_command=admit_command
     return audit, checked_open
 
 
 def full_child(launch,launch_parent,*,cancelled=lambda:False):
-    require(set(launch)=={'descriptor','output_identity','parent_pid','role',*FULL_FLAGS} and
+    require(set(launch)=={'descriptor','output_identity','parent_pid','role','startup_phase',*FULL_FLAGS} and
         all(type(launch[k]) is type(v) and launch[k]==v for k,v in FULL_FLAGS.items()) and
         launch['parent_pid']==os.getppid() and launch['role'] in ('fixture','worker'),'FULL_LAUNCH')
     d=launch['descriptor']; parents=full_descriptor(d); role=launch['role']
+    phase_deadline=full_phase_deadline(d,role,launch['startup_phase'])
+    require(time.monotonic()<phase_deadline,'PARENT_ACK_TIMEOUT')
     require(dict(os.environ)==lifecycle_environment(d['context']),'FULL_ENVIRONMENT')
     identities=verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
     cap=SyntheticCapability(canonical(d['package']),canonical(d['runtime']),canonical(d['expected']),
@@ -2319,7 +2354,7 @@ def full_child(launch,launch_parent,*,cancelled=lambda:False):
         value=full_startup(cap,role,launch_parent,{'pid':os.getpid(),'parent_pid':os.getppid(),
             'argv':[sys.executable,'-B',*sys.argv],'cwd':str(Path.cwd())})
         startup_parent=full_store(cap,parents,f'fs-{role}-startup.json',value)
-        until=full_startup_deadline(d)
+        until=phase_deadline
         while time.monotonic()<until:
             try:
                 full_read(cap,parents,f'fs-{role}-ack.json',value={'event':'ACK','role':role,
@@ -2384,12 +2419,6 @@ def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
     def verify_self():
         require(asdict(inspect_macos(os.getpid()))==observed,'FULL_SUPERVISOR_IDENTITY'); checked_capability(cap)
     owned=FullOwnedProcesses(cap,parents); commands={}; launches={}
-    for role in ('fixture','worker'):
-        launch={**FULL_FLAGS,'descriptor':d,'output_identity':list(cap.output_identity),
-                'parent_pid':os.getpid(),'role':role}
-        launches[role]=full_store(cap,parents,f'fs-{role}-launch.json',launch)
-        commands[role]=[str(executable),'-B',str(script),'--ci-full-session-only','--child',role,
-            '--descriptor',str(out/f'fs-{role}-launch.json'),'--expected-descriptor',launches[role]]
     audit,opened=full_audit(runtime,out,('127.0.0.1',p['fixture']['port']),'supervisor',plan=p['plan'],
         launch_commands=commands,child_pids=lambda:[os.getpid(),*[v['child'].pid for v in owned.children.values()]],context=d['context'])
     os.open=opened; sys.addaudithook(audit)
@@ -2402,7 +2431,6 @@ def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
                 'supervisor_pid':os.getpid(),'descriptor_parent':content_hash(d)})
         except FileNotFoundError: return
         raise ValueError('FULL_CANCELLED')
-    startup_deadline=full_startup_deadline(d)
     try:
         running(); verify_self(); boundary=full_real_clock_boundary()
         full_store(cap,parents,'fs-real-clock.json',boundary)
@@ -2410,13 +2438,22 @@ def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
             running(); verify_self()
             if role=='worker':
                 owned.verify('fixture'); require(tls is not None and tls['hostname_verified'] is True,'FULL_TLS_GATE')
+            phase=full_phase(d,role)
+            startup_deadline=full_phase_deadline(d,role,phase)
+            launch={**FULL_FLAGS,'descriptor':d,'output_identity':list(cap.output_identity),
+                    'parent_pid':os.getpid(),'role':role,'startup_phase':phase}
+            launches[role]=full_store(cap,parents,f'fs-{role}-launch.json',launch)
+            commands[role]=[str(executable),'-B',str(script),'--ci-full-session-only','--child',role,
+                '--descriptor',str(out/f'fs-{role}-launch.json'),'--expected-descriptor',launches[role]]
+            audit.admit_command(role,commands[role])
+            require(time.monotonic()<startup_deadline,'STARTUP_STABILIZATION_TIMEOUT')
             stage='PROCESS_CREATE'
             child=popen(commands[role],cwd=out,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,close_fds=True,env=lifecycle_environment(d['context']))
             close_lifecycle_stdin(child); stage='OWNERSHIP_REGISTER'
             owned.register(role,child,argv=commands[role],cwd=out,executable=executable,
                 executable_hash=executable_hash,stderr=child.stderr,launch_parent=launches[role],
-                descriptor=d,deadline=startup_deadline)
+                descriptor=d,deadline=startup_deadline,phase=phase)
             stage='STARTUP_VERIFY'
             while not (out/f'fs-{role}-startup.json').exists() and time.monotonic()<startup_deadline:
                 owned.verify(role,require_startup=False); time.sleep(.05)

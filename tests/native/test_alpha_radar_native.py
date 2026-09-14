@@ -2633,6 +2633,24 @@ class FullSessionModeTests(unittest.TestCase):
         guard('subprocess.Popen',(argv[0],argv,out,env))
         with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,out,env))
 
+    def test_deferred_phase_command_is_one_time_and_exact(self):
+        import alpha_radar_runner as run
+        _,p,r,_,d,_=self.inputs();out=Path(p['root']);runtime=Path(r['root'])
+        argv=[str(runtime/'python'),'-B',str(runtime/'alpha_radar_runner.py'),'--ci-full-session-only',
+            '--child','worker','--descriptor',str(out/'fs-worker-launch.json'),'--expected-descriptor','a'*64]
+        guard,_=run.full_audit(runtime,out,('127.0.0.1',38493),'supervisor',plan=p['plan'],context=d['context'])
+        env=run.lifecycle_environment(d['context'])
+        with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,out,env))
+        guard.admit_command('worker',argv)
+        with self.assertRaises(ValueError):guard.admit_command('worker',argv)
+        changed=list(argv);changed[-1]='b'*64
+        with self.assertRaises(ValueError):guard('subprocess.Popen',(changed[0],changed,out,env))
+        guard('subprocess.Popen',(argv[0],argv,out,env))
+        with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,out,env))
+        for role in ('worker','fixture'):
+            child_guard,_=run.full_audit(runtime,out,('127.0.0.1',38493),role,plan=p['plan'])
+            with self.assertRaises(ValueError):child_guard.admit_command('worker',argv)
+
     def test_guard_only_exact_journal_directories_and_exclusive_receipts(self):
         import alpha_radar_runner as run
         _,p,r,_,_,_=self.inputs();out=Path(p['root'])
@@ -2852,6 +2870,66 @@ class FullSessionModeTests(unittest.TestCase):
         self.assertTrue(all(v['observed']['field_matches'] and v['before']['state']=='CHILD_RUNNING'
             and v['after']['state']=='CHILD_RUNNING' for v in batch['samples']))
 
+    def test_fresh_worker_phase_after_expired_fixture_deadline(self):
+        run,s,d,owned,child,observation,exe=self.registration_case(monotonic=lambda:371)
+        self.assertLess(run.full_startup_deadline(d),371)
+        phase=run.full_phase(d,'worker',monotonic_ns=lambda:370_000_000_000)
+        self.assertEqual(run.full_phase_deadline(d,'worker',phase),470)
+        calls=[];original=run.checked_capability
+        with patch.object(run,'checked_capability',side_effect=lambda cap:(calls.append(1) or original(cap))):
+            owned.register('worker',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,launch_parent='1'*64,
+                descriptor=d,deadline=470,phase=phase)
+        self.assertEqual(calls,[1])
+        self.assertEqual(owned.children['worker']['observation'],dict(observation.__dict__))
+
+    def test_phase_roundtrip_mutations_expiry_and_overall_budget(self):
+        run,s,d,owned,child,observation,exe=self.registration_case(monotonic=lambda:471)
+        phase=run.full_phase(d,'worker',monotonic_ns=lambda:370_000_000_000)
+        self.assertEqual(run.full_phase_deadline(d,'worker',json.loads(json.dumps(phase))),470)
+        for key,value in [('deadline_ns',470_000_000_001),('start_ns',370_000_000_001),
+            ('unit','SECONDS'),('role','fixture'),('descriptor_parent','0'*64),
+            ('start_ns',float('nan')),('deadline_ns',float('inf')),('deadline_ns',2**63)]:
+            changed={**phase,key:value}
+            with self.subTest(key=key),self.assertRaises(ValueError):run.full_phase_deadline(d,'worker',changed)
+        with self.assertRaises(ValueError):run.full_phase(d,'worker',monotonic_ns=lambda:2_900_000_000_000)
+        owned.inspect=MagicMock(return_value=observation)
+        with self.assertRaises(ValueError):
+            owned.register('worker',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,launch_parent='1'*64,
+                descriptor=d,deadline=470,phase=phase)
+        owned.inspect.assert_not_called()
+        self.assertEqual(owned.primary_failures[0]['stage'],'OWNERSHIP_REGISTER')
+        child.terminate.assert_not_called();child.kill.assert_not_called()
+
+    def test_expired_phase_prevents_ack_and_timeout_cleanup_preserves_other_role(self):
+        import alpha_radar_runner as run
+        owned,_=self.owned();worker=owned.children['worker'];worker['observation']=None
+        owned.primary_failures.append({'role':'worker','stage':'OWNERSHIP_REGISTER',
+            'category':'STARTUP_STABILIZATION_TIMEOUT'})
+        with self.assertRaises(FileNotFoundError):
+            run.full_read(owned.cap,owned.lifecycle_parents,'fs-worker-ack.json')
+        with patch.object(run,'full_store') as publish,self.assertRaisesRegex(ValueError,'PARENT_ACK_TIMEOUT'):
+            run.full_publish_startup_ack(owned.cap,owned.lifecycle_parents,'worker','1'*64,'2'*64,
+                470,None,monotonic=lambda:470)
+        publish.assert_not_called()
+        result=owned.cleanup(lambda:True)
+        self.assertFalse(result['clean']);self.assertEqual(result['remaining'],['worker'])
+        self.assertEqual([v['role'] for v in result['exits']],['fixture'])
+        self.assertEqual(result['role_findings']['worker']['primary_failures'][0]['category'],
+            'STARTUP_STABILIZATION_TIMEOUT')
+        worker['child'].terminate.assert_not_called();worker['child'].kill.assert_not_called()
+
+    def test_phase_parent_child_deadline_mismatch_rejected_before_inspection(self):
+        run,s,d,owned,child,observation,exe=self.registration_case(monotonic=lambda:371)
+        phase=run.full_phase(d,'worker',monotonic_ns=lambda:370_000_000_000)
+        owned.inspect=MagicMock(return_value=observation)
+        with self.assertRaises(ValueError):
+            owned.register('worker',child,argv=(exe,),cwd=observation.cwd,executable=exe,
+                executable_hash=observation.executable_hash,launch_parent='1'*64,
+                descriptor=d,deadline=471,phase=phase)
+        owned.inspect.assert_not_called()
+
     def test_full_registration_buffers_bounded_sanitized_query_diagnostics(self):
         import alpha_radar_runner as run
         run,s,d,owned,child,observation,exe=self.registration_case()
@@ -2916,7 +2994,8 @@ class FullSessionModeTests(unittest.TestCase):
         d=self.inputs()[4]
         self.assertEqual(run.full_startup_deadline(d),266)
         child_source=inspect.getsource(run.full_child);supervisor=inspect.getsource(run.full_supervise)
-        self.assertIn('until=full_startup_deadline(d)',child_source)
+        self.assertIn('until=phase_deadline',child_source)
+        self.assertIn("full_phase_deadline(d,role,launch['startup_phase'])",child_source)
         self.assertNotIn('time.monotonic()+10',child_source)
         self.assertNotIn('time.monotonic()+10',supervisor)
         ack=supervisor.index('full_publish_startup_ack(')
