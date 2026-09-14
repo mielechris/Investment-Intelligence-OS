@@ -1509,6 +1509,8 @@ def lifecycle_main(d, expected, child):
 # This capability is deliberately not a lifecycle or confinement qualification.
 FULL_SCOPE = 'CI_SYNTHETIC_FULL_SESSION_ONLY'
 FULL_TIMING = 'ACCELERATED_LOGICAL_TIME_ONLY'
+FULL_DEADLINE_UNIT = 'MONOTONIC_NANOSECONDS'
+FULL_NANOSECONDS = 1_000_000_000
 FULL_FLAGS = {'scope': FULL_SCOPE, 'production_qualified': False,
     'os_confinement': 'UNQUALIFIED', 'credential_access': False, 'provider_access': False,
     'timing_proof': FULL_TIMING, **AUTHORITY}
@@ -1520,12 +1522,21 @@ def full_budget(d):
     b = d['budget']
     require(type(b) is dict and set(b) == {'schema','source_commit','run_id','run_attempt',
         'start_monotonic','prepared_monotonic','hard_deadline','work_deadline','cleanup_deadline',
-        'cleanup_seconds','export_seconds','real_clock_seconds','work_seconds'}, 'FULL_JOB_BUDGET')
-    require(b['schema'] == 'iios-native-job-budget-v1' and
+        'cleanup_seconds','export_seconds','real_clock_seconds','work_seconds','deadline_unit',
+        'prepared_monotonic_ns','startup_deadline_ns'}, 'FULL_JOB_BUDGET')
+    require(b['schema'] == 'iios-native-job-budget-v2' and
         b['source_commit'] == d['context']['GITHUB_SHA'] and b['run_id'] == d['context']['GITHUB_RUN_ID']
         and type(b['run_attempt']) is int and b['run_attempt'] == 1, 'FULL_JOB_BUDGET')
     for key in ('start_monotonic','prepared_monotonic','hard_deadline','work_deadline','cleanup_deadline'):
         require(type(b[key]) in (int,float) and math.isfinite(b[key]) and b[key] > 0,'FULL_JOB_BUDGET')
+    require(b['deadline_unit'] == FULL_DEADLINE_UNIT and
+        type(b['prepared_monotonic_ns']) is int and type(b['startup_deadline_ns']) is int and
+        0 < b['prepared_monotonic_ns'] <= 2**63-1 and
+        0 < b['startup_deadline_ns'] <= 2**63-1 and
+        b['prepared_monotonic_ns'] == round(b['prepared_monotonic']*FULL_NANOSECONDS) and
+        b['startup_deadline_ns'] == b['prepared_monotonic_ns']+
+            (b['real_clock_seconds']+100)*FULL_NANOSECONDS,
+        'FULL_JOB_BUDGET')
     require(b['cleanup_seconds'] == b['export_seconds'] == 180 and b['real_clock_seconds'] == 65
         and b['work_seconds'] == d['maximum_duration_seconds'] == 2700 and
         0 <= b['prepared_monotonic']-b['start_monotonic'] <= 300 and
@@ -1548,9 +1559,9 @@ def full_launch_budget(d, *, monotonic=time.monotonic):
 def full_startup_deadline(d):
     """One descriptor-bound deadline shared by child and supervisor startup."""
     b = full_budget(d)
-    deadline = b['work_deadline'] - b['work_seconds']
-    require(deadline == b['prepared_monotonic'] + b['real_clock_seconds'] + 100 and
-            deadline < b['work_deadline'], 'FULL_JOB_BUDGET')
+    deadline = b['startup_deadline_ns'] / FULL_NANOSECONDS
+    require(b['startup_deadline_ns'] < round(b['work_deadline']*FULL_NANOSECONDS),
+            'FULL_JOB_BUDGET')
     return deadline
 
 

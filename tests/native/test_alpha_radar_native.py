@@ -2458,9 +2458,11 @@ class FullSessionModeTests(unittest.TestCase):
             'maximum_duration_seconds':2700,'context':self.context(),'session_package':package,
             'session_package_parent':content_hash(package)}
         d['validation_parent']='a'*64
-        d['budget']={'schema':'iios-native-job-budget-v1','source_commit':d['context']['GITHUB_SHA'],
+        d['budget']={'schema':'iios-native-job-budget-v2','source_commit':d['context']['GITHUB_SHA'],
             'run_id':d['context']['GITHUB_RUN_ID'],'run_attempt':1,'start_monotonic':100,
             'prepared_monotonic':101,'hard_deadline':3640,'work_deadline':2966,'cleanup_deadline':3146,
+            'deadline_unit':'MONOTONIC_NANOSECONDS','prepared_monotonic_ns':101_000_000_000,
+            'startup_deadline_ns':266_000_000_000,
             'cleanup_seconds':180,'export_seconds':180,'real_clock_seconds':65,'work_seconds':2700}
         parents={**e,'session_package':content_hash(package),'full_descriptor':content_hash(d)}
         return root,p,r,e,d,parents
@@ -3324,6 +3326,61 @@ class QualificationBudgetTests(unittest.TestCase):
             with self.assertRaises(ValueError):run.full_budget(bad)
         bad=deepcopy(d);bad['validation_parent']=''
         with self.assertRaises(ValueError):run.full_budget(bad)
+
+    def test_canonical_startup_deadline_survives_observed_two_ulp_round_trip(self):
+        import alpha_radar_runner as run
+        d=self.descriptor();b=d['budget']
+        b.update(start_monotonic=199.422550333,prepared_monotonic=214.378764083,
+            hard_deadline=3739.422550333,work_deadline=3079.378764083,
+            cleanup_deadline=3259.378764083,prepared_monotonic_ns=214_378_764_083,
+            startup_deadline_ns=379_378_764_083)
+        from_work=b['work_deadline']-b['work_seconds']
+        from_prepared=b['prepared_monotonic']+b['real_clock_seconds']+100
+        self.assertNotEqual(from_work,from_prepared)
+        self.assertEqual(abs(from_work-from_prepared),1.1368683772161603e-13)
+        encoded=json.dumps(d,sort_keys=True,separators=(',',':'))
+        admitted=json.loads(encoded)
+        self.assertEqual(run.full_startup_deadline(admitted),379.378764083)
+        self.assertEqual(admitted['budget']['startup_deadline_ns'],379_378_764_083)
+
+    def test_canonical_startup_deadline_rejects_unit_tick_and_budget_mutations(self):
+        import alpha_radar_runner as run
+        mutations=(
+            ('deadline_unit','MONOTONIC_MILLISECONDS'),
+            ('prepared_monotonic_ns',101_000_000_001),
+            ('startup_deadline_ns',266_000_000_001),
+            ('startup_deadline_ns',266_000_000_000.0),
+            ('startup_deadline_ns',-1),
+            ('startup_deadline_ns',2**63),
+            ('prepared_monotonic_ns',2**63),
+            ('work_seconds',2699),
+            ('work_seconds',2701),
+            ('real_clock_seconds',64),
+            ('real_clock_seconds',66),
+        )
+        for key,value in mutations:
+            with self.subTest(key=key,value=value):
+                bad=deepcopy(self.descriptor());bad['budget'][key]=value
+                with self.assertRaisesRegex(ValueError,'FULL_JOB_BUDGET'):
+                    run.full_budget(bad)
+        for key,value in (('prepared_monotonic',float('nan')),
+                          ('prepared_monotonic',float('inf')),
+                          ('prepared_monotonic',-1)):
+            bad=deepcopy(self.descriptor());bad['budget'][key]=value
+            with self.assertRaisesRegex(ValueError,'FULL_JOB_BUDGET'):
+                run.full_budget(bad)
+
+    def test_fixture_creation_waits_for_every_canonical_budget_pin(self):
+        import alpha_radar_runner as run
+        for key,value in (('deadline_unit','WRONG'),('startup_deadline_ns',266_000_000_001),
+                          ('prepared_monotonic_ns',101_000_000_001),('work_deadline',2965),
+                          ('cleanup_deadline',3145),('hard_deadline',3639)):
+            bad=deepcopy(self.descriptor());bad['budget'][key]=value
+            with self.subTest(key=key),patch.object(run,'admit') as admit_mock,\
+                 patch.object(run,'full_supervise') as supervise:
+                with self.assertRaisesRegex(ValueError,'FULL_JOB_BUDGET'):
+                    run.full_main(bad,content_hash(bad),None)
+                admit_mock.assert_not_called();supervise.assert_not_called()
 
     def test_insufficient_budget_prevents_admission_or_process_creation(self):
         import alpha_radar_runner as run

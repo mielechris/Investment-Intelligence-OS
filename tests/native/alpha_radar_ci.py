@@ -726,9 +726,12 @@ def prepare_job_budget(root):
     try: start = float(os.environ['IIOS_NATIVE_JOB_START'])
     except (ValueError, KeyError): raise ValueError('NATIVE_JOB_BUDGET') from None
     now = time.monotonic()
+    prepared_ns = round(now * 1_000_000_000)
     require(0 <= now-start <= NATIVE_PREPARATION_SECONDS and start > 0, 'NATIVE_JOB_BUDGET')
-    value = {'schema':'iios-native-job-budget-v1', **validation_identity(),
+    value = {'schema':'iios-native-job-budget-v2', **validation_identity(),
         'start_monotonic':start,'prepared_monotonic':now,
+        'deadline_unit':'MONOTONIC_NANOSECONDS','prepared_monotonic_ns':prepared_ns,
+        'startup_deadline_ns':prepared_ns+(NATIVE_STARTUP_SECONDS+REAL_CLOCK_SECONDS)*1_000_000_000,
         'hard_deadline':start+NATIVE_JOB_SECONDS-NATIVE_START_RESERVE,
         'work_deadline':now+NATIVE_STARTUP_SECONDS+REAL_CLOCK_SECONDS+FULL_WORK_SECONDS,
         'cleanup_deadline':now+NATIVE_STARTUP_SECONDS+REAL_CLOCK_SECONDS+FULL_WORK_SECONDS+CLEANUP_SECONDS,
