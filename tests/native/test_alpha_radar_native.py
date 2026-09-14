@@ -3348,7 +3348,8 @@ class QualificationBudgetTests(unittest.TestCase):
                 'failed':0,'errors':0,'skipped':0,'native_not_run':partition['native_not_run']},
             'fresh_stdio':4,'fresh_export':10,'result_parents':{n:'a'*64 for n in (
                 'offline-results.json','fresh-stdio-results.json','fresh-export-results.json','python-syntax.json','workflow-syntax.json')},
-            'runtime_archive_sha256':ci.ARCHIVE_SHA256}
+            'runtime_archive_sha256':ci.ARCHIVE_SHA256,
+            'workload_measurement':{'node':ci.WORKLOAD_NODE,'wall_seconds':1200}}
         return value
 
     def test_validation_parent_commit_run_source_collection_and_all_counts(self):
@@ -3597,7 +3598,7 @@ class QualificationBudgetTests(unittest.TestCase):
             records={'offline-collection.json':partition,
                 'offline-results.json':{'scope':'MOCKED_OFFLINE_ONLY','success':True,'collected':count,
                     'executed':count,'passed':count,'skipped':[],'source_bindings':binding,
-                    'timings':[{'node':n} for n in partition['offline']]},
+                    'timings':[{'node':n,'wall_seconds':1200} for n in partition['offline']]},
                 'fresh-stdio-results.json':{'scope':'FRESH_PROCESS_STDIO_ONLY','success':True,'collected':4,
                     'executed':4,'source_bindings':binding},
                 'fresh-export-results.json':{'scope':'FRESH_PROCESS_EXPORT_ONLY','success':True,'collected':10,
@@ -3804,3 +3805,104 @@ class FullSessionPreflightDifferenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):s.execute(s.request(1),'0'*64)
         self.assertEqual(calls,[0]);self.assertEqual(s.next_slot,1)
         self.assertFalse((Path(s.p['plan']['root'])/'1.reserved.json').exists())
+
+
+class HostedFeasibilityTests(unittest.TestCase):
+    def case(self):
+        import alpha_radar_ci as ci
+        root=Path(tempfile.mkdtemp(prefix='feasibility-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        (root/'export').mkdir()
+        d=FullSessionModeTests().inputs()[4]
+        proof={'workload_measurement':{'node':ci.WORKLOAD_NODE,'wall_seconds':1200}}
+        env={'GITHUB_SHA':d['context']['GITHUB_SHA'],'GITHUB_RUN_ID':d['context']['GITHUB_RUN_ID'],
+             'GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'native','GITHUB_ENV':str(root/'step-env')}
+        return ci,root,d,proof,env
+
+    def test_request_journal_benchmark_and_conservative_cost(self):
+        import alpha_radar_ci as ci
+        b={'node':ci.WORKLOAD_NODE,'wall_seconds':1275.691580959}
+        self.assertAlmostEqual(ci.feasibility_estimate(b,[400_000_000,450_000_000,420_000_000]),3197.73947619875)
+        for bad in ({}, {'node':'different','wall_seconds':1200}, {'node':ci.WORKLOAD_NODE,'wall_seconds':float('nan')},
+                    {'node':ci.WORKLOAD_NODE,'wall_seconds':float('inf')}, {'node':ci.WORKLOAD_NODE,'wall_seconds':0}):
+            with self.assertRaises(ValueError):ci.feasibility_estimate(bad,[1,1,1])
+        for samples in ([],[1,1],[1,1,1,1],[1,1,0],[1,1,True],[1,1,float('nan')],[1,1,30_000_000_001]):
+            with self.assertRaises(ValueError):ci.feasibility_estimate(b,samples)
+
+    def publish(self,ci,root,d,proof,env,ns=400_000_000):
+        ticks=[110_000_000_000]
+        for i in range(3):ticks.extend([111_000_000_000+i*1_000_000_000,111_000_000_000+i*1_000_000_000+ns])
+        ticks.append(114_000_000_000)
+        with patch.dict(os.environ,env),patch.object(ci,'hosted'),patch.object(ci,'root_check'), \
+             patch.object(ci,'require_validation',return_value=proof),patch.object(ci.time,'monotonic_ns',side_effect=ticks), \
+             patch('alpha_radar_admission.verify_inputs') as verify:
+            value=ci.prepare_feasibility(root,d)
+            self.assertEqual(verify.call_count,3)
+            for call in verify.call_args_list:self.assertEqual(call.args,(d['package'],d['runtime'],d['expected'],d['authorized_root']))
+        return value
+
+    def test_fresh_samples_round_trip_and_independent_pin(self):
+        ci,root,d,proof,env=self.case();parent=ci.digest(ci.canonical(d));value=self.publish(ci,root,d,proof,env)
+        self.assertFalse((root/'full-session-output').exists());self.assertFalse((root/'full-attempt.json').exists())
+        d['budget']['prepared_monotonic_ns']=115_000_000_000
+        env['IIOS_FEASIBILITY_SHA256']=ci.digest(ci.canonical(value))
+        self.assertIn(env['IIOS_FEASIBILITY_SHA256'],(root/'step-env').read_text())
+        with patch.dict(os.environ,env),patch.object(ci,'root_check'),patch.object(ci,'require_validation',return_value=proof), \
+             patch.object(ci.time,'monotonic_ns',return_value=116_000_000_000):
+            self.assertEqual(ci.require_feasibility(root,d,parent),value)
+            with patch.dict(os.environ,{'IIOS_FEASIBILITY_SHA256':'0'*64}),self.assertRaises(ValueError):
+                ci.require_feasibility(root,d,parent)
+            with self.assertRaises(ValueError):ci.require_feasibility(root,d,'0'*64)
+        with self.assertRaises(FileExistsError):self.publish(ci,root,d,proof,env)
+
+    def test_over_budget_preserves_measured_values_without_launch(self):
+        ci,root,d,proof,env=self.case()
+        with patch.object(ci.subprocess,'Popen') as spawn,self.assertRaisesRegex(ValueError,'FEASIBILITY_EXCEEDED'):
+            self.publish(ci,root,d,proof,env,ns=900_000_000)
+        spawn.assert_not_called()
+        value=json.loads((root/'export/full-feasibility.json').read_bytes())
+        self.assertEqual(value['classification'],'INFEASIBLE')
+        self.assertEqual(value['estimated_work_seconds'],4706.25)
+        self.assertFalse((root/'step-env').exists());self.assertFalse((root/'full-attempt.json').exists())
+
+    def test_missing_stale_changed_source_runtime_workload_and_replay(self):
+        ci,root,d,proof,env=self.case();parent=ci.digest(ci.canonical(d));v=self.publish(ci,root,d,proof,env)
+        d['budget']['prepared_monotonic_ns']=115_000_000_000
+        with patch.dict(os.environ,env),patch.object(ci,'root_check'),patch.object(ci,'require_validation',return_value=proof), \
+             patch.object(ci.time,'monotonic_ns',return_value=116_000_000_000):
+            for key,val in [('source_commit','b'*40),('run_id','different'),('root','different'),('runtime_parent','b'*64),
+                ('workload_parent','b'*64),('validation_parent','b'*64),('started_ns',99_000_000_000),
+                ('finished_ns',1),('estimated_work_seconds',1),('work_limit_seconds',9999),('classification','INFEASIBLE')]:
+                bad={**v,key:val};raw=ci.canonical(bad)
+                with self.subTest(key=key),patch.object(ci,'validation_record',return_value=raw), \
+                     patch.dict(os.environ,{'IIOS_FEASIBILITY_SHA256':ci.digest(raw)}),self.assertRaises(ValueError):
+                    ci.require_feasibility(root,d,parent)
+            with patch.object(ci,'validation_record',side_effect=FileNotFoundError),self.assertRaises(FileNotFoundError):
+                ci.require_feasibility(root,d,parent)
+            with patch.dict(os.environ,{'IIOS_FEASIBILITY_SHA256':ci.digest(ci.canonical(v))}), \
+                 patch.object(ci.time,'monotonic_ns',return_value=215_000_000_000),self.assertRaisesRegex(ValueError,'FEASIBILITY_STALE'):
+                ci.require_feasibility(root,d,parent)
+
+    def test_gate_precedes_attempt_publication_and_spawn_and_sampling_is_charged(self):
+        import alpha_radar_ci as ci,inspect
+        source=inspect.getsource(ci.execute_full)
+        self.assertLess(source.index('require_feasibility('),source.index("document(root/'full-attempt.json'"))
+        self.assertLess(source.index('require_feasibility('),source.index('subprocess.Popen('))
+        source=inspect.getsource(ci.prepare_full_descriptor)
+        self.assertLess(source.index('prepare_feasibility('),source.index('prepare_job_budget('))
+        self.assertEqual(ci.NATIVE_JOB_SECONDS,4500);self.assertEqual(ci.NATIVE_PREPARATION_SECONDS,300)
+        self.assertEqual(ci.CLEANUP_SECONDS,180);self.assertEqual(ci.EXPORT_SECONDS,180)
+
+    def test_failed_gate_blocks_actual_execute_entry_before_attempt_or_spawn(self):
+        import alpha_radar_runner as run
+        ci,root,d,proof,env=self.case()
+        pins={'descriptor_parent':content_hash(d),'parents':{},'preparation_descriptor_parent':'a'*64}
+        env['IIOS_EXPECTED_VALIDATION_SHA256']=d['validation_parent']
+        ci.document(root/'export/full-pins.json',pins)
+        with patch.dict(os.environ,env),patch.object(ci,'full_event'),patch.object(ci,'hosted'), \
+             patch.object(ci,'root_check'),patch.object(run,'read_descriptor',return_value=d), \
+             patch.object(run,'full_descriptor',return_value={}),patch.object(ci,'require_validation'), \
+             patch.object(ci,'require_feasibility',side_effect=ValueError('FEASIBILITY_EXCEEDED')), \
+             patch.object(ci.subprocess,'Popen') as spawn,self.assertRaisesRegex(ValueError,'FEASIBILITY_EXCEEDED'):
+            ci.execute_full(root,explicit_request=True)
+        spawn.assert_not_called()
+        self.assertFalse((root/'full-attempt.json').exists());self.assertFalse((root/'full-session-output').exists())

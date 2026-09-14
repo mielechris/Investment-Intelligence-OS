@@ -591,7 +591,7 @@ def verify_bindings(expected):
 
 # CI outputs are an independent parent from the successful validation job. They
 # never substitute validation-runner runtime identities for native-runner pins.
-FAILURES = frozenset((*FAILURES,'VALIDATION_PARENT','VALIDATION_COLLECTION','VALIDATION_RESULTS','NATIVE_JOB_BUDGET'))
+FAILURES = frozenset((*FAILURES,'VALIDATION_PARENT','VALIDATION_COLLECTION','VALIDATION_RESULTS','NATIVE_JOB_BUDGET','FEASIBILITY_MEASUREMENT','FEASIBILITY_PARENT','FEASIBILITY_STALE','FEASIBILITY_EXCEEDED'))
 VALIDATION_SCOPE = 'MOCKED_AND_FRESH_PROCESS_VALIDATION_ONLY'
 NATIVE_JOB_SECONDS = 4500
 NATIVE_START_RESERVE = 60
@@ -620,7 +620,7 @@ def validation_identity():
 
 def validation_record(root, name):
     require(name in ('offline-collection.json','offline-results.json','fresh-stdio-results.json',
-        'fresh-export-results.json','python-syntax.json','workflow-syntax.json','validation-proof.json'),
+        'fresh-export-results.json','python-syntax.json','workflow-syntax.json','validation-proof.json','full-feasibility.json'),
         'VALIDATION_PARENT')
     root_check(root)
     directory=root/'export'; parent=directory.lstat()
@@ -646,7 +646,7 @@ def check_validation_proof(value, expected):
             digest(canonical(value)) == expected, 'VALIDATION_PARENT')
     require(type(value) is dict and set(value) == {'schema','scope','source_commit','run_id',
         'run_attempt','job','source_bindings','collection_parent','offline','fresh_stdio',
-        'fresh_export','result_parents','runtime_archive_sha256'}, 'VALIDATION_PARENT')
+        'fresh_export','result_parents','runtime_archive_sha256','workload_measurement'}, 'VALIDATION_PARENT')
     require(value['schema'] == 'iios-offline-validation-v1' and value['scope'] == VALIDATION_SCOPE
         and value['job'] == 'validation' and all(value[k] == v for k,v in validation_identity().items())
         and value['runtime_archive_sha256'] == ARCHIVE_SHA256, 'VALIDATION_PARENT')
@@ -660,6 +660,7 @@ def check_validation_proof(value, expected):
         'offline-results.json','fresh-stdio-results.json','fresh-export-results.json','python-syntax.json','workflow-syntax.json'} and
         all(type(v) is str and re.fullmatch('[a-f0-9]{64}', v) for v in value['result_parents'].values()),
         'VALIDATION_PARENT')
+    workload_measurement(value['workload_measurement'])
     return value
 
 
@@ -696,7 +697,8 @@ def publish_validation(root):
         'fresh_stdio':records['fresh-stdio-results.json']['executed'],
         'fresh_export':records['fresh-export-results.json']['executed'],
         'result_parents':{n:digest(validation_record(root,n)) for n in (*records,'python-syntax.json','workflow-syntax.json')},
-        'runtime_archive_sha256':ARCHIVE_SHA256}
+        'runtime_archive_sha256':ARCHIVE_SHA256,
+        'workload_measurement':workload_measurement(next(r for r in off['timings'] if r['node']==WORKLOAD_NODE))}
     check_validation_proof(value,digest(canonical(value)))
     document(root/'export/validation-proof.json',value)
 
@@ -719,6 +721,94 @@ def require_validation(root):
     expected = os.environ.get('IIOS_EXPECTED_VALIDATION_SHA256')
     value = json.loads(validation_record(root,'validation-proof.json'))
     return check_validation_proof(value,expected)
+
+
+WORKLOAD_NODE = 'test_alpha_radar_native.FullSessionModeTests.test_full_475_mocked_session_accounting_and_every_record_scope'
+
+
+def workload_measurement(value):
+    """Actual scheduler/journal/recovery/accounting test, with transport mocked.
+
+    Its entire wall time is retained: no subtraction for synthetic admission,
+    negative assertions or filesystem overhead. Source/tests/archive are bound
+    by the independently expected, same-run validation proof.
+    """
+    import math
+    require(type(value) is dict and value.get('node')==WORKLOAD_NODE and
+        type(value.get('wall_seconds')) in (int,float) and
+        math.isfinite(value['wall_seconds']) and 0<value['wall_seconds']<=3600,
+        'FEASIBILITY_MEASUREMENT')
+    return {'node':WORKLOAD_NODE,'wall_seconds':value['wall_seconds']}
+
+
+def feasibility_estimate(benchmark, samples):
+    require(type(samples) is list and len(samples)==3 and
+        all(type(n) is int and 0<n<=30_000_000_000 for n in samples),
+        'FEASIBILITY_MEASUREMENT')
+    # Six complete runtime checks per request, including the fixture-side check.
+    # Do not subtract any checks already included in the measured journal path.
+    return (workload_measurement(benchmark)['wall_seconds']+
+            475*6*max(samples)/1_000_000_000)*1.25
+
+
+def prepare_feasibility(root, d):
+    from alpha_radar_admission import verify_inputs
+    hosted();root_check(root);proof=require_validation(root)
+    require(os.environ.get('GITHUB_JOB')=='native','FEASIBILITY_PARENT')
+    require(not (root/'full-session-output').exists() and not (root/'full-attempt.json').exists(),
+        'ATTEMPT_ALREADY_EXISTS')
+    start=time.monotonic_ns();samples=[]
+    for _ in range(3):
+        before=time.monotonic_ns()
+        verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
+        after=time.monotonic_ns();samples.append(after-before)
+        require(0<after-before<=30_000_000_000,'FEASIBILITY_MEASUREMENT')
+    end=time.monotonic_ns()
+    estimate=feasibility_estimate(proof['workload_measurement'],samples)
+    value={'schema':'iios-hosted-feasibility-v1',**validation_identity(),
+        'scope':'PREPARATION_MEASUREMENT_ONLY','validation_parent':digest(canonical(proof)),
+        'input_parent':digest(canonical(d)),'runtime_parent':d['expected']['runtime'],
+        'workload_parent':d['expected']['plan'],'root':str(root),
+        'started_ns':start,'finished_ns':end,'samples_ns':samples,
+        'benchmark':proof['workload_measurement'],'estimated_work_seconds':estimate,
+        'work_limit_seconds':FULL_WORK_SECONDS,'production_qualified':False,
+        'classification':'FEASIBLE' if estimate<=FULL_WORK_SECONDS else 'INFEASIBLE'}
+    document(root/'export/full-feasibility.json',value)
+    require(estimate<=FULL_WORK_SECONDS,'FEASIBILITY_EXCEEDED')
+    # Independent publisher pin crosses the step boundary via GitHub's runner
+    # command file; it is never sourced from the measurement being verified.
+    with open(os.environ['GITHUB_ENV'],'a') as stream:
+        stream.write('IIOS_FEASIBILITY_SHA256='+digest(canonical(value))+'\n')
+    return value
+
+
+def require_feasibility(root, d, input_parent):
+    proof=require_validation(root)
+    raw=validation_record(root,'full-feasibility.json');value=json.loads(raw)
+    expected=os.environ.get('IIOS_FEASIBILITY_SHA256','')
+    require(re.fullmatch('[a-f0-9]{64}',expected) and digest(raw)==expected and
+        raw==canonical(value),'FEASIBILITY_PARENT')
+    require(type(value) is dict and set(value)=={'schema','source_commit','run_id','run_attempt',
+        'scope','validation_parent','input_parent','runtime_parent','workload_parent','root',
+        'started_ns','finished_ns','samples_ns','benchmark','estimated_work_seconds',
+        'work_limit_seconds','production_qualified','classification'},'FEASIBILITY_PARENT')
+    require(value['schema']=='iios-hosted-feasibility-v1' and
+        value['scope']=='PREPARATION_MEASUREMENT_ONLY' and value['production_qualified'] is False and
+        all(value[k]==v for k,v in validation_identity().items()) and
+        value['validation_parent']==digest(canonical(proof)) and
+        value['input_parent']==input_parent and value['runtime_parent']==d['expected']['runtime'] and
+        value['workload_parent']==d['expected']['plan'] and value['root']==str(root) and
+        value['benchmark']==proof['workload_measurement'],'FEASIBILITY_PARENT')
+    b=d['budget'];now=time.monotonic_ns()
+    require(type(value['started_ns']) is int and type(value['finished_ns']) is int and
+        round(b['start_monotonic']*1_000_000_000)<=value['started_ns']<value['finished_ns']<=
+        b['prepared_monotonic_ns']<=now and now-value['finished_ns']<=100_000_000_000 and
+        sum(value['samples_ns'])<=value['finished_ns']-value['started_ns'],
+        'FEASIBILITY_STALE')
+    estimate=feasibility_estimate(value['benchmark'],value['samples_ns'])
+    require(value['estimated_work_seconds']==estimate and value['work_limit_seconds']==FULL_WORK_SECONDS
+        and value['classification']=='FEASIBLE' and estimate<=FULL_WORK_SECONDS,'FEASIBILITY_EXCEEDED')
+    return value
 
 
 def prepare_job_budget(root):
@@ -1036,6 +1126,7 @@ def prepare_full_descriptor(root,old):
     d={k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools')}
     package=full_package(old['package'],old['expected'])
     require_validation(root)
+    prepare_feasibility(root,old)
     budget=prepare_job_budget(root)
     d.update(schema='iios-ci-full-session-descriptor-v2',execution_mode=FULL_SCOPE,
         budget=budget,validation_parent=os.environ['IIOS_EXPECTED_VALIDATION_SHA256'],
@@ -1060,6 +1151,7 @@ def execute_full(root,*,explicit_request=False):
     require(parents==pins['parents'] and d['package']['source_commit']==os.environ['GITHUB_SHA'],'SOURCE_PIN')
     require_validation(root)
     require(d['validation_parent']==os.environ['IIOS_EXPECTED_VALIDATION_SHA256'],'VALIDATION_PARENT')
+    require_feasibility(root,d,pins['preparation_descriptor_parent'])
     budget=full_launch_budget(d)
     argv=[str(runtime/'python/bin/python3.13'),'-B',str(runtime/'source/alpha_radar_runner.py'),
         '--ci-full-session-only','--descriptor',str(root/'full-descriptor.json'),'--expected-descriptor',pins['descriptor_parent']]
