@@ -2455,15 +2455,15 @@ class FullSessionModeTests(unittest.TestCase):
         package=run.full_package(p,e)
         d={'schema':'iios-ci-full-session-descriptor-v2','execution_mode':run.FULL_SCOPE,
             'package':p,'runtime':r,'expected':e,'authorized_root':str(root),'native_tools':{},
-            'maximum_duration_seconds':2700,'context':self.context(),'session_package':package,
+            'maximum_duration_seconds':3300,'context':self.context(),'session_package':package,
             'session_package_parent':content_hash(package)}
         d['validation_parent']='a'*64
         d['budget']={'schema':'iios-native-job-budget-v2','source_commit':d['context']['GITHUB_SHA'],
             'run_id':d['context']['GITHUB_RUN_ID'],'run_attempt':1,'start_monotonic':100,
-            'prepared_monotonic':101,'hard_deadline':3640,'work_deadline':2966,'cleanup_deadline':3146,
+            'prepared_monotonic':101,'hard_deadline':4540,'work_deadline':3766,'cleanup_deadline':3946,
             'deadline_unit':'MONOTONIC_NANOSECONDS','prepared_monotonic_ns':101_000_000_000,
-            'startup_deadline_ns':266_000_000_000,
-            'cleanup_seconds':180,'export_seconds':180,'real_clock_seconds':65,'work_seconds':2700}
+            'startup_deadline_ns':466_000_000_000,
+            'cleanup_seconds':180,'export_seconds':180,'real_clock_seconds':65,'work_seconds':3300}
         parents={**e,'session_package':content_hash(package),'full_descriptor':content_hash(d)}
         return root,p,r,e,d,parents
 
@@ -2871,15 +2871,15 @@ class FullSessionModeTests(unittest.TestCase):
             and v['after']['state']=='CHILD_RUNNING' for v in batch['samples']))
 
     def test_fresh_worker_phase_after_expired_fixture_deadline(self):
-        run,s,d,owned,child,observation,exe=self.registration_case(monotonic=lambda:371)
-        self.assertLess(run.full_startup_deadline(d),371)
-        phase=run.full_phase(d,'worker',monotonic_ns=lambda:370_000_000_000)
-        self.assertEqual(run.full_phase_deadline(d,'worker',phase),470)
+        run,s,d,owned,child,observation,exe=self.registration_case(monotonic=lambda:571)
+        self.assertLess(run.full_startup_deadline(d),571)
+        phase=run.full_phase(d,'worker',monotonic_ns=lambda:570_000_000_000)
+        self.assertEqual(run.full_phase_deadline(d,'worker',phase),670)
         calls=[];original=run.checked_capability
         with patch.object(run,'checked_capability',side_effect=lambda cap:(calls.append(1) or original(cap))):
             owned.register('worker',child,argv=(exe,),cwd=observation.cwd,executable=exe,
                 executable_hash=observation.executable_hash,launch_parent='1'*64,
-                descriptor=d,deadline=470,phase=phase)
+                descriptor=d,deadline=670,phase=phase)
         self.assertEqual(calls,[1])
         self.assertEqual(owned.children['worker']['observation'],dict(observation.__dict__))
 
@@ -2892,7 +2892,7 @@ class FullSessionModeTests(unittest.TestCase):
             ('start_ns',float('nan')),('deadline_ns',float('inf')),('deadline_ns',2**63)]:
             changed={**phase,key:value}
             with self.subTest(key=key),self.assertRaises(ValueError):run.full_phase_deadline(d,'worker',changed)
-        with self.assertRaises(ValueError):run.full_phase(d,'worker',monotonic_ns=lambda:2_900_000_000_000)
+        with self.assertRaises(ValueError):run.full_phase(d,'worker',monotonic_ns=lambda:3_700_000_000_000)
         owned.inspect=MagicMock(return_value=observation)
         with self.assertRaises(ValueError):
             owned.register('worker',child,argv=(exe,),cwd=observation.cwd,executable=exe,
@@ -2992,7 +2992,7 @@ class FullSessionModeTests(unittest.TestCase):
     def test_full_shared_deadline_covers_registration_listener_and_ack_order(self):
         import alpha_radar_runner as run,inspect
         d=self.inputs()[4]
-        self.assertEqual(run.full_startup_deadline(d),266)
+        self.assertEqual(run.full_startup_deadline(d),466)
         child_source=inspect.getsource(run.full_child);supervisor=inspect.getsource(run.full_supervise)
         self.assertIn('until=phase_deadline',child_source)
         self.assertIn("full_phase_deadline(d,role,launch['startup_phase'])",child_source)
@@ -3396,7 +3396,7 @@ class QualificationBudgetTests(unittest.TestCase):
         d=self.descriptor();b=run.full_launch_budget(d,monotonic=lambda:101)
         self.assertEqual(b['real_clock_seconds'],65);self.assertEqual(b['cleanup_seconds'],180)
         self.assertLessEqual(b['cleanup_deadline']+b['export_seconds'],b['hard_deadline'])
-        for tick in (100,202,float('nan'),float('inf')):
+        for tick in (100,402,float('nan'),float('inf')):
             with self.assertRaises(ValueError):run.full_launch_budget(d,monotonic=lambda:tick)
         for key,val in [('cleanup_seconds',0),('export_seconds',0),('real_clock_seconds',60),
             ('work_seconds',900),('hard_deadline',5000),('cleanup_deadline',5000),
@@ -3406,34 +3406,71 @@ class QualificationBudgetTests(unittest.TestCase):
         bad=deepcopy(d);bad['validation_parent']=''
         with self.assertRaises(ValueError):run.full_budget(bad)
 
+    def test_revised_budget_creator_verifier_and_workflow_agree(self):
+        import alpha_radar_ci as ci, alpha_radar_runner as run
+        d=self.descriptor();root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        env={'GITHUB_SHA':d['context']['GITHUB_SHA'],'GITHUB_RUN_ID':d['context']['GITHUB_RUN_ID'],
+             'GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'native','IIOS_NATIVE_JOB_START':'100'}
+        with patch.dict(os.environ,env),patch.object(ci,'document'), \
+             patch.object(ci.time,'monotonic',return_value=400):
+            d['budget']=ci.prepare_job_budget(root)
+        d=json.loads(json.dumps(d))
+        b=run.full_launch_budget(d,monotonic=lambda:400)
+        self.assertEqual(b['hard_deadline'],4540)
+        self.assertEqual(b['work_deadline'],4065)
+        self.assertEqual(b['cleanup_deadline'],4245)
+        self.assertEqual(b['cleanup_deadline']+180,4425)
+        self.assertEqual(b['hard_deadline']-(b['cleanup_deadline']+180),115)
+        self.assertEqual(ci.NATIVE_JOB_SECONDS,75*60)
+        self.assertEqual(sum((ci.NATIVE_PREPARATION_SECONDS,ci.NATIVE_STARTUP_SECONDS,
+            ci.REAL_CLOCK_SECONDS,ci.FULL_WORK_SECONDS,ci.CLEANUP_SECONDS,
+            ci.EXPORT_SECONDS,ci.NATIVE_START_RESERVE)),4385)
+        self.assertEqual(run.full_startup_deadline(d),765)
+        # Last launch-admission instant and one nanosecond beyond the boundary.
+        run.full_launch_budget(d,monotonic=lambda:700)
+        with self.assertRaisesRegex(ValueError,'FULL_INSUFFICIENT_BUDGET'):
+            run.full_launch_budget(d,monotonic=lambda:700.000000001)
+        for role in ('fixture','worker'):
+            phase=run.full_phase(d,role,monotonic_ns=lambda:800_000_000_000)
+            self.assertEqual(phase['deadline_ns']-phase['start_ns'],100_000_000_000)
+            self.assertEqual(run.full_phase_deadline(d,role,phase),900)
+        for key in ('hard_deadline','work_deadline','cleanup_deadline','work_seconds',
+                    'startup_deadline_ns','cleanup_seconds','export_seconds'):
+            for delta in (-1,1):
+                bad=deepcopy(d);bad['budget'][key]+=delta
+                with self.subTest(key=key,delta=delta),self.assertRaises(ValueError):
+                    run.full_budget(bad)
+
     def test_canonical_startup_deadline_survives_observed_two_ulp_round_trip(self):
         import alpha_radar_runner as run
         d=self.descriptor();b=d['budget']
+        # Preserve the exact historical two-ULP reproduction independently of
+        # the revised allocation; no float equality is used for startup identity.
+        from_work=3079.378764083-2700
+        from_prepared=214.378764083+65+100
         b.update(start_monotonic=199.422550333,prepared_monotonic=214.378764083,
-            hard_deadline=3739.422550333,work_deadline=3079.378764083,
-            cleanup_deadline=3259.378764083,prepared_monotonic_ns=214_378_764_083,
-            startup_deadline_ns=379_378_764_083)
-        from_work=b['work_deadline']-b['work_seconds']
-        from_prepared=b['prepared_monotonic']+b['real_clock_seconds']+100
+            hard_deadline=199.422550333+4440,work_deadline=214.378764083+3665,
+            cleanup_deadline=214.378764083+3665+180,prepared_monotonic_ns=214_378_764_083,
+            startup_deadline_ns=579_378_764_083)
         self.assertNotEqual(from_work,from_prepared)
         self.assertEqual(abs(from_work-from_prepared),1.1368683772161603e-13)
         encoded=json.dumps(d,sort_keys=True,separators=(',',':'))
         admitted=json.loads(encoded)
-        self.assertEqual(run.full_startup_deadline(admitted),379.378764083)
-        self.assertEqual(admitted['budget']['startup_deadline_ns'],379_378_764_083)
+        self.assertEqual(run.full_startup_deadline(admitted),579.378764083)
+        self.assertEqual(admitted['budget']['startup_deadline_ns'],579_378_764_083)
 
     def test_canonical_startup_deadline_rejects_unit_tick_and_budget_mutations(self):
         import alpha_radar_runner as run
         mutations=(
             ('deadline_unit','MONOTONIC_MILLISECONDS'),
             ('prepared_monotonic_ns',101_000_000_001),
-            ('startup_deadline_ns',266_000_000_001),
-            ('startup_deadline_ns',266_000_000_000.0),
+            ('startup_deadline_ns',466_000_000_001),
+            ('startup_deadline_ns',466_000_000_000.0),
             ('startup_deadline_ns',-1),
             ('startup_deadline_ns',2**63),
             ('prepared_monotonic_ns',2**63),
-            ('work_seconds',2699),
-            ('work_seconds',2701),
+            ('work_seconds',3299),
+            ('work_seconds',3301),
             ('real_clock_seconds',64),
             ('real_clock_seconds',66),
         )
@@ -3451,9 +3488,9 @@ class QualificationBudgetTests(unittest.TestCase):
 
     def test_fixture_creation_waits_for_every_canonical_budget_pin(self):
         import alpha_radar_runner as run
-        for key,value in (('deadline_unit','WRONG'),('startup_deadline_ns',266_000_000_001),
-                          ('prepared_monotonic_ns',101_000_000_001),('work_deadline',2965),
-                          ('cleanup_deadline',3145),('hard_deadline',3639)):
+        for key,value in (('deadline_unit','WRONG'),('startup_deadline_ns',466_000_000_001),
+                          ('prepared_monotonic_ns',101_000_000_001),('work_deadline',3765),
+                          ('cleanup_deadline',3945),('hard_deadline',4539)):
             bad=deepcopy(self.descriptor());bad['budget'][key]=value
             with self.subTest(key=key),patch.object(run,'admit') as admit_mock,\
                  patch.object(run,'full_supervise') as supervise:
@@ -3527,7 +3564,7 @@ class QualificationBudgetTests(unittest.TestCase):
         self.assertIn('needs.validation.outputs.proof_sha256',native)
         self.assertIn('needs.validation.outputs.proof',native)
         self.assertIn("github.event_name == 'workflow_dispatch'",native)
-        self.assertIn('timeout-minutes: 60',native);self.assertIn('timeout-minutes: 60',validation)
+        self.assertIn('timeout-minutes: 75',native);self.assertIn('timeout-minutes: 60',validation)
         source=Path(ci.__file__).read_text();tree=ast.parse(source)
         for name in ('execute','execute_lifecycle','execute_full'):
             f=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
@@ -3545,8 +3582,8 @@ class QualificationBudgetTests(unittest.TestCase):
                     ci.prepare_job_budget(root)
             publish.assert_not_called()
             with patch.object(ci.time,'monotonic',return_value=101):b=ci.prepare_job_budget(root)
-            self.assertEqual(b['work_seconds'],2700)
-            self.assertEqual(b['work_deadline']-b['prepared_monotonic'],2865)
+            self.assertEqual(b['work_seconds'],3300)
+            self.assertEqual(b['work_deadline']-b['prepared_monotonic'],3665)
             self.assertLessEqual(b['cleanup_deadline']+180,b['hard_deadline'])
             publish.assert_called_once()
 

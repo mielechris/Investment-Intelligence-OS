@@ -151,9 +151,10 @@ jobs:
     needs: validation
     if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && (inputs.native_startup == true || inputs.lifecycle_only == true || inputs.full_session_only == true)
     runs-on: macos-26
-    # Fresh prep <=300s; startup 100s; real-clock 65s; session <=2700s;
-    # cleanup 180s + export 180s + runner-start margin 60s = 3585s < 60m.
-    timeout-minutes: 60
+    # Fresh prep <=300s; admission/startup/TLS 300s; real-clock 65s; work <=3300s;
+    # cleanup 180s + export 180s + hard-stop margin 60s = 4385s < 75m.
+    # Individual fixture/worker startup phases remain bounded at 100s each.
+    timeout-minutes: 75
     env:
       IIOS_EXPECTED_VALIDATION_SHA256: ${{ needs.validation.outputs.proof_sha256 }}
     steps:

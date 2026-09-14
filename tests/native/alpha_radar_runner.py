@@ -1535,13 +1535,13 @@ def full_budget(d):
         0 < b['startup_deadline_ns'] <= 2**63-1 and
         b['prepared_monotonic_ns'] == round(b['prepared_monotonic']*FULL_NANOSECONDS) and
         b['startup_deadline_ns'] == b['prepared_monotonic_ns']+
-            (b['real_clock_seconds']+100)*FULL_NANOSECONDS,
+            (b['real_clock_seconds']+300)*FULL_NANOSECONDS,
         'FULL_JOB_BUDGET')
     require(b['cleanup_seconds'] == b['export_seconds'] == 180 and b['real_clock_seconds'] == 65
-        and b['work_seconds'] == d['maximum_duration_seconds'] == 2700 and
+        and b['work_seconds'] == d['maximum_duration_seconds'] == 3300 and
         0 <= b['prepared_monotonic']-b['start_monotonic'] <= 300 and
-        b['hard_deadline'] == b['start_monotonic']+3540 and
-        b['work_deadline'] == b['prepared_monotonic']+2865 and
+        b['hard_deadline'] == b['start_monotonic']+4440 and
+        b['work_deadline'] == b['prepared_monotonic']+3665 and
         b['cleanup_deadline'] == b['work_deadline']+180 and
         b['cleanup_deadline']+180 <= b['hard_deadline'], 'FULL_JOB_BUDGET')
     require(type(d['validation_parent']) is str and
@@ -1551,7 +1551,7 @@ def full_budget(d):
 
 def full_launch_budget(d, *, monotonic=time.monotonic):
     b = full_budget(d); now = monotonic()
-    require(b['prepared_monotonic'] <= now and b['work_deadline']-now >= 2765,
+    require(b['prepared_monotonic'] <= now and b['work_deadline']-now >= 3365,
             'FULL_INSUFFICIENT_BUDGET')
     return b
 
@@ -1651,7 +1651,7 @@ def full_descriptor(d):
         'expected', 'authorized_root', 'native_tools', 'maximum_duration_seconds', 'context',
         'session_package', 'session_package_parent', 'budget', 'validation_parent'}, 'FULL_DESCRIPTOR')
     require(d['schema'] == 'iios-ci-full-session-descriptor-v2' and d['execution_mode'] == FULL_SCOPE
-        and type(d['maximum_duration_seconds']) is int and d['maximum_duration_seconds'] == 2700,
+        and type(d['maximum_duration_seconds']) is int and d['maximum_duration_seconds'] == 3300,
         'FULL_DESCRIPTOR')
     full_budget(d)
     lifecycle_environment(d['context'])
