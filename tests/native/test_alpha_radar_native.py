@@ -3595,3 +3595,175 @@ class QualificationBudgetTests(unittest.TestCase):
         with patch.object(Path,'lstat') as metadata,patch.object(ci.os,'open') as opened:
             with self.assertRaises(ValueError):ci.validation_record(root,'../not-admitted')
             metadata.assert_not_called();opened.assert_not_called()
+
+
+class SchedulerSanitizedFailureTests(unittest.TestCase):
+    def call(self, executor, diagnostics=None, **overrides):
+        at = '2026-09-14T13:20:00+00:00'
+        kwargs = dict(clock=lambda:at, wait=lambda _:None, executor=executor,
+                      stop=lambda:False, verify=lambda *_:None,
+                      completion_parent=lambda *_:None,
+                      failure_diagnostics=diagnostics)
+        kwargs.update(overrides)
+        return execute_schedule({'rows':[{'valid_from':at,
+            'expires_at':'2026-09-14T13:25:00+00:00'}]}, [{}], **kwargs)
+
+    def test_exception_text_and_locals_never_retained(self):
+        def fail(*_):
+            sensitive_local = 'DO_NOT_RETAIN_SYNTHETIC_SENTINEL'
+            raise ValueError(sensitive_local)
+        diagnostics=[]
+        receipts, reason=self.call(fail,diagnostics)
+        self.assertEqual((receipts,reason),([], 'AMBIGUOUS_OR_FAILED_STOP'))
+        self.assertEqual(len(diagnostics),1)
+        self.assertEqual(diagnostics[0]['exception_type'],'VALUE_ERROR')
+        self.assertEqual(diagnostics[0]['stage'],'EXECUTOR')
+        self.assertNotIn('DO_NOT_RETAIN',json.dumps(diagnostics))
+        self.assertFalse(diagnostics[0]['message_retained'])
+        self.assertFalse(diagnostics[0]['locals_retained'])
+
+    def test_custom_exception_name_and_stringification_not_used(self):
+        class UntrustedError(Exception):
+            def __str__(self): raise AssertionError('MUST_NOT_STRINGIFY')
+        def fail(*_): raise UntrustedError('DO_NOT_RETAIN')
+        diagnostics=[]; self.call(fail,diagnostics)
+        self.assertEqual(diagnostics[0]['exception_type'],'UNKNOWN')
+        self.assertNotIn('UntrustedError',json.dumps(diagnostics))
+
+    def test_fail_closed_without_diagnostic_sink(self):
+        executor=MagicMock(side_effect=PermissionError('DO_NOT_RETAIN'))
+        self.assertEqual(self.call(executor),([], 'AMBIGUOUS_OR_FAILED_STOP'))
+        executor.assert_called_once()
+
+    def test_verify_failure_stage_and_no_duplicate_dispatch(self):
+        diagnostics=[]; executor=MagicMock(return_value={})
+        self.assertEqual(self.call(executor,diagnostics,
+            verify=MagicMock(side_effect=KeyError('DO_NOT_RETAIN'))),
+            ([], 'AMBIGUOUS_OR_FAILED_STOP'))
+        self.assertEqual(diagnostics[0]['stage'],'VERIFY')
+        self.assertEqual(diagnostics[0]['exception_type'],'KEY_ERROR')
+        executor.assert_called_once()
+
+    def test_nonempty_or_untrusted_sink_rejected_before_dispatch(self):
+        for sink in ({}, [1], ()):
+            executor=MagicMock()
+            with self.assertRaises(ValueError): self.call(executor,sink)
+            executor.assert_not_called()
+
+    def test_location_comes_only_from_known_scheduler_code(self):
+        def fail(*_): raise ValueError('DO_NOT_RETAIN')
+        diagnostics=[]; self.call(fail,diagnostics)
+        self.assertEqual(diagnostics[0]['location']['site'],'EXECUTE_SCHEDULE')
+        self.assertIs(type(diagnostics[0]['location']['line']),int)
+        self.assertNotIn('file',diagnostics[0]['location'])
+
+
+class JournalLockAuditTests(unittest.TestCase):
+    def test_only_cloexec_is_additionally_admitted_for_exact_worker_lock(self):
+        import alpha_radar_runner as runner
+        root=Path(tempfile.mkdtemp(prefix='lock-audit-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        runtime=root/'runtime';out=root/'output';journal=out/'journal'
+        for path in (runtime,out,journal):path.mkdir(mode=0o700)
+        plan={'root':str(journal),'rows':[]}
+        base=os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW
+        for role in ('worker','fixture','supervisor'):
+            audit,_=runner.full_audit(runtime,out,('127.0.0.1',38493),role,plan=plan)
+            for extra in (0,os.O_CLOEXEC):
+                if role=='worker':audit('open',(journal/'day.lock',None,base|extra))
+                else:
+                    with self.assertRaises(ValueError):audit('open',(journal/'day.lock',None,base|extra))
+            for altered in (base|os.O_TRUNC,base|os.O_APPEND,base|os.O_EXCL,
+                            base&~os.O_NOFOLLOW,os.O_RDWR,base|os.O_NONBLOCK):
+                with self.assertRaises(ValueError):audit('open',(journal/'day.lock',None,altered))
+            with self.assertRaises(ValueError):audit('open',(journal/'other.lock',None,base|os.O_CLOEXEC))
+
+
+class OneRequestDiagnosticTests(unittest.TestCase):
+    def session(self,fail=False):
+        import alpha_radar_runner as run
+        root,p,r,e,_,_=FullSessionModeTests().inputs();cap=admit(p,r,expected=e,authorized_root=root)
+        parents={**e,'diagnostic_descriptor':'c'*64,'diagnostic_source':'d'*64};calls=[]
+        def exchange(cap,slot,at):
+            from urllib.parse import urlencode
+            calls.append(slot)
+            if fail:raise TimeoutError('NOT_RETAINED')
+            status,body=response(cap,'/slot/'+str(slot)+'?'+urlencode({'at':at}))
+            return Response(status,body,'2026-09-14T13:20:00+00:00','2026-09-14T13:20:00+00:00')
+        s=run.DiagnosticSession(cap,parents,clock=lambda:p['plan']['rows'][0]['valid_from'],
+            wait=lambda _:self.fail('UNEXPECTED_WAIT'),stop=lambda:False,exchange=exchange)
+        return s,calls
+
+    def test_one_request_keeps_full_plan_and_rejects_second_dispatch(self):
+        import alpha_radar_runner as run
+        s,calls=self.session();before=canonical(s.p['plan']);value,parent=s.run()
+        self.assertEqual(value['classification'],'DIAGNOSTIC_PASS');self.assertEqual(calls,[0])
+        self.assertEqual((value['attempted'],value['completed'],value['reservations']),(1,1,1))
+        self.assertEqual(canonical(s.p['plan']),before);self.assertEqual(len(s.p['plan']['rows']),475)
+        with self.assertRaises(ValueError):s.execute(s.request(1),None)
+        self.assertEqual(calls,[0])
+        doc=json.loads((Path(s.p['root'])/'fs-session.json').read_bytes())
+        self.assertEqual(run.diagnostic_verify(doc,parent,s.full_parents),value)
+        with self.assertRaises(ValueError):run.verify_full_receipt(doc,parent,s.full_parents)
+        with self.assertRaises(ValueError):run.verify_envelope(doc,content_hash(doc),parents=s.pins)
+
+    def test_ambiguous_request_stays_consumed_no_retry_and_no_full_acceptance(self):
+        s,calls=self.session(True);value,_=s.run()
+        self.assertEqual(calls,[0]);self.assertEqual(value['classification'],'DIAGNOSTIC_FAILED')
+        self.assertEqual(value['completed'],0)
+        self.assertTrue((Path(s.p['plan']['root'])/'0.reserved.json').is_file())
+        with self.assertRaises(ValueError):s.execute(s.request(0),None)
+        self.assertEqual(calls,[0])
+
+    def test_relabelled_or_reparented_diagnostic_receipt_rejected(self):
+        import alpha_radar_runner as run
+        parents={'diagnostic_descriptor':'a'*64};doc=run.diagnostic_envelope({'result':'TEST'},parents)
+        for key,value in [('scope',run.FULL_SCOPE),('production_qualified',True),('parents',{})]:
+            bad=deepcopy(doc);bad[key]=value;bad['content_hash']=content_hash({k:v for k,v in bad.items() if k!='content_hash'})
+            with self.assertRaises(ValueError):run.diagnostic_verify(bad,content_hash(bad),parents)
+
+
+class DiagnosticSupervisorAdmissionTests(unittest.TestCase):
+    def test_only_explicit_self_and_owned_pids_admitted(self):
+        import alpha_radar_runner as run
+        root=Path(tempfile.mkdtemp(prefix='diagnostic-self-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        runtime=root/'runtime';out=root/'output'
+        runtime.mkdir();out.mkdir()
+        plan={'root':str(out/'journal'),'rows':[]}
+        audit,_=run.full_audit(runtime,out,('127.0.0.1',38494),'supervisor',plan=plan,
+            child_pids=lambda:(os.getpid(),))
+        argv=['/bin/ps','-ww','-p',str(os.getpid()),'-o','ppid=']
+        audit('subprocess.Popen',('/bin/ps',argv,None,run.LIFECYCLE_ENV))
+        argv[3]=str(os.getpid()+1)
+        with self.assertRaises(ValueError):audit('subprocess.Popen',('/bin/ps',argv,None,run.LIFECYCLE_ENV))
+        try:audit('subprocess.Popen',('/bin/ps',argv,None,run.LIFECYCLE_ENV))
+        except ValueError as error:
+            diagnostic=run.diagnostic_failure(error,'STARTUP')
+        self.assertEqual(diagnostic['diagnostic']['location']['site'],'NATIVE_FULL_AUDIT')
+
+
+class FullSessionPreflightDifferenceTests(unittest.TestCase):
+    def test_pilot_to_normal_batches_revalidates_every_prior_record(self):
+        helper=FullSessionModeTests();s,now,calls,_=helper.session();helper.journal(s)
+        previous=None
+        for slot in range(3):
+            now[0]=utc(s.p['plan']['rows'][slot]['valid_from'])
+            request=s.request(slot)
+            with patch.object(s,'read',wraps=s.read) as reads:
+                receipt=s.execute(request,previous)
+                self.assertEqual(reads.call_count,3*slot)
+            previous=s.completion(request,slot,previous,receipt)
+            self.assertEqual(receipt['result'],'OBSERVED')
+            self.assertEqual(receipt['scope'],s.receipt_scope)
+        self.assertEqual(calls,[0,1,2]);self.assertEqual(s.next_slot,3)
+        self.assertEqual(len(s.p['plan']['rows']),475)
+        self.assertEqual(len(s.p['plan']['rows'][0]['symbols']),10)
+        self.assertEqual([len(s.p['plan']['rows'][i]['symbols']) for i in (1,2)],[100,100])
+
+    def test_normal_batch_wrong_recovery_parent_never_dispatches(self):
+        helper=FullSessionModeTests();s,now,calls,_=helper.session();helper.journal(s)
+        first=s.execute(s.request(0),None)
+        self.assertEqual(first['result'],'OBSERVED')
+        now[0]=utc(s.p['plan']['rows'][1]['valid_from'])
+        with self.assertRaises(ValueError):s.execute(s.request(1),'0'*64)
+        self.assertEqual(calls,[0]);self.assertEqual(s.next_slot,1)
+        self.assertFalse((Path(s.p['plan']['root'])/'1.reserved.json').exists())

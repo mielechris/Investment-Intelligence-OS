@@ -1788,6 +1788,7 @@ def full_real_clock_boundary(*, monotonic=time.monotonic, pause=time.sleep):
 
 
 class FullSession(Session):
+    receipt_scope = FULL_SCOPE
     def __init__(self, cap, parents, *, clock, wait, stop, exchange=fixture_exchange):
         super().__init__(cap, clock=clock, wait=wait, stop=stop, exchange=exchange)
         full_package(self.p, self.pins)
@@ -1816,12 +1817,12 @@ class FullSession(Session):
         return value
 
     def verify(self, receipt, expected, *, parents):
-        require(receipt['scope'] == FULL_SCOPE and receipt['authority'] == AUTHORITY and
+        require(receipt['scope'] == self.receipt_scope and receipt['authority'] == AUTHORITY and
             receipt['parents'] == parents and self.hash(receipt) == expected and
             receipt['source_commit'] == self.p['source_commit'], 'FULL_RECEIPT_BINDING')
 
     def request(self, slot):
-        request = super().request(slot); request['manifest']['role'] = FULL_SCOPE
+        request = super().request(slot); request['manifest']['role'] = self.receipt_scope
         return request
 
     def execute(self, request, previous):
@@ -1833,8 +1834,8 @@ class FullSession(Session):
             require(index == slot, 'FULL_REQUEST_ORDER')
             at = self.clock(); self.rate.reserve(utc(at).timestamp())
             row = self.p['plan']['rows'][slot]; fd = self.open_root(row['root'])
-            receipt = {'scope': FULL_SCOPE, 'authority': AUTHORITY, 'source_commit': m['source_commit'],
-                'root': m['root'], 'role': FULL_SCOPE, 'parents': {**request['expected'],'reservation':reserved},
+            receipt = {'scope': self.receipt_scope, 'authority': AUTHORITY, 'source_commit': m['source_commit'],
+                'root': m['root'], 'role': self.receipt_scope, 'parents': {**request['expected'],'reservation':reserved},
                 'result': 'AMBIGUOUS_OR_UNVERIFIED_STOP', 'retry_count': 0,
                 'credential_selector_access_count': 0, 'billing': 'SYNTHETIC_NO_CHARGE',
                 'bulk_checks': {}, 'dispatch_time': at, 'response_time': None,
@@ -1881,12 +1882,15 @@ class FullSession(Session):
         def verify(receipt,request):
             require(receipt['parents'] == {**request['expected'],'reservation':receipt['parents']['reservation']},'RECEIPT_PARENTS')
             self.verify(receipt,self.hash(receipt),parents=receipt['parents'])
+        failure_diagnostics = []
         receipts, reason = execute_schedule(self.p['plan'],requests,clock=self.clock,wait=self.wait,
-            executor=self.execute,stop=self.stop,verify=verify,completion_parent=self.completion)
+            executor=self.execute,stop=self.stop,verify=verify,completion_parent=self.completion,
+            failure_diagnostics=failure_diagnostics)
         complete = reason is None and len(receipts) == self.attempted == self.completed == self.next_slot == 475 and utc(self.clock()) <= utc(self.p['plan']['finalization_deadline'])
         value = {'classification':'FULL_SYNTHETIC_PASS' if complete else 'FULL_SYNTHETIC_FAILED',
             'attempted':self.attempted,'completed':self.completed,'reservations':self.next_slot,
             'receipt_parents':self.receipt_pins,'stop_reason':reason,'worker_launches':1,
+            'failure_diagnostics':failure_diagnostics,
             'provider_requests':0,'credential_accesses':0,'full_day_wall_clock_proven':False}
         parent = full_store(self.cap,self.full_parents,'fs-session.json',value,logical_time=self.clock())
         return value,parent
@@ -1948,6 +1952,8 @@ class FullRoleInspection(OwnedProcesses):
 
 
 class FullOwnedProcesses(LifecycleOwnedProcesses):
+    record_store = staticmethod(full_store)
+    record_read = staticmethod(full_read)
     def registration_admission(self, descriptor, deadline, phase=None, role=None):
         """Pin the expensive immutable inputs once before timed observation."""
         require(type(deadline) in (int,float) and deadline == (full_startup_deadline(descriptor) if phase is None else
@@ -2060,7 +2066,7 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
 
     def evidence(self,value):
         self.counter += 1
-        full_store(self.cap,self.lifecycle_parents,f'fs-event-{self.counter:06d}.json',value)
+        self.record_store(self.cap,self.lifecycle_parents,f'fs-event-{self.counter:06d}.json',value)
 
     def verify(self,role,*,require_startup=True):
         require(role in ('fixture','worker'),'FULL_ROLE')
@@ -2069,7 +2075,7 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
         require(not require_startup or role in self.startup_pins,'STARTUP_RECEIPT_REQUIRED')
         if role in self.startup_pins:
             launch,expected = self.startup_pins[role]
-            full_read(self.cap,self.lifecycle_parents,f'fs-{role}-startup.json',expected=expected,
+            self.record_read(self.cap,self.lifecycle_parents,f'fs-{role}-startup.json',expected=expected,
                 value=full_startup(self.cap,role,launch,entry['observation']))
         return entry['child']
 
@@ -2096,14 +2102,14 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
             try:
                 self.verify(role); finding['ownership_verified'] = True
                 stage = 'COOPERATIVE_STOP'
-                full_store(self.cap,self.lifecycle_parents,f'fs-{role}-stop.json',
+                self.record_store(self.cap,self.lifecycle_parents,f'fs-{role}-stop.json',
                     {'event':'STOP','role':role,'launch_parent':entry['launch_parent']})
                 remaining=25 if deadline is None else min(25,deadline-self.monotonic())
                 require(remaining>0,'FULL_CLEANUP_DEADLINE')
                 child.wait(timeout=remaining)
                 stage = 'EXIT_VERIFY'
                 require(child.poll() == 0 and entry['observation'] is not None,'COOPERATIVE_SHUTDOWN')
-                full_read(self.cap,self.lifecycle_parents,f'fs-{role}-exit.json',
+                self.record_read(self.cap,self.lifecycle_parents,f'fs-{role}-exit.json',
                     value={'role':role,'returncode':0,'launch_parent':entry['launch_parent']})
                 finding['exit_verified'] = True
                 exits.append({'role':role,'pid':child.pid,'returncode':0,'ownership_verified':True})
@@ -2306,7 +2312,8 @@ def full_audit(runtime, output, endpoint, role, *, plan, launch_commands=None, c
                         re.fullmatch(r'(?:[0-9]{1,3}\.(?:reserved|complete)|ALPHA_VANTAGE\.receipt)\.json',target.name)))
                 lock = role == 'worker' and target == Path(plan['root'])/'day.lock'
                 require((receipt and flags & os.O_EXCL and flags & os.O_NOFOLLOW) or
-                    (lock and flags == os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW),'FULL_WRITE')
+                    (lock and flags in (os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,
+                        os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_CLOEXEC)),'FULL_WRITE')
             else:
                 require(target.is_relative_to(root) or target.is_relative_to(out) or
                     str(target) in read_exact,'FULL_READ')
@@ -2511,6 +2518,310 @@ def full_main(d,expected,child):
         return 0 if full_supervise(cap,d,cancelled=cancelled)['classification']=='FULL_SYNTHETIC_PASS' else 1
 
 
+# Separate local diagnostic admission. Never an alternate full-session admission.
+DIAG_SCOPE = 'LOCAL_SYNTHETIC_ONE_REQUEST_DIAGNOSTIC'
+DIAG_FLAGS = {**FULL_FLAGS, 'scope': DIAG_SCOPE}
+DIAG_ENV = {**LIFECYCLE_ENV, '__CF_USER_TEXT_ENCODING': f'0x{os.getuid():X}:0x0:0x0'}
+
+
+def diagnostic_descriptor(d):
+    require(type(d) is dict and set(d)=={'schema','scope','package','runtime','expected',
+        'authorized_root','native_tools','source_inventory','source_parent','os_identity',
+        'maximum_requests','work_deadline_ns','cleanup_deadline_ns'},'DIAGNOSTIC_DESCRIPTOR')
+    require(d['schema']=='iios-local-one-request-descriptor-v1' and d['scope']==DIAG_SCOPE
+        and type(d['maximum_requests']) is int and d['maximum_requests']==1,'DIAGNOSTIC_DESCRIPTOR')
+    require(d['os_identity']=={'sysname':os.uname().sysname,'release':os.uname().release,
+        'machine':os.uname().machine} and os.uname().sysname=='Darwin','DIAGNOSTIC_OS')
+    require(type(d['work_deadline_ns']) is int and type(d['cleanup_deadline_ns']) is int and
+        0<d['work_deadline_ns']<d['cleanup_deadline_ns'] and
+        d['cleanup_deadline_ns']-d['work_deadline_ns']==180_000_000_000,'DIAGNOSTIC_DEADLINE')
+    require(content_hash(d['source_inventory'])==d['source_parent'],'DIAGNOSTIC_SOURCE')
+    rows={row['path']:row for row in d['runtime']['files']}
+    require(set(d['source_inventory'])==set(d['runtime']['source_files']) and
+        all(rows[n]['sha256']==h for n,h in d['source_inventory'].items()),'DIAGNOSTIC_SOURCE')
+    verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
+    verify_tools(d['native_tools']); full_package(d['package'],d['expected'])
+    require(Path(d['package']['root']).name=='one-request-output','DIAGNOSTIC_OUTPUT')
+    return {**d['expected'],'diagnostic_descriptor':content_hash(d),'diagnostic_source':d['source_parent']}
+
+
+def diagnostic_envelope(value,parents,*,logical_time=None):
+    doc=full_envelope(value,parents,logical_time=logical_time)
+    doc.pop('content_hash');doc.update(DIAG_FLAGS)
+    return {**doc,'content_hash':content_hash(doc)}
+
+
+def diagnostic_verify(doc,expected,parents):
+    require(content_hash(doc)==expected and doc['parents']==parents and
+        doc['content_hash']==content_hash({k:v for k,v in doc.items() if k!='content_hash'}) and
+        all(type(doc[k]) is type(v) and doc[k]==v for k,v in DIAG_FLAGS.items()),'DIAGNOSTIC_RECEIPT')
+    require(set(doc)=={'schema',*DIAG_FLAGS,'parents','logical_time','actual_utc',
+        'monotonic_seconds','value','content_hash'},'DIAGNOSTIC_RECEIPT')
+    return doc['value']
+
+
+def diagnostic_store(cap,parents,name,value,*,logical_time=None):
+    p,_,_=checked_capability(cap);fd=safe_root(p['root'])
+    try:
+        st=os.fstat(fd);require((st.st_dev,st.st_ino)==cap.output_identity,'OUTPUT_REPLACED')
+        verify_destination(fd,p['root'])
+        return publish(fd,name,diagnostic_envelope(value,parents,logical_time=logical_time))
+    finally:os.close(fd)
+
+
+def diagnostic_read(cap,parents,name,*,expected=None,value=None):
+    require(expected is not None or value is not None,'DIAGNOSTIC_PARENT')
+    fd=safe_root(cap.documents()[0]['root'])
+    try:doc=read_record(fd,name,expected_hash=expected)
+    finally:os.close(fd)
+    result=diagnostic_verify(doc,expected or content_hash(doc),parents)
+    if value is not None:require(result==value,'DIAGNOSTIC_PARENT')
+    return result,content_hash(doc)
+
+
+class DiagnosticSession(FullSession):
+    receipt_scope=DIAG_SCOPE
+
+    def document(self,value):
+        key=canonical(value)
+        if key not in self.documents:self.documents[key]=diagnostic_envelope(value,self.full_parents,logical_time=self.clock())
+        return self.documents[key]
+
+    def execute(self,request,previous):
+        require(self.next_slot==0 and previous is None,'DIAGNOSTIC_REQUEST_LIMIT')
+        return super().execute(request,previous)
+
+    def read(self,fd,name,*,expected_hash=None):
+        self.verify_fd(fd);doc=read_record(fd,name,expected_hash=expected_hash)
+        value=diagnostic_verify(doc,expected_hash or content_hash(doc),self.full_parents)
+        require(self.documents.get(canonical(value))==doc,'FULL_RECOVERY_PIN')
+        return value
+
+    def run(self):
+        # The admitted plan stays 475 rows. Only the independently bound slot zero
+        # is executed; this result cannot satisfy any full-session verifier.
+        Path(self.p['plan']['root']).mkdir(mode=0o700)
+        Path(self.p['plan']['rows'][0]['root']).mkdir(mode=0o700)
+        request=self.request(0);diagnostics=[]
+        def verify(receipt,request):
+            require(receipt['parents']=={**request['expected'],'reservation':receipt['parents']['reservation']},'RECEIPT_PARENTS')
+            self.verify(receipt,self.hash(receipt),parents=receipt['parents'])
+        receipts,reason=execute_schedule(self.p['plan'],[request],clock=self.clock,wait=self.wait,
+            executor=self.execute,stop=self.stop,verify=verify,completion_parent=self.completion,
+            failure_diagnostics=diagnostics)
+        value={'scope':DIAG_SCOPE,'classification':'DIAGNOSTIC_PASS' if reason is None and
+            self.attempted==self.completed==self.next_slot==len(receipts)==1 else 'DIAGNOSTIC_FAILED',
+            'attempted':self.attempted,'completed':self.completed,'reservations':self.next_slot,
+            'receipt_parents':self.receipt_pins,'stop_reason':reason,'failure_diagnostics':diagnostics,
+            'provider_requests':0,'credential_accesses':0,'maximum_requests':1}
+        return value,diagnostic_store(self.cap,self.full_parents,'fs-session.json',value,logical_time=self.clock())
+
+
+class DiagnosticOwnedProcesses(FullOwnedProcesses):
+    record_store=staticmethod(diagnostic_store)
+    record_read=staticmethod(diagnostic_read)
+
+    def registration_admission(self,descriptor,deadline,phase=None,role=None):
+        require(phase is not None and phase=={'role':role,'descriptor_parent':content_hash(descriptor),
+            'start_ns':phase['start_ns'],'deadline_ns':phase['deadline_ns']} and
+            type(phase['start_ns']) is int and type(phase['deadline_ns']) is int and
+            phase['deadline_ns']-phase['start_ns']==100_000_000_000 and
+            phase['deadline_ns']<=descriptor['work_deadline_ns'] and
+            deadline==phase['deadline_ns']/1e9 and self.monotonic()<deadline,'DIAGNOSTIC_PHASE')
+        p,r,pins=checked_capability(self.cap)
+        require(p==descriptor['package'] and r==descriptor['runtime'] and pins==descriptor['expected']
+            and self.lifecycle_parents=={**pins,'diagnostic_descriptor':content_hash(descriptor),
+                'diagnostic_source':descriptor['source_parent']},'DIAGNOSTIC_PARENT')
+        fd=safe_root(p['root'])
+        try:
+            st=os.fstat(fd);require((st.st_dev,st.st_ino)==self.cap.output_identity,'OUTPUT_REPLACED')
+            verify_destination(fd,p['root']);return fd
+        except BaseException:os.close(fd);raise
+
+    def registration_evidence(self,fd,value):
+        self.counter+=1
+        return publish(fd,f'fs-event-{self.counter:06d}.json',diagnostic_envelope(value,self.lifecycle_parents))
+
+
+def diagnostic_audit(d,role,commands,child_pids):
+    p=d['package'];r=d['runtime']
+    base,opened=full_audit(r['root'],p['root'],('127.0.0.1',p['fixture']['port']),role,
+        plan=p['plan'],child_pids=child_pids)
+    launched=set()
+    def audit(event,args):
+        if event=='subprocess.Popen' and role=='supervisor' and len(args)==4:
+            executable,argv,cwd,env=args;matches=[k for k,v in commands.items() if tuple(argv)==tuple(v)]
+            if matches:
+                key=matches[0]
+                require(key not in launched and key in ('fixture','worker') and
+                    executable==str(Path(r['root'])/r['interpreter']) and
+                    argv[1:7]==['-B',str(Path(r['root'])/'source/alpha_radar_runner.py'),
+                        '--local-one-request-only','--child',key,'--descriptor'] and
+                    argv[7]==str(Path(p['root'])/f'fs-{key}-launch.json') and
+                    argv[8]=='--expected-descriptor' and re.fullmatch('[a-f0-9]{64}',argv[9]) and
+                    str(cwd)==p['root'] and env==DIAG_ENV,'DIAGNOSTIC_COMMAND')
+                launched.add(key);return
+        base(event,args)
+    return audit,opened
+
+
+def diagnostic_child(launch,launch_parent):
+    require(set(launch)=={'descriptor','role','parent_pid','output_identity','phase',*DIAG_FLAGS} and
+        all(launch[k]==v and type(launch[k]) is type(v) for k,v in DIAG_FLAGS.items()) and
+        launch['role'] in ('fixture','worker') and launch['parent_pid']==os.getppid(),'DIAGNOSTIC_LAUNCH')
+    d=launch['descriptor'];parents=diagnostic_descriptor(d);role=launch['role'];phase=launch['phase']
+    require(phase['descriptor_parent']==content_hash(d) and phase['role']==role and
+        type(phase['start_ns']) is int and type(phase['deadline_ns']) is int and
+        phase['deadline_ns']-phase['start_ns']==100_000_000_000 and
+        time.monotonic_ns()<phase['deadline_ns']<=d['work_deadline_ns'],'DIAGNOSTIC_PHASE')
+    require(dict(os.environ)==DIAG_ENV,'DIAGNOSTIC_ENVIRONMENT')
+    ids=verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
+    cap=SyntheticCapability(canonical(d['package']),canonical(d['runtime']),canonical(d['expected']),
+        d['authorized_root'],ids,tuple(launch['output_identity']))
+    native_identity(cap)
+    from alpha_radar_fixture import serve
+    audit,opened=diagnostic_audit(d,role,{},lambda:());os.open=opened;sys.addaudithook(audit)
+    def stop():
+        require(time.monotonic_ns()<d['cleanup_deadline_ns'],'DIAGNOSTIC_DEADLINE')
+        try:diagnostic_read(cap,parents,f'fs-{role}-stop.json',value={'event':'STOP','role':role,'launch_parent':launch_parent});return True
+        except FileNotFoundError:return False
+    def ready():
+        value=full_startup(cap,role,launch_parent,{'pid':os.getpid(),'parent_pid':os.getppid(),
+            'argv':[sys.executable,'-B',*sys.argv],'cwd':str(Path.cwd())})
+        parent=diagnostic_store(cap,parents,f'fs-{role}-startup.json',value)
+        while time.monotonic_ns()<phase['deadline_ns']:
+            try:diagnostic_read(cap,parents,f'fs-{role}-ack.json',value={'event':'ACK','role':role,
+                'launch_parent':launch_parent,'startup_parent':parent});return
+            except FileNotFoundError:time.sleep(.05)
+        raise ValueError('PARENT_ACK_TIMEOUT')
+    try:
+        if role=='fixture':serve(cap,stop,ready)
+        else:
+            ready();at=d['package']['plan']['rows'][0]['valid_from']
+            def stopped():
+                require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE');return stop()
+            def no_wait(seconds):raise ValueError('DIAGNOSTIC_SCHEDULE')
+            session=DiagnosticSession(cap,parents,clock=lambda:at,wait=no_wait,stop=stopped)
+            value,parent=session.run()
+            diagnostic_store(cap,parents,'fs-worker-complete.json',{'session_parent':parent,'launch_parent':launch_parent})
+            while not stop():time.sleep(.05)
+        # A failed diagnostic can still shut down cooperatively, without making
+        # its failed request result successful.
+        diagnostic_store(cap,parents,f'fs-{role}-exit.json',{'role':role,'returncode':0,'launch_parent':launch_parent})
+        return 0
+    except BaseException as error:
+        from alpha_session_execution import sanitized_execution_failure
+        diagnostic_store(cap,parents,f'fs-{role}-failure.json',sanitized_execution_failure(error,'EXECUTOR'))
+        raise
+
+
+def diagnostic_failure(error,stage):
+    from alpha_session_execution import sanitized_execution_failure
+    import types
+    result=sanitized_execution_failure(error,'EXECUTOR')
+    sites={diagnostic_supervise.__code__:'DIAGNOSTIC_SUPERVISE',
+        diagnostic_child.__code__:'DIAGNOSTIC_CHILD'}
+    for code in full_audit.__code__.co_consts:
+        if isinstance(code,types.CodeType):sites[code]='NATIVE_FULL_AUDIT'
+    trace=error.__traceback__;count=0
+    while trace is not None and count<32:
+        if trace.tb_frame.f_code in sites:
+            result['location']={'site':sites[trace.tb_frame.f_code],'line':trace.tb_lineno}
+        trace=trace.tb_next;count+=1
+    return {'stage':stage,'diagnostic':result}
+
+
+def diagnostic_supervise(d):
+    parents=diagnostic_descriptor(d);require(dict(os.environ)==DIAG_ENV,'DIAGNOSTIC_ENVIRONMENT')
+    require(time.monotonic_ns()+220_000_000_000<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE')
+    cap=admit(d['package'],d['runtime'],expected=d['expected'],authorized_root=d['authorized_root'])
+    native_identity(cap);p,r,_=cap.documents();out=Path(p['root']);exe=Path(r['root'])/r['interpreter']
+    executable_hash=next(row['sha256'] for row in r['files'] if row['path']==r['interpreter'])
+    observed=asdict(inspect_macos(os.getpid()))
+    require(observed['executable']==str(exe) and observed['executable_hash']==executable_hash and
+        observed['cwd']==str(out.parent),'DIAGNOSTIC_SUPERVISOR')
+    def verify_self():require(asdict(inspect_macos(os.getpid()))==observed,'DIAGNOSTIC_SUPERVISOR')
+    owned=DiagnosticOwnedProcesses(cap,parents);commands={};launches={};tls=None;session=None;primary=None
+    audit,opened=diagnostic_audit(d,'supervisor',commands,lambda:(os.getpid(),*(e['child'].pid for e in owned.children.values())))
+    os.open=opened;sys.addaudithook(audit);stage='STARTUP'
+    try:
+        for role in ('fixture','worker'):
+            verify_self()
+            if role=='worker':owned.verify('fixture');require(tls is not None,'DIAGNOSTIC_TLS')
+            start=time.monotonic_ns();phase={'role':role,'descriptor_parent':content_hash(d),
+                'start_ns':start,'deadline_ns':start+100_000_000_000}
+            require(phase['deadline_ns']<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE')
+            launch={**DIAG_FLAGS,'descriptor':d,'role':role,'parent_pid':os.getpid(),
+                'output_identity':list(cap.output_identity),'phase':phase}
+            parent=diagnostic_store(cap,parents,f'fs-{role}-launch.json',launch);launches[role]=parent
+            argv=[str(exe),'-B',str(Path(r['root'])/'source/alpha_radar_runner.py'),
+                '--local-one-request-only','--child',role,'--descriptor',str(out/f'fs-{role}-launch.json'),
+                '--expected-descriptor',parent];commands[role]=argv
+            stage='PROCESS_CREATE'
+            child=subprocess.Popen(argv,cwd=out,env=DIAG_ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,close_fds=True);close_lifecycle_stdin(child)
+            stage='OWNERSHIP_REGISTER';deadline=phase['deadline_ns']/1e9
+            owned.register(role,child,argv=argv,cwd=out,executable=exe,executable_hash=executable_hash,
+                stderr=child.stderr,launch_parent=parent,descriptor=d,deadline=deadline,phase=phase)
+            stage='STARTUP_RECEIPT'
+            while not (out/f'fs-{role}-startup.json').exists():
+                require(time.monotonic_ns()<phase['deadline_ns'],'PARENT_ACK_TIMEOUT')
+                owned.verify(role,require_startup=False);time.sleep(.05)
+            _,startup=diagnostic_read(cap,parents,f'fs-{role}-startup.json',
+                value=full_startup(cap,role,parent,owned.children[role]['observation']))
+            owned.startup_pins[role]=(parent,startup);owned.verify(role);verify_self()
+            full_verify_startup_listener(role,child,p['fixture']['port'])
+            require(time.monotonic_ns()<phase['deadline_ns'],'PARENT_ACK_TIMEOUT')
+            diagnostic_store(cap,parents,f'fs-{role}-ack.json',{'event':'ACK','role':role,'launch_parent':parent,'startup_parent':startup})
+            require(time.monotonic_ns()<phase['deadline_ns'],'PARENT_ACK_TIMEOUT')
+            if role=='fixture':stage='TLS';tls=startup_tls(cap,owned)
+        stage='SESSION'
+        while not (out/'fs-worker-complete.json').exists():
+            require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE')
+            owned.verify('worker');owned.verify('fixture');time.sleep(.05)
+        fd=safe_root(out)
+        try:doc=read_record(fd,'fs-worker-complete.json')
+        finally:os.close(fd)
+        completion=diagnostic_verify(doc,content_hash(doc),parents)
+        require(completion['launch_parent']==launches['worker'],'DIAGNOSTIC_PARENT')
+        session,_=diagnostic_read(cap,parents,'fs-session.json',expected=completion['session_parent'])
+        require(session['classification']=='DIAGNOSTIC_PASS' and
+            session['attempted']==session['completed']==session['reservations']==len(session['receipt_parents'])==1,'DIAGNOSTIC_SESSION')
+        fd=safe_root(p['plan']['root']);rf=safe_root(p['plan']['rows'][0]['root'])
+        try:
+            reserved=read_record(fd,'0.reserved.json');complete=read_record(fd,'0.complete.json')
+            receipt=read_record(rf,'ALPHA_VANTAGE.receipt.json',expected_hash=session['receipt_parents'][0])
+            rv=diagnostic_verify(reserved,content_hash(reserved),parents)
+            cv=diagnostic_verify(complete,content_hash(complete),parents)
+            v=diagnostic_verify(receipt,session['receipt_parents'][0],parents)
+            require(rv=={'plan':d['expected']['plan'],'slot':0,'source_commit':p['source_commit'],'previous':None}
+                and cv=={'slot':0,'previous':None,'reservation':content_hash(reserved),
+                    'receipt':content_hash(receipt),'result':'OBSERVED'} and
+                v['parents']=={**d['expected'],'slot':content_hash({'slot':0,'row':p['plan']['rows'][0]}),
+                    'reservation':content_hash(reserved)} and v['result']=='OBSERVED','DIAGNOSTIC_ACCOUNTING')
+            require(set(os.listdir(fd))=={'day.lock','0.reserved.json','0.complete.json','PREFLIGHT-0'} and
+                os.listdir(rf)==['ALPHA_VANTAGE.receipt.json'],'DIAGNOSTIC_ACCOUNTING')
+        finally:os.close(fd);os.close(rf)
+    except BaseException as error:
+        from alpha_session_execution import sanitized_execution_failure
+        primary=diagnostic_failure(error,stage)
+    cleanup=owned.cleanup(lambda:not listener_owners(p['fixture']['port']),
+        supervisor_check=verify_self,deadline=d['cleanup_deadline_ns']/1e9)
+    result={'classification':'DIAGNOSTIC_PASS' if primary is None and cleanup['clean'] else 'DIAGNOSTIC_FAILED',
+        'primary_failure':primary,'session':session,'tls':tls,'cleanup':cleanup,
+        'credential_accesses':0,'provider_requests':0,'worker_launches':int('worker' in owned.startup_pins)}
+    diagnostic_store(cap,parents,'fs-final.json',result)
+    return 0 if result['classification']=='DIAGNOSTIC_PASS' else 1
+
+
+def diagnostic_main(d,expected,child):
+    if child:
+        parents=diagnostic_descriptor(d['value']['descriptor']);value=diagnostic_verify(d,expected,parents)
+        require(child==value['role'],'DIAGNOSTIC_ROLE');return diagnostic_child(value,expected)
+    require(content_hash(d)==expected,'DIAGNOSTIC_PARENT')
+    return diagnostic_supervise(d)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -2519,11 +2830,15 @@ def main():
     parser.add_argument('--child', choices=('fixture', 'worker'))
     parser.add_argument('--ci-lifecycle-only', action='store_true', default=False)
     parser.add_argument('--ci-full-session-only', action='store_true', default=False)
+    parser.add_argument('--local-one-request-only', action='store_true', default=False)
     args = parser.parse_args()
+    require(not args.local_one_request_only or not (args.ci_full_session_only or args.ci_lifecycle_only), 'DIAGNOSTIC_MODE')
     require(not (args.ci_full_session_only and args.ci_lifecycle_only), 'FULL_MODE_EXCLUSION')
     early_diagnostic('DESCRIPTOR_READ')
     d = read_descriptor(args.descriptor, args.expected_descriptor)
     early_diagnostic('DESCRIPTOR_VERIFIED')
+    if args.local_one_request_only:
+        return diagnostic_main(d, args.expected_descriptor, args.child)
     if args.ci_full_session_only:
         return full_main(d, args.expected_descriptor, args.child)
     if args.ci_lifecycle_only:

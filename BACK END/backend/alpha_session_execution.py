@@ -149,9 +149,40 @@ def execute_day(m, a, *, clock, expected_bulk_previous, dispatch,
         os.close(fd)
 
 
+def sanitized_execution_failure(error, stage):
+    """Fixed metadata only; never stringify exceptions or inspect frame locals."""
+    kinds = {ValueError: 'VALUE_ERROR', TypeError: 'TYPE_ERROR', KeyError: 'KEY_ERROR',
+             PermissionError: 'PERMISSION_ERROR', FileNotFoundError: 'FILE_NOT_FOUND',
+             FileExistsError: 'FILE_EXISTS', TimeoutError: 'TIMEOUT', OSError: 'OS_ERROR'}
+    stages = ('EXECUTOR', 'VERIFY', 'RECEIPT_HASH', 'OBSERVATION', 'COMPLETION_PARENT')
+    sites = {fn.__code__: label for fn, label in (
+        (execute_schedule, 'EXECUTE_SCHEDULE'), (execute_day, 'EXECUTE_DAY'),
+        (safe_root, 'SAFE_ROOT'), (verify_destination, 'VERIFY_DESTINATION'),
+        (publish, 'PUBLISH'), (read_record, 'READ_RECORD'))}
+    location = {'site': 'UNKNOWN', 'line': None}
+    trace = error.__traceback__
+    count = 0
+    while trace is not None and count < 32:
+        code = trace.tb_frame.f_code
+        if code in sites:
+            # A line is admitted only from a trusted scheduler code object.
+            lines = {line for _, _, line in code.co_lines() if line is not None}
+            if trace.tb_lineno in lines:
+                location = {'site': sites[code], 'line': trace.tb_lineno}
+        trace = trace.tb_next
+        count += 1
+    return {'schema': 'iios-execution-failure-diagnostic-v1',
+            'exception_type': kinds.get(type(error), 'UNKNOWN'),
+            'stage': stage if stage in stages else 'UNKNOWN',
+            'location': location, 'trace_truncated': trace is not None,
+            'message_retained': False, 'locals_retained': False}
+
+
 def execute_schedule(plan, requests, *, clock, wait, executor, stop, verify,
-                     completion_parent, checkpoint=None):
+                     completion_parent, checkpoint=None, failure_diagnostics=None):
     """No admission, receipt scope conversion or live activation occurs here."""
+    require(failure_diagnostics is None or (type(failure_diagnostics) is list and
+            not failure_diagnostics), 'DIAGNOSTIC_SINK')
     receipts=[];starts=[];previous=None;phase_receipts=[];reason=None
     for i,request in enumerate(requests):
         row=plan['rows'][i]
@@ -165,16 +196,23 @@ def execute_schedule(plan, requests, *, clock, wait, executor, stop, verify,
             reason='COOPERATIVE_SHUTDOWN';break
         if utc(clock())>=utc(row['expires_at']):
             reason='MISSED_INTERVAL_NO_BACKFILL';break
+        stage='EXECUTOR'
         try:
             receipt=executor(request,previous)
+            stage='VERIFY'
             verify(receipt, request)
+            stage='RECEIPT_HASH'
             receipts.append(content_hash(receipt));phase_receipts.append(content_hash(receipt))
+            stage='OBSERVATION'
             require(receipt['result']=='OBSERVED' and receipt['bulk_checks']['freshness']=='WITHIN_AGE_BOUND','OBSERVATION_FAILED')
             starts.append(receipt['dispatch_time'])
             # Completion identity is derived from the trusted executor result and
             # exact day reservation, not from an untrusted self-labeled disk file.
+            stage='COMPLETION_PARENT'
             previous=completion_parent(request, i, previous, receipt)
-        except Exception:
+        except Exception as error:
+            if failure_diagnostics is not None:
+                failure_diagnostics.append(sanitized_execution_failure(error, stage))
             reason='AMBIGUOUS_OR_FAILED_STOP';break
         if checkpoint is not None and (i==0 or i in (6,12,18)):
             checkpoint(row['phase'].lower(),'PASS',phase_receipts);phase_receipts=[]
