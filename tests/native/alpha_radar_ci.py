@@ -708,7 +708,12 @@ def publish_validation(root):
 def import_validation(root):
     import base64
     root_check(root); hosted()
-    require(os.environ.get('GITHUB_JOB') == 'native', 'VALIDATION_PARENT')
+    job = os.environ.get('GITHUB_JOB')
+    require(job in ('native', 'tail-measurement'), 'VALIDATION_PARENT')
+    if job == 'tail-measurement':
+        tail_event()  # Exact manual diagnostic mode, source/ref and hosted identity.
+    else:
+        require(os.environ.get('GITHUB_JOB') == 'native', 'VALIDATION_PARENT')
     encoded = os.environ.get('IIOS_VALIDATION_PROOF', '')
     require(type(encoded) is str and 0 < len(encoded) <= 32000, 'VALIDATION_PARENT')
     try: raw = base64.b64decode(encoded, validate=True); value = json.loads(raw)
@@ -1822,7 +1827,7 @@ def execute_tail(root):
     from alpha_radar_runner import DepthOuterCase,run_depth_outer_case
     backend=DepthOuterCase(root/'tail-template.json',pins['template_parent'],474)
     start=time.monotonic_ns()
-    result=run_depth_outer_case(backend,series_deadline=start+800_000_000_000)
+    result=run_depth_outer_case(backend,series_deadline=start+800_000_000_000,canonical_start_ns=start)
     document(root/'export/tail-result.json',{**TAIL_FLAGS,'result':result,
         'production_qualified':False,'os_confinement':'UNQUALIFIED'})
     # Failed cleanup still exports retained diagnostics where possible; never makes PASS.

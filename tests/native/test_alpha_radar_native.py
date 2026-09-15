@@ -4555,3 +4555,58 @@ class TailMeasurementAdapterTests(unittest.TestCase):
         with patch.object(ci,'tail_event'),patch.object(ci,'require_validation'),                patch.dict(os.environ,{'GITHUB_SHA':'b'*40}),patch.object(run,'DepthOuterCase') as backend:
             with self.assertRaisesRegex(ValueError,'SOURCE_PIN'):ci.execute_tail(root)
             backend.assert_not_called()
+
+
+class TailPrerequisiteRepairTests(unittest.TestCase):
+    def test_tail_import_exact_scope_and_parents(self):
+        import alpha_radar_ci as ci, base64
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        event=root/'tail-event.json'
+        event.write_bytes(ci.canonical({'inputs':{'tail_measurement_only':True,'expected_source_commit':'a'*40}}))
+        env={'GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1',
+             'GITHUB_JOB':'tail-measurement','GITHUB_REF':'refs/heads/feature/iios-provider-gateway-superbatch-1',
+             'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_EVENT_PATH':str(event)}
+        with patch.dict(os.environ,env),patch.object(ci,'hosted'):
+            proof=QualificationBudgetTests().proof()
+            def invoke(value,parent=None):
+                raw=ci.canonical(value)
+                with patch.dict(os.environ,{'IIOS_VALIDATION_PROOF':base64.b64encode(raw).decode(),
+                    'IIOS_EXPECTED_VALIDATION_SHA256':parent or ci.digest(raw)}):ci.import_validation(root)
+            with patch.object(ci,'put') as put:
+                invoke(proof);put.assert_called_once()
+            for key,value in [('scope',ci.TAIL_SCOPE),('source_commit','b'*40),('run_id','2'),('job','tail-measurement')]:
+                bad=deepcopy(proof);bad[key]=value
+                with patch.object(ci,'put') as put:
+                    with self.assertRaises(ValueError):invoke(bad)
+                    put.assert_not_called()
+            with patch.object(ci,'put') as put:
+                with self.assertRaises(ValueError):invoke(proof,'b'*64)
+                put.assert_not_called()
+            for key,value in [('GITHUB_JOB','unrelated'),('GITHUB_EVENT_NAME','push'),('GITHUB_REF','refs/heads/main')]:
+                with patch.dict(os.environ,{key:value}),patch.object(ci,'put') as put:
+                    with self.assertRaises(ValueError):invoke(proof)
+                    put.assert_not_called()
+            event.write_bytes(ci.canonical({'inputs':{'tail_measurement_only':True,'full_session_only':True,'expected_source_commit':'a'*40}}))
+            with patch.object(ci,'put') as put:
+                with self.assertRaises(ValueError):invoke(proof)
+                put.assert_not_called()
+
+    def test_canonical_outer_start_survives_elapsed_check(self):
+        import alpha_radar_runner as run
+        b,c,e,now,pause=DepthOuterSupervisorTests().fixture(exit_at=0)
+        c[0]=1
+        result=run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=800_000_000_000,canonical_start_ns=0)
+        self.assertEqual(result['classification'],'PASS')
+        self.assertEqual(result['start_ns'],0)
+        self.assertEqual(result['export_deadline_ns'],800_000_000_000)
+        self.assertEqual(result['work_deadline_ns'],440_000_000_000)
+
+    def test_outer_single_tick_mutation_expiry_and_types(self):
+        import alpha_radar_runner as run
+        for start,end,observed in [(0,800_000_000_001,1),(1,800_000_000_000,2),
+                (0,799_999_999_999,1),(0,800_000_000_000,800_000_000_000),
+                (True,800_000_000_000,1),(0,800_000_000_000.0,1),(2,800_000_000_002,1)]:
+            b,c,e,now,pause=DepthOuterSupervisorTests().fixture(exit_at=0);c[0]=observed
+            with self.assertRaises(ValueError):
+                run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=end,canonical_start_ns=start)
+            self.assertEqual(e,[])

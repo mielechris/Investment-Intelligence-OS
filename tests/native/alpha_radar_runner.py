@@ -3347,15 +3347,21 @@ class DepthOuterCase:
         finally:os.close(fd)
 
 
-def run_depth_outer_case(backend, *, now=time.monotonic_ns, pause=time.sleep, series_deadline):
+def run_depth_outer_case(backend, *, now=time.monotonic_ns, pause=time.sleep, series_deadline, canonical_start_ns=None):
     """800s including admission/startup, 440s work, 180s cleanup, 180s export.
 
     A surviving/unverified process yields RED, never a signal or inferred cleanup.
     Blocking OS/filesystem calls remain subject to their existing bounded contracts.
     """
-    start=now();require(type(start) is int and start+800_000_000_000<=series_deadline,'OUTER_SERIES_BUDGET')
+    observed=now();start=observed if canonical_start_ns is None else canonical_start_ns
+    require(type(start) is int and type(observed) is int and type(series_deadline) is int and
+        0<=start<=observed<10**18 and start+800_000_000_000<=series_deadline<10**18,
+        'OUTER_SERIES_BUDGET')
+    if canonical_start_ns is not None:
+        require(series_deadline==start+800_000_000_000,'OUTER_SERIES_BUDGET')
+    require(observed<start+800_000_000_000,'OUTER_SERIES_BUDGET')
     work=start+440_000_000_000;cleanup=start+620_000_000_000;end=start+800_000_000_000
-    failures=[];findings=None;last=start;created=False
+    failures=[];findings=None;last=observed;created=False
     def clock():
         nonlocal last
         n=now();require(type(n) is int and last<=n<=10**18,'OUTER_CLOCK');last=n;return n
