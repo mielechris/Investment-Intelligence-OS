@@ -63,20 +63,32 @@ def safe_document(value):
     Injected transports must supply public evidence only, never headers or secrets.
     Unknown exception text and provider error messages are never persisted.
     """
+    _safe_document(value, set())
+
+
+def _safe_document(value, serialized):
     if isinstance(value, dict):
         for key, child in value.items():
             if not isinstance(key, str) or key.lower() in DENIED_KEYS:
                 raise ValueError("SENSITIVE_DOCUMENT_REJECTED")
-            safe_document(child)
+            _safe_document(child, serialized)
     elif isinstance(value, (list, tuple)):
         for child in value:
-            safe_document(child)
+            _safe_document(child, serialized)
     elif isinstance(value, str):
         if re.search(r"(?i)(bearer\s|api[_-]?key[=:]|password[=:]|[?&](token|key)=|-----BEGIN .*PRIVATE KEY)", value):
             raise ValueError("SENSITIVE_DOCUMENT_REJECTED")
     elif value is not None and type(value) not in (int, float, bool):
         raise ValueError("PUBLIC_JSON_REQUIRED")
-    canonical(value)  # Reject NaN/Infinity; preserve integer timestamp precision.
+    # Only memoize successful serialization of exact immutable primitives.
+    # Validation above still runs on every visit; containers always serialize.
+    # This bounded set is private to one call and never caches admission.
+    primitive = type(value) in (str, int, float, bool, type(None))
+    key = (type(value), value) if primitive else None
+    if not primitive or key not in serialized:
+        canonical(value)  # Same encoder, errors, NaN and precision behavior.
+        if primitive and len(serialized) < 1024:
+            serialized.add(key)
 
 
 def symbols(value, *, count=None):

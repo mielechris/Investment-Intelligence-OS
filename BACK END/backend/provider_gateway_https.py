@@ -62,7 +62,7 @@ class DeadlineSocket:
 
 
 def bounded_https(*, host, address, port, method, target, headers, body,
-                  tls_file, timeout, limit):
+                  tls_file, timeout, limit, before_request=lambda: None):
     context = ssl.create_default_context(cafile=tls_file)
     require(context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname, 'TLS_REQUIRED')
     context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -81,6 +81,7 @@ def bounded_https(*, host, address, port, method, target, headers, body,
         sock = context.wrap_socket(sock, server_hostname=host)
         connection.sock = DeadlineSocket(sock, remaining)
         sock.settimeout(remaining())
+        before_request()
         request_start = datetime.now(timezone.utc).isoformat()
         connection.request(method, target, body=body, headers=headers)
         sock.settimeout(remaining())

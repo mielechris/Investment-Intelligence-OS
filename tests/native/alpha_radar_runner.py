@@ -427,13 +427,16 @@ def checked_capability(cap):
     return cap.recheck()
 
 
-def fixture_exchange(cap, slot, at):
+def fixture_exchange(cap, slot, at, *, before_dispatch=lambda: None,
+                     check_deadline=lambda: None):
     p, r, _ = checked_capability(cap)
     f = p['fixture']
+    check_deadline()
     return bounded_https(host=f['server_name'], address=f['address'], port=f['port'],
         method='GET', target=f'/slot/{slot}?' + urlencode({'at': at}),
         headers={'Accept': 'application/json', 'Accept-Encoding': 'identity'}, body=None,
-        tls_file=str(Path(r['root']) / r['tls']), timeout=20, limit=1_000_000)
+        tls_file=str(Path(r['root']) / r['tls']), timeout=20, limit=1_000_000,
+        before_request=before_dispatch)
 
 
 class Session:
@@ -1538,10 +1541,10 @@ def full_budget(d):
             (b['real_clock_seconds']+300)*FULL_NANOSECONDS,
         'FULL_JOB_BUDGET')
     require(b['cleanup_seconds'] == b['export_seconds'] == 180 and b['real_clock_seconds'] == 65
-        and b['work_seconds'] == d['maximum_duration_seconds'] == 3300 and
+        and b['work_seconds'] == d['maximum_duration_seconds'] == 6000 and
         0 <= b['prepared_monotonic']-b['start_monotonic'] <= 300 and
-        b['hard_deadline'] == b['start_monotonic']+4440 and
-        b['work_deadline'] == b['prepared_monotonic']+3665 and
+        b['hard_deadline'] == b['start_monotonic']+7140 and
+        b['work_deadline'] == b['prepared_monotonic']+6365 and
         b['cleanup_deadline'] == b['work_deadline']+180 and
         b['cleanup_deadline']+180 <= b['hard_deadline'], 'FULL_JOB_BUDGET')
     require(type(d['validation_parent']) is str and
@@ -1551,7 +1554,7 @@ def full_budget(d):
 
 def full_launch_budget(d, *, monotonic=time.monotonic):
     b = full_budget(d); now = monotonic()
-    require(b['prepared_monotonic'] <= now and b['work_deadline']-now >= 3365,
+    require(b['prepared_monotonic'] <= now and b['work_deadline']-now >= 6065,
             'FULL_INSUFFICIENT_BUDGET')
     return b
 
@@ -1651,7 +1654,7 @@ def full_descriptor(d):
         'expected', 'authorized_root', 'native_tools', 'maximum_duration_seconds', 'context',
         'session_package', 'session_package_parent', 'budget', 'validation_parent'}, 'FULL_DESCRIPTOR')
     require(d['schema'] == 'iios-ci-full-session-descriptor-v2' and d['execution_mode'] == FULL_SCOPE
-        and type(d['maximum_duration_seconds']) is int and d['maximum_duration_seconds'] == 3300,
+        and type(d['maximum_duration_seconds']) is int and d['maximum_duration_seconds'] == 6000,
         'FULL_DESCRIPTOR')
     full_budget(d)
     lifecycle_environment(d['context'])
@@ -1789,11 +1792,21 @@ def full_real_clock_boundary(*, monotonic=time.monotonic, pause=time.sleep):
 
 class FullSession(Session):
     receipt_scope = FULL_SCOPE
-    def __init__(self, cap, parents, *, clock, wait, stop, exchange=fixture_exchange):
+    def __init__(self, cap, parents, *, clock, wait, stop, exchange=fixture_exchange,
+                 work_deadline=None):
         super().__init__(cap, clock=clock, wait=wait, stop=stop, exchange=exchange)
         full_package(self.p, self.pins)
         self.full_parents = parents; self.documents = {}; self.next_slot = 0; self.rate = FullPacing()
         self.attempted = 0; self.completed = 0; self.receipt_pins = []
+        self.work_deadline = work_deadline
+
+    def check_work_deadline(self):
+        if self.work_deadline is not None:
+            require(time.monotonic() < self.work_deadline, 'NATIVE_SESSION_TIMEOUT')
+
+    def check_work(self):
+        require(not self.stop(), 'FULL_CANCELLED')
+        self.check_work_deadline()
 
     def document(self, value):
         key = canonical(value)
@@ -1805,7 +1818,10 @@ class FullSession(Session):
 
     def write(self, fd, name, value):
         checked_capability(self.cap); self.verify_fd(fd)
-        return publish(fd, name, self.document(value))
+        document = self.document(value)
+        if name.endswith('.reserved.json'):
+            self.check_work()
+        return publish(fd, name, document)
 
     def read(self, fd, name, *, expected_hash=None):
         self.verify_fd(fd)
@@ -1832,6 +1848,7 @@ class FullSession(Session):
         m,a = request['manifest'],request['account']
         def dispatch(day_fd, index, reserved):
             require(index == slot, 'FULL_REQUEST_ORDER')
+            self.check_work()
             at = self.clock(); self.rate.reserve(utc(at).timestamp())
             row = self.p['plan']['rows'][slot]; fd = self.open_root(row['root'])
             receipt = {'scope': self.receipt_scope, 'authority': AUTHORITY, 'source_commit': m['source_commit'],
@@ -1842,9 +1859,17 @@ class FullSession(Session):
                 'actual_dispatch_time': datetime.now(timezone.utc).isoformat(), 'actual_response_time': None,
                 'dispatch_monotonic': time.monotonic(), 'response_monotonic': None,
                 'timing_proof': FULL_TIMING}
-            self.attempted += 1
             try:
-                response = self.exchange(self.cap,slot,at)
+                self.check_work()
+                def before_wire():
+                    self.check_work_deadline()
+                    self.attempted += 1
+                if self.exchange is fixture_exchange:
+                    response = self.exchange(self.cap,slot,at,
+                        before_dispatch=before_wire,check_deadline=self.check_work_deadline)
+                else:
+                    before_wire()
+                    response = self.exchange(self.cap,slot,at)
                 receipt.update(response_time=self.clock(), actual_response_time=response.response_end,
                     response_monotonic=time.monotonic(), http_status=response.status)
                 require(response.status == 200 and len(response.body) <= 1_000_000, 'HTTP_OR_SIZE')
@@ -1902,6 +1927,12 @@ def full_accounting(cap, parents, session, *, check_deadline=lambda:None):
     require(session['classification'] == 'FULL_SYNTHETIC_PASS' and
         session['attempted'] == session['completed'] == session['reservations'] == 475 and
         len(session['receipt_parents']) == len(set(session['receipt_parents'])) == 475,'FULL_ACCOUNTING')
+    return _reconcile_full_journal(p,pins,parents,session,verify_full_receipt,FULL_SCOPE,check_deadline)
+
+
+def _reconcile_full_journal(p, pins, parents, session, verifier, receipt_scope, check_deadline):
+    """Shared record traversal; callers separately admit live-run or seed evidence."""
+    rows=p['plan']['rows']
     fd = safe_root(p['plan']['root']); previous = None; rate = FullPacing()
     try:
         require(set(os.listdir(fd)) == {'day.lock'} | {row['id'] for row in rows} |
@@ -1909,22 +1940,22 @@ def full_accounting(cap, parents, session, *, check_deadline=lambda:None):
         for i,row in enumerate(rows):
             check_deadline()
             reservation_doc = read_record(fd,f'{i}.reserved.json')
-            reservation = verify_full_receipt(reservation_doc,content_hash(reservation_doc),parents)
+            reservation = verifier(reservation_doc,content_hash(reservation_doc),parents)
             require(reservation == {'plan':pins['plan'],'slot':i,'source_commit':p['source_commit'],'previous':previous},'FULL_RESERVATION')
             child = safe_root(row['root'])
             try:
                 require(os.listdir(child) == ['ALPHA_VANTAGE.receipt.json'],'FULL_ACCOUNTING')
                 receipt_doc = read_record(child,'ALPHA_VANTAGE.receipt.json',expected_hash=session['receipt_parents'][i])
             finally: os.close(child)
-            receipt = verify_full_receipt(receipt_doc,session['receipt_parents'][i],parents)
+            receipt = verifier(receipt_doc,session['receipt_parents'][i],parents)
             require(receipt['parents'] == {**pins,'slot':content_hash({'slot':i,'row':row}),
                 'reservation':content_hash(reservation_doc)} and receipt['root'] == row['root'] and
-                receipt['source_commit'] == p['source_commit'] and receipt['scope'] == receipt['role'] == FULL_SCOPE
+                receipt['source_commit'] == p['source_commit'] and receipt['scope'] == receipt['role'] == receipt_scope
                 and receipt['authority'] == AUTHORITY and receipt['result'] == 'OBSERVED'
                 and receipt['retry_count'] == receipt['credential_selector_access_count'] == 0,'FULL_ACCOUNTING')
             rate.reserve(utc(receipt['dispatch_time']).timestamp())
             complete_doc = read_record(fd,f'{i}.complete.json')
-            complete = verify_full_receipt(complete_doc,content_hash(complete_doc),parents)
+            complete = verifier(complete_doc,content_hash(complete_doc),parents)
             require(complete == {'slot':i,'previous':previous,'reservation':content_hash(reservation_doc),
                 'receipt':session['receipt_parents'][i],'result':'OBSERVED'},'FULL_COMPLETION')
             previous = content_hash(complete_doc)
@@ -2057,12 +2088,29 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
     def observe(self,entry,*,allow_launcher=False):
         inspector = FullRoleInspection(self,entry)
         before = len(inspector.diagnostic_failures)
+        diagnostics = []
+        def collect(value):
+            require(len(diagnostics) < 19, 'DIAGNOSTIC_OVERFLOW')
+            diagnostics.append(value)
+        inspector.evidence = collect
+        inspection_failed = False
         try:
             return inspector.observe(entry,allow_launcher=allow_launcher)
+        except BaseException:
+            inspection_failed = True
+            raise
         finally:
-            # Aggregate for final failure classification without using one
-            # child's diagnostics as another child's inspection admission gate.
-            self.diagnostic_failures.extend(inspector.diagnostic_failures[before:])
+            try:
+                if diagnostics:
+                    self.evidence({'event':'OWNERSHIP_VERIFICATION_BATCH',
+                        'pid':entry['child'].pid,'launch_parent':entry.get('launch_parent'),
+                        'samples':diagnostics,'ownership_authority':False})
+            except Exception:
+                inspector.diagnostic_failures.append('DIAGNOSTIC_PUBLICATION_FAILED')
+                if not inspection_failed:
+                    raise
+            finally:
+                self.diagnostic_failures.extend(inspector.diagnostic_failures[before:])
 
     def evidence(self,value):
         self.counter += 1
@@ -2090,6 +2138,7 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
         for role in reversed(list(self.children)):
             entry = self.children[role]; child = entry['child']
             finding = {'ownership_verified':False, 'exit_verified':False,
+                'termination_verified':False, 'cooperative_shutdown_verified':False,
                 'primary_failures':[v for v in self.primary_failures if v['role']==role],
                 'cleanup_failures':[], 'diagnostic_failures':[], 'signals':0}
             roles[role] = finding
@@ -2100,6 +2149,27 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
                 finding['cleanup_failures'].append(item); self.failures.append(item)
             stage = 'OWNERSHIP_VERIFY'
             try:
+                returncode = child.poll()
+                if returncode is not None:
+                    require(entry['observation'] is not None and
+                        entry['observation']['pid'] == child.pid and
+                        role in self.startup_pins and
+                        self.startup_pins[role][0] == entry['launch_parent'], 'PROCESS_IDENTITY')
+                    require(all(entry['observation'][key] == value
+                        for key,value in entry['expected'].items()), 'PROCESS_IDENTITY')
+                    launch,startup_parent = self.startup_pins[role]
+                    self.record_read(self.cap,self.lifecycle_parents,f'fs-{role}-startup.json',
+                        expected=startup_parent,
+                        value=full_startup(self.cap,role,launch,entry['observation']))
+                    require(child.wait(timeout=0) == returncode, 'PROCESS_IDENTITY')
+                    finding['ownership_verified'] = True
+                    finding['termination_verified'] = True
+                    finding['returncode'] = returncode
+                    self.evidence({'event':'OWNED_CHILD_TERMINATED','role':role,
+                        'pid':child.pid,'launch_parent':entry['launch_parent'],
+                        'returncode':returncode,'cooperative_shutdown_verified':False})
+                    del self.children[role]
+                    raise ValueError('COOPERATIVE_SHUTDOWN')
                 self.verify(role); finding['ownership_verified'] = True
                 stage = 'COOPERATIVE_STOP'
                 self.record_store(self.cap,self.lifecycle_parents,f'fs-{role}-stop.json',
@@ -2112,6 +2182,8 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
                 self.record_read(self.cap,self.lifecycle_parents,f'fs-{role}-exit.json',
                     value={'role':role,'returncode':0,'launch_parent':entry['launch_parent']})
                 finding['exit_verified'] = True
+                finding['termination_verified'] = True
+                finding['cooperative_shutdown_verified'] = True
                 exits.append({'role':role,'pid':child.pid,'returncode':0,'ownership_verified':True})
                 del self.children[role]
             except Exception as error: failed(stage,error)
@@ -2377,7 +2449,8 @@ def full_child(launch,launch_parent,*,cancelled=lambda:False):
             def work_stop():
                 require(time.monotonic()<d['budget']['work_deadline'],'NATIVE_SESSION_TIMEOUT')
                 return stop()
-            session=FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=work_stop)
+            session=FullSession(cap,parents,clock=lambda:now[0].isoformat(),wait=wait,stop=work_stop,
+                work_deadline=d['budget']['work_deadline'])
             value,parent=session.run()
             full_store(cap,parents,'fs-worker-complete.json',{'session_parent':parent,'launch_parent':launch_parent})
             # Stay owned/alive until the independently validating supervisor stops us.
@@ -2525,10 +2598,11 @@ DIAG_ENV = {**LIFECYCLE_ENV, '__CF_USER_TEXT_ENCODING': f'0x{os.getuid():X}:0x0:
 
 
 def diagnostic_descriptor(d):
+    depth_mode = type(d) is dict and d.get('schema')=='iios-local-depth-measurement-descriptor-v1'
     require(type(d) is dict and set(d)=={'schema','scope','package','runtime','expected',
         'authorized_root','native_tools','source_inventory','source_parent','os_identity',
-        'maximum_requests','work_deadline_ns','cleanup_deadline_ns'},'DIAGNOSTIC_DESCRIPTOR')
-    require(d['schema']=='iios-local-one-request-descriptor-v1' and d['scope']==DIAG_SCOPE
+        'maximum_requests','work_deadline_ns','cleanup_deadline_ns'} | ({'measurement'} if depth_mode else set()),'DIAGNOSTIC_DESCRIPTOR')
+    require(d['schema'] in ('iios-local-one-request-descriptor-v1','iios-local-depth-measurement-descriptor-v1') and d['scope']==DIAG_SCOPE
         and type(d['maximum_requests']) is int and d['maximum_requests']==1,'DIAGNOSTIC_DESCRIPTOR')
     require(d['os_identity']=={'sysname':os.uname().sysname,'release':os.uname().release,
         'machine':os.uname().machine} and os.uname().sysname=='Darwin','DIAGNOSTIC_OS')
@@ -2541,6 +2615,9 @@ def diagnostic_descriptor(d):
         all(rows[n]['sha256']==h for n,h in d['source_inventory'].items()),'DIAGNOSTIC_SOURCE')
     verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
     verify_tools(d['native_tools']); full_package(d['package'],d['expected'])
+    if depth_mode:
+        regenerate_depth_seed(d['package'],d['expected'],
+            {**d['expected'],'measurement_source':d['source_parent']},d['measurement'])
     require(Path(d['package']['root']).name=='one-request-output','DIAGNOSTIC_OUTPUT')
     return {**d['expected'],'diagnostic_descriptor':content_hash(d),'diagnostic_source':d['source_parent']}
 
@@ -2617,9 +2694,299 @@ class DiagnosticSession(FullSession):
         return value,diagnostic_store(self.cap,self.full_parents,'fs-session.json',value,logical_time=self.clock())
 
 
+# Explicit preparation/measurement API; never selected by the legacy slot-zero CLI.
+DEPTH_SCOPE = 'LOCAL_SYNTHETIC_JOURNAL_DEPTH_MEASUREMENT'
+DEPTHS = (0, 237, 474)
+
+
+def depth_record(value, parents, origin):
+    require(origin in ('SYNTHETIC_SEED', 'MEASURED_REQUEST'), 'SEED_ORIGIN')
+    doc = {**FULL_FLAGS, 'scope': DEPTH_SCOPE, 'schema': 'iios-depth-record-v1',
+        'origin': origin, 'parents': parents, 'value': value,
+        'network_activity_proven': False}
+    return {**doc, 'content_hash': content_hash(doc)}
+
+
+def verify_depth_record(doc, expected, parents, origin):
+    require(type(doc) is dict and content_hash(doc) == expected and
+        doc == depth_record(doc['value'], parents, origin), 'SEED_RECORD_BINDING')
+    return doc['value']
+
+
+def depth_seed_manifest(cap, parents, depth):
+    """Deterministic synthetic prior history, not a network-execution receipt.
+
+    No files written or transports called. The owner independently pins this
+    complete manifest before seed installation or a measured request is admitted.
+    """
+    p, _, pins = checked_capability(cap)
+    return depth_seed_documents(p, pins, parents, depth)
+
+
+def depth_seed_documents(p, pins, parents, depth):
+    require(type(depth) is int and depth in DEPTHS, 'SEED_DEPTH')
+    return _depth_seed_documents(p,pins,parents,depth)
+
+
+def _depth_seed_documents(p, pins, parents, depth):
+    require(type(depth) is int and 0<=depth<=475, 'SEED_DEPTH')
+    full_package(p, pins)
+    require(type(parents) is dict and all(parents.get(k) == v for k,v in pins.items()), 'SEED_PARENTS')
+    rows = []; previous = None; starts = []
+    from datetime import timedelta
+    def eligible(row):
+        target = utc(row['valid_from'])
+        if len(starts)>=3: target=max(target,starts[-3]+timedelta(seconds=60))
+        require(target < utc(row['expires_at']), 'SEED_WINDOW')
+        return target
+    for i, row in enumerate(p['plan']['rows'][:depth]):
+        reservation = {'plan': pins['plan'], 'slot': i, 'source_commit': p['source_commit'], 'previous': previous}
+        reserved = depth_record(reservation, parents, 'SYNTHETIC_SEED')
+        # Use the ordinary coverage/freshness validator on explicitly synthetic
+        # data. These fields satisfy journal replay, never evidence of a wire call.
+        target = eligible(row); starts.append(target); at = target.isoformat()
+        checks = summarize({'data':[{'symbol': s, 'timestamp':at, 'open':'100',
+            'high':'101','low':'99','close':'100','volume':1000} for s in row['symbols']]},
+            row['symbols'], received_at=at, maximum_age_seconds=60)
+        receipt = {'scope': DEPTH_SCOPE, 'role': DEPTH_SCOPE, 'authority': AUTHORITY,
+            'source_commit':p['source_commit'], 'root':row['root'],
+            'parents':{**pins, 'slot':content_hash({'slot':i,'row':row}), 'reservation':content_hash(reserved)},
+            'result':'OBSERVED', 'bulk_checks':checks, 'dispatch_time':at, 'response_time':at,
+            'actual_dispatch_time':None, 'actual_response_time':None,
+            'dispatch_monotonic':None, 'response_monotonic':None,
+            'retry_count':0, 'credential_selector_access_count':0,
+            'seed_only':True, 'requests_attempted':0, 'billing':'SYNTHETIC_NO_CHARGE'}
+        response = depth_record(receipt, parents, 'SYNTHETIC_SEED')
+        complete = depth_record({'slot':i,'previous':previous,'reservation':content_hash(reserved),
+            'receipt':content_hash(response),'result':'OBSERVED'}, parents, 'SYNTHETIC_SEED')
+        rows.append({'slot':i,'reservation':reserved,'response':response,'completion':complete})
+        previous = content_hash(complete)
+    return {'schema':'iios-depth-seeds-v1','scope':DEPTH_SCOPE,'depth':depth,
+        'parents':parents,'source_commit':p['source_commit'],'plan_parent':pins['plan'],
+        'rows':rows,'last_completion_parent':previous,'requests_attempted':0,
+        'seed_records':depth*3,'authority':AUTHORITY,
+        'measured_at':eligible(p['plan']['rows'][depth]).isoformat() if depth<475 else None}
+
+
+
+def reconciliation_seed_manifest(cap, parents):
+    """Complete seed-only journal, with no request execution or live authority."""
+    p,_,pins=checked_capability(cap)
+    return _depth_seed_documents(p,pins,parents,475)
+
+
+def reconcile_seed_journal(cap, parents, manifest, expected_manifest, *, check_deadline=lambda:None):
+    check_deadline()
+    require(type(expected_manifest) is str and re.fullmatch('[a-f0-9]{64}',expected_manifest) and
+        content_hash(manifest)==expected_manifest, 'SEED_PIN')
+    require(manifest==reconciliation_seed_manifest(cap,parents), 'SEED_MANIFEST')
+    p,_,pins=checked_capability(cap)
+    # No full-session PASS classification is created, even internally.
+    session={'receipt_parents':[content_hash(row['response']) for row in manifest['rows']]}
+    def verifier(doc, expected, bound_parents):
+        return verify_depth_record(doc,expected,bound_parents,'SYNTHETIC_SEED')
+    result=_reconcile_full_journal(p,pins,parents,session,verifier,DEPTH_SCOPE,check_deadline)
+    check_deadline()
+    return {'scope':DEPTH_SCOPE,'classification':'SEED_RECONCILIATION_ONLY',
+        'seed_parent':expected_manifest,'seed_reservations':result['reservations'],
+        'seed_responses':result['receipts'],'seed_completions':result['completions'],
+        'last_completion_parent':result['last_completion_parent'],
+        'requests_attempted':0,'requests_completed':0,'production_qualified':False,
+        'os_confinement':'UNQUALIFIED','authority':AUTHORITY}
+
+
+def regenerate_depth_seed(package, pins, parents, measurement):
+    require(type(measurement) is dict and set(measurement)=={'depth','expected_manifest'} and
+        type(measurement['expected_manifest']) is str and
+        re.fullmatch('[a-f0-9]{64}',measurement['expected_manifest']), 'SEED_MANIFEST')
+    seed=depth_seed_documents(package,pins,parents,measurement['depth'])
+    require(content_hash(seed)==measurement['expected_manifest'], 'SEED_MANIFEST')
+    return seed
+
+
+class DepthTimings:
+    STAGES=frozenset(('SEEDING','SEED_VERIFY','RECOVERY','PUBLICATION','REQUEST_EXECUTION','SUPERVISOR_ACTIVITY','CLEANUP'))
+    def __init__(self, actor, clock=time.monotonic_ns):
+        require(actor in ('worker','supervisor'), 'TIMING_ACTOR')
+        self.actor=actor; self.clock=clock; self.rows=[]; self.stack=[]; self.last=0
+
+    def tick(self):
+        value=self.clock()
+        require(type(value) is int and self.last<=value<10**18, 'TIMING_CLOCK')
+        self.last=value;return value
+
+    def measure(self, stage, call):
+        require(stage in self.STAGES and len(self.rows)<8192, 'TIMING_BOUND')
+        row={'id':len(self.rows),'parent':self.stack[-1] if self.stack else None,
+            'stage':stage,'start_ns':self.tick(),'end_ns':None}
+        self.rows.append(row);self.stack.append(row['id'])
+        try:return call()
+        finally:
+            row['end_ns']=self.tick();self.stack.pop()
+            require(row['end_ns']-row['start_ns']<=800_000_000_000, 'TIMING_BOUND')
+
+    def report(self):
+        require(not self.stack and all(r['end_ns'] is not None for r in self.rows), 'TIMING_INCOMPLETE')
+        return {'schema':'iios-depth-timings-v1','actor':self.actor,'unit':'MONOTONIC_NANOSECONDS',
+            'intervals':[{**r,'exclusive_ns':r['end_ns']-r['start_ns']-sum(
+                c['end_ns']-c['start_ns'] for c in self.rows if c['parent']==r['id'])} for r in self.rows],
+            'accounting':'NESTED_SPANS_NOT_ADDITIVE; CONCURRENT_ACTORS_NOT_ADDITIVE'}
+
+
+class DepthMeasurementSession(FullSession):
+    """One request after an independently pinned seed prefix; no CLI bypass.
+
+    Caller must perform the existing diagnostic supervisor/ACK/TLS admission.
+    This API cannot launch children. Every read retains ordinary journal checks.
+    """
+    receipt_scope = DEPTH_SCOPE
+
+    def __init__(self, cap, parents, *, manifest, expected_manifest, clock, wait,
+                 stop, work_deadline, exchange=fixture_exchange):
+        require(type(expected_manifest) is str and re.fullmatch('[a-f0-9]{64}',expected_manifest), 'SEED_PIN')
+        require(content_hash(manifest) == expected_manifest, 'SEED_PIN')
+        require(manifest == depth_seed_manifest(cap, parents, manifest['depth']), 'SEED_MANIFEST')
+        require(type(work_deadline) in (int,float) and 0 < work_deadline < 10**12, 'SEED_DEADLINE')
+        super().__init__(cap, parents, clock=clock, wait=wait, stop=stop,
+            exchange=exchange, work_deadline=work_deadline)
+        self.seed_bytes = canonical(manifest); self.seed_parent = expected_manifest
+        self.depth = manifest['depth']; self.used = False; self.seeded = False
+        self.previous = manifest['last_completion_parent']; self.seed_seconds = None
+        self.timings=DepthTimings('worker')
+
+    def document(self, value):
+        key = canonical(value)
+        if key not in self.documents:
+            self.documents[key] = depth_record(value, self.full_parents, 'MEASURED_REQUEST')
+        return self.documents[key]
+
+    def write(self,fd,name,value):
+        return self.timings.measure('PUBLICATION',lambda:FullSession.write(self,fd,name,value))
+
+    def read(self, fd, name, *, expected_hash=None):
+        def read_checked():
+            self.verify_fd(fd); doc = read_record(fd, name, expected_hash=expected_hash)
+            require(doc.get('origin') in ('SYNTHETIC_SEED','MEASURED_REQUEST'), 'SEED_ORIGIN')
+            value = verify_depth_record(doc, expected_hash or content_hash(doc), self.full_parents, doc['origin'])
+            require(self.documents.get(canonical(value)) == doc, 'FULL_RECOVERY_PIN')
+            return value
+        return self.timings.measure('RECOVERY' if self.seeded else 'SEED_VERIFY',read_checked)
+
+    def seed(self):
+        return self.timings.measure('SEEDING',self._seed)
+
+    def _seed(self):
+        require(not self.seeded and not self.used, 'SEED_ALREADY_USED')
+        self.check_work(); start = time.monotonic()
+        manifest = json.loads(self.seed_bytes)
+        require(content_hash(manifest) == self.seed_parent and
+            manifest == depth_seed_manifest(self.cap,self.full_parents,self.depth), 'SEED_MANIFEST')
+        journal = Path(self.p['plan']['root']); journal.mkdir(mode=0o700)
+        for row in self.p['plan']['rows'][:self.depth+1]: Path(row['root']).mkdir(mode=0o700)
+        fd = self.open_root(journal)
+        try:
+            for item in manifest['rows']:
+                self.check_work(); i = item['slot']; child = self.open_root(self.p['plan']['rows'][i]['root'])
+                try:
+                    for dest,name,key in ((fd,f'{i}.reserved.json','reservation'),
+                        (child,'ALPHA_VANTAGE.receipt.json','response'),(fd,f'{i}.complete.json','completion')):
+                        doc = item[key]; verify_depth_record(doc,content_hash(doc),self.full_parents,'SYNTHETIC_SEED')
+                        self.verify_fd(dest); publish(dest,name,doc)
+                        self.documents[canonical(doc['value'])] = doc
+                        self.read(dest,name,expected_hash=content_hash(doc))
+                finally: os.close(child)
+        finally: os.close(fd)
+        self.next_slot = self.depth; self.seeded = True
+        self.seed_seconds = time.monotonic()-start
+
+    def execute(self, request, previous):
+        require(self.seeded and not self.used and self.next_slot==self.depth and
+            previous==self.previous and request==self.request(self.depth), 'SEED_REQUEST_LIMIT')
+        self.used = True  # Any ambiguous/failing execution consumes this attempt.
+        return self.timings.measure('REQUEST_EXECUTION',lambda:FullSession.execute(self,request,previous))
+
+    def run(self):
+        require(self.seeded and not self.used, 'SEED_NOT_READY')
+        require(self.clock()==json.loads(self.seed_bytes)['measured_at'], 'SEED_CLOCK')
+        start=time.monotonic(); failure=None; receipt=None
+        try:
+            receipt=self.execute(self.request(self.depth),self.previous)
+            require(receipt['result']=='OBSERVED' and self.attempted==self.completed==1, 'SEED_REQUEST_FAILED')
+            fd=self.open_root(self.p['plan']['root'])
+            try:
+                complete=self.read(fd,f'{self.depth}.complete.json')
+                require(complete=={'slot':self.depth,'previous':self.previous,
+                    'reservation':receipt['parents']['reservation'],'receipt':self.hash(receipt),'result':'OBSERVED'},'SEED_COMPLETION')
+            finally:os.close(fd)
+        except Exception as error:
+            from alpha_session_execution import sanitized_execution_failure
+            failure=sanitized_execution_failure(error,'EXECUTOR')
+        return {'scope':DEPTH_SCOPE,'production_qualified':False,'os_confinement':'UNQUALIFIED',
+            'depth':self.depth,'seed_parent':self.seed_parent,'seed_records':self.depth*3,
+            'seed_requests_attempted':0,'seed_seconds':self.seed_seconds,
+            'measured_seconds':time.monotonic()-start,'attempted':self.attempted,'completed':self.completed,
+            'classification':'DEPTH_REQUEST_PASS' if failure is None else 'DEPTH_REQUEST_FAILED',
+            'failure':failure,'receipt_parent':None if receipt is None else self.hash(receipt),
+            'timings':self.timings.report(),
+            'authority':AUTHORITY,'credential_access':False,'provider_access':False,
+            'timing_proof':FULL_TIMING}
+
+
+
+def verify_depth_accounting(cap, measurement, result, parents):
+    p,_,pins=checked_capability(cap);pin=measurement['expected_manifest']
+    seed=regenerate_depth_seed(p,pins,parents,measurement);depth=seed['depth']
+    require(result['scope']==DEPTH_SCOPE and result['classification']=='DEPTH_REQUEST_PASS' and
+        result['seed_parent']==pin and result['depth']==depth and result['seed_records']==depth*3 and
+        result['seed_requests_attempted']==0 and result['attempted']==result['completed']==1 and
+        result['authority']==AUTHORITY and result['production_qualified'] is False, 'SEED_ACCOUNTING')
+    fd=safe_root(p['plan']['root'])
+    try:
+        allowed={'day.lock'}|{row['id'] for row in p['plan']['rows'][:depth+1]}|{
+            f'{i}.{kind}.json' for i in range(depth+1) for kind in ('reserved','complete')}
+        require(set(os.listdir(fd))==allowed, 'SEED_ACCOUNTING')
+        previous=None
+        for i in range(depth+1):
+            child=safe_root(p['plan']['rows'][i]['root'])
+            try:
+                require(os.listdir(child)==['ALPHA_VANTAGE.receipt.json'], 'SEED_ACCOUNTING')
+                docs=[read_record(fd,f'{i}.reserved.json'),read_record(child,'ALPHA_VANTAGE.receipt.json'),
+                    read_record(fd,f'{i}.complete.json')]
+            finally:os.close(child)
+            origin='SYNTHETIC_SEED' if i<depth else 'MEASURED_REQUEST'
+            values=[verify_depth_record(doc,content_hash(doc),parents,origin) for doc in docs]
+            reservation,receipt,completion=values
+            if i<depth:
+                require(docs==[seed['rows'][i][k] for k in ('reservation','response','completion')], 'SEED_DISK_MISMATCH')
+            require(reservation=={'plan':p['plan_parent'],'slot':i,'source_commit':p['source_commit'],'previous':previous}
+                and completion=={'slot':i,'previous':previous,'reservation':content_hash(docs[0]),
+                    'receipt':content_hash(docs[1]),'result':'OBSERVED'}, 'SEED_ACCOUNTING')
+            require(receipt['parents']=={**cap.documents()[2], 'slot':content_hash({'slot':i,'row':p['plan']['rows'][i]}),
+                'reservation':content_hash(docs[0])} and receipt['scope']==receipt['role']==DEPTH_SCOPE and
+                receipt['source_commit']==p['source_commit'] and receipt['root']==p['plan']['rows'][i]['root'] and
+                receipt['result']=='OBSERVED' and receipt['authority']==AUTHORITY and
+                receipt['retry_count']==receipt['credential_selector_access_count']==0, 'SEED_ACCOUNTING')
+            previous=content_hash(docs[2])
+        require(content_hash(docs[1])==result['receipt_parent'], 'SEED_ACCOUNTING')
+    finally:os.close(fd)
+    return {'seed_records':depth*3,'executed_reservations':1,'executed_responses':1,'executed_completions':1}
+
+
 class DiagnosticOwnedProcesses(FullOwnedProcesses):
     record_store=staticmethod(diagnostic_store)
     record_read=staticmethod(diagnostic_read)
+
+    def register(self,*args,**kwargs):
+        call=lambda:FullOwnedProcesses.register(self,*args,**kwargs)
+        return self.depth_timings.measure('SUPERVISOR_ACTIVITY',call) if hasattr(self,'depth_timings') else call()
+
+    def observe(self,entry,*,allow_launcher=False):
+        call=lambda:FullOwnedProcesses.observe(self,entry,allow_launcher=allow_launcher)
+        return self.depth_timings.measure('SUPERVISOR_ACTIVITY',call) if hasattr(self,'depth_timings') else call()
+
+    def cleanup(self,*args,**kwargs):
+        call=lambda:FullOwnedProcesses.cleanup(self,*args,**kwargs)
+        return self.depth_timings.measure('CLEANUP',call) if hasattr(self,'depth_timings') else call()
 
     def registration_admission(self,descriptor,deadline,phase=None,role=None):
         require(phase is not None and phase=={'role':role,'descriptor_parent':content_hash(descriptor),
@@ -2701,8 +3068,17 @@ def diagnostic_child(launch,launch_parent):
             def stopped():
                 require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE');return stop()
             def no_wait(seconds):raise ValueError('DIAGNOSTIC_SCHEDULE')
-            session=DiagnosticSession(cap,parents,clock=lambda:at,wait=no_wait,stop=stopped)
-            value,parent=session.run()
+            if d['schema']=='iios-local-depth-measurement-descriptor-v1':
+                m=d['measurement'];seed=regenerate_depth_seed(d['package'],d['expected'],
+                    {**d['expected'],'measurement_source':d['source_parent']},m);at=seed['measured_at']
+                session=DepthMeasurementSession(cap,seed['parents'],manifest=seed,
+                    expected_manifest=m['expected_manifest'],clock=lambda:at,wait=no_wait,
+                    stop=stopped,work_deadline=d['work_deadline_ns']/1e9)
+                session.seed();value=session.run()
+                parent=diagnostic_store(cap,parents,'fs-session.json',value,logical_time=at)
+            else:
+                session=DiagnosticSession(cap,parents,clock=lambda:at,wait=no_wait,stop=stopped)
+                value,parent=session.run()
             diagnostic_store(cap,parents,'fs-worker-complete.json',{'session_parent':parent,'launch_parent':launch_parent})
             while not stop():time.sleep(.05)
         # A failed diagnostic can still shut down cooperatively, without making
@@ -2740,13 +3116,21 @@ def diagnostic_supervise(d):
     observed=asdict(inspect_macos(os.getpid()))
     require(observed['executable']==str(exe) and observed['executable_hash']==executable_hash and
         observed['cwd']==str(out.parent),'DIAGNOSTIC_SUPERVISOR')
-    def verify_self():require(asdict(inspect_macos(os.getpid()))==observed,'DIAGNOSTIC_SUPERVISOR')
-    owned=DiagnosticOwnedProcesses(cap,parents);commands={};launches={};tls=None;session=None;primary=None
+    def check_outer_stop():
+        try:diagnostic_read(cap,parents,'fs-outer-stop.json',value={'event':'OUTER_STOP','supervisor_pid':os.getpid()})
+        except FileNotFoundError:return
+        raise ValueError('OUTER_CANCELLED')
+    def verify_self():
+        require(asdict(inspect_macos(os.getpid()))==observed,'DIAGNOSTIC_SUPERVISOR')
+
+    owned=DiagnosticOwnedProcesses(cap,parents)
+    if d['schema']=='iios-local-depth-measurement-descriptor-v1': owned.depth_timings=DepthTimings('supervisor')
+    commands={};launches={};tls=None;session=None;primary=None
     audit,opened=diagnostic_audit(d,'supervisor',commands,lambda:(os.getpid(),*(e['child'].pid for e in owned.children.values())))
     os.open=opened;sys.addaudithook(audit);stage='STARTUP'
     try:
         for role in ('fixture','worker'):
-            verify_self()
+            check_outer_stop();verify_self()
             if role=='worker':owned.verify('fixture');require(tls is not None,'DIAGNOSTIC_TLS')
             start=time.monotonic_ns();phase={'role':role,'descriptor_parent':content_hash(d),
                 'start_ns':start,'deadline_ns':start+100_000_000_000}
@@ -2777,6 +3161,7 @@ def diagnostic_supervise(d):
             if role=='fixture':stage='TLS';tls=startup_tls(cap,owned)
         stage='SESSION'
         while not (out/'fs-worker-complete.json').exists():
+            check_outer_stop()
             require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE')
             owned.verify('worker');owned.verify('fixture');time.sleep(.05)
         fd=safe_root(out)
@@ -2785,23 +3170,26 @@ def diagnostic_supervise(d):
         completion=diagnostic_verify(doc,content_hash(doc),parents)
         require(completion['launch_parent']==launches['worker'],'DIAGNOSTIC_PARENT')
         session,_=diagnostic_read(cap,parents,'fs-session.json',expected=completion['session_parent'])
-        require(session['classification']=='DIAGNOSTIC_PASS' and
-            session['attempted']==session['completed']==session['reservations']==len(session['receipt_parents'])==1,'DIAGNOSTIC_SESSION')
-        fd=safe_root(p['plan']['root']);rf=safe_root(p['plan']['rows'][0]['root'])
-        try:
-            reserved=read_record(fd,'0.reserved.json');complete=read_record(fd,'0.complete.json')
-            receipt=read_record(rf,'ALPHA_VANTAGE.receipt.json',expected_hash=session['receipt_parents'][0])
-            rv=diagnostic_verify(reserved,content_hash(reserved),parents)
-            cv=diagnostic_verify(complete,content_hash(complete),parents)
-            v=diagnostic_verify(receipt,session['receipt_parents'][0],parents)
-            require(rv=={'plan':d['expected']['plan'],'slot':0,'source_commit':p['source_commit'],'previous':None}
-                and cv=={'slot':0,'previous':None,'reservation':content_hash(reserved),
-                    'receipt':content_hash(receipt),'result':'OBSERVED'} and
-                v['parents']=={**d['expected'],'slot':content_hash({'slot':0,'row':p['plan']['rows'][0]}),
-                    'reservation':content_hash(reserved)} and v['result']=='OBSERVED','DIAGNOSTIC_ACCOUNTING')
-            require(set(os.listdir(fd))=={'day.lock','0.reserved.json','0.complete.json','PREFLIGHT-0'} and
-                os.listdir(rf)==['ALPHA_VANTAGE.receipt.json'],'DIAGNOSTIC_ACCOUNTING')
-        finally:os.close(fd);os.close(rf)
+        if d['schema']=='iios-local-depth-measurement-descriptor-v1':
+            verify_depth_accounting(cap,d['measurement'],session,{**d['expected'],'measurement_source':d['source_parent']})
+        else:
+            require(session['classification']=='DIAGNOSTIC_PASS' and
+                session['attempted']==session['completed']==session['reservations']==len(session['receipt_parents'])==1,'DIAGNOSTIC_SESSION')
+            fd=safe_root(p['plan']['root']);rf=safe_root(p['plan']['rows'][0]['root'])
+            try:
+                reserved=read_record(fd,'0.reserved.json');complete=read_record(fd,'0.complete.json')
+                receipt=read_record(rf,'ALPHA_VANTAGE.receipt.json',expected_hash=session['receipt_parents'][0])
+                rv=diagnostic_verify(reserved,content_hash(reserved),parents)
+                cv=diagnostic_verify(complete,content_hash(complete),parents)
+                v=diagnostic_verify(receipt,session['receipt_parents'][0],parents)
+                require(rv=={'plan':d['expected']['plan'],'slot':0,'source_commit':p['source_commit'],'previous':None}
+                    and cv=={'slot':0,'previous':None,'reservation':content_hash(reserved),
+                        'receipt':content_hash(receipt),'result':'OBSERVED'} and
+                    v['parents']=={**d['expected'],'slot':content_hash({'slot':0,'row':p['plan']['rows'][0]}),
+                        'reservation':content_hash(reserved)} and v['result']=='OBSERVED','DIAGNOSTIC_ACCOUNTING')
+                require(set(os.listdir(fd))=={'day.lock','0.reserved.json','0.complete.json','PREFLIGHT-0'} and
+                    os.listdir(rf)==['ALPHA_VANTAGE.receipt.json'],'DIAGNOSTIC_ACCOUNTING')
+            finally:os.close(fd);os.close(rf)
     except BaseException as error:
         from alpha_session_execution import sanitized_execution_failure
         primary=diagnostic_failure(error,stage)
@@ -2810,6 +3198,7 @@ def diagnostic_supervise(d):
     result={'classification':'DIAGNOSTIC_PASS' if primary is None and cleanup['clean'] else 'DIAGNOSTIC_FAILED',
         'primary_failure':primary,'session':session,'tls':tls,'cleanup':cleanup,
         'credential_accesses':0,'provider_requests':0,'worker_launches':int('worker' in owned.startup_pins)}
+    if hasattr(owned,'depth_timings'): result['timings']=owned.depth_timings.report()
     diagnostic_store(cap,parents,'fs-final.json',result)
     return 0 if result['classification']=='DIAGNOSTIC_PASS' else 1
 
@@ -2820,6 +3209,181 @@ def diagnostic_main(d,expected,child):
         require(child==value['role'],'DIAGNOSTIC_ROLE');return diagnostic_child(value,expected)
     require(content_hash(d)==expected,'DIAGNOSTIC_PARENT')
     return diagnostic_supervise(d)
+
+
+class DepthOuterCase:
+    """Pinned local diagnostic backend. No signals, credentials or provider routes."""
+    def __init__(self, template, expected, depth):
+        require(type(depth) is int and depth in DEPTHS,'OUTER_DEPTH')
+        self.depth=depth
+        self.template=template;self.expected=expected;self.child=None;self.capture=None
+        self.observation=None;self.cancelled=False;self.descriptor=None
+
+    def prepare(self,start):
+        d=read_descriptor(self.template,self.expected)
+        require(d['schema']=='iios-local-depth-measurement-descriptor-v1','OUTER_SCOPE')
+        diagnostic_descriptor(d)
+        require(d['measurement']['depth']==self.depth,'OUTER_DEPTH')
+        import ssl
+        cert=ssl._ssl._test_decode_cert(str(Path(d['runtime']['root'])/d['runtime']['tls']))
+        require(ssl.cert_time_to_seconds(cert['notBefore'])<=time.time()<ssl.cert_time_to_seconds(cert['notAfter']),'OUTER_TLS_VALIDITY')
+        root=Path(d['authorized_root']);out=Path(d['package']['root'])
+        require(not out.exists() and not listener_owners(d['package']['fixture']['port']),'OUTER_DESTINATION')
+        self.root=root;self.out=out
+        self.descriptor={**d,'work_deadline_ns':start+440_000_000_000,
+            'cleanup_deadline_ns':start+620_000_000_000}
+        diagnostic_descriptor(self.descriptor)
+        fd=safe_root(root)
+        try:
+            publish(fd,'outer-attempt.json',{'scope':DEPTH_SCOPE,'template':self.expected,
+                'start_ns':start,'total_ns':800_000_000_000,'authority':AUTHORITY})
+            self.parent=publish(fd,'execution-descriptor.json',self.descriptor)
+        finally:os.close(fd)
+        require(read_descriptor(root/'execution-descriptor.json',self.parent)==self.descriptor,'OUTER_PARENT')
+        r=d['runtime'];self.exe=Path(r['root'])/r['interpreter']
+        self.exe_hash=next(v['sha256'] for v in r['files'] if v['path']==r['interpreter'])
+        self.argv=[str(self.exe),'-B',str(Path(r['root'])/'source/alpha_radar_runner.py'),
+            '--local-one-request-only','--descriptor',str(root/'execution-descriptor.json'),
+            '--expected-descriptor',self.parent]
+
+    def launch(self):
+        require(self.child is None and self.descriptor is not None,'OUTER_DUPLICATE')
+        self.child=subprocess.Popen(self.argv,cwd=self.root,env=DIAG_ENV,stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
+        close_lifecycle_stdin(self.child);self.capture=LifecycleStreams(self.child)
+
+    def inspect(self):
+        require(self.child is not None and self.child.poll() is None,'OUTER_CHILD_EXITED')
+        v=asdict(inspect_macos(self.child.pid))
+        expected={'pid':self.child.pid,'parent_pid':os.getpid(),'argv':tuple(self.argv),
+            'cwd':str(self.root),'executable':str(self.exe),'executable_hash':self.exe_hash}
+        require(all(v[k]==value for k,value in expected.items()) and v['start_time'] and
+            v['command']==' '.join(v['argv']),'OUTER_IDENTITY')
+        if self.observation is not None:require(v==self.observation,'OUTER_IDENTITY')
+        return v
+
+    def register(self,deadline,now,pause):
+        samples=[]
+        for _ in range(3):
+            require(now()<deadline,'OUTER_STARTUP_DEADLINE')
+            self.pump();samples.append(self.inspect());pause(.05)
+        require(now()<deadline and samples[0]==samples[1]==samples[2],'OUTER_IDENTITY')
+        self.observation=samples[0]
+
+    def poll(self):return None if self.child is None else self.child.poll()
+
+    def pump(self):
+        if self.capture:self.capture.drain();self.capture.check()
+
+    def cancel(self):
+        if self.cancelled or self.child is None or self.child.poll() is not None:return
+        require(self.observation is not None,'OUTER_UNVERIFIED')
+        self.inspect()  # Reverify before cooperative request; never sends a signal.
+        parents=diagnostic_descriptor(self.descriptor)
+        fd=safe_root(self.out)
+        try:publish(fd,'fs-outer-stop.json',diagnostic_envelope(
+            {'event':'OUTER_STOP','supervisor_pid':self.child.pid},parents))
+        finally:os.close(fd)
+        self.cancelled=True
+
+    def finish(self):
+        require(self.observation is not None and self.child is not None and
+            self.child.poll()==0 and self.child.wait(timeout=0)==0,'OUTER_EXIT_UNVERIFIED')
+        d=self.descriptor;parents=diagnostic_descriptor(d)
+        fd=safe_root(self.out)
+        try:
+            st=os.fstat(fd);doc=read_record(fd,'fs-final.json')
+        finally:os.close(fd)
+        value=diagnostic_verify(doc,content_hash(doc),parents)
+        require(value['classification']=='DIAGNOSTIC_PASS' and value['cleanup']['clean'] is True
+            and value['cleanup']['remaining']==[] and value['cleanup']['port_clear_observations']==[True]*3,
+            'OUTER_INNER_FAILED')
+        ids=verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
+        cap=SyntheticCapability(canonical(d['package']),canonical(d['runtime']),canonical(d['expected']),
+            d['authorized_root'],ids,(st.st_dev,st.st_ino))
+        counts=verify_depth_accounting(cap,d['measurement'],value['session'],
+            {**d['expected'],'measurement_source':d['source_parent']})
+        require(not listener_owners(d['package']['fixture']['port']),'OUTER_LISTENER')
+        return {'final_parent':content_hash(doc),'accounting':counts,'cleanup':value['cleanup'],
+            'supervisor_returncode':0,'supervisor_ownership_verified':True}
+
+    def export(self,result):
+        # Export only bounded sanitized status; original hash-bound receipts stay in place.
+        result['template_parent']=self.expected
+        result['descriptor_parent']=getattr(self,'parent',None)
+        if self.capture:
+            for action in (self.capture.drain,self.capture.close):
+                try:action()
+                except Exception as error:
+                    result['failures'].append({'stage':'EXPORT_STREAM','category':failure_category(error)})
+                    result['classification']='FAILED'
+            result['diagnostics']=self.capture.snapshot()
+        root=Path(read_descriptor(self.template,self.expected)['authorized_root'])
+        fd=safe_root(root)
+        try:return publish(fd,'outer-result.json',{**DIAG_FLAGS,'value':result,'authority':AUTHORITY})
+        finally:os.close(fd)
+
+
+def run_depth_outer_case(backend, *, now=time.monotonic_ns, pause=time.sleep, series_deadline):
+    """800s including admission/startup, 440s work, 180s cleanup, 180s export.
+
+    A surviving/unverified process yields RED, never a signal or inferred cleanup.
+    Blocking OS/filesystem calls remain subject to their existing bounded contracts.
+    """
+    start=now();require(type(start) is int and start+800_000_000_000<=series_deadline,'OUTER_SERIES_BUDGET')
+    work=start+440_000_000_000;cleanup=start+620_000_000_000;end=start+800_000_000_000
+    failures=[];findings=None;last=start;created=False
+    def clock():
+        nonlocal last
+        n=now();require(type(n) is int and last<=n<=10**18,'OUTER_CLOCK');last=n;return n
+    def failed(stage,error):failures.append({'stage':stage,'category':failure_category(error)})
+    try:
+        backend.prepare(start);require(clock()+220_000_000_000<work,'OUTER_WORK_BUDGET')
+        # Set before launch: partial process creation must still reach cleanup.
+        created=True;backend.launch();backend.register(min(clock()+100_000_000_000,work),clock,pause)
+        while backend.poll() is None:
+            require(clock()<work,'OUTER_WORK_DEADLINE');backend.pump();pause(.1)
+    except Exception as error:failed('WORK',error)
+    if created:
+        try:backend.cancel()
+        except Exception as error:failed('COOPERATIVE_STOP',error)
+        try:
+            drain_failed=False
+            while backend.poll() is None:
+                require(clock()<cleanup,'OUTER_CLEANUP_DEADLINE')
+                if not drain_failed:
+                    try:backend.pump()
+                    except Exception as error:failed('CLEANUP_STREAM',error);drain_failed=True
+                pause(.1)
+        except Exception as error:failed('CLEANUP',error)
+        try:
+            require(clock()<cleanup,'OUTER_CLEANUP_DEADLINE')
+            findings=backend.finish()
+            require(clock()<cleanup,'OUTER_CLEANUP_DEADLINE')
+        except Exception as error:failed('EXIT_RECONCILIATION',error)
+    result={'scope':DEPTH_SCOPE,'authority':AUTHORITY,'production_qualified':False,
+        'os_confinement':'UNQUALIFIED','signals':0,'start_ns':start,'work_deadline_ns':work,
+        'cleanup_deadline_ns':cleanup,'export_deadline_ns':end,'failures':failures,'findings':findings,
+        'classification':'PASS' if not failures and findings is not None else 'FAILED'}
+    try:
+        require(clock()<end,'OUTER_EXPORT_DEADLINE');result['export_start_ns']=last
+        backend.export(result);require(clock()<end,'OUTER_EXPORT_DEADLINE')
+    except Exception as error:failed('EXPORT',error);result['classification']='FAILED'
+    result['finished_ns']=last
+    return result
+
+
+def run_depth_outer_series(cases, *, now=time.monotonic_ns, pause=time.sleep):
+    require(type(cases) is list and [depth for depth,_ in cases]==list(DEPTHS) and
+        all(backend.depth==depth for depth,backend in cases),'OUTER_DEPTH_ORDER')
+    start=now();require(type(start) is int and start>=0,'OUTER_CLOCK');end=start+2_400_000_000_000
+    results=[]
+    for depth,backend in cases:
+        result=run_depth_outer_case(backend,now=now,pause=pause,series_deadline=end)
+        results.append({'depth':depth,**result})
+        if result['classification']!='PASS':break
+    return {'scope':DEPTH_SCOPE,'authority':AUTHORITY,'results':results,'start_ns':start,
+        'deadline_ns':end,'classification':'PASS' if len(results)==3 and all(v['classification']=='PASS' for v in results) else 'FAILED'}
 
 
 def main():

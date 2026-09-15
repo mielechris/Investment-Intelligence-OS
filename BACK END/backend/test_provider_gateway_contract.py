@@ -71,3 +71,77 @@ class ContractTests(unittest.TestCase):
         value = readiness_matrix({})
         self.assertEqual(len(value["providers"]), 6)
         self.assertTrue(all(r["OVERALL READINESS"] == "NOT_READY" for r in value["providers"].values()))
+
+
+class SerializationEquivalenceTests(unittest.TestCase):
+    @staticmethod
+    def original(value):
+        # Frozen pre-optimization implementation, including recursive order.
+        import re
+        from provider_gateway_contract import DENIED_KEYS, canonical
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if not isinstance(key, str) or key.lower() in DENIED_KEYS:
+                    raise ValueError('SENSITIVE_DOCUMENT_REJECTED')
+                SerializationEquivalenceTests.original(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                SerializationEquivalenceTests.original(child)
+        elif isinstance(value, str):
+            if re.search(r'(?i)(bearer\s|api[_-]?key[=:]|password[=:]|[?&](token|key)=|-----BEGIN .*PRIVATE KEY)', value):
+                raise ValueError('SENSITIVE_DOCUMENT_REJECTED')
+        elif value is not None and type(value) not in (int, float, bool):
+            raise ValueError('PUBLIC_JSON_REQUIRED')
+        canonical(value)
+
+    def outcome(self, fn, value):
+        from provider_gateway_contract import canonical, content_hash
+        try:
+            result=fn(value)
+            return ('accepted',result,canonical(value),content_hash(value))
+        except Exception as error:
+            return ('rejected',type(error),error.args)
+
+    def test_valid_and_adversarial_match_original(self):
+        class Text(str):pass
+        class Sequence(list):pass
+        cases=[None,True,False,0,-0.0,1.5,2**256,'μ\\\"\n',(),[],{},
+               {'a':['MU']*2000,'b':(True,None,17,1.5)},Sequence(['MU','MU']),Text('MU'),
+               float('nan'),float('inf'),float('-inf'),object(),b'bytes',
+               {1:'x'},{'API_KEY':'SYNTHETIC'},{'a':[None,{'password':'SYNTHETIC'}]},
+               'bearer SYNTHETIC','api_key=SYNTHETIC','\ud800',
+               {'a':float('nan'),'password':'SYNTHETIC'},
+               {'password':'SYNTHETIC','a':float('nan')},10**5000]
+        for i,value in enumerate(cases):
+            with self.subTest(case=i):self.assertEqual(self.outcome(self.original,value),self.outcome(safe_document,value))
+
+    def test_repetition_changes_no_bytes_or_hashes(self):
+        for size in (0,1,100,1500):
+            value={'items':[{'symbol':'MU','i':i,'flags':[False,None,0,-0.0]} for i in range(size)]}
+            self.assertEqual(self.outcome(self.original,value),self.outcome(safe_document,value))
+
+    def test_no_approval_cached_between_calls_or_mutations(self):
+        value={'a':['MU']*20};safe_document(value)
+        value['a'].append({'authorization':'SYNTHETIC'})
+        self.assertEqual(self.outcome(self.original,value),self.outcome(safe_document,value))
+        with self.assertRaises(ValueError):safe_document(value)
+
+    def test_bounded_primitive_serialization_reuse_and_container_checks(self):
+        from unittest.mock import patch
+        import provider_gateway_contract as contract
+        encoder=contract.canonical
+        value=['MU']*100
+        with patch.object(contract,'canonical',wraps=encoder) as calls:
+            safe_document(value)
+            self.assertEqual(calls.call_count,2)  # One scalar, one full container.
+            safe_document(value)
+            self.assertEqual(calls.call_count,4)  # No cross-call cache.
+        values=list(range(1100))+[1099]*3
+        with patch.object(contract,'canonical',wraps=encoder) as calls:
+            safe_document(values)
+            self.assertEqual(calls.call_count,1104)  # Cache bound, no skipped container.
+
+    def test_cycles_still_reject(self):
+        value=[];value.append(value)
+        for fn in (self.original,safe_document):
+            with self.assertRaises(RecursionError):fn(value)

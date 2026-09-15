@@ -2455,15 +2455,15 @@ class FullSessionModeTests(unittest.TestCase):
         package=run.full_package(p,e)
         d={'schema':'iios-ci-full-session-descriptor-v2','execution_mode':run.FULL_SCOPE,
             'package':p,'runtime':r,'expected':e,'authorized_root':str(root),'native_tools':{},
-            'maximum_duration_seconds':3300,'context':self.context(),'session_package':package,
+            'maximum_duration_seconds':6000,'context':self.context(),'session_package':package,
             'session_package_parent':content_hash(package)}
         d['validation_parent']='a'*64
         d['budget']={'schema':'iios-native-job-budget-v2','source_commit':d['context']['GITHUB_SHA'],
             'run_id':d['context']['GITHUB_RUN_ID'],'run_attempt':1,'start_monotonic':100,
-            'prepared_monotonic':101,'hard_deadline':4540,'work_deadline':3766,'cleanup_deadline':3946,
+            'prepared_monotonic':101,'hard_deadline':7240,'work_deadline':6466,'cleanup_deadline':6646,
             'deadline_unit':'MONOTONIC_NANOSECONDS','prepared_monotonic_ns':101_000_000_000,
             'startup_deadline_ns':466_000_000_000,
-            'cleanup_seconds':180,'export_seconds':180,'real_clock_seconds':65,'work_seconds':3300}
+            'cleanup_seconds':180,'export_seconds':180,'real_clock_seconds':65,'work_seconds':6000}
         parents={**e,'session_package':content_hash(package),'full_descriptor':content_hash(d)}
         return root,p,r,e,d,parents
 
@@ -2892,7 +2892,8 @@ class FullSessionModeTests(unittest.TestCase):
             ('start_ns',float('nan')),('deadline_ns',float('inf')),('deadline_ns',2**63)]:
             changed={**phase,key:value}
             with self.subTest(key=key),self.assertRaises(ValueError):run.full_phase_deadline(d,'worker',changed)
-        with self.assertRaises(ValueError):run.full_phase(d,'worker',monotonic_ns=lambda:3_700_000_000_000)
+        with self.assertRaises(ValueError):
+            run.full_phase(d,'worker',monotonic_ns=lambda:round(d['budget']['work_deadline']*1_000_000_000)-99_000_000_000)
         owned.inspect=MagicMock(return_value=observation)
         with self.assertRaises(ValueError):
             owned.register('worker',child,argv=(exe,),cwd=observation.cwd,executable=exe,
@@ -3155,14 +3156,14 @@ class FullCleanupIsolationTests(unittest.TestCase):
         owned,observations=self.owned();children=dict(owned.children);worker=children['worker']['child'].pid
         original=owned.evidence;calls=[]
         def evidence(value):
-            if value.get('event')=='INSPECTION_CHILD_STATUS' and value.get('pid')==worker:
+            if value.get('event')=='OWNERSHIP_VERIFICATION_BATCH' and value.get('pid')==worker:
                 raise OSError('SYNTHETIC_PUBLICATION_FAILURE')
             original(value)
         owned.evidence=evidence
         owned.inspect=lambda pid:(calls.append(pid) or observations[pid])
         result=owned.cleanup(lambda:True)
         self.assertFalse(result['clean']);self.assertEqual([v['role'] for v in result['exits']],['fixture'])
-        self.assertEqual(calls,[children['fixture']['child'].pid])
+        self.assertEqual(calls,[worker,children['fixture']['child'].pid])
         self.assertTrue(result['role_findings']['worker']['diagnostic_failures'])
         self.assertEqual(result['role_findings']['fixture']['diagnostic_failures'],[])
         self.assertTrue(result['diagnostic_failures'])
@@ -3415,6 +3416,25 @@ class QualificationBudgetTests(unittest.TestCase):
         bad=deepcopy(d);bad['validation_parent']=''
         with self.assertRaises(ValueError):run.full_budget(bad)
 
+    def test_120_minute_budget_rejects_old_budget_and_one_unit_mutations(self):
+        import alpha_radar_runner as run
+        d=self.descriptor()
+        self.assertEqual(run.full_budget(d)['work_seconds'],6000)
+        old=deepcopy(d)
+        old['maximum_duration_seconds']=3300
+        old['budget'].update(work_seconds=3300,hard_deadline=4540,
+            work_deadline=3766,cleanup_deadline=3946)
+        with self.assertRaisesRegex(ValueError,'FULL_JOB_BUDGET'):
+            run.full_budget(old)
+        for key in ('hard_deadline','work_deadline','cleanup_deadline',
+                    'work_seconds','cleanup_seconds','export_seconds','real_clock_seconds'):
+            for delta in (-1,1):
+                bad=deepcopy(d);bad['budget'][key]+=delta
+                with self.assertRaises(ValueError):run.full_budget(bad)
+        for delta in (-1,1):
+            bad=deepcopy(d);bad['maximum_duration_seconds']+=delta
+            with self.assertRaises(ValueError):run.full_budget(bad)
+
     def test_revised_budget_creator_verifier_and_workflow_agree(self):
         import alpha_radar_ci as ci, alpha_radar_runner as run
         d=self.descriptor();root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
@@ -3425,15 +3445,15 @@ class QualificationBudgetTests(unittest.TestCase):
             d['budget']=ci.prepare_job_budget(root)
         d=json.loads(json.dumps(d))
         b=run.full_launch_budget(d,monotonic=lambda:400)
-        self.assertEqual(b['hard_deadline'],4540)
-        self.assertEqual(b['work_deadline'],4065)
-        self.assertEqual(b['cleanup_deadline'],4245)
-        self.assertEqual(b['cleanup_deadline']+180,4425)
+        self.assertEqual(b['hard_deadline'],7240)
+        self.assertEqual(b['work_deadline'],6765)
+        self.assertEqual(b['cleanup_deadline'],6945)
+        self.assertEqual(b['cleanup_deadline']+180,7125)
         self.assertEqual(b['hard_deadline']-(b['cleanup_deadline']+180),115)
-        self.assertEqual(ci.NATIVE_JOB_SECONDS,75*60)
+        self.assertEqual(ci.NATIVE_JOB_SECONDS,120*60)
         self.assertEqual(sum((ci.NATIVE_PREPARATION_SECONDS,ci.NATIVE_STARTUP_SECONDS,
             ci.REAL_CLOCK_SECONDS,ci.FULL_WORK_SECONDS,ci.CLEANUP_SECONDS,
-            ci.EXPORT_SECONDS,ci.NATIVE_START_RESERVE)),4385)
+            ci.EXPORT_SECONDS,ci.NATIVE_START_RESERVE)),7085)
         self.assertEqual(run.full_startup_deadline(d),765)
         # Last launch-admission instant and one nanosecond beyond the boundary.
         run.full_launch_budget(d,monotonic=lambda:700)
@@ -3458,8 +3478,8 @@ class QualificationBudgetTests(unittest.TestCase):
         from_work=3079.378764083-2700
         from_prepared=214.378764083+65+100
         b.update(start_monotonic=199.422550333,prepared_monotonic=214.378764083,
-            hard_deadline=199.422550333+4440,work_deadline=214.378764083+3665,
-            cleanup_deadline=214.378764083+3665+180,prepared_monotonic_ns=214_378_764_083,
+            hard_deadline=199.422550333+7140,work_deadline=214.378764083+6365,
+            cleanup_deadline=214.378764083+6365+180,prepared_monotonic_ns=214_378_764_083,
             startup_deadline_ns=579_378_764_083)
         self.assertNotEqual(from_work,from_prepared)
         self.assertEqual(abs(from_work-from_prepared),1.1368683772161603e-13)
@@ -3573,7 +3593,7 @@ class QualificationBudgetTests(unittest.TestCase):
         self.assertIn('needs.validation.outputs.proof_sha256',native)
         self.assertIn('needs.validation.outputs.proof',native)
         self.assertIn("github.event_name == 'workflow_dispatch'",native)
-        self.assertIn('timeout-minutes: 75',native);self.assertIn('timeout-minutes: 60',validation)
+        self.assertIn('timeout-minutes: 120',native);self.assertIn('timeout-minutes: 60',validation)
         source=Path(ci.__file__).read_text();tree=ast.parse(source)
         for name in ('execute','execute_lifecycle','execute_full'):
             f=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
@@ -3591,8 +3611,8 @@ class QualificationBudgetTests(unittest.TestCase):
                     ci.prepare_job_budget(root)
             publish.assert_not_called()
             with patch.object(ci.time,'monotonic',return_value=101):b=ci.prepare_job_budget(root)
-            self.assertEqual(b['work_seconds'],3300)
-            self.assertEqual(b['work_deadline']-b['prepared_monotonic'],3665)
+            self.assertEqual(b['work_seconds'],6000)
+            self.assertEqual(b['work_deadline']-b['prepared_monotonic'],6365)
             self.assertLessEqual(b['cleanup_deadline']+180,b['hard_deadline'])
             publish.assert_called_once()
 
@@ -3932,11 +3952,11 @@ class HostedFeasibilityTests(unittest.TestCase):
     def test_over_budget_preserves_measured_values_without_launch(self):
         ci,root,d,proof,env=self.case()
         with patch.object(ci.subprocess,'Popen') as spawn,self.assertRaisesRegex(ValueError,'FEASIBILITY_EXCEEDED'):
-            self.publish(ci,root,d,proof,env,ns=900_000_000)
+            self.publish(ci,root,d,proof,env,ns=2_000_000_000)
         spawn.assert_not_called()
         value=json.loads((root/'export/full-feasibility.json').read_bytes())
         self.assertEqual(value['classification'],'INFEASIBLE')
-        self.assertEqual(value['estimated_work_seconds'],4331.25)
+        self.assertEqual(value['estimated_work_seconds'],8250)
         self.assertFalse((root/'step-env').exists());self.assertFalse((root/'full-attempt.json').exists())
 
     def test_missing_stale_changed_source_runtime_workload_and_replay(self):
@@ -3964,7 +3984,7 @@ class HostedFeasibilityTests(unittest.TestCase):
         self.assertLess(source.index('require_feasibility('),source.index('subprocess.Popen('))
         source=inspect.getsource(ci.prepare_full_descriptor)
         self.assertLess(source.index('prepare_feasibility('),source.index('prepare_job_budget('))
-        self.assertEqual(ci.NATIVE_JOB_SECONDS,4500);self.assertEqual(ci.NATIVE_PREPARATION_SECONDS,300)
+        self.assertEqual(ci.NATIVE_JOB_SECONDS,7200);self.assertEqual(ci.NATIVE_PREPARATION_SECONDS,300)
         self.assertEqual(ci.CLEANUP_SECONDS,180);self.assertEqual(ci.EXPORT_SECONDS,180)
 
     def test_failed_gate_blocks_actual_execute_entry_before_attempt_or_spawn(self):
@@ -3981,3 +4001,443 @@ class HostedFeasibilityTests(unittest.TestCase):
             ci.execute_full(root,explicit_request=True)
         spawn.assert_not_called()
         self.assertFalse((root/'full-attempt.json').exists());self.assertFalse((root/'full-session-output').exists())
+
+
+class RehearsalBoundaryRepairTests(unittest.TestCase):
+    def test_recovery_crossing_deadline_cannot_reserve_or_dispatch(self):
+        helper=FullSessionModeTests();s,now,calls,_=helper.session();helper.journal(s)
+        request=s.request(0);receipt=s.execute(request,None)
+        previous=s.completion(request,0,None,receipt)
+        now[0]=utc(s.p['plan']['rows'][1]['valid_from'])
+        read=s.read;expired=[False]
+        def recovery(*args,**kwargs):
+            value=read(*args,**kwargs);expired[0]=True;return value
+        s.stop=lambda:expired[0]
+        with patch.object(s,'read',side_effect=recovery),self.assertRaisesRegex(ValueError,'FULL_CANCELLED'):
+            s.execute(s.request(1),previous)
+        self.assertEqual(calls,[0])
+        self.assertFalse((Path(s.p['plan']['root'])/'1.reserved.json').exists())
+
+    def test_expiry_after_reservation_preserves_consumed_slot(self):
+        helper=FullSessionModeTests();s,_,calls,_=helper.session();helper.journal(s)
+        reservation=Path(s.p['plan']['root'])/'0.reserved.json'
+        s.stop=lambda:reservation.exists()
+        with self.assertRaisesRegex(ValueError,'FULL_CANCELLED'):s.execute(s.request(0),None)
+        self.assertTrue(reservation.exists());self.assertEqual(calls,[])
+        self.assertEqual(s.attempted,0)
+        self.assertFalse((reservation.parent/'0.complete.json').exists())
+
+    def test_work_deadline_checked_after_stop_check(self):
+        import alpha_radar_runner as run
+        s,_,_,_=FullSessionModeTests().session();s.work_deadline=10
+        clock=[9]
+        def stop():clock[0]=10;return False
+        s.stop=stop
+        with patch.object(run.time,'monotonic',side_effect=lambda:clock[0]),self.assertRaisesRegex(ValueError,'NATIVE_SESSION_TIMEOUT'):
+            s.check_work()
+
+    def test_transport_admission_expiry_prevents_wire_call(self):
+        import alpha_radar_runner as run
+        s,_,_,_=FullSessionModeTests().session()
+        def expired():raise ValueError('NATIVE_SESSION_TIMEOUT')
+        with patch.object(run,'bounded_https') as wire,self.assertRaisesRegex(ValueError,'NATIVE_SESSION_TIMEOUT'):
+            run.fixture_exchange(s.cap,0,CALENDAR['open'],check_deadline=expired)
+        wire.assert_not_called()
+
+    def test_tls_setup_expiry_prevents_http_request_and_closes_sockets(self):
+        import provider_gateway_https as wire
+        import ssl
+        context=MagicMock();context.verify_mode=ssl.CERT_REQUIRED;context.check_hostname=True
+        sock=MagicMock();connection=MagicMock()
+        def expired():raise ValueError('NATIVE_SESSION_TIMEOUT')
+        with patch.object(wire.ssl,'create_default_context',return_value=context), \
+                patch.object(wire.socket,'socket',return_value=sock), \
+                patch.object(wire.http.client,'HTTPSConnection',return_value=connection), \
+                self.assertRaisesRegex(ValueError,'NATIVE_SESSION_TIMEOUT'):
+            wire.bounded_https(host='127.0.0.1',address='127.0.0.1',port=38491,
+                method='GET',target='/synthetic',headers={},body=None,tls_file='SYNTHETIC',
+                timeout=20,limit=1000,before_request=expired)
+        context.wrap_socket.assert_called_once()
+        connection.request.assert_not_called();connection.close.assert_called_once()
+        context.wrap_socket.return_value.close.assert_called_once()
+
+    def test_observation_publishes_one_batch_after_inspection(self):
+        owned,observations=FullSessionModeTests().owned();entry=owned.children['worker'];events=[]
+        owned.inspect=lambda pid:(events.append('INSPECT') or observations[pid])
+        original=owned.evidence
+        def publish(value):events.append(value['event']);return original(value)
+        owned.evidence=publish
+        self.assertEqual(owned.observe(entry),entry['observation'])
+        self.assertEqual(events,['INSPECT','OWNERSHIP_VERIFICATION_BATCH'])
+
+    def test_batch_publication_failure_rejects_ownership(self):
+        owned,_=FullSessionModeTests().owned()
+        owned.evidence=MagicMock(side_effect=OSError('SYNTHETIC'))
+        with self.assertRaises(OSError):owned.verify('worker')
+        self.assertIn('DIAGNOSTIC_PUBLICATION_FAILED',owned.diagnostic_failures)
+
+    def test_inspection_failure_survives_batch_publication_failure(self):
+        owned,_=FullSessionModeTests().owned()
+        primary=ValueError('ARGV_OBSERVATION_FAILED')
+        owned.inspect=MagicMock(side_effect=primary)
+        owned.evidence=MagicMock(side_effect=OSError('SYNTHETIC'))
+        with self.assertRaises(ValueError) as caught:
+            owned.verify('worker')
+        self.assertIs(caught.exception,primary)
+        self.assertIn('DIAGNOSTIC_PUBLICATION_FAILED',owned.diagnostic_failures)
+        self.assertIn('DIAGNOSTIC_PUBLICATION_FAILED',
+            owned.children['worker']['inspection_diagnostic_failures'])
+
+    def test_inspection_failure_survives_successful_batch_publication(self):
+        owned,_=FullSessionModeTests().owned()
+        primary=ValueError('ARGV_OBSERVATION_FAILED')
+        owned.inspect=MagicMock(side_effect=primary)
+        with self.assertRaises(ValueError) as caught:
+            owned.verify('worker')
+        self.assertIs(caught.exception,primary)
+        self.assertEqual(owned.diagnostic_failures,[])
+
+    def test_exited_owned_worker_records_termination_without_live_inspection(self):
+        owned,observations=FullSessionModeTests().owned();entry=owned.children['worker']
+        child=entry['child'];child.poll.return_value=1;child.wait.side_effect=None;child.wait.return_value=1
+        calls=[];owned.inspect=lambda pid:(calls.append(pid) or observations[pid])
+        result=owned.cleanup(lambda:True)
+        finding=result['role_findings']['worker']
+        self.assertTrue(finding['termination_verified'])
+        self.assertFalse(finding['cooperative_shutdown_verified'])
+        self.assertFalse(result['clean']);self.assertEqual(result['remaining'],[])
+        self.assertNotIn(child.pid,calls)
+        child.kill.assert_not_called();child.terminate.assert_not_called()
+
+    def test_exited_unregistered_worker_stays_unverified(self):
+        owned,_=FullSessionModeTests().owned();entry=owned.children['worker']
+        entry['child'].poll.return_value=1;entry['observation']=None
+        result=owned.cleanup(lambda:True)
+        self.assertFalse(result['role_findings']['worker']['termination_verified'])
+        self.assertIn('worker',result['remaining']);self.assertFalse(result['clean'])
+
+
+class DepthSeedAdmissionTests(unittest.TestCase):
+    def build(self, depth):
+        import alpha_radar_runner as run
+        s,_=OneRequestDiagnosticTests().session();parents=s.full_parents
+        manifest=run.depth_seed_manifest(s.cap,parents,depth);calls=[]
+        at=manifest['measured_at']
+        def exchange(cap,slot,when):
+            from urllib.parse import urlencode
+            calls.append(slot);status,body=response(cap,f'/slot/{slot}?'+urlencode({'at':when}))
+            return Response(status,body,when,when)
+        def create(value=manifest,pin=None):
+            return run.DepthMeasurementSession(s.cap,parents,manifest=value,
+                expected_manifest=content_hash(manifest) if pin is None else pin,
+                clock=lambda:at,wait=lambda _:self.fail('WAIT'),stop=lambda:False,
+                work_deadline=run.time.monotonic()+120,exchange=exchange)
+        return create,manifest,calls
+
+    def test_three_depths_seed_zero_requests_and_execute_exactly_one(self):
+        import alpha_radar_runner as run
+        for depth in (0,237,474):
+            with self.subTest(depth=depth):
+                create,m,calls=self.build(depth);s=create();before=canonical(s.p['plan'])
+                s.seed();self.assertEqual(calls,[]);self.assertEqual(s.attempted,0)
+                self.assertEqual(m['requests_attempted'],0);self.assertEqual(m['seed_records'],3*depth)
+                result=s.run();self.assertEqual(result['classification'],'DEPTH_REQUEST_PASS',result)
+                self.assertEqual(calls,[depth]);self.assertEqual((result['attempted'],result['completed']),(1,1))
+                self.assertEqual(run.verify_depth_accounting(s.cap,{'depth':depth,'expected_manifest':content_hash(m)},result,s.full_parents),
+                    {'seed_records':depth*3,'executed_reservations':1,'executed_responses':1,'executed_completions':1})
+                self.assertEqual(canonical(s.p['plan']),before)
+                self.assertGreaterEqual(result['seed_seconds'],0);self.assertGreaterEqual(result['measured_seconds'],0)
+                spans=result['timings']['intervals'];self.assertTrue({'SEEDING','RECOVERY','PUBLICATION','REQUEST_EXECUTION'} <= {r['stage'] for r in spans})
+                self.assertTrue(all(r['exclusive_ns']>=0 for r in spans))
+                with self.assertRaises(ValueError):s.run()
+                with self.assertRaises(ValueError):s.seed()
+                self.assertEqual(calls,[depth])
+                for item in m['rows']:
+                    self.assertIsNone(item['response']['value']['actual_dispatch_time'])
+                    self.assertEqual(item['response']['origin'],'SYNTHETIC_SEED')
+                fd=s.open_root(s.p['plan']['root'])
+                try:doc=run.read_record(fd,f'{depth}.complete.json')
+                finally:os.close(fd)
+                with self.assertRaises(ValueError):run.verify_full_receipt(doc,content_hash(doc),s.full_parents)
+                with self.assertRaises(ValueError):run.diagnostic_verify(doc,content_hash(doc),s.full_parents)
+
+    def test_manifest_missing_altered_reordered_and_wrong_parent_rejected(self):
+        create,m,calls=self.build(237)
+        mutations=[lambda v:v['rows'].pop(),lambda v:v['rows'].reverse(),
+            lambda v:v['rows'][0]['reservation']['value'].update(slot=1),
+            lambda v:v.update(last_completion_parent='0'*64),
+            lambda v:v.update(source_commit='0'*40),lambda v:v.update(depth=474)]
+        for mutate in mutations:
+            bad=deepcopy(m);mutate(bad)
+            with self.assertRaises(ValueError):create(bad)
+            with self.assertRaises(ValueError):create(bad,content_hash(bad))
+        self.assertEqual(calls,[])
+
+    def test_missing_and_altered_seed_disk_records_fail_before_dispatch(self):
+        for kind in ('missing','altered'):
+            create,m,calls=self.build(237);s=create();s.seed()
+            path=Path(s.p['plan']['root'])/'0.reserved.json'
+            if kind=='missing':path.unlink()
+            else:
+                path.chmod(0o600);path.write_bytes(b'{}');path.chmod(0o400)
+            result=s.run();self.assertEqual(result['classification'],'DEPTH_REQUEST_FAILED')
+            self.assertEqual(calls,[])
+            self.assertFalse((path.parent/'237.reserved.json').exists())
+            with self.assertRaises(ValueError):s.run()
+
+    def test_seed_expiration_and_existing_destination_fail_closed(self):
+        create,_,calls=self.build(0);s=create();s.work_deadline=1
+        with self.assertRaises(ValueError):s.seed()
+        create,_,calls=self.build(0);s=create();Path(s.p['plan']['root']).mkdir()
+        with self.assertRaises(FileExistsError):s.seed()
+        self.assertEqual(calls,[])
+
+    def test_wrong_previous_parent_and_wrong_clock_fail_before_exchange(self):
+        create,_,calls=self.build(0);s=create();s.seed()
+        with self.assertRaises(ValueError):s.execute(s.request(0),'0'*64)
+        s.clock=lambda:'2026-09-14T00:00:00+00:00'
+        with self.assertRaises(ValueError):s.run()
+        self.assertEqual(calls,[])
+
+
+class CompactDepthTimingTests(unittest.TestCase):
+    def test_real_loading_compact_binding_all_depths_and_wrong_hash(self):
+        import alpha_radar_runner as run
+        from alpha_session_execution import publish,safe_root
+        for depth in (0,237,474):
+            create,m,_=DepthSeedAdmissionTests().build(depth);s=create()
+            compact={'depth':depth,'expected_manifest':content_hash(m)}
+            root=Path(tempfile.mkdtemp(dir=os.environ['IIOS_GATEWAY_TEST_ROOT'],prefix='compact-'))
+            name='compact-'+str(depth)+'.json';fd=safe_root(root)
+            try:pin=publish(fd,name,compact)
+            finally:os.close(fd)
+            loaded=run.read_descriptor(root/name,pin)
+            self.assertEqual(run.regenerate_depth_seed(s.p,s.pins,s.full_parents,loaded),m)
+            self.assertLess((root/name).stat().st_size,8000000)
+            bad={**loaded,'expected_manifest':'0'*64}
+            with self.assertRaises(ValueError):run.regenerate_depth_seed(s.p,s.pins,s.full_parents,bad)
+            with self.assertRaises(ValueError):run.read_descriptor(root/name,'0'*64)
+            with self.assertRaises(ValueError):run.regenerate_depth_seed(s.p,s.pins,s.full_parents,{**loaded,'manifest':m})
+
+    def test_oversized_loader_still_rejects(self):
+        import alpha_radar_runner as run
+        root=Path(tempfile.mkdtemp(dir=os.environ['IIOS_GATEWAY_TEST_ROOT'],prefix='oversized-'));path=root/'oversized-timing.json'
+        with path.open('xb') as f:f.write(b' '*8000001)
+        with self.assertRaisesRegex(ValueError,'DESCRIPTOR_SIZE'):run.read_descriptor(path,'0'*64)
+
+    def test_nested_timing_and_failure_are_retained_without_addition(self):
+        import alpha_radar_runner as run
+        ticks=iter([10,20,30,40]);t=run.DepthTimings('worker',lambda:next(ticks))
+        def inner():raise ValueError('SYNTHETIC')
+        with self.assertRaises(ValueError):t.measure('REQUEST_EXECUTION',lambda:t.measure('RECOVERY',inner))
+        report=t.report();a,b=report['intervals']
+        self.assertEqual((a['start_ns'],a['end_ns']),(10,40));self.assertEqual(b['parent'],a['id'])
+        self.assertIn('NOT_ADDITIVE',report['accounting']);self.assertEqual(a['exclusive_ns'],20);self.assertEqual(b['exclusive_ns'],10)
+
+    def test_timing_rollback_invalid_stage_and_bound_rejected(self):
+        import alpha_radar_runner as run
+        for ticks in ([10,9],[0,800000000001],[True]):
+            it=iter(ticks);t=run.DepthTimings('worker',lambda:next(it))
+            with self.assertRaises(ValueError):t.measure('SEEDING',lambda:None)
+        with self.assertRaises(ValueError):run.DepthTimings('worker').measure('UNTRUSTED',lambda:None)
+
+    def test_supervisor_registration_and_cleanup_spans_preserve_calls(self):
+        import alpha_radar_runner as run
+        owned=run.DiagnosticOwnedProcesses.__new__(run.DiagnosticOwnedProcesses)
+        ticks=iter([1,2,3,4]);owned.depth_timings=run.DepthTimings('supervisor',lambda:next(ticks))
+        with patch.object(run.FullOwnedProcesses,'register',return_value='registered') as register, patch.object(run.FullOwnedProcesses,'cleanup',side_effect=ValueError('SYNTHETIC')) as cleanup:
+            self.assertEqual(owned.register('worker',None,deadline=1),'registered')
+            register.assert_called_once_with(owned,'worker',None,deadline=1)
+            with self.assertRaises(ValueError):owned.cleanup(None)
+            cleanup.assert_called_once_with(owned,None)
+        report=owned.depth_timings.report()
+        self.assertEqual([r['stage'] for r in report['intervals']],['SUPERVISOR_ACTIVITY','CLEANUP'])
+        self.assertEqual(report['actor'],'supervisor')
+
+
+class DepthOuterSupervisorTests(unittest.TestCase):
+    def fixture(self,depth=0,fail=None,exit_at=2):
+        import alpha_radar_runner as run
+        clock=[0];events=[]
+        class Backend:
+            def __init__(self):self.depth=depth
+            def prepare(self,start):events.append('prepare')
+            def launch(self):
+                events.append('launch')
+                if fail=='launch':raise ValueError('SYNTHETIC')
+            def register(self,*args):
+                events.append('register')
+                if fail=='identity':raise ValueError('PROCESS_IDENTITY')
+            def poll(self):return 0 if clock[0]>=exit_at*10**9 else None
+            def pump(self):
+                if fail=='stream':raise ValueError('DIAGNOSTIC_OVERFLOW')
+            def cancel(self):
+                events.append('cancel')
+                if fail=='identity':raise ValueError('PROCESS_IDENTITY')
+            def finish(self):
+                events.append('finish')
+                if fail or self.poll() is None:raise ValueError('OUTER_EXIT_UNVERIFIED')
+                return {'cleanup':True}
+            def export(self,result):
+                events.append('export')
+                if fail=='export':raise OSError('NOT_RETAINED')
+        return Backend(),clock,events,lambda:clock[0],lambda seconds:clock.__setitem__(0,clock[0]+int(seconds*10**9))
+
+    def test_three_sequential_cases_and_budgets(self):
+        import alpha_radar_runner as run
+        b,clock,events,now,pause=self.fixture();cases=[]
+        for depth in run.DEPTHS:
+            c,_,_,_,_=self.fixture(depth);c.poll=lambda:0;cases.append((depth,c))
+        result=run.run_depth_outer_series(cases,now=now,pause=pause)
+        self.assertEqual(result['classification'],'PASS');self.assertEqual(len(result['results']),3)
+        for row in result['results']:
+            self.assertEqual(row['export_deadline_ns']-row['start_ns'],800_000_000_000)
+            self.assertEqual(row['cleanup_deadline_ns']-row['work_deadline_ns'],180_000_000_000)
+
+    def test_work_timeout_retains_failure_and_exports_after_cleanup(self):
+        import alpha_radar_runner as run
+        b,c,e,now,pause=self.fixture(exit_at=450)
+        result=run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=2_400_000_000_000)
+        self.assertEqual(result['classification'],'FAILED');self.assertIn('cancel',e);self.assertIn('finish',e);self.assertEqual(e[-1],'export')
+        self.assertGreaterEqual(c[0],450_000_000_000);self.assertLess(c[0],620_000_000_000)
+
+    def test_partial_start_identity_stream_child_and_export_failures_stop_series(self):
+        import alpha_radar_runner as run
+        for failure in ('launch','identity','stream','export'):
+            b,c,e,now,pause=self.fixture(fail=failure)
+            second,_,e2,_,_=self.fixture(depth=237);third,_,e3,_,_=self.fixture(depth=474)
+            result=run.run_depth_outer_series([(0,b),(237,second),(474,third)],now=now,pause=pause)
+            self.assertEqual(result['classification'],'FAILED');self.assertEqual(len(result['results']),1)
+            self.assertIn('finish',e);self.assertIn('export',e);self.assertEqual(e2+e3,[])
+
+    def test_surviving_child_reaches_export_without_signal_or_green(self):
+        import alpha_radar_runner as run
+        b,c,e,now,pause=self.fixture(exit_at=1000)
+        result=run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=2_400_000_000_000)
+        self.assertEqual(result['classification'],'FAILED');self.assertEqual(result['signals'],0)
+        self.assertGreaterEqual(c[0],620_000_000_000);self.assertLess(c[0],800_000_000_000)
+        self.assertEqual(e[-1],'export')
+
+    def test_no_start_when_budget_or_depth_order_invalid(self):
+        import alpha_radar_runner as run
+        b,c,e,now,pause=self.fixture()
+        with self.assertRaises(ValueError):run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=799_000_000_000)
+        self.assertEqual(e,[])
+        with self.assertRaises(ValueError):run.run_depth_outer_series([(237,b)],now=now,pause=pause)
+
+    def test_export_deadline_and_clock_rollback_fail(self):
+        import alpha_radar_runner as run
+        b,c,e,now,pause=self.fixture(exit_at=0)
+        b.export=lambda result:c.__setitem__(0,801_000_000_000)
+        result=run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=2_400_000_000_000)
+        self.assertEqual(result['classification'],'FAILED');self.assertEqual(result['failures'][-1]['stage'],'EXPORT')
+        b,c,e,now,pause=self.fixture(exit_at=0);b.prepare=lambda start:c.__setitem__(0,-1)
+        result=run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=2_400_000_000_000)
+        self.assertEqual(result['classification'],'FAILED');self.assertNotIn('launch',e)
+
+    def test_unverified_outer_owner_cannot_cancel(self):
+        import alpha_radar_runner as run
+        b=run.DepthOuterCase('unused','a'*64,0);b.child=MagicMock();b.child.poll.return_value=None
+        with patch.object(run,'publish') as publish:
+            with self.assertRaises(ValueError):b.cancel()
+        publish.assert_not_called()
+
+    def test_depth_child_uses_descriptor_package_not_unbound_global(self):
+        import alpha_radar_runner as run
+        import ast,inspect,textwrap
+        tree=ast.parse(textwrap.dedent(inspect.getsource(run.diagnostic_child)))
+        calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='regenerate_depth_seed']
+        self.assertEqual(len(calls),1)
+        self.assertEqual(ast.dump(calls[0].args[0]),ast.dump(ast.parse("d['package']",mode='eval').body))
+
+    def test_actual_depth_child_branch_reaches_seed_session_without_native_calls(self):
+        import alpha_radar_runner as run
+        import time
+        package={'plan':{'rows':[{'valid_from':'synthetic'}]}}
+        d={'package':package,'runtime':{},'expected':{},'authorized_root':'synthetic',
+            'schema':'iios-local-depth-measurement-descriptor-v1','source_parent':'a'*64,
+            'measurement':{'depth':0,'expected_manifest':'b'*64},
+            'work_deadline_ns':time.monotonic_ns()+100_000_000_000,'cleanup_deadline_ns':time.monotonic_ns()+280_000_000_000}
+        start=time.monotonic_ns();phase={'descriptor_parent':content_hash(d),'role':'worker','start_ns':start,'deadline_ns':start+100_000_000_000}
+        d['work_deadline_ns']=phase['deadline_ns'];phase['descriptor_parent']=content_hash(d)
+        launch={**run.DIAG_FLAGS,'descriptor':d,'role':'worker','parent_pid':os.getppid(),'output_identity':[1,2],'phase':phase}
+        seed={'measured_at':'synthetic','parents':{}}
+        original_open=os.open
+        with patch.dict(os.environ,run.DIAG_ENV,clear=True), patch.object(run,'diagnostic_descriptor',return_value={}), patch.object(run,'verify_inputs',return_value={}), patch.object(run,'SyntheticCapability'), patch.object(run,'native_identity'), patch.object(run,'diagnostic_audit',return_value=(lambda *a:None,original_open)), patch.object(run.sys,'addaudithook'), patch.object(run.os,'open',original_open), patch.object(run,'full_startup',return_value={}), patch.object(run,'diagnostic_store',return_value='c'*64), patch.object(run,'diagnostic_read',return_value=({},'c'*64)), patch.object(run,'regenerate_depth_seed',return_value=seed) as regenerate, patch.object(run,'DepthMeasurementSession') as session:
+            self.assertEqual(run.diagnostic_child(launch,'c'*64),0)
+        regenerate.assert_called_once_with(package,{}, {'measurement_source':'a'*64},d['measurement'])
+        session.return_value.seed.assert_called_once();session.return_value.run.assert_called_once()
+
+
+class SeedReconciliationTests(unittest.TestCase):
+    def journal(self):
+        import alpha_radar_runner as run
+        root,p,r,e,_,_=FullSessionModeTests().inputs()
+        cap=admit(p,r,expected=e,authorized_root=root)
+        parents={**e,'seed_measurement':'a'*64}
+        manifest=run.reconciliation_seed_manifest(cap,parents)
+        journal=Path(p['plan']['root']);journal.mkdir(mode=0o700)
+        (journal/'day.lock').touch(mode=0o600)
+        fd=run.safe_root(journal)
+        try:
+            for item,row in zip(manifest['rows'],p['plan']['rows']):
+                Path(row['root']).mkdir(mode=0o700);child=run.safe_root(row['root'])
+                try:
+                    for dest,name,key in ((fd,f"{item['slot']}.reserved.json",'reservation'),
+                        (child,'ALPHA_VANTAGE.receipt.json','response'),
+                        (fd,f"{item['slot']}.complete.json",'completion')):
+                        doc=item[key]
+                        run.verify_depth_record(doc,content_hash(doc),parents,'SYNTHETIC_SEED')
+                        run.publish(dest,name,doc)
+                finally:os.close(child)
+        finally:os.close(fd)
+        return run,cap,parents,manifest
+
+    def test_complete_seed_reconciliation_zero_requests_and_cross_scope_rejection(self):
+        run,cap,parents,m=self.journal()
+        value=run.reconcile_seed_journal(cap,parents,m,content_hash(m))
+        self.assertEqual([value[k] for k in ('seed_reservations','seed_responses','seed_completions')],[475]*3)
+        self.assertEqual(value['requests_attempted'],0);self.assertEqual(value['requests_completed'],0)
+        self.assertFalse(value['production_qualified']);self.assertEqual(value['authority'],run.AUTHORITY)
+        forged={'classification':'FULL_SYNTHETIC_PASS','attempted':475,'completed':475,'reservations':475,
+            'receipt_parents':[content_hash(v['response']) for v in m['rows']]}
+        with self.assertRaises(ValueError):run.full_accounting(cap,parents,forged)
+        with self.assertRaises(ValueError):run.depth_seed_documents(cap.documents()[0],cap.documents()[2],parents,475)
+
+    def test_seed_hash_order_parent_and_content_mutations_rejected(self):
+        run,cap,parents,m=self.journal()
+        with self.assertRaises(ValueError):run.reconcile_seed_journal(cap,parents,m,'0'*64)
+        for mutate in (lambda x:x['rows'].reverse(),lambda x:x['rows'].pop(),
+                       lambda x:x['parents'].update(seed_measurement='b'*64),
+                       lambda x:x['rows'][237]['response']['value'].update(result='ALTERED')):
+            bad=deepcopy(m);mutate(bad)
+            with self.assertRaises(ValueError):run.reconcile_seed_journal(cap,parents,bad,content_hash(bad))
+
+    def test_seed_missing_altered_record_and_expired_deadline_rejected(self):
+        run,cap,parents,m=self.journal();original=run.read_record
+        def altered(fd,name,**kw):
+            doc=original(fd,name,**kw)
+            if name=='237.complete.json':doc['value']['previous']='0'*64
+            return doc
+        with patch.object(run,'read_record',side_effect=altered),self.assertRaises(ValueError):
+            run.reconcile_seed_journal(cap,parents,m,content_hash(m))
+        with patch.object(run,'read_record',side_effect=FileNotFoundError),self.assertRaises(FileNotFoundError):
+            run.reconcile_seed_journal(cap,parents,m,content_hash(m))
+        with patch.object(run,'read_record') as read,self.assertRaisesRegex(ValueError,'TEST_DEADLINE'):
+            run.reconcile_seed_journal(cap,parents,m,content_hash(m),check_deadline=lambda:run.require(False,'TEST_DEADLINE'))
+        read.assert_not_called()
+
+    def test_full_wrapper_keeps_full_verifier_and_never_accepts_seed_result(self):
+        import alpha_radar_runner as run
+        root,p,r,e,_,_=FullSessionModeTests().inputs();cap=admit(p,r,expected=e,authorized_root=root)
+        session={'classification':'FULL_SYNTHETIC_PASS','attempted':475,'completed':475,'reservations':475,
+                 'receipt_parents':[f'{i:064x}' for i in range(475)]}
+        with patch.object(run,'_reconcile_full_journal',return_value={'test':'ONLY_MOCKED'}) as traversal:
+            self.assertEqual(run.full_accounting(cap,e,session),{'test':'ONLY_MOCKED'})
+            self.assertIs(traversal.call_args.args[4],run.verify_full_receipt)
+            self.assertEqual(traversal.call_args.args[5],run.FULL_SCOPE)
+            for mutation in ({'classification':'SEED_RECONCILIATION_ONLY'}, {'attempted':0},
+                             {'completed':474}, {'receipt_parents':['0'*64]*475}):
+                traversal.reset_mock()
+                with self.assertRaises(ValueError):run.full_accounting(cap,e,{**session,**mutation})
+                traversal.assert_not_called()
