@@ -4441,3 +4441,117 @@ class SeedReconciliationTests(unittest.TestCase):
                 traversal.reset_mock()
                 with self.assertRaises(ValueError):run.full_accounting(cap,e,{**session,**mutation})
                 traversal.assert_not_called()
+
+
+class TailMeasurementAdapterTests(unittest.TestCase):
+    def test_manual_gate_is_exclusive_and_strict(self):
+        import alpha_radar_ci as ci
+        good={'inputs':{'tail_measurement_only':True}}
+        self.assertTrue(ci.tail_execution_allowed('workflow_dispatch',good,True))
+        for event in ('push','pull_request','schedule',''):
+            self.assertFalse(ci.tail_execution_allowed(event,good,True))
+        for value in (None,1,0,'TRUE','',[],{}):
+            self.assertFalse(ci.tail_execution_allowed('workflow_dispatch',{'inputs':{'tail_measurement_only':value}},True))
+        for name in ('full_session_only','lifecycle_only','native_startup','unknown'):
+            v=deepcopy(good);v['inputs'][name]=True
+            self.assertFalse(ci.tail_execution_allowed('workflow_dispatch',v,True))
+
+    def test_other_modes_reject_tail_mode(self):
+        import alpha_radar_ci as ci
+        for mode,gate in (('full_session_only',ci.full_execution_allowed),
+                ('lifecycle_only',ci.lifecycle_execution_allowed),('native_startup',ci.native_execution_allowed)):
+            self.assertFalse(gate('workflow_dispatch',{'inputs':{mode:True,'tail_measurement_only':True}},True))
+
+    def test_independent_allocations_and_one_request(self):
+        import alpha_radar_ci as ci
+        self.assertEqual(ci.TAIL_LIMITS['depth'],474)
+        self.assertEqual(ci.TAIL_LIMITS['actual_requests'],1)
+        self.assertEqual([ci.TAIL_LIMITS[k] for k in ('work_seconds','cleanup_seconds','export_seconds','total_seconds')], [440,180,180,800])
+        self.assertEqual((ci.FULL_WORK_SECONDS,ci.NATIVE_JOB_SECONDS,ci.CLEANUP_SECONDS,ci.EXPORT_SECONDS),(6000,7200,180,180))
+
+    def export_fixture(self):
+        import alpha_radar_runner as run
+        root=Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-tail-unit-',dir='/private/tmp'))
+        out=root/'one-request-output';out.mkdir();(root/'export').mkdir()
+        parents={'test':'a'*64}
+        doc=run.diagnostic_envelope({'event':'SAFE_SYNTHETIC'},parents)
+        path=out/'fs-final.json';path.write_bytes(canonical(doc));path.chmod(0o400)
+        return root,{'package':{'root':str(out)},'expected':{},'source_parent':'b'*64},parents,path
+
+    def test_export_keeps_diagnostic_scope_and_all_records(self):
+        import alpha_radar_ci as ci
+        import alpha_radar_runner as run
+        root,d,parents,path=self.export_fixture()
+        with patch.object(run,'diagnostic_descriptor',return_value=parents):
+            result=ci.export_tail_records(root,d,root/'export/tail-records',10,now=lambda:1)
+        self.assertEqual(result['files'],1)
+        copied=json.loads((root/'export/tail-records/record-00000.json').read_bytes())
+        self.assertEqual(copied,json.loads(path.read_bytes()))
+        with self.assertRaises(ValueError):run.verify_full_receipt(copied,content_hash(copied),parents)
+        with self.assertRaises(FileExistsError):
+            (root/'export/tail-records/inventory.json').open('x')
+
+    def test_export_deadline_and_tamper_rejection(self):
+        import alpha_radar_ci as ci
+        import alpha_radar_runner as run
+        for failure in ('deadline','hash','mode','symlink'):
+            root,d,parents,path=self.export_fixture()
+            if failure=='hash':
+                path.chmod(0o600);doc=json.loads(path.read_bytes());doc['value']={'event':'ALTERED'}
+                path.write_bytes(canonical(doc));path.chmod(0o400)
+            if failure=='mode':path.chmod(0o600)
+            if failure=='symlink':(path.parent/'fs-alias.json').symlink_to(path)
+            with patch.object(run,'diagnostic_descriptor',return_value=parents):
+                with self.assertRaises(ValueError):
+                    ci.export_tail_records(root,d,root/'export/tail-records',10,now=lambda:10 if failure=='deadline' else 1)
+
+    def test_post_tail_timing_is_separate_and_bounded(self):
+        import alpha_radar_runner as run
+        clock=iter([1,5]);t=run.DepthTimings('supervisor',clock=lambda:next(clock))
+        self.assertEqual(t.measure('POST_SESSION',lambda:42),42)
+        self.assertEqual(t.report()['intervals'][0]['exclusive_ns'],4)
+        self.assertIn('CONCURRENT_ACTORS_NOT_ADDITIVE',t.report()['accounting'])
+
+    def test_volume_records_are_inert_and_deterministic(self):
+        import alpha_radar_ci as ci
+        import alpha_radar_runner as run
+        value=ci.tail_volume_record(12,512,'a'*64)
+        self.assertEqual(value,ci.tail_volume_record(12,512,'a'*64))
+        self.assertEqual(len(value['padding']),512)
+        self.assertEqual(value['requests_attempted'],0)
+        self.assertFalse(value['production_qualified'])
+        self.assertEqual(value['kind'],'EXPORT_VOLUME_ONLY')
+        for args in ((-1,1,'a'*64),(50000,1,'a'*64),(1,-1,'a'*64),(1,8_000_001,'a'*64),(1,2,'wrong')):
+            with self.assertRaises(ValueError):ci.tail_volume_record(*args)
+        with self.assertRaises((ValueError,KeyError)):run.verify_full_receipt(value,content_hash(value),{})
+
+    def test_volume_export_cannot_ignore_deadline(self):
+        import alpha_radar_ci as ci
+        with patch.object(ci,'put') as put:
+            with self.assertRaises(ValueError):
+                ci.export_tail_volume(Path('/unused'),{'files':1,'bytes':1,'inventory_parent':'a'*64},10,now=lambda:10)
+            put.assert_not_called()
+
+    def test_tail_interval_rejects_clock_failures(self):
+        import alpha_radar_runner as run
+        self.assertEqual(run.bounded_tail_interval(1,2)['end_ns'],2)
+        for start,end in ((2,1),(-1,2),(1,float('nan')),(1,10**18),(True,2),(0,800_000_000_001)):
+            with self.assertRaises(ValueError):run.bounded_tail_interval(start,end)
+
+    def test_upload_reserve_does_not_borrow_work_time(self):
+        import alpha_radar_ci as ci
+        self.assertEqual(ci.tail_upload_minutes(180_000_000_000,1),2)
+        self.assertEqual(ci.tail_upload_minutes(180_000_000_000,105_000_000_000),1)
+        for deadline,now in ((180_000_000_000,121_000_000_000),(6000_000_000_000,1),
+                (10,10),(float('inf'),0),(-1,0)):
+            with self.assertRaises(ValueError):ci.tail_upload_minutes(deadline,now)
+
+    def test_wrong_source_blocks_before_native_backend(self):
+        import alpha_radar_ci as ci
+        import alpha_radar_runner as run
+        root=Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-tail-source-',dir='/private/tmp'))
+        (root/'export').mkdir()
+        (root/'export/tail-pins.json').write_text(json.dumps({'scope':ci.TAIL_SCOPE,'limits':ci.TAIL_LIMITS,'source_commit':'a'*40}))
+        with patch.object(ci,'tail_event'),patch.object(ci,'require_validation'),                patch.dict(os.environ,{'GITHUB_SHA':'b'*40}),patch.object(run,'DepthOuterCase') as backend:
+            with self.assertRaisesRegex(ValueError,'SOURCE_PIN'):ci.execute_tail(root)
+            backend.assert_not_called()

@@ -2804,8 +2804,14 @@ def regenerate_depth_seed(package, pins, parents, measurement):
     return seed
 
 
+def bounded_tail_interval(start, end):
+    require(type(start) is int and type(end) is int and 0<=start<=end<10**18 and
+        end-start<=800_000_000_000,'TIMING_BOUND')
+    return {'start_ns':start,'end_ns':end,'unit':'MONOTONIC_NANOSECONDS'}
+
+
 class DepthTimings:
-    STAGES=frozenset(('SEEDING','SEED_VERIFY','RECOVERY','PUBLICATION','REQUEST_EXECUTION','SUPERVISOR_ACTIVITY','CLEANUP'))
+    STAGES=frozenset(('SEEDING','SEED_VERIFY','RECOVERY','PUBLICATION','REQUEST_EXECUTION','SUPERVISOR_ACTIVITY','CLEANUP','POST_SESSION'))
     def __init__(self, actor, clock=time.monotonic_ns):
         require(actor in ('worker','supervisor'), 'TIMING_ACTOR')
         self.actor=actor; self.clock=clock; self.rows=[]; self.stack=[]; self.last=0
@@ -3075,11 +3081,15 @@ def diagnostic_child(launch,launch_parent):
                     expected_manifest=m['expected_manifest'],clock=lambda:at,wait=no_wait,
                     stop=stopped,work_deadline=d['work_deadline_ns']/1e9)
                 session.seed();value=session.run()
+                publication_start=time.monotonic_ns()
                 parent=diagnostic_store(cap,parents,'fs-session.json',value,logical_time=at)
             else:
                 session=DiagnosticSession(cap,parents,clock=lambda:at,wait=no_wait,stop=stopped)
                 value,parent=session.run()
             diagnostic_store(cap,parents,'fs-worker-complete.json',{'session_parent':parent,'launch_parent':launch_parent})
+            if d['schema']=='iios-local-depth-measurement-descriptor-v1':
+                diagnostic_store(cap,parents,'fs-worker-tail.json',{'scope':DEPTH_SCOPE,
+                    **bounded_tail_interval(publication_start,time.monotonic_ns()),'accounting':'PUBLICATION_ONLY_NOT_REQUEST_TIME'})
             while not stop():time.sleep(.05)
         # A failed diagnostic can still shut down cooperatively, without making
         # its failed request result successful.
@@ -3122,6 +3132,7 @@ def diagnostic_supervise(d):
         raise ValueError('OUTER_CANCELLED')
     def verify_self():
         require(asdict(inspect_macos(os.getpid()))==observed,'DIAGNOSTIC_SUPERVISOR')
+        checked_capability(cap)  # Match the full supervisor's admission cost and predicates.
 
     owned=DiagnosticOwnedProcesses(cap,parents)
     if d['schema']=='iios-local-depth-measurement-descriptor-v1': owned.depth_timings=DepthTimings('supervisor')
@@ -3164,6 +3175,7 @@ def diagnostic_supervise(d):
             check_outer_stop()
             require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE')
             owned.verify('worker');owned.verify('fixture');time.sleep(.05)
+        tail_start=time.monotonic_ns()
         fd=safe_root(out)
         try:doc=read_record(fd,'fs-worker-complete.json')
         finally:os.close(fd)
@@ -3190,16 +3202,27 @@ def diagnostic_supervise(d):
                 require(set(os.listdir(fd))=={'day.lock','0.reserved.json','0.complete.json','PREFLIGHT-0'} and
                     os.listdir(rf)==['ALPHA_VANTAGE.receipt.json'],'DIAGNOSTIC_ACCOUNTING')
             finally:os.close(fd);os.close(rf)
+        verify_self();owned.verify('fixture');owned.verify('worker')
+        diagnostic_store(cap,parents,'fs-supervisor-tail.json',{'scope':DEPTH_SCOPE,
+            **bounded_tail_interval(tail_start,time.monotonic_ns()),'accounting':'INCLUDES_RECONCILIATION_AND_NESTED_OWNERSHIP'})
     except BaseException as error:
         from alpha_session_execution import sanitized_execution_failure
         primary=diagnostic_failure(error,stage)
+    cleanup_start=time.monotonic_ns()
     cleanup=owned.cleanup(lambda:not listener_owners(p['fixture']['port']),
         supervisor_check=verify_self,deadline=d['cleanup_deadline_ns']/1e9)
+    cleanup_end=time.monotonic_ns()
     result={'classification':'DIAGNOSTIC_PASS' if primary is None and cleanup['clean'] else 'DIAGNOSTIC_FAILED',
         'primary_failure':primary,'session':session,'tls':tls,'cleanup':cleanup,
         'credential_accesses':0,'provider_requests':0,'worker_launches':int('worker' in owned.startup_pins)}
     if hasattr(owned,'depth_timings'): result['timings']=owned.depth_timings.report()
+    final_start=time.monotonic_ns()
     diagnostic_store(cap,parents,'fs-final.json',result)
+    final_end=time.monotonic_ns()
+    diagnostic_store(cap,parents,'fs-final-publication-timing.json',{'scope':DEPTH_SCOPE,
+        'cleanup':bounded_tail_interval(cleanup_start,cleanup_end),
+        'final_publication':bounded_tail_interval(final_start,final_end),
+        'limitation':'THIS_TIMING_RECORD_PUBLICATION_IS_INCLUDED_IN_OUTER_EXIT_NOT_THIS_SPAN'})
     return 0 if result['classification']=='DIAGNOSTIC_PASS' else 1
 
 

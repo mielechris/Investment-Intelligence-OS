@@ -101,6 +101,7 @@ def native_execution_allowed(event_name, event, explicit_request):
     inputs = event.get('inputs')
     if type(inputs) is not dict:
         return False
+    if type(inputs.get('tail_measurement_only',False)) not in (bool,str) or inputs.get('tail_measurement_only',False) not in (False,'false'): return False
     value = inputs.get('native_startup')
     return value is True or (type(value) is str and value == 'true')
 
@@ -370,13 +371,13 @@ def materialize(archive, destination, expected=ARCHIVE_SHA256):
                 put(path, content, 0o500 if source.mode & 0o111 else 0o400)
 
 
-def prepare(root, commit, *, full_session=False):
+def prepare(root, commit, *, full_session=False, tail_measurement=False):
     hosted(); root_check(root)
     require(re.fullmatch('[a-f0-9]{40}', commit) and os.environ['GITHUB_SHA'] == commit,
             'SOURCE_PIN')
     require(command(['/usr/bin/git', 'rev-parse', 'HEAD'], cwd=REPO).decode().strip() == commit and
             command(['/usr/bin/git', 'status', '--porcelain'], cwd=REPO) == b'', 'SOURCE_STATE')
-    runtime, out, exported = root/'runtime', root/('full-session-output' if full_session else 'execution-output'), root/'export'
+    runtime, out, exported = root/'runtime', root/('one-request-output' if tail_measurement else ('full-session-output' if full_session else 'execution-output')), root/'export'
     require(not out.exists() and not (root/'confinement-denied-input').exists(), 'ATTEMPT_ALREADY_EXISTS')
     materialize(root/'python-runtime.tar.gz', runtime)
     source = runtime/'source'; source.mkdir(mode=0o700)
@@ -480,9 +481,9 @@ def dependency_rows(runtime, path, listing, install_ids, load_commands, known):
             'dependencies':linked}
 
 
-def finalize(root, commit, *, full_session=False):
+def finalize(root, commit, *, full_session=False, tail_measurement=False):
     hosted(); root_check(root)
-    runtime=root/'runtime'; out=root/('full-session-output' if full_session else 'execution-output')
+    runtime=root/'runtime'; out=root/('one-request-output' if tail_measurement else ('full-session-output' if full_session else 'execution-output'))
     require(Path(sys.executable).resolve() == runtime/'python/bin/python3.13' and
             sys.prefix == str(runtime/'python') and platform.python_version() == PYTHON_VERSION,
             'RELOCATABLE_RUNTIME_IDENTITY')
@@ -552,6 +553,7 @@ def finalize(root, commit, *, full_session=False):
         'execution_mode':STARTUP_MODE,'http_requests':0,'worker_launches':0,'production':'NOT_QUALIFIED'})
 
     if full_session: prepare_full_descriptor(root,d)
+    if tail_measurement: prepare_tail(root,d)
 
 
 def offline_partition(suite):
@@ -1020,7 +1022,8 @@ def lifecycle_execution_allowed(event_name, event, explicit_request):
     return (type(values) is dict and values.get('lifecycle_only') in (True, 'true') and
             type(values.get('lifecycle_only')) in (bool, str) and
             type(values.get('native_startup', 'false')) in (bool, str) and
-            values.get('native_startup', 'false') in (False, 'false'))
+            values.get('native_startup', 'false') in (False, 'false') and
+            type(values.get('tail_measurement_only',False)) in (bool,str) and values.get('tail_measurement_only',False) in (False,'false'))
 
 
 def execute_lifecycle(root, *, explicit_request=False):
@@ -1146,11 +1149,11 @@ def export_dependencies(root):
 def full_execution_allowed(event_name,event,explicit_request):
     if event_name!='workflow_dispatch' or explicit_request is not True or type(event) is not dict: return False
     inputs=event.get('inputs')
-    if type(inputs) is not dict or set(inputs)-{'full_session_only','lifecycle_only','native_startup','expected_source_commit'}: return False
+    if type(inputs) is not dict or set(inputs)-{'full_session_only','lifecycle_only','native_startup','expected_source_commit','tail_measurement_only'}: return False
     def boolean(key,expected):
         value=inputs.get(key,False)
         return type(value) in (bool,str) and value in ((True,'true') if expected else (False,'false'))
-    return boolean('full_session_only',True) and boolean('native_startup',False) and boolean('lifecycle_only',False)
+    return boolean('full_session_only',True) and boolean('native_startup',False) and boolean('lifecycle_only',False) and boolean('tail_measurement_only',False)
 
 
 def full_event(explicit):
@@ -1666,25 +1669,211 @@ def profile_probe(root):
 
 
 
+# Separate measurement admission. It never creates full-session evidence.
+TAIL_SCOPE = 'CI_TAIL_EXPORT_DIAGNOSTIC_ONLY'
+TAIL_FLAGS = {'scope':TAIL_SCOPE,'production_qualified':False,'os_confinement':'UNQUALIFIED',
+    'provider_access':False,'credential_access':False,'broker_connected':False,
+    'paper_order_permission':False,'trade_execution_permission':False,'live_execution':False}
+TAIL_LIMITS = {'work_seconds':440, 'cleanup_seconds':180, 'export_seconds':180,
+               'total_seconds':800, 'depth':474, 'actual_requests':1,
+               'maximum_files':50000, 'maximum_bytes':256000000}
+
+
+def tail_execution_allowed(event_name, event, explicit):
+    if event_name!='workflow_dispatch' or explicit is not True or type(event) is not dict:
+        return False
+    inputs=event.get('inputs')
+    if type(inputs) is not dict or set(inputs)-{'tail_measurement_only','expected_source_commit',
+            'native_startup','lifecycle_only','full_session_only'}: return False
+    return type(inputs.get('tail_measurement_only')) in (bool,str) and inputs.get('tail_measurement_only') in (True,'true') and all(
+        type(inputs.get(k,False)) in (bool,str) and inputs.get(k,False) in (False,'false')
+        for k in ('native_startup','lifecycle_only','full_session_only'))
+
+
+def tail_event():
+    path=Path(os.environ['GITHUB_EVENT_PATH'])
+    require(not path.is_symlink() and path.stat().st_size<=1_000_000,'EVIDENCE_SCOPE')
+    def unique(pairs):
+        result={}
+        for k,v in pairs:
+            require(k not in result,'EVIDENCE_SCOPE');result[k]=v
+        return result
+    event=json.loads(path.read_bytes(),object_pairs_hook=unique)
+    require(tail_execution_allowed(os.environ.get('GITHUB_EVENT_NAME'),event,True),'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    require_execution_source(event['inputs'].get('expected_source_commit'),os.environ.get('GITHUB_SHA'),os.environ.get('GITHUB_REF'))
+    hosted()
+
+
+def prepare_tail(root, old):
+    from alpha_radar_runner import diagnostic_descriptor, depth_seed_documents, DIAG_SCOPE
+    rows={v['path']:v for v in old['runtime']['files']}
+    source={n:rows[n]['sha256'] for n in old['runtime']['source_files']}
+    now=time.monotonic_ns()
+    d={k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools')}
+    d.update(schema='iios-local-depth-measurement-descriptor-v1',scope=DIAG_SCOPE,
+        source_inventory=source,source_parent=digest(canonical(source)),
+        os_identity={'sysname':os.uname().sysname,'release':os.uname().release,'machine':os.uname().machine},
+        maximum_requests=1,work_deadline_ns=now+440_000_000_000,cleanup_deadline_ns=now+620_000_000_000)
+    seed=depth_seed_documents(d['package'],d['expected'],{**d['expected'],'measurement_source':d['source_parent']},474)
+    d['measurement']={'depth':474,'expected_manifest':digest(canonical(seed))}
+    diagnostic_descriptor(d)
+    document(root/'tail-template.json',d)
+    document(root/'export/tail-pins.json',{**TAIL_FLAGS,'source_commit':os.environ['GITHUB_SHA'],
+        'template_parent':digest(canonical(d)),'limits':TAIL_LIMITS,'seed_parent':d['measurement']['expected_manifest'],
+        'production_qualified':False,'provider_access':False,'credential_access':False})
+
+
+def export_tail_records(root, d, destination, deadline_ns, *, now=time.monotonic_ns):
+    """Same file/receipt protections as full export, with a FIXED diagnostic verifier.
+
+    All real lifecycle records and all seed/measured journal records are exported.
+    No full verifier accepts this scope. No record is relabeled as executed.
+    """
+    from alpha_radar_runner import diagnostic_descriptor,diagnostic_verify,verify_depth_record
+    root_check(root)
+    require(destination==root/'export/tail-records','EVIDENCE_NAME')
+    parents=diagnostic_descriptor(d)
+    journal_parents={**d['expected'],'measurement_source':d['source_parent']}
+    out=Path(d['package']['root']); manifest=[];total=0
+    require(not destination.exists(),'ATTEMPT_ALREADY_EXISTS')
+    destination.mkdir(mode=0o700)
+    for path in sorted(out.rglob('*.json')):
+        require(now()<deadline_ns,'EVIDENCE_FILE')
+        st=path.lstat();relative=path.relative_to(out).as_posix()
+        require(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_uid==os.getuid() and
+            stat.S_IMODE(st.st_mode)==0o400 and st.st_size<=8_000_000 and path.resolve()==path,'EVIDENCE_FILE')
+        raw=path.read_bytes();doc=json.loads(raw)
+        if path.parent==out:
+            require(re.fullmatch(r'fs-[a-z0-9-]+\.json',path.name),'EVIDENCE_NAME')
+            diagnostic_verify(doc,digest(raw),parents)
+        else:
+            plan=d['package']['plan'];slot=None
+            for i,row in enumerate(plan['rows'][:475]):
+                if path==Path(row['root'])/'ALPHA_VANTAGE.receipt.json' or path in (
+                        Path(plan['root'])/f'{i}.reserved.json',Path(plan['root'])/f'{i}.complete.json'):
+                    slot=i;break
+            require(slot is not None,'EVIDENCE_NAME')
+            verify_depth_record(doc,digest(raw),journal_parents,'SYNTHETIC_SEED' if slot<474 else 'MEASURED_REQUEST')
+        total+=len(raw);require(len(manifest)<50000 and total<=256000000,'EVIDENCE_FILE')
+        name=f'record-{len(manifest):05}.json';document(destination/name,doc)
+        manifest.append({'source_relative_path':relative,'export_path':name,'sha256':digest(raw),'size':len(raw)})
+    require(now()<deadline_ns,'EVIDENCE_FILE')
+    document(destination/'inventory.json',{**TAIL_FLAGS,'records':manifest,'bytes':total,
+        'executed_counts':'SEE_INDEPENDENTLY_VERIFIED_RESULT','seed_limit':1422,'production_qualified':False})
+    return {'files':len(manifest),'bytes':total,'inventory_parent':digest((destination/'inventory.json').read_bytes())}
+
+
+def tail_volume_record(index, padding_size, parent):
+    require(type(index) is int and 0<=index<50000 and type(padding_size) is int and
+        0<=padding_size<=8_000_000 and re.fullmatch('[a-f0-9]{64}',parent),'EVIDENCE_FILE')
+    # Deterministic inert bytes; not a fabricated process observation or request.
+    padding=''.join(digest(f'{index}:{i}'.encode()) for i in range((padding_size+63)//64))[:padding_size]
+    return {**TAIL_FLAGS,'kind':'EXPORT_VOLUME_ONLY','source_inventory_parent':parent,
+        'ordinal':index,'padding':padding,'requests_attempted':0,'production_qualified':False}
+
+
+def export_tail_volume(destination, counts, deadline_ns, *, now=time.monotonic_ns):
+    # Match the existing full export's documented maximum record count and bytes.
+    target_files=50000;target_bytes=256000000;total=counts['bytes'];start=now()
+    require(0<counts['files']<target_files and total<target_bytes,'EVIDENCE_FILE')
+    for i in range(counts['files'],target_files):
+        require(now()<deadline_ns,'EVIDENCE_FILE')
+        remaining=target_files-i;size=(target_bytes-total)//remaining
+        base=tail_volume_record(i,0,counts['inventory_parent']);overhead=len(canonical(base))
+        require(size>=overhead and size<=8_000_000,'EVIDENCE_FILE')
+        value=tail_volume_record(i,size-overhead,counts['inventory_parent']);raw=canonical(value)
+        require(len(raw)==size,'EVIDENCE_FILE')
+        put(destination/f'volume-{i:05}.json',raw);total+=len(raw)
+    require(total==target_bytes and now()<deadline_ns,'EVIDENCE_FILE')
+    return {'files':target_files,'bytes':total,'start_ns':start,'end_ns':now(),
+        'kind':'REAL_DIAGNOSTIC_RECORDS_PLUS_INERT_VOLUME','executed_requests_added':0,
+        'upload_timing':'OBSERVATION_NOT_GUARANTEE'}
+
+
+def tail_upload_minutes(deadline, now):
+    require(type(deadline) is int and type(now) is int and 0<=now<deadline<10**18,'EVIDENCE_FILE')
+    seconds=(deadline-now)//1_000_000_000
+    require(60<=seconds<=180,'EVIDENCE_FILE')
+    return seconds//60
+
+
+def execute_tail(root):
+    tail_event();root_check(root);require_validation(root)
+    pins=json.loads((root/'export/tail-pins.json').read_bytes())
+    require(pins['scope']==TAIL_SCOPE and pins['limits']==TAIL_LIMITS and
+        pins['source_commit']==os.environ['GITHUB_SHA'],'SOURCE_PIN')
+    prepared=json.loads((root/'export/prepared-pins.json').read_bytes())
+    old=json.loads((root/'descriptor.json').read_bytes())
+    require(digest(canonical(old))==prepared['descriptor_sha256'] and
+        old['runtime']==prepared['runtime'] and old['package']['source_commit']==os.environ['GITHUB_SHA'],'SOURCE_PIN')
+    template=json.loads((root/'tail-template.json').read_bytes())
+    require(digest(canonical(template))==pins['template_parent'] and
+        all(template[k]==old[k] for k in ('package','runtime','expected','authorized_root','native_tools')) and
+        template['measurement']=={'depth':474,'expected_manifest':pins['seed_parent']},'SOURCE_PIN')
+    source=root/'runtime/source';rows={r['path']:r for r in old['runtime']['files']}
+    require({p.name for p in source.iterdir()}==set(SOURCE_NAMES),'IMPORT_CLOSURE')
+    for name in SOURCE_NAMES:
+        path=source/name;st=path.lstat();row=rows['source/'+name]
+        relative=('tests/native/' if name.startswith('alpha_radar') else 'BACK END/backend/')+name
+        require(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_uid==os.getuid() and
+            not st.st_mode&0o222 and st.st_size==row['size'] and digest(path.read_bytes())==row['sha256']
+            and path.read_bytes()==(REPO/relative).read_bytes(),'IMPORT_CLOSURE')
+    sys.path.insert(0,str(source))
+    from alpha_radar_runner import DepthOuterCase,run_depth_outer_case
+    backend=DepthOuterCase(root/'tail-template.json',pins['template_parent'],474)
+    start=time.monotonic_ns()
+    result=run_depth_outer_case(backend,series_deadline=start+800_000_000_000)
+    document(root/'export/tail-result.json',{**TAIL_FLAGS,'result':result,
+        'production_qualified':False,'os_confinement':'UNQUALIFIED'})
+    # Failed cleanup still exports retained diagnostics where possible; never makes PASS.
+    export_start=time.monotonic_ns();deadline=min(result['export_deadline_ns'],export_start+180_000_000_000)
+    local_deadline=deadline-75_000_000_000  # Keep upload time INSIDE the 180s export allocation.
+    try:
+        counts=export_tail_records(root,backend.descriptor,root/'export/tail-records',local_deadline)
+        volume=export_tail_volume(root/'export/tail-records',counts,local_deadline)
+        end=time.monotonic_ns()
+        document(root/'export/tail-export.json',{**TAIL_FLAGS,'start_ns':export_start,'end_ns':end,
+            'deadline_ns':deadline,'remaining_upload_seconds':(deadline-end)//1_000_000_000,'volume':volume,'actual_record_volume':counts,
+            'upload':'PENDING_OBSERVATION','production_qualified':False,
+            'applicability':'ONLY_UP_TO_MEASURED_FILE_COUNT_AND_BYTES; NOT_A_HOSTED_THROUGHPUT_GUARANTEE'})
+        require(result['classification']=='PASS','EVIDENCE_FILE')
+    except Exception as error:
+        document(root/'export/tail-export-failure.json',{**TAIL_FLAGS,
+            'category':type(error).__name__ if type(error) in (ValueError,OSError,FileExistsError,TimeoutError) else 'UNCLASSIFIED_ERROR',
+            'raw_error_retained':False,'primary_result_preserved':True})
+        raise
+    finally:
+        minutes=tail_upload_minutes(deadline,time.monotonic_ns())
+        with open(os.environ['GITHUB_OUTPUT'],'a') as stream:
+            stream.write('upload_minutes='+str(minutes)+'\n')
+
+    # Local copy and upload share this one 180-second reserve. No work-time borrowing.
+
+
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session','validation-proof','accept-validation'))
+    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session','validation-proof','accept-validation','tail-measurement'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
     parser.add_argument('--native-startup', action='store_true', default=False)
     parser.add_argument('--lifecycle-only', action='store_true', default=False)
     parser.add_argument('--full-session-only',action='store_true',default=False)
+    parser.add_argument('--tail-measurement-only',action='store_true',default=False)
     parser.add_argument('--prepare-full-session',action='store_true',default=False)
     args=parser.parse_args();root=Path(args.root)
     try:
-        if args.phase not in ('execute', 'profile-probe', 'lifecycle', 'full-session'):
+        if args.phase not in ('execute', 'profile-probe', 'lifecycle', 'full-session', 'tail-measurement'):
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             sys.addaudithook(preparation_audit)
         require(not args.full_session_only or args.phase=='full-session','NATIVE_EXECUTION_NOT_AUTHORIZED')
         require(not args.prepare_full_session or args.phase in ('prepare','finalize'),'NATIVE_EXECUTION_NOT_AUTHORIZED')
         require(not ((args.full_session_only or args.prepare_full_session) and (args.native_startup or args.lifecycle_only)), 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        require(not args.tail_measurement_only or (args.phase in ('prepare','finalize','tail-measurement') and not (args.native_startup or args.lifecycle_only or args.full_session_only or args.prepare_full_session)), 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        if args.tail_measurement_only: tail_event()
         if args.prepare_full_session: full_event(True)
         require(not args.lifecycle_only or args.phase == 'lifecycle', 'NATIVE_EXECUTION_NOT_AUTHORIZED')
-        if args.phase == 'full-session':
+        if args.phase == 'tail-measurement':
+            require(args.tail_measurement_only,'NATIVE_EXECUTION_NOT_AUTHORIZED');execute_tail(root)
+        elif args.phase == 'full-session':
             require(not args.native_startup and not args.lifecycle_only,'NATIVE_EXECUTION_NOT_AUTHORIZED')
             execute_full(root,explicit_request=args.full_session_only)
         elif args.phase == 'lifecycle':
@@ -1698,6 +1887,7 @@ def main():
         elif args.phase == 'execute': execute(root, native_startup=args.native_startup)
         elif args.phase in ('prepare','finalize'):
             if args.prepare_full_session: globals()[args.phase](root,args.commit,full_session=True)
+            elif args.tail_measurement_only: globals()[args.phase](root,args.commit,tail_measurement=True)
             else: globals()[args.phase](root,args.commit)
         else: globals()[args.phase](root)
         return 0
@@ -1714,6 +1904,8 @@ def main():
                 os_confinement='UNQUALIFIED', provider_access=False, credential_access=False,
                 timing_proof='ACCELERATED_LOGICAL_TIME_ONLY', broker_connected=False,
                 paper_order_permission=False, trade_execution_permission=False, live_execution=False)
+        elif args.phase == 'tail-measurement':
+            failure.update(TAIL_FLAGS)
         elif args.phase == 'lifecycle':
             failure.update(scope='CI_NATIVE_LIFECYCLE_ONLY', production_qualified=False,
                 os_confinement='UNQUALIFIED', provider_access=False, credential_access=False,

@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      tail_measurement_only:
+        description: One depth-474 tail and complete lifecycle export diagnostic; never full acceptance
+        type: boolean
+        required: false
+        default: false
       expected_source_commit:
         description: Independently reviewed 40-character source commit; required for native execution
         type: string
@@ -149,7 +154,7 @@ jobs:
 
   native:
     needs: validation
-    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && (inputs.native_startup == true || inputs.lifecycle_only == true || inputs.full_session_only == true)
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.tail_measurement_only != true && (inputs.native_startup == true || inputs.lifecycle_only == true || inputs.full_session_only == true)
     runs-on: macos-26
     # Fresh prep <=300s; admission/startup/TLS 300s; real-clock 65s; work <=6000s (including final reconciliation);
     # cleanup 180s + export 180s + hard-stop margin 60s = 7085s < 120m; 115s remains unallocated.
@@ -244,3 +249,68 @@ jobs:
           path: ${{ env.IIOS_RADAR_CI_ROOT }}/export/
           if-no-files-found: error
           retention-days: 30
+
+  tail-measurement:
+    needs: validation
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.tail_measurement_only == true && inputs.native_startup != true && inputs.lifecycle_only != true && inputs.full_session_only != true
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      IIOS_EXPECTED_VALIDATION_SHA256: ${{ needs.validation.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Exclusive diagnostic preparation
+        timeout-minutes: 5
+        env:
+          IIOS_VALIDATION_PROOF: ${{ needs.validation.outputs.proof }}
+        shell: bash
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          root=$(mktemp -d /private/tmp/iios-provider-connection-source-tests-tail-ci-XXXXXXXX)
+          mkdir "$root/export"
+          chmod 700 "$root/export"
+          echo "IIOS_RADAR_CI_ROOT=$root" >> "$GITHUB_ENV"
+          python -B tests/native/alpha_radar_ci.py accept-validation --root "$root"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 --output "$root/python-runtime.tar.gz" 'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
+          python -B tests/native/alpha_radar_ci.py prepare --root "$root" --commit "$GITHUB_SHA" --tail-measurement-only
+          "$root/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize --root "$root" --commit "$GITHUB_SHA" --tail-measurement-only
+      - name: One depth-474 diagnostic and complete local export
+        id: measured
+        shell: bash
+        run: |
+          "$IIOS_RADAR_CI_ROOT/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py tail-measurement --tail-measurement-only --root "$IIOS_RADAR_CI_ROOT"
+      - name: Upload complete diagnostic evidence within remaining export reserve
+        id: uploaded
+        if: always() && steps.measured.outputs.upload_minutes != ''
+        timeout-minutes: ${{ fromJSON(steps.measured.outputs.upload_minutes) }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: alpha-radar-tail-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IIOS_RADAR_CI_ROOT }}/export/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record upload observation and enforce independent export reserve
+        if: always() && steps.measured.outputs.upload_minutes != ''
+        env:
+          UPLOAD_OUTCOME: ${{ steps.uploaded.outcome }}
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,json,time,pathlib
+          p=pathlib.Path(os.environ['IIOS_RADAR_CI_ROOT'])/'export/tail-export.json'
+          v=json.loads(p.read_bytes());end=time.monotonic_ns()
+          result={'scope':'CI_TAIL_EXPORT_DIAGNOSTIC_ONLY','upload_outcome':os.environ['UPLOAD_OUTCOME'],
+              'upload_and_step_transition_seconds':(end-v['end_ns'])/1e9,
+              'complete_export_elapsed_seconds':(end-v['start_ns'])/1e9,
+              'within_export_deadline':end<v['deadline_ns'],'timing':'OBSERVATION_NOT_GUARANTEE',
+              'production_qualified':False,'broker_connected':False,'paper_order_permission':False,
+              'trade_execution_permission':False,'live_execution':False}
+          print(json.dumps(result,sort_keys=True))
+          assert result['within_export_deadline'] and result['upload_outcome']=='success'
+          PYCODE
