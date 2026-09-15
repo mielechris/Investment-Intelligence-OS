@@ -1164,9 +1164,27 @@ class HostedPreparationTests(unittest.TestCase):
         self.assertNotIn('secrets.',text)
         self.assertNotIn('self-hosted',text)
         uses=re.findall(r'uses: ([^\n]+)',text)
-        self.assertEqual(len(uses),6)
+        expected_actions=[
+            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065',
+            'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
+        self.assertEqual(len(uses),9)
         self.assertEqual(len(set(uses)),3)
-        for value in set(uses): self.assertEqual(uses.count(value),2)
+        for value in expected_actions: self.assertEqual(uses.count(value),3)
+        jobs=re.split(r'^  ([a-z][a-z-]*):\s*$',text.split('\njobs:\n',1)[1],flags=re.MULTILINE)
+        self.assertEqual(jobs[1::2],['validation','native','tail-measurement'])
+        for name,body in zip(jobs[1::2],jobs[2::2]):
+            with self.subTest(job=name):
+                self.assertEqual(re.findall(r'uses: ([^\n]+)',body),expected_actions)
+                self.assertIn('runs-on: macos-26',body)
+                self.assertIn('persist-credentials: false',body)
+                if name!='validation':
+                    self.assertIn('needs: validation',body)
+                    self.assertIn("github.event_name == 'workflow_dispatch'",body)
+        self.assertIn('inputs.tail_measurement_only != true',jobs[4])
+        self.assertIn('inputs.tail_measurement_only == true',jobs[6])
+        for mode in ('native_startup','lifecycle_only','full_session_only'):
+            self.assertIn('inputs.'+mode+' != true',jobs[6])
         for value in uses:self.assertRegex(value,r'^actions/[a-z-]+@[a-f0-9]{40}$')
         self.assertLess(text.index('alpha_radar_ci.py offline'),text.index('alpha_radar_ci.py execute'))
         self.assertIn('/export/',text)
