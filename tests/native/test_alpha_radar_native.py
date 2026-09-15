@@ -4462,6 +4462,29 @@ class SeedReconciliationTests(unittest.TestCase):
 
 
 class TailMeasurementAdapterTests(unittest.TestCase):
+    def setUp(self):
+        import alpha_radar_ci as ci
+        self.registered_root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        self.production_root_check=ci.root_check
+        self.admitted_test_roots=set()
+
+    def exclusive_test_root(self, prefix):
+        import alpha_radar_ci as ci
+        self.production_root_check(self.registered_root)
+        root=Path(tempfile.mkdtemp(prefix=prefix,dir=self.registered_root))
+        self.admitted_test_roots.add(root)
+        if len(self.admitted_test_roots)==1:
+            def check(candidate):
+                self.production_root_check(self.registered_root)
+                self.assertIn(candidate,self.admitted_test_roots)
+                self.assertEqual(candidate.parent,self.registered_root)
+                self.assertFalse(candidate.is_symlink())
+                self.assertEqual(candidate.resolve(),candidate)
+                self.assertEqual(candidate.stat().st_uid,os.getuid())
+                self.assertEqual(candidate.stat().st_mode & 0o077,0)
+            self.enterContext(patch.object(ci,'root_check',side_effect=check))
+        return root
+
     def test_manual_gate_is_exclusive_and_strict(self):
         import alpha_radar_ci as ci
         good={'inputs':{'tail_measurement_only':True}}
@@ -4489,7 +4512,7 @@ class TailMeasurementAdapterTests(unittest.TestCase):
 
     def export_fixture(self):
         import alpha_radar_runner as run
-        root=Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-tail-unit-',dir='/private/tmp'))
+        root=self.exclusive_test_root('tail-unit-')
         out=root/'one-request-output';out.mkdir();(root/'export').mkdir()
         parents={'test':'a'*64}
         doc=run.diagnostic_envelope({'event':'SAFE_SYNTHETIC'},parents)
@@ -4567,7 +4590,7 @@ class TailMeasurementAdapterTests(unittest.TestCase):
     def test_wrong_source_blocks_before_native_backend(self):
         import alpha_radar_ci as ci
         import alpha_radar_runner as run
-        root=Path(tempfile.mkdtemp(prefix='iios-provider-connection-source-tests-tail-source-',dir='/private/tmp'))
+        root=self.exclusive_test_root('tail-source-')
         (root/'export').mkdir()
         (root/'export/tail-pins.json').write_text(json.dumps({'scope':ci.TAIL_SCOPE,'limits':ci.TAIL_LIMITS,'source_commit':'a'*40}))
         with patch.object(ci,'tail_event'),patch.object(ci,'require_validation'),                patch.dict(os.environ,{'GITHUB_SHA':'b'*40}),patch.object(run,'DepthOuterCase') as backend:
