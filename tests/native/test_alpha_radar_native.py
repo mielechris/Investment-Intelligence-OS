@@ -1168,14 +1168,14 @@ class HostedPreparationTests(unittest.TestCase):
             'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
             'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065',
             'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
-        self.assertEqual(len(uses),9)
+        self.assertEqual(len(uses),14)
         self.assertEqual(len(set(uses)),3)
-        for value in expected_actions: self.assertEqual(uses.count(value),3)
+        for value,count in zip(expected_actions,(4,4,6)): self.assertEqual(uses.count(value),count)
         jobs=re.split(r'^  ([a-z][a-z-]*):\s*$',text.split('\njobs:\n',1)[1],flags=re.MULTILINE)
-        self.assertEqual(jobs[1::2],['validation','native','tail-measurement'])
+        self.assertEqual(jobs[1::2],['validation','native','tail-measurement','throughput-measurement'])
         for name,body in zip(jobs[1::2],jobs[2::2]):
             with self.subTest(job=name):
-                self.assertEqual(re.findall(r'uses: ([^\n]+)',body),expected_actions)
+                self.assertEqual(re.findall(r'uses: ([^\n]+)',body),expected_actions if name!='throughput-measurement' else expected_actions[:2]+[expected_actions[2]]*3)
                 self.assertIn('runs-on: macos-26',body)
                 self.assertIn('persist-credentials: false',body)
                 if name!='validation':
@@ -4517,7 +4517,7 @@ class TailMeasurementAdapterTests(unittest.TestCase):
         parents={'test':'a'*64}
         doc=run.diagnostic_envelope({'event':'SAFE_SYNTHETIC'},parents)
         path=out/'fs-final.json';path.write_bytes(canonical(doc));path.chmod(0o400)
-        return root,{'package':{'root':str(out)},'expected':{},'source_parent':'b'*64},parents,path
+        return root,{'schema':'iios-local-depth-measurement-descriptor-v1','package':{'root':str(out)},'expected':{},'source_parent':'b'*64},parents,path
 
     def test_export_keeps_diagnostic_scope_and_all_records(self):
         import alpha_radar_ci as ci
@@ -4651,3 +4651,236 @@ class TailPrerequisiteRepairTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 run.run_depth_outer_case(b,now=now,pause=pause,series_deadline=end,canonical_start_ns=start)
             self.assertEqual(e,[])
+
+
+class ThroughputDiagnosticTests(unittest.TestCase):
+    def build(self,depth):
+        import alpha_radar_runner as run
+        base,_=OneRequestDiagnosticTests().session();parents=base.full_parents
+        binding=run.throughput_binding(base.p,base.pins,parents,depth)
+        seed=run.verify_throughput_binding(base.p,base.pins,parents,binding)
+        now=[utc(seed['measured_at'])];calls=[]
+        def exchange(cap,slot,when):
+            from urllib.parse import urlencode
+            calls.append(slot);status,body=response(cap,f'/slot/{slot}?'+urlencode({'at':when}))
+            return Response(status,body,when,when)
+        session=run.ThroughputSession(base.cap,parents,binding=binding,clock=lambda:now[0].isoformat(),
+            wait=lambda seconds:run.advance_throughput_clock(session,now,seconds),stop=lambda:False,
+            work_deadline=run.time.monotonic()+300,exchange=exchange)
+        return session,binding,calls
+
+    def test_six_requests_each_depth_exact_accounting_no_seed_dispatch(self):
+        import alpha_radar_runner as run
+        for depth in (0,237,469):
+            with self.subTest(depth=depth):
+                s,b,calls=self.build(depth);before=canonical(s.p);s.seed()
+                self.assertEqual(calls,[]);result=s.run()
+                self.assertEqual(result['classification'],'THROUGHPUT_PASS',result)
+                self.assertEqual(calls,list(range(depth,depth+6)))
+                with patch.object(run,'_reconcile_full_journal',wraps=run._reconcile_full_journal) as traversal:
+                    counts=run.verify_throughput_accounting(s.cap,b,result,s.full_parents)
+                    self.assertEqual(traversal.call_count,1 if depth==469 else 0)
+                self.assertEqual(counts,{'seed_records':depth*3,'seed_requests_attempted':0,
+                    'executed_reservations':6,'executed_responses':6,'executed_completions':6})
+                self.assertEqual(before,canonical(s.p));self.assertEqual(len(result['timing']['requests']),6)
+                self.assertTrue(all(r['unexplained_ns']>=0 for r in result['timing']['requests']))
+                with self.assertRaises(ValueError):s.run()
+                with self.assertRaises(ValueError):s.execute(s.request(depth+6 if depth<469 else 474),s.previous)
+                with self.assertRaises(ValueError):run.full_accounting(s.cap,s.full_parents,result)
+                with self.assertRaises(ValueError):run.verify_depth_accounting(s.cap,{'depth':depth,'expected_manifest':b['expected_manifest']},result,s.full_parents)
+
+    def test_window_mutations_and_seed_identity(self):
+        import alpha_radar_runner as run
+        s,b,calls=self.build(0)
+        for mutate in (lambda x:x.update(depth=474),lambda x:x.update(maximum_requests=7),
+            lambda x:x['slots'].reverse(),lambda x:x.update(rows_parent='0'*64),
+            lambda x:x.update(expected_manifest='0'*64),lambda x:x.update(plan_parent='0'*64),
+            lambda x:x.update(scope=run.FULL_SCOPE),lambda x:x['slots'].pop()):
+            bad=deepcopy(b);mutate(bad)
+            with self.assertRaises(ValueError):run.verify_throughput_binding(s.p,s.pins,s.full_parents,bad)
+        self.assertEqual(calls,[])
+
+    def test_missing_seed_prevents_first_reservation(self):
+        s,_,calls=self.build(237);s.seed()
+        (Path(s.p['plan']['root'])/'0.reserved.json').unlink()
+        result=s.run();self.assertEqual(result['classification'],'THROUGHPUT_FAILED')
+        self.assertEqual(calls,[])
+        self.assertFalse((Path(s.p['plan']['root'])/'237.reserved.json').exists())
+
+    def test_ambiguous_second_request_stops_without_retry(self):
+        s,_,calls=self.build(0);s.seed();original=s.exchange
+        def exchange(cap,slot,at):
+            if slot==1: calls.append(slot);raise TimeoutError('DO_NOT_RETAIN')
+            return original(cap,slot,at)
+        s.exchange=exchange;result=s.run()
+        self.assertEqual(calls,[0,1]);self.assertEqual(result['attempted'],2)
+        self.assertEqual(result['completed'],1);self.assertEqual(result['classification'],'THROUGHPUT_FAILED')
+        self.assertNotIn('DO_NOT_RETAIN',json.dumps(result))
+        self.assertTrue((Path(s.p['plan']['root'])/'1.reserved.json').exists())
+        self.assertFalse((Path(s.p['plan']['root'])/'2.reserved.json').exists())
+
+    def test_timing_partitions_nested_cost_and_rejects_rollback(self):
+        import alpha_radar_runner as run
+        ticks=iter([10,20,30,50,60,80]);t=run.ThroughputTimings(lambda:next(ticks))
+        t.request(0,lambda:t.measure('ADMISSION',lambda:None))
+        r=t.report()['requests'][0]
+        self.assertEqual(r['end_ns']-r['start_ns'],70)
+        self.assertEqual(sum(v['exclusive_ns'] for v in r['buckets'].values())+r['unexplained_ns'],70)
+        ticks=iter([3,2]);bad=run.ThroughputTimings(lambda:next(ticks))
+        with self.assertRaises(ValueError):bad.measure('RECOVERY',lambda:None)
+
+    def test_instrumentation_calls_original_and_restores_on_error(self):
+        import alpha_radar_runner as run
+        timing=run.ThroughputTimings()
+        with patch.object(run,'checked_capability',side_effect=ValueError('ADMISSION')) as original:
+            with self.assertRaisesRegex(ValueError,'ADMISSION'):
+                with run.ThroughputInstrumentation(timing):run.checked_capability(None)
+            self.assertIs(run.checked_capability,original);self.assertEqual(original.call_count,1)
+        self.assertEqual(timing.report()['buckets']['ADMISSION']['calls'],1)
+
+    def test_shared_full_supervisor_poll_and_failure_order(self):
+        import alpha_radar_runner as run
+        events=[];owned=MagicMock();owned.verify.side_effect=lambda role:events.append(role)
+        run.full_supervisor_poll(lambda:events.append('self'),owned,lambda seconds:events.append(seconds))
+        self.assertEqual(events,['self','fixture','worker',.2])
+        owned.reset_mock()
+        with self.assertRaises(ValueError):run.full_supervisor_poll(lambda:(_ for _ in ()).throw(ValueError('IDENTITY')),owned,lambda _:None)
+        owned.verify.assert_not_called()
+
+
+class HostedThroughputPreparationTests(unittest.TestCase):
+    def test_manual_gate_and_all_other_modes_are_mutually_exclusive(self):
+        import alpha_radar_ci as ci
+        good={'inputs':{'throughput_only':True,'expected_source_commit':'a'*40}}
+        self.assertTrue(ci.throughput_execution_allowed('workflow_dispatch',good,True))
+        for event in ('push','pull_request','schedule',''):
+            self.assertFalse(ci.throughput_execution_allowed(event,good,True))
+        for value in (None,1,0,'TRUE','',[],{}):
+            self.assertFalse(ci.throughput_execution_allowed('workflow_dispatch',{'inputs':{'throughput_only':value}},True))
+        for name,gate in [('native_startup',ci.native_execution_allowed),('lifecycle_only',ci.lifecycle_execution_allowed),
+                ('full_session_only',ci.full_execution_allowed),('tail_measurement_only',ci.tail_execution_allowed)]:
+            event=deepcopy(good);event['inputs'][name]=True
+            self.assertFalse(ci.throughput_execution_allowed('workflow_dispatch',event,True))
+            self.assertFalse(gate('workflow_dispatch',event,True))
+        bad=deepcopy(good);bad['inputs']['unexpected']=False
+        self.assertFalse(ci.throughput_execution_allowed('workflow_dispatch',bad,True))
+
+    def test_budget_includes_preparation_and_reserves_without_reset(self):
+        import alpha_radar_ci as ci
+        self.assertEqual(ci.throughput_budget(100,1,100_000_000_100),800_000_000_100)
+        for values in ((1,1,190_000_000_001),(1,1,440_000_000_001),(1,2,3),(True,1,3),(1,1,float('nan')),
+                (1_540_000_000_002,1,1_540_000_000_003)):
+            with self.assertRaises(ValueError):ci.throughput_budget(*values)
+
+    def test_throughput_cli_cannot_use_one_request_or_full_entry(self):
+        import alpha_radar_runner as run
+        d={'schema':run.THROUGHPUT_SCHEMA}
+        for mode in ('--local-one-request-only','--ci-full-session-only','--ci-lifecycle-only'):
+            with patch.object(run.sys,'argv',['runner',mode,'--descriptor','unused','--expected-descriptor','a'*64]), \
+                    patch.object(run,'read_descriptor',return_value=d),patch.object(run,'diagnostic_main') as dispatch:
+                with self.assertRaises(ValueError):run.main()
+                dispatch.assert_not_called()
+        with patch.object(run.sys,'argv',['runner','--ci-throughput-only','--local-one-request-only','--descriptor','unused','--expected-descriptor','a'*64]),patch.object(run,'read_descriptor') as read:
+            with self.assertRaises(ValueError):run.main()
+            read.assert_not_called()
+
+    def test_cross_scope_receipts_rejected(self):
+        import alpha_radar_runner as run
+        parents={'throughput_window':'a'*64};doc=run.diagnostic_envelope({'production_qualified':False},parents)
+        self.assertEqual(doc['scope'],run.THROUGHPUT_SCOPE)
+        self.assertEqual(run.diagnostic_verify(doc,content_hash(doc),parents),{'production_qualified':False})
+        with self.assertRaises(ValueError):run.diagnostic_verify(doc,content_hash(doc),{})
+        with self.assertRaises(ValueError):run.verify_full_receipt(doc,content_hash(doc),parents)
+        with self.assertRaises(ValueError):run.verify_lifecycle_receipt(doc,content_hash(doc),parents)
+        record=run.throughput_record({'slot':1},parents,'MEASURED_REQUEST')
+        with self.assertRaises(ValueError):run.verify_depth_record(record,content_hash(record),parents,'MEASURED_REQUEST')
+        bad=deepcopy(record);bad['value']['slot']=2
+        with self.assertRaises(ValueError):run.verify_throughput_record(bad,content_hash(bad),parents,'MEASURED_REQUEST')
+
+    def test_workflow_sequential_uploads_and_exact_case_selection(self):
+        import re
+        text=(Path(__file__).resolve().parents[2]/'.github/workflows/alpha-radar-native-diagnostics.yml').read_text()
+        body=text.split('\n  throughput-measurement:\n',1)[1]
+        self.assertIn('timeout-minutes: 40',body);self.assertIn('inputs.throughput_only == true',body)
+        self.assertNotIn('strategy:',body)
+        self.assertEqual(re.findall(r'id: measured(\d+)',body),['0','237','469'])
+        self.assertLess(body.index('id: uploaded0'),body.index('id: measured237'))
+        self.assertLess(body.index('id: uploaded237'),body.index('id: measured469'))
+        self.assertNotIn('--full-session-only',body);self.assertNotIn('--tail-measurement-only',body)
+        self.assertNotIn('secrets.',body);self.assertIn('persist-credentials: false',body)
+
+    def test_seed_transition_keeps_rolling_rate_and_exact_normal_rows(self):
+        import alpha_radar_runner as run
+        s,b,_=ThroughputDiagnosticTests().build(237)
+        seed=json.loads(s.seed_bytes);view=run.throughput_schedule(s.p,seed)
+        rate=run.FullPacing()
+        for row in seed['rows']:rate.reserve(utc(row['response']['value']['dispatch_time']).timestamp())
+        for actual,original in zip(view['rows'],s.p['plan']['rows'][237:243]):
+            self.assertEqual({k:v for k,v in actual.items() if k!='valid_from'},
+                {k:v for k,v in original.items() if k!='valid_from'})
+            self.assertGreaterEqual(utc(actual['valid_from']),utc(original['valid_from']))
+            self.assertLess(utc(actual['valid_from']),utc(original['expires_at']))
+            rate.reserve(utc(actual['valid_from']).timestamp())
+        self.assertEqual(b['rows_parent'],content_hash(s.p['plan']['rows'][237:243]))
+
+
+class ThroughputDescriptorTests(unittest.TestCase):
+    def descriptor(self,depth):
+        import alpha_radar_runner as run
+        root,p,r,e=fixture();out=Path(p['root']).with_name('throughput-output')
+        universe=p['plan']['universe'];proposal=schedule(universe,content_hash(universe),CALENDAR,content_hash(CALENDAR),
+            mode='FULL_OPPORTUNITY_RADAR',root=str(out/'journal'))
+        p['root']=str(out);p['plan']=radar_plan(universe,content_hash(universe),CALENDAR,content_hash(CALENDAR),root=str(out/'journal'),
+            opportunity_schedule=proposal,schedule_hash=content_hash(proposal));e['schedule']=content_hash(proposal);repin(p,r,e)
+        inventory={name:next(row['sha256'] for row in r['files'] if row['path']==name) for name in r['source_files']}
+        source_parent=content_hash(inventory);start=run.time.monotonic_ns()
+        d={'schema':run.THROUGHPUT_SCHEMA,'scope':run.THROUGHPUT_SCOPE,'maximum_requests':6,
+            'package':p,'runtime':r,'expected':e,'authorized_root':str(root),'native_tools':{},
+            'source_inventory':inventory,'source_parent':source_parent,
+            'os_identity':{'sysname':os.uname().sysname,'release':os.uname().release,'machine':os.uname().machine},
+            'work_deadline_ns':start+440_000_000_000,'cleanup_deadline_ns':start+620_000_000_000,
+            'hosted_context':{'source_commit':p['source_commit'],'run_id':'12345','run_attempt':'1',
+                'job':'throughput-measurement','ref':'refs/heads/feature/iios-provider-gateway-superbatch-1','event':'workflow_dispatch'}}
+        d['measurement']=run.throughput_binding(p,e,{**e,'measurement_source':source_parent},depth)
+        return d
+
+    def test_serialized_all_three_descriptors_and_old_mode_rejection(self):
+        import alpha_radar_runner as run
+        for depth in (0,237,469):
+            d=self.descriptor(depth);raw=canonical(d);self.assertLess(len(raw),8_000_000)
+            root=Path(d['authorized_root']);name='throughput-descriptor-'+str(depth)+'.json';fd=run.safe_root(root)
+            try:pin=run.publish(fd,name,d)
+            finally:os.close(fd)
+            loaded=run.read_descriptor(root/name,pin)
+            with patch.object(run,'verify_tools'):
+                parents=run.diagnostic_descriptor(loaded)
+                self.assertEqual(parents['throughput_window'],content_hash(d['measurement']))
+                bad=deepcopy(d);bad['schema']='iios-local-depth-measurement-descriptor-v1'
+                with self.assertRaises(ValueError):run.diagnostic_descriptor(bad)
+            self.assertFalse(Path(d['package']['root']).exists())
+
+    def test_wrong_context_window_source_runtime_and_duration_fail_before_output(self):
+        import alpha_radar_runner as run
+        d=self.descriptor(0)
+        mutations=[lambda v:v['hosted_context'].update(job='native'),lambda v:v['hosted_context'].update(run_attempt='2'),
+            lambda v:v['hosted_context'].update(source_commit='b'*40),lambda v:v['hosted_context'].update(event='push'),
+            lambda v:v.update(maximum_requests=475),lambda v:v.update(source_parent='0'*64),
+            lambda v:v['measurement']['slots'].reverse(),lambda v:v['expected'].update(runtime='0'*64),
+            lambda v:v.update(cleanup_deadline_ns=v['cleanup_deadline_ns']+1)]
+        for mutate in mutations:
+            bad=deepcopy(d);mutate(bad)
+            with patch.object(run,'verify_tools'),self.assertRaises(ValueError):run.diagnostic_descriptor(bad)
+        self.assertFalse(Path(d['package']['root']).exists())
+
+    def test_only_exact_throughput_child_command_is_admitted(self):
+        import alpha_radar_runner as run
+        d=self.descriptor(0);out=Path(d['package']['root']);runtime=Path(d['runtime']['root'])
+        argv=[str(runtime/d['runtime']['interpreter']),'-B',str(runtime/'source/alpha_radar_runner.py'),
+            '--ci-throughput-only','--child','worker','--descriptor',str(out/'fs-worker-launch.json'),
+            '--expected-descriptor','a'*64]
+        guard,_=run.diagnostic_audit(d,'supervisor',{'worker':argv},lambda:())
+        for bad in ([*argv[:3],'--ci-full-session-only',*argv[4:]],['/bin/sh','-c','false']):
+            with self.assertRaises(ValueError):guard('subprocess.Popen',(bad[0],bad,out,run.DIAG_ENV))
+        with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,out,{**run.DIAG_ENV,'HTTPS_PROXY':'INVALID'}))
+        guard('subprocess.Popen',(argv[0],argv,out,run.DIAG_ENV))
+        with self.assertRaises(ValueError):guard('subprocess.Popen',(argv[0],argv,out,run.DIAG_ENV))

@@ -95,6 +95,9 @@ def hosted():
 
 
 def native_execution_allowed(event_name, event, explicit_request):
+    if type(event) is dict and type(event.get('inputs')) is dict:
+        if event['inputs'].get('throughput_only',False) not in (False,'false') or type(event['inputs'].get('throughput_only',False)) not in (bool,str):return False
+        event={**event,'inputs':{k:v for k,v in event['inputs'].items() if k!='throughput_only'}}
     """Exact manual event AND explicit CLI request; absent/invalid values deny."""
     if event_name != 'workflow_dispatch' or explicit_request is not True or type(event) is not dict:
         return False
@@ -371,13 +374,13 @@ def materialize(archive, destination, expected=ARCHIVE_SHA256):
                 put(path, content, 0o500 if source.mode & 0o111 else 0o400)
 
 
-def prepare(root, commit, *, full_session=False, tail_measurement=False):
+def prepare(root, commit, *, full_session=False, tail_measurement=False, throughput_depth=None):
     hosted(); root_check(root)
     require(re.fullmatch('[a-f0-9]{40}', commit) and os.environ['GITHUB_SHA'] == commit,
             'SOURCE_PIN')
     require(command(['/usr/bin/git', 'rev-parse', 'HEAD'], cwd=REPO).decode().strip() == commit and
             command(['/usr/bin/git', 'status', '--porcelain'], cwd=REPO) == b'', 'SOURCE_STATE')
-    runtime, out, exported = root/'runtime', root/('one-request-output' if tail_measurement else ('full-session-output' if full_session else 'execution-output')), root/'export'
+    runtime, out, exported = root/'runtime', root/('throughput-output' if throughput_depth is not None else ('one-request-output' if tail_measurement else ('full-session-output' if full_session else 'execution-output'))), root/'export'
     require(not out.exists() and not (root/'confinement-denied-input').exists(), 'ATTEMPT_ALREADY_EXISTS')
     materialize(root/'python-runtime.tar.gz', runtime)
     source = runtime/'source'; source.mkdir(mode=0o700)
@@ -481,9 +484,9 @@ def dependency_rows(runtime, path, listing, install_ids, load_commands, known):
             'dependencies':linked}
 
 
-def finalize(root, commit, *, full_session=False, tail_measurement=False):
+def finalize(root, commit, *, full_session=False, tail_measurement=False, throughput_depth=None):
     hosted(); root_check(root)
-    runtime=root/'runtime'; out=root/('one-request-output' if tail_measurement else ('full-session-output' if full_session else 'execution-output'))
+    runtime=root/'runtime'; out=root/('throughput-output' if throughput_depth is not None else ('one-request-output' if tail_measurement else ('full-session-output' if full_session else 'execution-output')))
     require(Path(sys.executable).resolve() == runtime/'python/bin/python3.13' and
             sys.prefix == str(runtime/'python') and platform.python_version() == PYTHON_VERSION,
             'RELOCATABLE_RUNTIME_IDENTITY')
@@ -554,6 +557,7 @@ def finalize(root, commit, *, full_session=False, tail_measurement=False):
 
     if full_session: prepare_full_descriptor(root,d)
     if tail_measurement: prepare_tail(root,d)
+    if throughput_depth is not None: prepare_throughput(root,d,throughput_depth)
 
 
 def offline_partition(suite):
@@ -709,8 +713,9 @@ def import_validation(root):
     import base64
     root_check(root); hosted()
     job = os.environ.get('GITHUB_JOB')
-    require(job in ('native', 'tail-measurement'), 'VALIDATION_PARENT')
-    if job == 'tail-measurement':
+    require(job in ('native', 'tail-measurement', 'throughput-measurement'), 'VALIDATION_PARENT')
+    if job == 'throughput-measurement':throughput_event()
+    elif job == 'tail-measurement':
         tail_event()  # Exact manual diagnostic mode, source/ref and hosted identity.
     else:
         require(os.environ.get('GITHUB_JOB') == 'native', 'VALIDATION_PARENT')
@@ -1021,6 +1026,9 @@ def execute(root, *, native_startup=False):
 
 
 def lifecycle_execution_allowed(event_name, event, explicit_request):
+    if type(event) is dict and type(event.get('inputs')) is dict:
+        if event['inputs'].get('throughput_only',False) not in (False,'false') or type(event['inputs'].get('throughput_only',False)) not in (bool,str):return False
+        event={**event,'inputs':{k:v for k,v in event['inputs'].items() if k!='throughput_only'}}
     if event_name != 'workflow_dispatch' or explicit_request is not True or type(event) is not dict:
         return False
     values = event.get('inputs')
@@ -1152,6 +1160,9 @@ def export_dependencies(root):
 
 
 def full_execution_allowed(event_name,event,explicit_request):
+    if type(event) is dict and type(event.get('inputs')) is dict:
+        if event['inputs'].get('throughput_only',False) not in (False,'false') or type(event['inputs'].get('throughput_only',False)) not in (bool,str):return False
+        event={**event,'inputs':{k:v for k,v in event['inputs'].items() if k!='throughput_only'}}
     if event_name!='workflow_dispatch' or explicit_request is not True or type(event) is not dict: return False
     inputs=event.get('inputs')
     if type(inputs) is not dict or set(inputs)-{'full_session_only','lifecycle_only','native_startup','expected_source_commit','tail_measurement_only'}: return False
@@ -1685,6 +1696,9 @@ TAIL_LIMITS = {'work_seconds':440, 'cleanup_seconds':180, 'export_seconds':180,
 
 
 def tail_execution_allowed(event_name, event, explicit):
+    if type(event) is dict and type(event.get('inputs')) is dict:
+        if event['inputs'].get('throughput_only',False) not in (False,'false') or type(event['inputs'].get('throughput_only',False)) not in (bool,str):return False
+        event={**event,'inputs':{k:v for k,v in event['inputs'].items() if k!='throughput_only'}}
     if event_name!='workflow_dispatch' or explicit is not True or type(event) is not dict:
         return False
     inputs=event.get('inputs')
@@ -1734,9 +1748,10 @@ def export_tail_records(root, d, destination, deadline_ns, *, now=time.monotonic
     All real lifecycle records and all seed/measured journal records are exported.
     No full verifier accepts this scope. No record is relabeled as executed.
     """
-    from alpha_radar_runner import diagnostic_descriptor,diagnostic_verify,verify_depth_record
+    from alpha_radar_runner import diagnostic_descriptor,diagnostic_verify,verify_depth_record,verify_throughput_record,THROUGHPUT_SCHEMA
     root_check(root)
-    require(destination==root/'export/tail-records','EVIDENCE_NAME')
+    throughput=d['schema']==THROUGHPUT_SCHEMA
+    require(destination==root/('export/throughput-records' if throughput else 'export/tail-records'),'EVIDENCE_NAME')
     parents=diagnostic_descriptor(d)
     journal_parents={**d['expected'],'measurement_source':d['source_parent']}
     out=Path(d['package']['root']); manifest=[];total=0
@@ -1758,13 +1773,15 @@ def export_tail_records(root, d, destination, deadline_ns, *, now=time.monotonic
                         Path(plan['root'])/f'{i}.reserved.json',Path(plan['root'])/f'{i}.complete.json'):
                     slot=i;break
             require(slot is not None,'EVIDENCE_NAME')
-            verify_depth_record(doc,digest(raw),journal_parents,'SYNTHETIC_SEED' if slot<474 else 'MEASURED_REQUEST')
+            require(not throughput or slot<d['measurement']['depth']+6,'EVIDENCE_NAME')
+            (verify_throughput_record if throughput else verify_depth_record)(doc,digest(raw),journal_parents,
+                'SYNTHETIC_SEED' if slot<(d['measurement']['depth'] if throughput else 474) else 'MEASURED_REQUEST')
         total+=len(raw);require(len(manifest)<50000 and total<=256000000,'EVIDENCE_FILE')
         name=f'record-{len(manifest):05}.json';document(destination/name,doc)
         manifest.append({'source_relative_path':relative,'export_path':name,'sha256':digest(raw),'size':len(raw)})
     require(now()<deadline_ns,'EVIDENCE_FILE')
-    document(destination/'inventory.json',{**TAIL_FLAGS,'records':manifest,'bytes':total,
-        'executed_counts':'SEE_INDEPENDENTLY_VERIFIED_RESULT','seed_limit':1422,'production_qualified':False})
+    document(destination/'inventory.json',{**(THROUGHPUT_FLAGS if throughput else TAIL_FLAGS),'records':manifest,'bytes':total,
+        'executed_counts':'SEE_INDEPENDENTLY_VERIFIED_RESULT','seed_limit':d['measurement']['depth']*3 if throughput else 1422,'production_qualified':False})
     return {'files':len(manifest),'bytes':total,'inventory_parent':digest((destination/'inventory.json').read_bytes())}
 
 
@@ -1855,20 +1872,111 @@ def execute_tail(root):
     # Local copy and upload share this one 180-second reserve. No work-time borrowing.
 
 
+THROUGHPUT_FLAGS={**TAIL_FLAGS,'scope':'CI_SYNTHETIC_THROUGHPUT_DIAGNOSTIC_ONLY',
+    'timing_proof':'ACCELERATED_LOGICAL_TIME_ONLY'}
+
+
+def throughput_execution_allowed(event_name,event,explicit):
+    if event_name!='workflow_dispatch' or explicit is not True or type(event) is not dict:return False
+    inputs=event.get('inputs')
+    if type(inputs) is not dict or set(inputs)-{'throughput_only','expected_source_commit','tail_measurement_only',
+        'native_startup','lifecycle_only','full_session_only'}:return False
+    return type(inputs.get('throughput_only')) in (bool,str) and inputs.get('throughput_only') in (True,'true') and all(
+        type(inputs.get(k,False)) in (bool,str) and inputs.get(k,False) in (False,'false')
+        for k in ('tail_measurement_only','native_startup','lifecycle_only','full_session_only'))
+
+
+def throughput_event():
+    hosted();require(os.environ.get('GITHUB_JOB')=='throughput-measurement','VALIDATION_PARENT')
+    path=Path(os.environ['GITHUB_EVENT_PATH'])
+    require(not path.is_symlink() and path.stat().st_size<=1_000_000,'EVIDENCE_SCOPE')
+    def unique(pairs):
+        result={}
+        for k,v in pairs:require(k not in result,'EVIDENCE_SCOPE');result[k]=v
+        return result
+    event=json.loads(path.read_bytes(),object_pairs_hook=unique)
+    require(throughput_execution_allowed(os.environ.get('GITHUB_EVENT_NAME'),event,True),'NATIVE_EXECUTION_NOT_AUTHORIZED')
+    require_execution_source(event['inputs'].get('expected_source_commit'),os.environ.get('GITHUB_SHA'),os.environ.get('GITHUB_REF'))
+
+
+def throughput_budget(start,series_start,now):
+    require(all(type(v) is int and 0<v<10**18 for v in (start,series_start,now)) and
+        series_start<=start<=now and now+250_000_000_000<start+440_000_000_000 and
+        start+800_000_000_000<=series_start+2_340_000_000_000,'NATIVE_JOB_BUDGET')
+    return start+800_000_000_000
+
+
+def prepare_throughput(root,old,depth):
+    from alpha_radar_runner import diagnostic_descriptor,throughput_binding,THROUGHPUT_SCHEMA,THROUGHPUT_SCOPE
+    throughput_event();require(type(depth) is int and depth in (0,237,469),'EVIDENCE_SCOPE')
+    start=int(os.environ['IIOS_THROUGHPUT_CASE_START_NS']);series=int(os.environ['IIOS_THROUGHPUT_SERIES_START_NS'])
+    throughput_budget(start,series,time.monotonic_ns())
+    rows={v['path']:v for v in old['runtime']['files']};source={n:rows[n]['sha256'] for n in old['runtime']['source_files']}
+    d={k:old[k] for k in ('package','runtime','expected','authorized_root','native_tools')}
+    d.update(schema=THROUGHPUT_SCHEMA,scope=THROUGHPUT_SCOPE,maximum_requests=6,
+        source_inventory=source,source_parent=digest(canonical(source)),
+        os_identity={'sysname':os.uname().sysname,'release':os.uname().release,'machine':os.uname().machine},
+        work_deadline_ns=start+440_000_000_000,cleanup_deadline_ns=start+620_000_000_000,
+        hosted_context={'source_commit':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],
+            'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'job':os.environ['GITHUB_JOB'],
+            'ref':os.environ['GITHUB_REF'],'event':os.environ['GITHUB_EVENT_NAME']})
+    d['measurement']=throughput_binding(d['package'],d['expected'],{**d['expected'],'measurement_source':d['source_parent']},depth)
+    diagnostic_descriptor(d);document(root/'throughput-template.json',d)
+    document(root/'export/throughput-pins.json',{**THROUGHPUT_FLAGS,'source_commit':os.environ['GITHUB_SHA'],
+        'template_parent':digest(canonical(d)),'measurement':d['measurement'],'start_ns':start,'series_start_ns':series,
+        'limits':{'case_seconds':800,'series_seconds':2400,'work_including_preparation_seconds':440,
+            'cleanup_seconds':180,'export_seconds':180,'requests':6}})
+
+
+def execute_throughput(root,depth):
+    throughput_event();root_check(root);require_validation(root)
+    from alpha_radar_runner import ThroughputOuterCase,run_depth_outer_case,diagnostic_descriptor
+    pins=json.loads((root/'export/throughput-pins.json').read_bytes())
+    require(pins['source_commit']==os.environ['GITHUB_SHA'] and
+        all(pins[k]==v for k,v in THROUGHPUT_FLAGS.items()) and pins['measurement']['depth']==depth,'SOURCE_PIN')
+    start=pins['start_ns'];end=throughput_budget(start,pins['series_start_ns'],time.monotonic_ns())
+    template=json.loads((root/'throughput-template.json').read_bytes())
+    require(digest(canonical(template))==pins['template_parent'] and template['measurement']==pins['measurement'] and
+        template['work_deadline_ns']==start+440_000_000_000 and template['cleanup_deadline_ns']==start+620_000_000_000,'SOURCE_PIN')
+    require(template['hosted_context']=={'source_commit':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],
+        'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'job':os.environ['GITHUB_JOB'],
+        'ref':os.environ['GITHUB_REF'],'event':os.environ['GITHUB_EVENT_NAME']},'SOURCE_PIN')
+    diagnostic_descriptor(template)
+    backend=ThroughputOuterCase(root/'throughput-template.json',pins['template_parent'],depth)
+    result=run_depth_outer_case(backend,series_deadline=end,canonical_start_ns=start)
+    document(root/'export/throughput-result.json',{**THROUGHPUT_FLAGS,'depth':depth,'result':result})
+    export_start=time.monotonic_ns();deadline=min(end,export_start+180_000_000_000)
+    try:
+        counts=export_tail_records(root,backend.descriptor,root/'export/throughput-records',deadline-75_000_000_000)
+        document(root/'export/throughput-export.json',{**THROUGHPUT_FLAGS,'depth':depth,
+            'start_ns':export_start,'end_ns':time.monotonic_ns(),'deadline_ns':deadline,'volume':counts,
+            'upload':'PENDING_OBSERVATION'})
+        require(result['classification']=='PASS','EVIDENCE_FILE')
+    finally:
+        # A failure does not permit another case; the workflow exports this case only.
+        minutes=tail_upload_minutes(deadline,time.monotonic_ns())
+        with open(os.environ['GITHUB_OUTPUT'],'a') as stream:stream.write('upload_minutes='+str(minutes)+'\n')
+
+
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session','validation-proof','accept-validation','tail-measurement'))
+    parser.add_argument('phase',choices=('prepare','finalize','offline','execute','export','profile-probe','lifecycle','full-session','validation-proof','accept-validation','tail-measurement','throughput'))
     parser.add_argument('--root',required=True);parser.add_argument('--commit')
     parser.add_argument('--native-startup', action='store_true', default=False)
     parser.add_argument('--lifecycle-only', action='store_true', default=False)
     parser.add_argument('--full-session-only',action='store_true',default=False)
+    parser.add_argument('--throughput-only',action='store_true',default=False)
+    parser.add_argument('--throughput-depth',type=int,choices=(0,237,469))
     parser.add_argument('--tail-measurement-only',action='store_true',default=False)
     parser.add_argument('--prepare-full-session',action='store_true',default=False)
     args=parser.parse_args();root=Path(args.root)
     try:
-        if args.phase not in ('execute', 'profile-probe', 'lifecycle', 'full-session', 'tail-measurement'):
+        if args.phase not in ('execute', 'profile-probe', 'lifecycle', 'full-session', 'tail-measurement', 'throughput'):
             require(not args.native_startup, 'NATIVE_EXECUTION_NOT_AUTHORIZED')
             sys.addaudithook(preparation_audit)
+        require(not args.throughput_only or (args.phase in ('prepare','finalize','throughput') and args.throughput_depth in (0,237,469) and not (args.native_startup or args.lifecycle_only or args.full_session_only or args.prepare_full_session or args.tail_measurement_only)), 'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        require(args.throughput_depth is None or args.throughput_only,'NATIVE_EXECUTION_NOT_AUTHORIZED')
+        if args.throughput_only:throughput_event()
         require(not args.full_session_only or args.phase=='full-session','NATIVE_EXECUTION_NOT_AUTHORIZED')
         require(not args.prepare_full_session or args.phase in ('prepare','finalize'),'NATIVE_EXECUTION_NOT_AUTHORIZED')
         require(not ((args.full_session_only or args.prepare_full_session) and (args.native_startup or args.lifecycle_only)), 'NATIVE_EXECUTION_NOT_AUTHORIZED')
@@ -1876,7 +1984,9 @@ def main():
         if args.tail_measurement_only: tail_event()
         if args.prepare_full_session: full_event(True)
         require(not args.lifecycle_only or args.phase == 'lifecycle', 'NATIVE_EXECUTION_NOT_AUTHORIZED')
-        if args.phase == 'tail-measurement':
+        if args.phase == 'throughput':
+            require(args.throughput_only,'NATIVE_EXECUTION_NOT_AUTHORIZED');execute_throughput(root,args.throughput_depth)
+        elif args.phase == 'tail-measurement':
             require(args.tail_measurement_only,'NATIVE_EXECUTION_NOT_AUTHORIZED');execute_tail(root)
         elif args.phase == 'full-session':
             require(not args.native_startup and not args.lifecycle_only,'NATIVE_EXECUTION_NOT_AUTHORIZED')
@@ -1891,7 +2001,8 @@ def main():
         elif args.phase == 'accept-validation': import_validation(root)
         elif args.phase == 'execute': execute(root, native_startup=args.native_startup)
         elif args.phase in ('prepare','finalize'):
-            if args.prepare_full_session: globals()[args.phase](root,args.commit,full_session=True)
+            if args.throughput_only:globals()[args.phase](root,args.commit,throughput_depth=args.throughput_depth)
+            elif args.prepare_full_session: globals()[args.phase](root,args.commit,full_session=True)
             elif args.tail_measurement_only: globals()[args.phase](root,args.commit,tail_measurement=True)
             else: globals()[args.phase](root,args.commit)
         else: globals()[args.phase](root)
@@ -1911,6 +2022,7 @@ def main():
                 paper_order_permission=False, trade_execution_permission=False, live_execution=False)
         elif args.phase == 'tail-measurement':
             failure.update(TAIL_FLAGS)
+        elif args.phase == 'throughput':failure.update(THROUGHPUT_FLAGS)
         elif args.phase == 'lifecycle':
             failure.update(scope='CI_NATIVE_LIFECYCLE_ONLY', production_qualified=False,
                 os_confinement='UNQUALIFIED', provider_access=False, credential_access=False,

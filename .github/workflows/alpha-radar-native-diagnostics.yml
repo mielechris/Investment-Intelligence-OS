@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      throughput_only:
+        description: Three sequential six-request throughput diagnostics; never full-session acceptance
+        type: boolean
+        required: false
+        default: false
       tail_measurement_only:
         description: One depth-474 tail and complete lifecycle export diagnostic; never full acceptance
         type: boolean
@@ -154,7 +159,7 @@ jobs:
 
   native:
     needs: validation
-    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.tail_measurement_only != true && (inputs.native_startup == true || inputs.lifecycle_only == true || inputs.full_session_only == true)
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.throughput_only != true && inputs.tail_measurement_only != true && (inputs.native_startup == true || inputs.lifecycle_only == true || inputs.full_session_only == true)
     runs-on: macos-26
     # Fresh prep <=300s; admission/startup/TLS 300s; real-clock 65s; work <=6000s (including final reconciliation);
     # cleanup 180s + export 180s + hard-stop margin 60s = 7085s < 120m; 115s remains unallocated.
@@ -252,7 +257,7 @@ jobs:
 
   tail-measurement:
     needs: validation
-    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.tail_measurement_only == true && inputs.native_startup != true && inputs.lifecycle_only != true && inputs.full_session_only != true
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.throughput_only != true && inputs.tail_measurement_only == true && inputs.native_startup != true && inputs.lifecycle_only != true && inputs.full_session_only != true
     runs-on: macos-26
     timeout-minutes: 20
     env:
@@ -313,4 +318,244 @@ jobs:
               'trade_execution_permission':False,'live_execution':False}
           print(json.dumps(result,sort_keys=True))
           assert result['within_export_deadline'] and result['upload_outcome']=='success'
+          PYCODE
+
+  throughput-measurement:
+    needs: validation
+    if: github.ref == 'refs/heads/feature/iios-provider-gateway-superbatch-1' && github.event_name == 'workflow_dispatch' && inputs.throughput_only == true && inputs.tail_measurement_only != true && inputs.native_startup != true && inputs.lifecycle_only != true && inputs.full_session_only != true
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      IIOS_EXPECTED_VALIDATION_SHA256: ${{ needs.validation.outputs.proof_sha256 }}
+    steps:
+      - name: Bind the shared 2400-second clock before preparation
+        shell: bash
+        run: |
+          python3 -B - <<'PYCODE'
+          import os,time
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('IIOS_THROUGHPUT_SERIES_START_NS='+str(time.monotonic_ns())+'\n')
+          PYCODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Prepare depth 0 with fresh pins inside its 800-second bound
+        env:
+          IIOS_VALIDATION_PROOF: ${{ needs.validation.outputs.proof }}
+        shell: bash
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          export IIOS_THROUGHPUT_CASE_START_NS=$(python -B -c 'import time; print(time.monotonic_ns())')
+          root=$(mktemp -d /private/tmp/iios-provider-connection-source-tests-throughput-ci-XXXXXXXX)
+          mkdir "$root/export"
+          chmod 700 "$root/export"
+          echo "IIOS_THROUGHPUT_CASE_START_NS=$IIOS_THROUGHPUT_CASE_START_NS" >> "$GITHUB_ENV"
+          echo "IIOS_THROUGHPUT_ROOT_0=$root" >> "$GITHUB_ENV"
+          python -B tests/native/alpha_radar_ci.py accept-validation --root "$root"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 --output "$root/python-runtime.tar.gz" 'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
+          python -B tests/native/alpha_radar_ci.py prepare --root "$root" --commit "$GITHUB_SHA" --throughput-only --throughput-depth 0
+          "$root/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize --root "$root" --commit "$GITHUB_SHA" --throughput-only --throughput-depth 0
+      - name: Execute six requests at depth 0 and export verified evidence
+        id: measured0
+        shell: bash
+        run: |
+          "$IIOS_THROUGHPUT_ROOT_0/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py throughput --throughput-only --throughput-depth 0 --root "$IIOS_THROUGHPUT_ROOT_0"
+      - name: Preserve failure evidence even if depth 0 admission did not launch
+        id: exportgate0
+        if: always() && env.IIOS_THROUGHPUT_ROOT_0 != ''
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,time,json,pathlib,sys
+          sys.path.insert(0,'tests/native')
+          import alpha_radar_ci as ci
+          root=pathlib.Path(os.environ['IIOS_THROUGHPUT_ROOT_0']);ci.root_check(root)
+          p=root/'export/throughput-export.json';now=time.monotonic_ns()
+          if p.exists(): v=json.loads(p.read_bytes())
+          else:
+              v={**ci.THROUGHPUT_FLAGS,'start_ns':now,'end_ns':now,
+                  'deadline_ns':min(int(os.environ['IIOS_THROUGHPUT_CASE_START_NS'])+800000000000,now+180000000000),
+                  'execution_qualified':False,'reason':'INCOMPLETE_CASE_EVIDENCE'}
+              ci.document(root/'export/throughput-failure-export.json',v)
+          minutes=ci.tail_upload_minutes(v['deadline_ns'],time.monotonic_ns())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as stream:stream.write('upload_minutes='+str(minutes)+'\n')
+          PYCODE
+      - name: Upload depth 0 before proceeding to another case
+        id: uploaded0
+        if: always() && steps.exportgate0.outputs.upload_minutes != ''
+        timeout-minutes: ${{ fromJSON(steps.exportgate0.outputs.upload_minutes) }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: alpha-radar-throughput-0-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IIOS_THROUGHPUT_ROOT_0 }}/export/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify depth 0 upload and independent reserve
+        if: always() && steps.exportgate0.outputs.upload_minutes != ''
+        env:
+          UPLOAD_OUTCOME: ${{ steps.uploaded0.outcome }}
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,time,json,pathlib
+          root=pathlib.Path(os.environ['IIOS_THROUGHPUT_ROOT_0'])
+          p=root/'export/throughput-export.json'
+          if not p.exists():p=root/'export/throughput-failure-export.json'
+          v=json.loads(p.read_bytes());end=time.monotonic_ns()
+          value={'scope':'CI_SYNTHETIC_THROUGHPUT_DIAGNOSTIC_ONLY','depth':0,
+              'upload_seconds':(end-v['end_ns'])/1e9,'export_total_seconds':(end-v['start_ns'])/1e9,
+              'within_deadline':end<v['deadline_ns'],'upload_outcome':os.environ['UPLOAD_OUTCOME'],
+              'timing':'OBSERVATION_NOT_GUARANTEE','production_qualified':False,
+              'broker_connected':False,'paper_order_permission':False,'trade_execution_permission':False,'live_execution':False}
+          print(json.dumps(value,sort_keys=True))
+          assert value['within_deadline'] and value['upload_outcome']=='success'
+          assert end<int(os.environ['IIOS_THROUGHPUT_SERIES_START_NS'])+2400000000000
+          PYCODE
+      - name: Prepare depth 237 with fresh pins inside its 800-second bound
+        env:
+          IIOS_VALIDATION_PROOF: ${{ needs.validation.outputs.proof }}
+        shell: bash
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          export IIOS_THROUGHPUT_CASE_START_NS=$(python -B -c 'import time; print(time.monotonic_ns())')
+          root=$(mktemp -d /private/tmp/iios-provider-connection-source-tests-throughput-ci-XXXXXXXX)
+          mkdir "$root/export"
+          chmod 700 "$root/export"
+          echo "IIOS_THROUGHPUT_CASE_START_NS=$IIOS_THROUGHPUT_CASE_START_NS" >> "$GITHUB_ENV"
+          echo "IIOS_THROUGHPUT_ROOT_237=$root" >> "$GITHUB_ENV"
+          python -B tests/native/alpha_radar_ci.py accept-validation --root "$root"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 --output "$root/python-runtime.tar.gz" 'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
+          python -B tests/native/alpha_radar_ci.py prepare --root "$root" --commit "$GITHUB_SHA" --throughput-only --throughput-depth 237
+          "$root/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize --root "$root" --commit "$GITHUB_SHA" --throughput-only --throughput-depth 237
+      - name: Execute six requests at depth 237 and export verified evidence
+        id: measured237
+        shell: bash
+        run: |
+          "$IIOS_THROUGHPUT_ROOT_237/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py throughput --throughput-only --throughput-depth 237 --root "$IIOS_THROUGHPUT_ROOT_237"
+      - name: Preserve failure evidence even if depth 237 admission did not launch
+        id: exportgate237
+        if: always() && env.IIOS_THROUGHPUT_ROOT_237 != ''
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,time,json,pathlib,sys
+          sys.path.insert(0,'tests/native')
+          import alpha_radar_ci as ci
+          root=pathlib.Path(os.environ['IIOS_THROUGHPUT_ROOT_237']);ci.root_check(root)
+          p=root/'export/throughput-export.json';now=time.monotonic_ns()
+          if p.exists(): v=json.loads(p.read_bytes())
+          else:
+              v={**ci.THROUGHPUT_FLAGS,'start_ns':now,'end_ns':now,
+                  'deadline_ns':min(int(os.environ['IIOS_THROUGHPUT_CASE_START_NS'])+800000000000,now+180000000000),
+                  'execution_qualified':False,'reason':'INCOMPLETE_CASE_EVIDENCE'}
+              ci.document(root/'export/throughput-failure-export.json',v)
+          minutes=ci.tail_upload_minutes(v['deadline_ns'],time.monotonic_ns())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as stream:stream.write('upload_minutes='+str(minutes)+'\n')
+          PYCODE
+      - name: Upload depth 237 before proceeding to another case
+        id: uploaded237
+        if: always() && steps.exportgate237.outputs.upload_minutes != ''
+        timeout-minutes: ${{ fromJSON(steps.exportgate237.outputs.upload_minutes) }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: alpha-radar-throughput-237-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IIOS_THROUGHPUT_ROOT_237 }}/export/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify depth 237 upload and independent reserve
+        if: always() && steps.exportgate237.outputs.upload_minutes != ''
+        env:
+          UPLOAD_OUTCOME: ${{ steps.uploaded237.outcome }}
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,time,json,pathlib
+          root=pathlib.Path(os.environ['IIOS_THROUGHPUT_ROOT_237'])
+          p=root/'export/throughput-export.json'
+          if not p.exists():p=root/'export/throughput-failure-export.json'
+          v=json.loads(p.read_bytes());end=time.monotonic_ns()
+          value={'scope':'CI_SYNTHETIC_THROUGHPUT_DIAGNOSTIC_ONLY','depth':237,
+              'upload_seconds':(end-v['end_ns'])/1e9,'export_total_seconds':(end-v['start_ns'])/1e9,
+              'within_deadline':end<v['deadline_ns'],'upload_outcome':os.environ['UPLOAD_OUTCOME'],
+              'timing':'OBSERVATION_NOT_GUARANTEE','production_qualified':False,
+              'broker_connected':False,'paper_order_permission':False,'trade_execution_permission':False,'live_execution':False}
+          print(json.dumps(value,sort_keys=True))
+          assert value['within_deadline'] and value['upload_outcome']=='success'
+          assert end<int(os.environ['IIOS_THROUGHPUT_SERIES_START_NS'])+2400000000000
+          PYCODE
+      - name: Prepare depth 469 with fresh pins inside its 800-second bound
+        env:
+          IIOS_VALIDATION_PROOF: ${{ needs.validation.outputs.proof }}
+        shell: bash
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          export IIOS_THROUGHPUT_CASE_START_NS=$(python -B -c 'import time; print(time.monotonic_ns())')
+          root=$(mktemp -d /private/tmp/iios-provider-connection-source-tests-throughput-ci-XXXXXXXX)
+          mkdir "$root/export"
+          chmod 700 "$root/export"
+          echo "IIOS_THROUGHPUT_CASE_START_NS=$IIOS_THROUGHPUT_CASE_START_NS" >> "$GITHUB_ENV"
+          echo "IIOS_THROUGHPUT_ROOT_469=$root" >> "$GITHUB_ENV"
+          python -B tests/native/alpha_radar_ci.py accept-validation --root "$root"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-time 120 --output "$root/python-runtime.tar.gz" 'https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.13.15%2B20260901-aarch64-apple-darwin-install_only.tar.gz'
+          python -B tests/native/alpha_radar_ci.py prepare --root "$root" --commit "$GITHUB_SHA" --throughput-only --throughput-depth 469
+          "$root/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py finalize --root "$root" --commit "$GITHUB_SHA" --throughput-only --throughput-depth 469
+      - name: Execute six requests at depth 469 and export verified evidence
+        id: measured469
+        shell: bash
+        run: |
+          "$IIOS_THROUGHPUT_ROOT_469/runtime/python/bin/python3.13" -B tests/native/alpha_radar_ci.py throughput --throughput-only --throughput-depth 469 --root "$IIOS_THROUGHPUT_ROOT_469"
+      - name: Preserve failure evidence even if depth 469 admission did not launch
+        id: exportgate469
+        if: always() && env.IIOS_THROUGHPUT_ROOT_469 != ''
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,time,json,pathlib,sys
+          sys.path.insert(0,'tests/native')
+          import alpha_radar_ci as ci
+          root=pathlib.Path(os.environ['IIOS_THROUGHPUT_ROOT_469']);ci.root_check(root)
+          p=root/'export/throughput-export.json';now=time.monotonic_ns()
+          if p.exists(): v=json.loads(p.read_bytes())
+          else:
+              v={**ci.THROUGHPUT_FLAGS,'start_ns':now,'end_ns':now,
+                  'deadline_ns':min(int(os.environ['IIOS_THROUGHPUT_CASE_START_NS'])+800000000000,now+180000000000),
+                  'execution_qualified':False,'reason':'INCOMPLETE_CASE_EVIDENCE'}
+              ci.document(root/'export/throughput-failure-export.json',v)
+          minutes=ci.tail_upload_minutes(v['deadline_ns'],time.monotonic_ns())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as stream:stream.write('upload_minutes='+str(minutes)+'\n')
+          PYCODE
+      - name: Upload depth 469 before proceeding to another case
+        id: uploaded469
+        if: always() && steps.exportgate469.outputs.upload_minutes != ''
+        timeout-minutes: ${{ fromJSON(steps.exportgate469.outputs.upload_minutes) }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: alpha-radar-throughput-469-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IIOS_THROUGHPUT_ROOT_469 }}/export/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify depth 469 upload and independent reserve
+        if: always() && steps.exportgate469.outputs.upload_minutes != ''
+        env:
+          UPLOAD_OUTCOME: ${{ steps.uploaded469.outcome }}
+        shell: bash
+        run: |
+          python -B - <<'PYCODE'
+          import os,time,json,pathlib
+          root=pathlib.Path(os.environ['IIOS_THROUGHPUT_ROOT_469'])
+          p=root/'export/throughput-export.json'
+          if not p.exists():p=root/'export/throughput-failure-export.json'
+          v=json.loads(p.read_bytes());end=time.monotonic_ns()
+          value={'scope':'CI_SYNTHETIC_THROUGHPUT_DIAGNOSTIC_ONLY','depth':469,
+              'upload_seconds':(end-v['end_ns'])/1e9,'export_total_seconds':(end-v['start_ns'])/1e9,
+              'within_deadline':end<v['deadline_ns'],'upload_outcome':os.environ['UPLOAD_OUTCOME'],
+              'timing':'OBSERVATION_NOT_GUARANTEE','production_qualified':False,
+              'broker_connected':False,'paper_order_permission':False,'trade_execution_permission':False,'live_execution':False}
+          print(json.dumps(value,sort_keys=True))
+          assert value['within_deadline'] and value['upload_outcome']=='success'
+          assert end<int(os.environ['IIOS_THROUGHPUT_SERIES_START_NS'])+2400000000000
           PYCODE

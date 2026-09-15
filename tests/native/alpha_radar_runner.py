@@ -1603,6 +1603,10 @@ def advance_full_clock(session, now, seconds):
     """
     require(type(session) is FullSession and type(seconds) in (int,float) and 0 < seconds <= 1,
             'FULL_CLOCK')
+    return _advance_schedule_clock(session,now,seconds)
+
+
+def _advance_schedule_clock(session,now,seconds):
     require(0 <= session.next_slot < 475, 'FULL_REQUEST_ORDER')
     target = utc(session.p['plan']['rows'][session.next_slot]['valid_from'])
     if len(session.rate.starts) >= 3:
@@ -2483,6 +2487,11 @@ def full_publish_startup_ack(cap,parents,role,launch_parent,startup_parent,deadl
     return parent
 
 
+def full_supervisor_poll(verify_self, owned, pause=time.sleep):
+    """Identical per-poll admission/identity work for full and throughput runs."""
+    verify_self(); owned.verify('fixture'); owned.verify('worker'); pause(.2)
+
+
 def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
     budget=full_launch_budget(d)
     parents=full_descriptor(d); native_identity(cap)
@@ -2553,7 +2562,7 @@ def full_supervise(cap,d,*,popen=subprocess.Popen,cancelled=lambda:False):
         stage='SESSION_WAIT'
         while not (out/'fs-worker-complete.json').exists():
             running()
-            verify_self(); owned.verify('fixture'); owned.verify('worker'); time.sleep(.2)
+            full_supervisor_poll(verify_self,owned)
         # A completion references the independently admitted worker launch. Validate
         # every journal parent before accepting its session result.
         fd=safe_root(out)
@@ -2598,12 +2607,13 @@ DIAG_ENV = {**LIFECYCLE_ENV, '__CF_USER_TEXT_ENCODING': f'0x{os.getuid():X}:0x0:
 
 
 def diagnostic_descriptor(d):
+    throughput_mode = type(d) is dict and d.get('schema')==THROUGHPUT_SCHEMA
     depth_mode = type(d) is dict and d.get('schema')=='iios-local-depth-measurement-descriptor-v1'
     require(type(d) is dict and set(d)=={'schema','scope','package','runtime','expected',
         'authorized_root','native_tools','source_inventory','source_parent','os_identity',
-        'maximum_requests','work_deadline_ns','cleanup_deadline_ns'} | ({'measurement'} if depth_mode else set()),'DIAGNOSTIC_DESCRIPTOR')
-    require(d['schema'] in ('iios-local-one-request-descriptor-v1','iios-local-depth-measurement-descriptor-v1') and d['scope']==DIAG_SCOPE
-        and type(d['maximum_requests']) is int and d['maximum_requests']==1,'DIAGNOSTIC_DESCRIPTOR')
+        'maximum_requests','work_deadline_ns','cleanup_deadline_ns'} | ({'measurement'} if depth_mode or throughput_mode else set()) | ({'hosted_context'} if throughput_mode else set()),'DIAGNOSTIC_DESCRIPTOR')
+    require(d['schema'] in ('iios-local-one-request-descriptor-v1','iios-local-depth-measurement-descriptor-v1',THROUGHPUT_SCHEMA) and d['scope']==(THROUGHPUT_SCOPE if throughput_mode else DIAG_SCOPE)
+        and type(d['maximum_requests']) is int and d['maximum_requests']==(6 if throughput_mode else 1),'DIAGNOSTIC_DESCRIPTOR')
     require(d['os_identity']=={'sysname':os.uname().sysname,'release':os.uname().release,
         'machine':os.uname().machine} and os.uname().sysname=='Darwin','DIAGNOSTIC_OS')
     require(type(d['work_deadline_ns']) is int and type(d['cleanup_deadline_ns']) is int and
@@ -2618,20 +2628,30 @@ def diagnostic_descriptor(d):
     if depth_mode:
         regenerate_depth_seed(d['package'],d['expected'],
             {**d['expected'],'measurement_source':d['source_parent']},d['measurement'])
-    require(Path(d['package']['root']).name=='one-request-output','DIAGNOSTIC_OUTPUT')
-    return {**d['expected'],'diagnostic_descriptor':content_hash(d),'diagnostic_source':d['source_parent']}
+    if throughput_mode:
+        context=d['hosted_context']
+        require(type(context) is dict and set(context)=={'source_commit','run_id','run_attempt','job','ref','event'} and
+            context['source_commit']==d['package']['source_commit'] and re.fullmatch('[0-9]+',context['run_id']) and
+            context['run_attempt']=='1' and context['job']=='throughput-measurement' and
+            context['ref']=='refs/heads/feature/iios-provider-gateway-superbatch-1' and context['event']=='workflow_dispatch','THROUGHPUT_CONTEXT')
+        verify_throughput_binding(d['package'],d['expected'],
+            {**d['expected'],'measurement_source':d['source_parent']},d['measurement'])
+    require(Path(d['package']['root']).name==('throughput-output' if throughput_mode else 'one-request-output'),'DIAGNOSTIC_OUTPUT')
+    return {**d['expected'],'diagnostic_descriptor':content_hash(d),'diagnostic_source':d['source_parent'],
+        **({'throughput_window':content_hash(d['measurement'])} if throughput_mode else {})}
 
 
 def diagnostic_envelope(value,parents,*,logical_time=None):
     doc=full_envelope(value,parents,logical_time=logical_time)
     doc.pop('content_hash');doc.update(DIAG_FLAGS)
+    if 'throughput_window' in parents: doc['scope']=THROUGHPUT_SCOPE
     return {**doc,'content_hash':content_hash(doc)}
 
 
 def diagnostic_verify(doc,expected,parents):
     require(content_hash(doc)==expected and doc['parents']==parents and
         doc['content_hash']==content_hash({k:v for k,v in doc.items() if k!='content_hash'}) and
-        all(type(doc[k]) is type(v) and doc[k]==v for k,v in DIAG_FLAGS.items()),'DIAGNOSTIC_RECEIPT')
+        all(type(doc[k]) is type(v) and doc[k]==(THROUGHPUT_SCOPE if k=='scope' and 'throughput_window' in parents else v) for k,v in DIAG_FLAGS.items()),'DIAGNOSTIC_RECEIPT')
     require(set(doc)=={'schema',*DIAG_FLAGS,'parents','logical_time','actual_utc',
         'monotonic_seconds','value','content_hash'},'DIAGNOSTIC_RECEIPT')
     return doc['value']
@@ -2728,7 +2748,7 @@ def depth_seed_documents(p, pins, parents, depth):
     return _depth_seed_documents(p,pins,parents,depth)
 
 
-def _depth_seed_documents(p, pins, parents, depth):
+def _depth_seed_documents(p, pins, parents, depth, *, record=depth_record, scope=DEPTH_SCOPE):
     require(type(depth) is int and 0<=depth<=475, 'SEED_DEPTH')
     full_package(p, pins)
     require(type(parents) is dict and all(parents.get(k) == v for k,v in pins.items()), 'SEED_PARENTS')
@@ -2741,14 +2761,14 @@ def _depth_seed_documents(p, pins, parents, depth):
         return target
     for i, row in enumerate(p['plan']['rows'][:depth]):
         reservation = {'plan': pins['plan'], 'slot': i, 'source_commit': p['source_commit'], 'previous': previous}
-        reserved = depth_record(reservation, parents, 'SYNTHETIC_SEED')
+        reserved = record(reservation, parents, 'SYNTHETIC_SEED')
         # Use the ordinary coverage/freshness validator on explicitly synthetic
         # data. These fields satisfy journal replay, never evidence of a wire call.
         target = eligible(row); starts.append(target); at = target.isoformat()
         checks = summarize({'data':[{'symbol': s, 'timestamp':at, 'open':'100',
             'high':'101','low':'99','close':'100','volume':1000} for s in row['symbols']]},
             row['symbols'], received_at=at, maximum_age_seconds=60)
-        receipt = {'scope': DEPTH_SCOPE, 'role': DEPTH_SCOPE, 'authority': AUTHORITY,
+        receipt = {'scope': scope, 'role': scope, 'authority': AUTHORITY,
             'source_commit':p['source_commit'], 'root':row['root'],
             'parents':{**pins, 'slot':content_hash({'slot':i,'row':row}), 'reservation':content_hash(reserved)},
             'result':'OBSERVED', 'bulk_checks':checks, 'dispatch_time':at, 'response_time':at,
@@ -2756,12 +2776,12 @@ def _depth_seed_documents(p, pins, parents, depth):
             'dispatch_monotonic':None, 'response_monotonic':None,
             'retry_count':0, 'credential_selector_access_count':0,
             'seed_only':True, 'requests_attempted':0, 'billing':'SYNTHETIC_NO_CHARGE'}
-        response = depth_record(receipt, parents, 'SYNTHETIC_SEED')
-        complete = depth_record({'slot':i,'previous':previous,'reservation':content_hash(reserved),
+        response = record(receipt, parents, 'SYNTHETIC_SEED')
+        complete = record({'slot':i,'previous':previous,'reservation':content_hash(reserved),
             'receipt':content_hash(response),'result':'OBSERVED'}, parents, 'SYNTHETIC_SEED')
         rows.append({'slot':i,'reservation':reserved,'response':response,'completion':complete})
         previous = content_hash(complete)
-    return {'schema':'iios-depth-seeds-v1','scope':DEPTH_SCOPE,'depth':depth,
+    return {'schema':'iios-depth-seeds-v1','scope':scope,'depth':depth,
         'parents':parents,'source_commit':p['source_commit'],'plan_parent':pins['plan'],
         'rows':rows,'last_completion_parent':previous,'requests_attempted':0,
         'seed_records':depth*3,'authority':AUTHORITY,
@@ -2846,12 +2866,15 @@ class DepthMeasurementSession(FullSession):
     This API cannot launch children. Every read retains ordinary journal checks.
     """
     receipt_scope = DEPTH_SCOPE
+    seed_factory = staticmethod(depth_seed_manifest)
+    record_verifier = staticmethod(verify_depth_record)
+    measured_count = 1
 
     def __init__(self, cap, parents, *, manifest, expected_manifest, clock, wait,
                  stop, work_deadline, exchange=fixture_exchange):
         require(type(expected_manifest) is str and re.fullmatch('[a-f0-9]{64}',expected_manifest), 'SEED_PIN')
         require(content_hash(manifest) == expected_manifest, 'SEED_PIN')
-        require(manifest == depth_seed_manifest(cap, parents, manifest['depth']), 'SEED_MANIFEST')
+        require(manifest == self.seed_factory(cap, parents, manifest['depth']), 'SEED_MANIFEST')
         require(type(work_deadline) in (int,float) and 0 < work_deadline < 10**12, 'SEED_DEADLINE')
         super().__init__(cap, parents, clock=clock, wait=wait, stop=stop,
             exchange=exchange, work_deadline=work_deadline)
@@ -2886,9 +2909,9 @@ class DepthMeasurementSession(FullSession):
         self.check_work(); start = time.monotonic()
         manifest = json.loads(self.seed_bytes)
         require(content_hash(manifest) == self.seed_parent and
-            manifest == depth_seed_manifest(self.cap,self.full_parents,self.depth), 'SEED_MANIFEST')
+            manifest == self.seed_factory(self.cap,self.full_parents,self.depth), 'SEED_MANIFEST')
         journal = Path(self.p['plan']['root']); journal.mkdir(mode=0o700)
-        for row in self.p['plan']['rows'][:self.depth+1]: Path(row['root']).mkdir(mode=0o700)
+        for row in self.p['plan']['rows'][:self.depth+self.measured_count]: Path(row['root']).mkdir(mode=0o700)
         fd = self.open_root(journal)
         try:
             for item in manifest['rows']:
@@ -2896,7 +2919,7 @@ class DepthMeasurementSession(FullSession):
                 try:
                     for dest,name,key in ((fd,f'{i}.reserved.json','reservation'),
                         (child,'ALPHA_VANTAGE.receipt.json','response'),(fd,f'{i}.complete.json','completion')):
-                        doc = item[key]; verify_depth_record(doc,content_hash(doc),self.full_parents,'SYNTHETIC_SEED')
+                        doc = item[key]; self.record_verifier(doc,content_hash(doc),self.full_parents,'SYNTHETIC_SEED')
                         self.verify_fd(dest); publish(dest,name,doc)
                         self.documents[canonical(doc['value'])] = doc
                         self.read(dest,name,expected_hash=content_hash(doc))
@@ -2978,6 +3001,231 @@ def verify_depth_accounting(cap, measurement, result, parents):
     return {'seed_records':depth*3,'executed_reservations':1,'executed_responses':1,'executed_completions':1}
 
 
+# Separately admitted six-request diagnostic. The accepted 475-row package is immutable.
+THROUGHPUT_SCOPE = 'CI_SYNTHETIC_THROUGHPUT_DIAGNOSTIC_ONLY'
+THROUGHPUT_SCHEMA = 'iios-throughput-descriptor-v1'
+THROUGHPUT_DEPTHS = (0, 237, 469)
+
+
+def throughput_record(value, parents, origin):
+    doc=depth_record(value,parents,origin)
+    doc.pop('content_hash');doc.update(scope=THROUGHPUT_SCOPE,schema='iios-throughput-record-v1',
+        timing_proof=FULL_TIMING)
+    return {**doc,'content_hash':content_hash(doc)}
+
+
+def verify_throughput_record(doc, expected, parents, origin):
+    require(type(doc) is dict and content_hash(doc)==expected and
+        doc==throughput_record(doc['value'],parents,origin),'THROUGHPUT_RECORD')
+    return doc['value']
+
+
+def throughput_seed(cap, parents, depth):
+    p,_,pins=checked_capability(cap)
+    return throughput_seed_documents(p,pins,parents,depth)
+
+
+def throughput_seed_documents(p,pins,parents,depth):
+    require(type(depth) is int and depth in THROUGHPUT_DEPTHS,'THROUGHPUT_DEPTH')
+    return _depth_seed_documents(p,pins,parents,depth,record=throughput_record,scope=THROUGHPUT_SCOPE)
+
+
+def throughput_binding(p,pins,parents,depth):
+    seed=throughput_seed_documents(p,pins,parents,depth)
+    return {'schema':'iios-throughput-window-v1','scope':THROUGHPUT_SCOPE,'depth':depth,
+        'slots':list(range(depth,depth+6)),'maximum_requests':6,
+        'rows_parent':content_hash(p['plan']['rows'][depth:depth+6]),
+        'plan_parent':pins['plan'],'expected_manifest':content_hash(seed)}
+
+
+def verify_throughput_binding(p,pins,parents,binding):
+    require(type(binding) is dict and binding==throughput_binding(p,pins,parents,binding.get('depth')),
+        'THROUGHPUT_BINDING')
+    return throughput_seed_documents(p,pins,parents,binding['depth'])
+
+
+class ThroughputTimings:
+    """Bounded aggregate in-memory spans. No per-journal-record diagnostic writes.
+
+    Exclusive buckets partition the measured actor's elapsed time. Actor totals
+    may overlap; supervisor elapsed must never be added to worker elapsed.
+    """
+    STAGES=frozenset(('REQUEST','ADMISSION','RECOVERY','TRANSPORT','PUBLICATION','SUPERVISOR'))
+    def __init__(self,clock=time.monotonic_ns):
+        self.clock=clock;self.last=0;self.stack=[];self.buckets={};self.requests=[]
+    def tick(self):
+        n=self.clock();require(type(n) is int and self.last<=n<10**18,'TIMING_CLOCK');self.last=n;return n
+    def measure(self,stage,call):
+        require(stage in self.STAGES and len(self.stack)<16,'TIMING_BOUND')
+        frame=[self.tick(),0];self.stack.append(frame)
+        try:return call()
+        finally:
+            end=self.tick();require(self.stack.pop() is frame,'TIMING_STACK')
+            elapsed=end-frame[0];require(0<=frame[1]<=elapsed<=800_000_000_000,'TIMING_BOUND')
+            if self.stack:self.stack[-1][1]+=elapsed
+            b=self.buckets.setdefault(stage,{'calls':0,'inclusive_ns':0,'exclusive_ns':0})
+            b['calls']+=1;b['inclusive_ns']+=elapsed;b['exclusive_ns']+=elapsed-frame[1]
+    def request(self,slot,call):
+        require(len(self.requests)<6,'THROUGHPUT_LIMIT')
+        prior={k:dict(v) for k,v in self.buckets.items()};start=self.tick()
+        try:return self.measure('REQUEST',call)
+        finally:
+            end=self.tick();buckets={k:{f:v[f]-prior.get(k,{}).get(f,0) for f in v} for k,v in self.buckets.items()}
+            self.requests.append({'slot':slot,'start_ns':start,'end_ns':end,
+                'actual_utc':datetime.now(timezone.utc).isoformat(),'buckets':buckets,
+                'unexplained_ns':end-start-sum(v['exclusive_ns'] for v in buckets.values()),
+                'timing_proof':FULL_TIMING})
+    def report(self):
+        require(not self.stack,'TIMING_INCOMPLETE')
+        return {'schema':'iios-throughput-timing-v1','unit':'MONOTONIC_NANOSECONDS',
+            'requests':self.requests,'buckets':self.buckets,
+            'accounting':'EXCLUSIVE_BUCKETS_PARTITION_ACTOR; NESTED_AND_CONCURRENT_SPANS_NOT_ADDITIVE',
+            'unexplained_definition':'REQUEST exclusive time plus timer overhead is uninstrumented worker work'}
+
+
+class ThroughputInstrumentation:
+    """Diagnostic process only; call original admission/transport without caching.
+
+    Restore even on failure. No fixture/network activity is created by this hook.
+    """
+    def __init__(self,timing):self.timing=timing
+    def __enter__(self):
+        self.admission=globals()['checked_capability'];self.transport=globals()['fixture_exchange']
+        def admission(*a,**kw):return self.timing.measure('ADMISSION',lambda:self.admission(*a,**kw))
+        def transport(*a,**kw):return self.timing.measure('TRANSPORT',lambda:self.transport(*a,**kw))
+        self.wrappers=(admission,transport)
+        globals()['checked_capability']=admission;globals()['fixture_exchange']=transport
+        return self
+    def __exit__(self,*_):
+        require(globals()['checked_capability'] is self.wrappers[0] and
+            globals()['fixture_exchange'] is self.wrappers[1],'TIMING_HOOK_CHANGED')
+        globals()['checked_capability']=self.admission;globals()['fixture_exchange']=self.transport
+
+
+def advance_throughput_clock(session,now,seconds):
+    require(type(session) is ThroughputSession and type(seconds) in (int,float) and 0<seconds<=1,'FULL_CLOCK')
+    return _advance_schedule_clock(session,now,seconds)
+
+
+def throughput_schedule(p,seed):
+    starts=[utc(row['response']['value']['dispatch_time']) for row in seed['rows']];rows=[]
+    from datetime import timedelta
+    for row in p['plan']['rows'][seed['depth']:seed['depth']+6]:
+        target=utc(row['valid_from'])
+        if len(starts)>=3:target=max(target,starts[-3]+timedelta(seconds=60))
+        require(target<utc(row['expires_at']),'SEED_WINDOW');starts.append(target)
+        rows.append({**row,'valid_from':target.isoformat()})
+    return {**p['plan'],'rows':rows}
+
+
+class ThroughputSession(DepthMeasurementSession):
+    receipt_scope=THROUGHPUT_SCOPE
+    seed_factory=staticmethod(throughput_seed)
+    record_verifier=staticmethod(verify_throughput_record)
+    measured_count=6
+    def __init__(self,cap,parents,*,binding,**kwargs):
+        p,_,pins=checked_capability(cap)
+        seed=verify_throughput_binding(p,pins,parents,binding)
+        super().__init__(cap,parents,manifest=seed,expected_manifest=binding['expected_manifest'],**kwargs)
+        self.binding=canonical(binding);self.profile=ThroughputTimings();self.consumed=set()
+        for row in seed['rows']:self.rate.reserve(utc(row['response']['value']['dispatch_time']).timestamp())
+    def document(self,value):
+        key=canonical(value)
+        if key not in self.documents:self.documents[key]=throughput_record(value,self.full_parents,'MEASURED_REQUEST')
+        return self.documents[key]
+    def read(self,fd,name,*,expected_hash=None):
+        def read():
+            self.verify_fd(fd);doc=read_record(fd,name,expected_hash=expected_hash)
+            origin=doc.get('origin');require(origin in ('SYNTHETIC_SEED','MEASURED_REQUEST'),'SEED_ORIGIN')
+            value=verify_throughput_record(doc,expected_hash or content_hash(doc),self.full_parents,origin)
+            require(self.documents.get(canonical(value))==doc,'FULL_RECOVERY_PIN')
+            return value
+        return self.profile.measure('RECOVERY',read)
+    def write(self,fd,name,value):
+        return self.profile.measure('PUBLICATION',lambda:FullSession.write(self,fd,name,value))
+    def execute(self,request,previous):
+        slot=self.next_slot
+        require(self.seeded and slot in range(self.depth,self.depth+6) and slot not in self.consumed and
+            previous==self.previous and request==self.request(slot),'THROUGHPUT_LIMIT')
+        self.consumed.add(slot)  # Ambiguous dispatch is permanently consumed.
+        return self.profile.request(slot,lambda:FullSession.execute(self,request,previous))
+    def run(self):
+        require(self.seeded and not self.used,'SEED_NOT_READY');self.used=True
+        require(self.clock()==json.loads(self.seed_bytes)['measured_at'],'SEED_CLOCK')
+        requests=[self.request(i) for i in range(self.depth,self.depth+6)]
+        # This is a scheduling view only. Every request/admission retains the
+        # original independently pinned 475-row package, plan and absolute slot.
+        view=throughput_schedule(self.p,json.loads(self.seed_bytes))
+        def verify(receipt,request):
+            require(receipt['parents']=={**request['expected'],'reservation':receipt['parents']['reservation']},'RECEIPT_PARENTS')
+            self.verify(receipt,self.hash(receipt),parents=receipt['parents'])
+        def execute(request,previous):
+            require(previous==(None if self.next_slot==self.depth else self.previous),'THROUGHPUT_PARENT')
+            return self.execute(request,self.previous)
+        def complete(request,index,previous,receipt):
+            slot=self.depth+index
+            require(slot==self.next_slot-1,'THROUGHPUT_ORDER')
+            self.previous=self.completion(request,slot,self.previous,receipt)
+            return self.previous
+        diagnostics=[];start=time.monotonic_ns()
+        receipts,reason=execute_schedule(view,requests,clock=self.clock,wait=self.wait,executor=execute,
+            stop=self.stop,verify=verify,completion_parent=complete,failure_diagnostics=diagnostics)
+        passed=reason is None and self.attempted==self.completed==len(receipts)==len(self.consumed)==6 and self.next_slot==self.depth+6
+        return {'scope':THROUGHPUT_SCOPE,'classification':'THROUGHPUT_PASS' if passed else 'THROUGHPUT_FAILED',
+            'binding_parent':content_hash(json.loads(self.binding)),'seed_parent':self.seed_parent,
+            'depth':self.depth,'seed_records':3*self.depth,'seed_requests_attempted':0,
+            'attempted':self.attempted,'completed':self.completed,'receipt_parents':self.receipt_pins,
+            'stop_reason':reason,'failure_diagnostics':diagnostics,'timing':self.profile.report(),
+            'start_ns':start,'end_ns':time.monotonic_ns(),'seed_seconds':self.seed_seconds,
+            'authority':AUTHORITY,'production_qualified':False,'os_confinement':'UNQUALIFIED',
+            'credential_access':False,'provider_access':False,'timing_proof':FULL_TIMING}
+
+
+def verify_throughput_accounting(cap,binding,result,parents,*,check_deadline=lambda:None):
+    p,_,pins=checked_capability(cap);seed=verify_throughput_binding(p,pins,parents,binding);depth=binding['depth']
+    require(result['scope']==THROUGHPUT_SCOPE and result['classification']=='THROUGHPUT_PASS' and
+        result['binding_parent']==content_hash(binding) and result['seed_parent']==binding['expected_manifest'] and
+        result['depth']==depth and result['seed_records']==depth*3 and result['seed_requests_attempted']==0 and
+        result['attempted']==result['completed']==6 and len(result['receipt_parents'])==len(set(result['receipt_parents']))==6 and
+        result['authority']==AUTHORITY and result['production_qualified'] is False,'THROUGHPUT_ACCOUNTING')
+    if depth==469:
+        # Exercise the very same full final traversal, with a strictly different
+        # verifier and seed origins. Its 475 journal rows are never 475 executions.
+        seed_pins={content_hash(row[k]) for row in seed['rows'] for k in ('reservation','response','completion')}
+        def verify(doc,expected,bound_parents):
+            origin=doc.get('origin')
+            require(origin in ('SYNTHETIC_SEED','MEASURED_REQUEST'),'SEED_ORIGIN')
+            if origin=='SYNTHETIC_SEED':require(expected in seed_pins,'SEED_DISK_MISMATCH')
+            return verify_throughput_record(doc,expected,bound_parents,origin)
+        session={'receipt_parents':[content_hash(row['response']) for row in seed['rows']]+result['receipt_parents']}
+        _reconcile_full_journal(p,pins,parents,session,verify,THROUGHPUT_SCOPE,check_deadline)
+        return {'seed_records':depth*3,'seed_requests_attempted':0,'executed_reservations':6,'executed_responses':6,'executed_completions':6}
+    fd=safe_root(p['plan']['root']);previous=None;rate=FullPacing()
+    try:
+        end=depth+6;rows=p['plan']['rows'][:end]
+        require(set(os.listdir(fd))=={'day.lock'}|{r['id'] for r in rows}|{f'{i}.{k}.json' for i in range(end) for k in ('reserved','complete')},'THROUGHPUT_ACCOUNTING')
+        for i,row in enumerate(rows):
+            check_deadline();child=safe_root(row['root'])
+            try:
+                require(os.listdir(child)==['ALPHA_VANTAGE.receipt.json'],'THROUGHPUT_ACCOUNTING')
+                docs=[read_record(fd,f'{i}.reserved.json'),read_record(child,'ALPHA_VANTAGE.receipt.json'),read_record(fd,f'{i}.complete.json')]
+            finally:os.close(child)
+            origin='SYNTHETIC_SEED' if i<depth else 'MEASURED_REQUEST'
+            reservation,receipt,completion=[verify_throughput_record(v,content_hash(v),parents,origin) for v in docs]
+            if i<depth:require(docs==[seed['rows'][i][k] for k in ('reservation','response','completion')],'SEED_DISK_MISMATCH')
+            else:require(content_hash(docs[1])==result['receipt_parents'][i-depth],'THROUGHPUT_ACCOUNTING')
+            require(reservation=={'plan':pins['plan'],'slot':i,'source_commit':p['source_commit'],'previous':previous} and
+                completion=={'slot':i,'previous':previous,'reservation':content_hash(docs[0]),'receipt':content_hash(docs[1]),'result':'OBSERVED'},'THROUGHPUT_ACCOUNTING')
+            require(receipt['parents']=={**pins,'slot':content_hash({'slot':i,'row':row}),'reservation':content_hash(docs[0])} and
+                receipt['scope']==receipt['role']==THROUGHPUT_SCOPE and receipt['source_commit']==p['source_commit'] and
+                receipt['root']==row['root'] and receipt['authority']==AUTHORITY and receipt['result']=='OBSERVED' and
+                receipt['retry_count']==receipt['credential_selector_access_count']==0 and
+                receipt['bulk_checks']['coverage']=='COMPLETE' and receipt['bulk_checks']['freshness']=='WITHIN_AGE_BOUND','THROUGHPUT_ACCOUNTING')
+            rate.reserve(utc(receipt['dispatch_time']).timestamp());previous=content_hash(docs[2])
+    finally:os.close(fd)
+    return {'seed_records':depth*3,'seed_requests_attempted':0,'executed_reservations':6,'executed_responses':6,'executed_completions':6}
+
+
 class DiagnosticOwnedProcesses(FullOwnedProcesses):
     record_store=staticmethod(diagnostic_store)
     record_read=staticmethod(diagnostic_read)
@@ -3004,7 +3252,8 @@ class DiagnosticOwnedProcesses(FullOwnedProcesses):
         p,r,pins=checked_capability(self.cap)
         require(p==descriptor['package'] and r==descriptor['runtime'] and pins==descriptor['expected']
             and self.lifecycle_parents=={**pins,'diagnostic_descriptor':content_hash(descriptor),
-                'diagnostic_source':descriptor['source_parent']},'DIAGNOSTIC_PARENT')
+                'diagnostic_source':descriptor['source_parent'],
+                **({'throughput_window':content_hash(descriptor['measurement'])} if descriptor['schema']==THROUGHPUT_SCHEMA else {})},'DIAGNOSTIC_PARENT')
         fd=safe_root(p['root'])
         try:
             st=os.fstat(fd);require((st.st_dev,st.st_ino)==self.cap.output_identity,'OUTPUT_REPLACED')
@@ -3029,7 +3278,7 @@ def diagnostic_audit(d,role,commands,child_pids):
                 require(key not in launched and key in ('fixture','worker') and
                     executable==str(Path(r['root'])/r['interpreter']) and
                     argv[1:7]==['-B',str(Path(r['root'])/'source/alpha_radar_runner.py'),
-                        '--local-one-request-only','--child',key,'--descriptor'] and
+                        ('--ci-throughput-only' if d['schema']==THROUGHPUT_SCHEMA else '--local-one-request-only'),'--child',key,'--descriptor'] and
                     argv[7]==str(Path(p['root'])/f'fs-{key}-launch.json') and
                     argv[8]=='--expected-descriptor' and re.fullmatch('[a-f0-9]{64}',argv[9]) and
                     str(cwd)==p['root'] and env==DIAG_ENV,'DIAGNOSTIC_COMMAND')
@@ -3074,7 +3323,18 @@ def diagnostic_child(launch,launch_parent):
             def stopped():
                 require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE');return stop()
             def no_wait(seconds):raise ValueError('DIAGNOSTIC_SCHEDULE')
-            if d['schema']=='iios-local-depth-measurement-descriptor-v1':
+            if d['schema']==THROUGHPUT_SCHEMA:
+                parents_seed={**d['expected'],'measurement_source':d['source_parent']}
+                seed=verify_throughput_binding(d['package'],d['expected'],parents_seed,d['measurement'])
+                now=[utc(seed['measured_at'])]
+                with ThroughputInstrumentation(ThroughputTimings()) as instrument:
+                    session=ThroughputSession(cap,parents_seed,binding=d['measurement'],clock=lambda:now[0].isoformat(),
+                        wait=lambda seconds:advance_throughput_clock(session,now,seconds),stop=stopped,
+                        work_deadline=d['work_deadline_ns']/1e9,exchange=fixture_exchange)
+                    instrument.timing=session.profile
+                    session.seed();value=session.run()
+                parent=diagnostic_store(cap,parents,'fs-session.json',value,logical_time=now[0].isoformat())
+            elif d['schema']=='iios-local-depth-measurement-descriptor-v1':
                 m=d['measurement'];seed=regenerate_depth_seed(d['package'],d['expected'],
                     {**d['expected'],'measurement_source':d['source_parent']},m);at=seed['measured_at']
                 session=DepthMeasurementSession(cap,seed['parents'],manifest=seed,
@@ -3135,7 +3395,8 @@ def diagnostic_supervise(d):
         checked_capability(cap)  # Match the full supervisor's admission cost and predicates.
 
     owned=DiagnosticOwnedProcesses(cap,parents)
-    if d['schema']=='iios-local-depth-measurement-descriptor-v1': owned.depth_timings=DepthTimings('supervisor')
+    throughput_profile=ThroughputTimings() if d['schema']==THROUGHPUT_SCHEMA else None
+    if d['schema'] in ('iios-local-depth-measurement-descriptor-v1',THROUGHPUT_SCHEMA): owned.depth_timings=DepthTimings('supervisor')
     commands={};launches={};tls=None;session=None;primary=None
     audit,opened=diagnostic_audit(d,'supervisor',commands,lambda:(os.getpid(),*(e['child'].pid for e in owned.children.values())))
     os.open=opened;sys.addaudithook(audit);stage='STARTUP'
@@ -3150,7 +3411,7 @@ def diagnostic_supervise(d):
                 'output_identity':list(cap.output_identity),'phase':phase}
             parent=diagnostic_store(cap,parents,f'fs-{role}-launch.json',launch);launches[role]=parent
             argv=[str(exe),'-B',str(Path(r['root'])/'source/alpha_radar_runner.py'),
-                '--local-one-request-only','--child',role,'--descriptor',str(out/f'fs-{role}-launch.json'),
+                ('--ci-throughput-only' if d['schema']==THROUGHPUT_SCHEMA else '--local-one-request-only'),'--child',role,'--descriptor',str(out/f'fs-{role}-launch.json'),
                 '--expected-descriptor',parent];commands[role]=argv
             stage='PROCESS_CREATE'
             child=subprocess.Popen(argv,cwd=out,env=DIAG_ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
@@ -3174,7 +3435,11 @@ def diagnostic_supervise(d):
         while not (out/'fs-worker-complete.json').exists():
             check_outer_stop()
             require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE')
-            owned.verify('worker');owned.verify('fixture');time.sleep(.05)
+            if d['schema']==THROUGHPUT_SCHEMA:
+                with ThroughputInstrumentation(throughput_profile):
+                    owned.depth_timings.measure('SUPERVISOR_ACTIVITY',lambda:throughput_profile.measure('SUPERVISOR',
+                        lambda:full_supervisor_poll(verify_self,owned)))
+            else:owned.verify('worker');owned.verify('fixture');time.sleep(.05)
         tail_start=time.monotonic_ns()
         fd=safe_root(out)
         try:doc=read_record(fd,'fs-worker-complete.json')
@@ -3182,7 +3447,10 @@ def diagnostic_supervise(d):
         completion=diagnostic_verify(doc,content_hash(doc),parents)
         require(completion['launch_parent']==launches['worker'],'DIAGNOSTIC_PARENT')
         session,_=diagnostic_read(cap,parents,'fs-session.json',expected=completion['session_parent'])
-        if d['schema']=='iios-local-depth-measurement-descriptor-v1':
+        if d['schema']==THROUGHPUT_SCHEMA:
+            verify_throughput_accounting(cap,d['measurement'],session,{**d['expected'],'measurement_source':d['source_parent']},
+                check_deadline=lambda:require(time.monotonic_ns()<d['work_deadline_ns'],'DIAGNOSTIC_DEADLINE'))
+        elif d['schema']=='iios-local-depth-measurement-descriptor-v1':
             verify_depth_accounting(cap,d['measurement'],session,{**d['expected'],'measurement_source':d['source_parent']})
         else:
             require(session['classification']=='DIAGNOSTIC_PASS' and
@@ -3203,7 +3471,7 @@ def diagnostic_supervise(d):
                     os.listdir(rf)==['ALPHA_VANTAGE.receipt.json'],'DIAGNOSTIC_ACCOUNTING')
             finally:os.close(fd);os.close(rf)
         verify_self();owned.verify('fixture');owned.verify('worker')
-        diagnostic_store(cap,parents,'fs-supervisor-tail.json',{'scope':DEPTH_SCOPE,
+        diagnostic_store(cap,parents,'fs-supervisor-tail.json',{'scope':THROUGHPUT_SCOPE if d['schema']==THROUGHPUT_SCHEMA else DEPTH_SCOPE,
             **bounded_tail_interval(tail_start,time.monotonic_ns()),'accounting':'INCLUDES_RECONCILIATION_AND_NESTED_OWNERSHIP'})
     except BaseException as error:
         from alpha_session_execution import sanitized_execution_failure
@@ -3216,10 +3484,11 @@ def diagnostic_supervise(d):
         'primary_failure':primary,'session':session,'tls':tls,'cleanup':cleanup,
         'credential_accesses':0,'provider_requests':0,'worker_launches':int('worker' in owned.startup_pins)}
     if hasattr(owned,'depth_timings'): result['timings']=owned.depth_timings.report()
+    if throughput_profile is not None:result['supervisor_poll_profile']=throughput_profile.report()
     final_start=time.monotonic_ns()
     diagnostic_store(cap,parents,'fs-final.json',result)
     final_end=time.monotonic_ns()
-    diagnostic_store(cap,parents,'fs-final-publication-timing.json',{'scope':DEPTH_SCOPE,
+    diagnostic_store(cap,parents,'fs-final-publication-timing.json',{'scope':THROUGHPUT_SCOPE if d['schema']==THROUGHPUT_SCHEMA else DEPTH_SCOPE,
         'cleanup':bounded_tail_interval(cleanup_start,cleanup_end),
         'final_publication':bounded_tail_interval(final_start,final_end),
         'limitation':'THIS_TIMING_RECORD_PUBLICATION_IS_INCLUDED_IN_OUTER_EXIT_NOT_THIS_SPAN'})
@@ -3236,15 +3505,19 @@ def diagnostic_main(d,expected,child):
 
 class DepthOuterCase:
     """Pinned local diagnostic backend. No signals, credentials or provider routes."""
+    allowed_depths=DEPTHS
+    descriptor_kind='iios-local-depth-measurement-descriptor-v1'
+    scope=DEPTH_SCOPE
+
     def __init__(self, template, expected, depth):
-        require(type(depth) is int and depth in DEPTHS,'OUTER_DEPTH')
+        require(type(depth) is int and depth in self.allowed_depths,'OUTER_DEPTH')
         self.depth=depth
         self.template=template;self.expected=expected;self.child=None;self.capture=None
         self.observation=None;self.cancelled=False;self.descriptor=None
 
     def prepare(self,start):
         d=read_descriptor(self.template,self.expected)
-        require(d['schema']=='iios-local-depth-measurement-descriptor-v1','OUTER_SCOPE')
+        require(d['schema']==self.descriptor_kind,'OUTER_SCOPE')
         diagnostic_descriptor(d)
         require(d['measurement']['depth']==self.depth,'OUTER_DEPTH')
         import ssl
@@ -3258,7 +3531,7 @@ class DepthOuterCase:
         diagnostic_descriptor(self.descriptor)
         fd=safe_root(root)
         try:
-            publish(fd,'outer-attempt.json',{'scope':DEPTH_SCOPE,'template':self.expected,
+            publish(fd,'outer-attempt.json',{'scope':self.scope,'template':self.expected,
                 'start_ns':start,'total_ns':800_000_000_000,'authority':AUTHORITY})
             self.parent=publish(fd,'execution-descriptor.json',self.descriptor)
         finally:os.close(fd)
@@ -3266,7 +3539,7 @@ class DepthOuterCase:
         r=d['runtime'];self.exe=Path(r['root'])/r['interpreter']
         self.exe_hash=next(v['sha256'] for v in r['files'] if v['path']==r['interpreter'])
         self.argv=[str(self.exe),'-B',str(Path(r['root'])/'source/alpha_radar_runner.py'),
-            '--local-one-request-only','--descriptor',str(root/'execution-descriptor.json'),
+            ('--ci-throughput-only' if self.scope==THROUGHPUT_SCOPE else '--local-one-request-only'),'--descriptor',str(root/'execution-descriptor.json'),
             '--expected-descriptor',self.parent]
 
     def launch(self):
@@ -3324,7 +3597,7 @@ class DepthOuterCase:
         ids=verify_inputs(d['package'],d['runtime'],d['expected'],d['authorized_root'])
         cap=SyntheticCapability(canonical(d['package']),canonical(d['runtime']),canonical(d['expected']),
             d['authorized_root'],ids,(st.st_dev,st.st_ino))
-        counts=verify_depth_accounting(cap,d['measurement'],value['session'],
+        counts=(verify_throughput_accounting if self.scope==THROUGHPUT_SCOPE else verify_depth_accounting)(cap,d['measurement'],value['session'],
             {**d['expected'],'measurement_source':d['source_parent']})
         require(not listener_owners(d['package']['fixture']['port']),'OUTER_LISTENER')
         return {'final_parent':content_hash(doc),'accounting':counts,'cleanup':value['cleanup'],
@@ -3343,8 +3616,14 @@ class DepthOuterCase:
             result['diagnostics']=self.capture.snapshot()
         root=Path(read_descriptor(self.template,self.expected)['authorized_root'])
         fd=safe_root(root)
-        try:return publish(fd,'outer-result.json',{**DIAG_FLAGS,'value':result,'authority':AUTHORITY})
+        try:return publish(fd,'outer-result.json',{**DIAG_FLAGS,'scope':self.scope if self.scope==THROUGHPUT_SCOPE else DIAG_SCOPE,'value':result,'authority':AUTHORITY})
         finally:os.close(fd)
+
+
+class ThroughputOuterCase(DepthOuterCase):
+    allowed_depths=THROUGHPUT_DEPTHS
+    descriptor_kind=THROUGHPUT_SCHEMA
+    scope=THROUGHPUT_SCOPE
 
 
 def run_depth_outer_case(backend, *, now=time.monotonic_ns, pause=time.sleep, series_deadline, canonical_start_ns=None):
@@ -3390,7 +3669,7 @@ def run_depth_outer_case(backend, *, now=time.monotonic_ns, pause=time.sleep, se
             findings=backend.finish()
             require(clock()<cleanup,'OUTER_CLEANUP_DEADLINE')
         except Exception as error:failed('EXIT_RECONCILIATION',error)
-    result={'scope':DEPTH_SCOPE,'authority':AUTHORITY,'production_qualified':False,
+    result={'scope':getattr(backend,'scope',DEPTH_SCOPE),'authority':AUTHORITY,'production_qualified':False,
         'os_confinement':'UNQUALIFIED','signals':0,'start_ns':start,'work_deadline_ns':work,
         'cleanup_deadline_ns':cleanup,'export_deadline_ns':end,'failures':failures,'findings':findings,
         'classification':'PASS' if not failures and findings is not None else 'FAILED'}
@@ -3423,13 +3702,20 @@ def main():
     parser.add_argument('--child', choices=('fixture', 'worker'))
     parser.add_argument('--ci-lifecycle-only', action='store_true', default=False)
     parser.add_argument('--ci-full-session-only', action='store_true', default=False)
+    parser.add_argument('--ci-throughput-only', action='store_true', default=False)
     parser.add_argument('--local-one-request-only', action='store_true', default=False)
     args = parser.parse_args()
+    require(not args.ci_throughput_only or not (args.local_one_request_only or args.ci_full_session_only or args.ci_lifecycle_only),'THROUGHPUT_MODE')
     require(not args.local_one_request_only or not (args.ci_full_session_only or args.ci_lifecycle_only), 'DIAGNOSTIC_MODE')
     require(not (args.ci_full_session_only and args.ci_lifecycle_only), 'FULL_MODE_EXCLUSION')
     early_diagnostic('DESCRIPTOR_READ')
     d = read_descriptor(args.descriptor, args.expected_descriptor)
     early_diagnostic('DESCRIPTOR_VERIFIED')
+    admitted_d=d['value']['descriptor'] if args.child and (args.ci_throughput_only or args.local_one_request_only) else d
+    if args.ci_throughput_only:
+        require(admitted_d['schema']==THROUGHPUT_SCHEMA,'THROUGHPUT_MODE')
+        return diagnostic_main(d,args.expected_descriptor,args.child)
+    require(admitted_d.get('schema')!=THROUGHPUT_SCHEMA,'THROUGHPUT_MODE')
     if args.local_one_request_only:
         return diagnostic_main(d, args.expected_descriptor, args.child)
     if args.ci_full_session_only:
