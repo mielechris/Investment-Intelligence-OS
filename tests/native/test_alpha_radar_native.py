@@ -3335,6 +3335,14 @@ class FullLexicalAdmissionTests(unittest.TestCase):
         with patch.object(Path,'resolve',return_value=out.parent),self.assertRaisesRegex(ValueError,'FULL_PATH_ALIAS'):
             guard('open',(str(path),'r',os.O_RDONLY))
 
+def measured_workload(seconds=1200, admission_ns=300_000_000_000, calls=2375):
+    import alpha_radar_ci as ci
+    return {'node':ci.WORKLOAD_NODE,'wall_seconds':seconds,
+        'cost_partition':{'schema':'iios-workload-cost-partition-v1',
+            'wall_ns':round(seconds*1_000_000_000),'admission_ns':admission_ns,
+            'admission_calls':calls}}
+
+
 class QualificationBudgetTests(unittest.TestCase):
     def descriptor(self): return FullSessionModeTests().inputs()[4]
 
@@ -3349,7 +3357,7 @@ class QualificationBudgetTests(unittest.TestCase):
             'fresh_stdio':4,'fresh_export':10,'result_parents':{n:'a'*64 for n in (
                 'offline-results.json','fresh-stdio-results.json','fresh-export-results.json','python-syntax.json','workflow-syntax.json')},
             'runtime_archive_sha256':ci.ARCHIVE_SHA256,
-            'workload_measurement':{'node':ci.WORKLOAD_NODE,'wall_seconds':1200}}
+            'workload_measurement':measured_workload()}
         return value
 
     def test_validation_parent_commit_run_source_collection_and_all_counts(self):
@@ -3598,7 +3606,7 @@ class QualificationBudgetTests(unittest.TestCase):
             records={'offline-collection.json':partition,
                 'offline-results.json':{'scope':'MOCKED_OFFLINE_ONLY','success':True,'collected':count,
                     'executed':count,'passed':count,'skipped':[],'source_bindings':binding,
-                    'timings':[{'node':n,'wall_seconds':1200} for n in partition['offline']]},
+                    'timings':[{**measured_workload(),'node':n} for n in partition['offline']]},
                 'fresh-stdio-results.json':{'scope':'FRESH_PROCESS_STDIO_ONLY','success':True,'collected':4,
                     'executed':4,'source_bindings':binding},
                 'fresh-export-results.json':{'scope':'FRESH_PROCESS_EXPORT_ONLY','success':True,'collected':10,
@@ -3813,20 +3821,87 @@ class HostedFeasibilityTests(unittest.TestCase):
         root=Path(tempfile.mkdtemp(prefix='feasibility-',dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
         (root/'export').mkdir()
         d=FullSessionModeTests().inputs()[4]
-        proof={'workload_measurement':{'node':ci.WORKLOAD_NODE,'wall_seconds':1200}}
+        proof={'workload_measurement':measured_workload()}
         env={'GITHUB_SHA':d['context']['GITHUB_SHA'],'GITHUB_RUN_ID':d['context']['GITHUB_RUN_ID'],
              'GITHUB_RUN_ATTEMPT':'1','GITHUB_JOB':'native','GITHUB_ENV':str(root/'step-env')}
         return ci,root,d,proof,env
 
     def test_request_journal_benchmark_and_conservative_cost(self):
         import alpha_radar_ci as ci
-        b={'node':ci.WORKLOAD_NODE,'wall_seconds':1275.691580959}
-        self.assertAlmostEqual(ci.feasibility_estimate(b,[400_000_000,450_000_000,420_000_000]),3197.73947619875)
+        b=measured_workload(1275.691580959)
+        self.assertAlmostEqual(ci.feasibility_estimate(b,[400_000_000,450_000_000,420_000_000]),2822.73947619875)
         for bad in ({}, {'node':'different','wall_seconds':1200}, {'node':ci.WORKLOAD_NODE,'wall_seconds':float('nan')},
                     {'node':ci.WORKLOAD_NODE,'wall_seconds':float('inf')}, {'node':ci.WORKLOAD_NODE,'wall_seconds':0}):
             with self.assertRaises(ValueError):ci.feasibility_estimate(bad,[1,1,1])
         for samples in ([],[1,1],[1,1,1,1],[1,1,0],[1,1,True],[1,1,float('nan')],[1,1,30_000_000_001]):
             with self.assertRaises(ValueError):ci.feasibility_estimate(b,samples)
+
+    def test_every_measured_component_is_counted_exactly_once(self):
+        import alpha_radar_ci as ci
+        b=measured_workload(1000,250_000_000_000,2380)
+        c=ci.feasibility_components(b,[100_000_000,200_000_000,150_000_000])
+        self.assertEqual(c['non_admission_ns'],750_000_000_000)
+        self.assertEqual(c['native_admission_calls'],2855)
+        self.assertEqual(c['native_admission_ns'],571_000_000_000)
+        self.assertEqual(c['subtotal_ns'],1_321_000_000_000)
+        self.assertEqual(c['estimated_work_seconds'],1651.25)
+        # Changing embedded admission time and wall time together leaves the
+        # non-admission workload unchanged. No admission is counted twice.
+        moved=measured_workload(1100,350_000_000_000,2380)
+        self.assertEqual(ci.feasibility_components(moved,[100_000_000,200_000_000,150_000_000]),c)
+        # Increasing only residual work charges it once, followed by headroom.
+        changed=measured_workload(1100,250_000_000_000,2380)
+        self.assertEqual(ci.feasibility_estimate(changed,[100_000_000,200_000_000,150_000_000])-1651.25,125)
+
+    def test_aggregate_only_or_malformed_partition_cannot_authorize_subtraction(self):
+        import alpha_radar_ci as ci
+        with self.assertRaises(ValueError):
+            ci.workload_measurement({'node':ci.WORKLOAD_NODE,'wall_seconds':1053.447414125})
+        for field,value in [('schema','old'),('wall_ns',0),('wall_ns',1_200_000_000_001),
+            ('admission_ns',0),('admission_ns',1_200_000_000_000),('admission_ns',-1),
+            ('admission_ns',float('nan')),('admission_ns',float('inf')),('admission_ns',True),
+            ('admission_calls',2374),('admission_calls',2851),('admission_calls',True)]:
+            b=measured_workload();b['cost_partition'][field]=value
+            with self.subTest(field=field,value=value),self.assertRaises(ValueError):ci.workload_measurement(b)
+        for field in measured_workload()['cost_partition']:
+            b=measured_workload();del b['cost_partition'][field]
+            with self.assertRaises(ValueError):ci.workload_measurement(b)
+
+    def test_meter_preserves_admission_arguments_result_and_exception(self):
+        import alpha_radar_ci as ci
+        target=MagicMock(return_value=object());clock=iter([10,20,25,40])
+        meter=ci.AdmissionCostMeter(target,lambda:next(clock))
+        self.assertIs(meter('package',expected='parent'),target.return_value)
+        target.assert_called_once_with('package',expected='parent')
+        failure=ValueError('RUNTIME_IDENTITY_CHANGED');target.side_effect=failure
+        with self.assertRaises(ValueError) as caught:meter('changed')
+        self.assertIs(caught.exception,failure)
+        self.assertEqual((meter.calls,meter.elapsed_ns),(2,25))
+        self.assertFalse(meter.active)
+
+    def test_meter_rejects_nested_accounting_and_clock_rollback(self):
+        import alpha_radar_ci as ci
+        clock=iter([10,20]);meter=ci.AdmissionCostMeter(lambda:meter(),lambda:next(clock))
+        with self.assertRaisesRegex(ValueError,'FEASIBILITY_MEASUREMENT'):meter()
+        self.assertEqual((meter.calls,meter.elapsed_ns),(1,10))
+        for ticks in ([10,10],[20,10]):
+            clock=iter(ticks);meter=ci.AdmissionCostMeter(lambda:None,lambda:next(clock))
+            with self.assertRaises(ValueError):meter()
+
+    def test_timing_wrapper_restores_real_admission_after_failed_test(self):
+        import alpha_radar_ci as ci,alpha_radar_admission as admission
+        root=Path(tempfile.mkdtemp(dir=os.environ['IIOS_GATEWAY_TEST_ROOT']))
+        original=admission.verify_inputs
+        class FailedBenchmark(unittest.TestCase):
+            def id(self):return ci.WORKLOAD_NODE
+            def runTest(self):
+                self.assertIsInstance(admission.verify_inputs,ci.AdmissionCostMeter)
+                self.fail('SYNTHETIC_FAILURE')
+        result=ci.TimedOfflineResult(root);FailedBenchmark().run(result)
+        self.assertIs(admission.verify_inputs,original)
+        self.assertEqual(len(result.failures),1)
+        self.assertEqual(result.timings[0]['cost_partition']['admission_calls'],0)
+        self.assertTrue((root/'test-duration-0001.json').is_file())
 
     def publish(self,ci,root,d,proof,env,ns=400_000_000):
         ticks=[110_000_000_000]
@@ -3861,7 +3936,7 @@ class HostedFeasibilityTests(unittest.TestCase):
         spawn.assert_not_called()
         value=json.loads((root/'export/full-feasibility.json').read_bytes())
         self.assertEqual(value['classification'],'INFEASIBLE')
-        self.assertEqual(value['estimated_work_seconds'],4706.25)
+        self.assertEqual(value['estimated_work_seconds'],4331.25)
         self.assertFalse((root/'step-env').exists());self.assertFalse((root/'full-attempt.json').exists())
 
     def test_missing_stale_changed_source_runtime_workload_and_replay(self):
@@ -3871,7 +3946,7 @@ class HostedFeasibilityTests(unittest.TestCase):
              patch.object(ci.time,'monotonic_ns',return_value=116_000_000_000):
             for key,val in [('source_commit','b'*40),('run_id','different'),('root','different'),('runtime_parent','b'*64),
                 ('workload_parent','b'*64),('validation_parent','b'*64),('started_ns',99_000_000_000),
-                ('finished_ns',1),('estimated_work_seconds',1),('work_limit_seconds',9999),('classification','INFEASIBLE')]:
+                ('finished_ns',1),('estimated_work_seconds',1),('components',{}),('work_limit_seconds',9999),('classification','INFEASIBLE')]:
                 bad={**v,key:val};raw=ci.canonical(bad)
                 with self.subTest(key=key),patch.object(ci,'validation_record',return_value=raw), \
                      patch.dict(os.environ,{'IIOS_FEASIBILITY_SHA256':ci.digest(raw)}),self.assertRaises(ValueError):

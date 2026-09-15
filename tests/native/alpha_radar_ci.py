@@ -727,28 +727,46 @@ WORKLOAD_NODE = 'test_alpha_radar_native.FullSessionModeTests.test_full_475_mock
 
 
 def workload_measurement(value):
-    """Actual scheduler/journal/recovery/accounting test, with transport mocked.
+    """Disjoint costs from one complete benchmark, never a sampled subtraction.
 
-    Its entire wall time is retained: no subtraction for synthetic admission,
-    negative assertions or filesystem overhead. Source/tests/archive are bound
-    by the independently expected, same-run validation proof.
+    Admission wall time is instrumented inside that same test. All remaining
+    work (including conservative test-only assertions) is retained unchanged.
+    Older aggregate-only measurements cannot authorize the revised forecast.
     """
     import math
     require(type(value) is dict and value.get('node')==WORKLOAD_NODE and
         type(value.get('wall_seconds')) in (int,float) and
         math.isfinite(value['wall_seconds']) and 0<value['wall_seconds']<=3600,
         'FEASIBILITY_MEASUREMENT')
-    return {'node':WORKLOAD_NODE,'wall_seconds':value['wall_seconds']}
+    part=value.get('cost_partition')
+    require(type(part) is dict and set(part)=={'schema','wall_ns','admission_ns','admission_calls'} and
+        part['schema']=='iios-workload-cost-partition-v1' and
+        all(type(part[k]) is int for k in ('wall_ns','admission_ns','admission_calls')) and
+        0<part['admission_ns']<part['wall_ns']<=3_600_000_000_000 and
+        475*5<=part['admission_calls']<=475*6 and
+        value['wall_seconds']==part['wall_ns']/1_000_000_000,'FEASIBILITY_MEASUREMENT')
+    return {'node':WORKLOAD_NODE,'wall_seconds':value['wall_seconds'],'cost_partition':dict(part)}
 
 
-def feasibility_estimate(benchmark, samples):
+def feasibility_components(benchmark, samples):
     require(type(samples) is list and len(samples)==3 and
         all(type(n) is int and 0<n<=30_000_000_000 for n in samples),
         'FEASIBILITY_MEASUREMENT')
-    # Six complete runtime checks per request, including the fixture-side check.
-    # Do not subtract any checks already included in the measured journal path.
-    return (workload_measurement(benchmark)['wall_seconds']+
-            475*6*max(samples)/1_000_000_000)*1.25
+    part=workload_measurement(benchmark)['cost_partition']
+    # Replace exactly the observed verify_inputs calls, not the surrounding
+    # capability/identity predicates. Native fixture_exchange adds one per slot.
+    # No historical or cross-run mock timing is subtracted.
+    remainder=part['wall_ns']-part['admission_ns']
+    native_calls=part['admission_calls']+475
+    admission=native_calls*max(samples)
+    subtotal=remainder+admission
+    return {'non_admission_ns':remainder,'native_admission_calls':native_calls,
+        'native_admission_ns':admission,'subtotal_ns':subtotal,
+        'headroom_fraction':0.25,'estimated_work_seconds':subtotal/1_000_000_000*1.25}
+
+
+def feasibility_estimate(benchmark, samples):
+    return feasibility_components(benchmark,samples)['estimated_work_seconds']
 
 
 def prepare_feasibility(root, d):
@@ -770,7 +788,7 @@ def prepare_feasibility(root, d):
         'input_parent':digest(canonical(d)),'runtime_parent':d['expected']['runtime'],
         'workload_parent':d['expected']['plan'],'root':str(root),
         'started_ns':start,'finished_ns':end,'samples_ns':samples,
-        'benchmark':proof['workload_measurement'],'estimated_work_seconds':estimate,
+        'benchmark':proof['workload_measurement'],'components':feasibility_components(proof['workload_measurement'],samples),'estimated_work_seconds':estimate,
         'work_limit_seconds':FULL_WORK_SECONDS,'production_qualified':False,
         'classification':'FEASIBLE' if estimate<=FULL_WORK_SECONDS else 'INFEASIBLE'}
     document(root/'export/full-feasibility.json',value)
@@ -790,7 +808,7 @@ def require_feasibility(root, d, input_parent):
         raw==canonical(value),'FEASIBILITY_PARENT')
     require(type(value) is dict and set(value)=={'schema','source_commit','run_id','run_attempt',
         'scope','validation_parent','input_parent','runtime_parent','workload_parent','root',
-        'started_ns','finished_ns','samples_ns','benchmark','estimated_work_seconds',
+        'started_ns','finished_ns','samples_ns','benchmark','components','estimated_work_seconds',
         'work_limit_seconds','production_qualified','classification'},'FEASIBILITY_PARENT')
     require(value['schema']=='iios-hosted-feasibility-v1' and
         value['scope']=='PREPARATION_MEASUREMENT_ONLY' and value['production_qualified'] is False and
@@ -806,7 +824,8 @@ def require_feasibility(root, d, input_parent):
         sum(value['samples_ns'])<=value['finished_ns']-value['started_ns'],
         'FEASIBILITY_STALE')
     estimate=feasibility_estimate(value['benchmark'],value['samples_ns'])
-    require(value['estimated_work_seconds']==estimate and value['work_limit_seconds']==FULL_WORK_SECONDS
+    require(value['components']==feasibility_components(value['benchmark'],value['samples_ns']) and
+        value['estimated_work_seconds']==estimate and value['work_limit_seconds']==FULL_WORK_SECONDS
         and value['classification']=='FEASIBLE' and estimate<=FULL_WORK_SECONDS,'FEASIBILITY_EXCEEDED')
     return value
 
@@ -831,6 +850,22 @@ def prepare_job_budget(root):
     document(root/'export/native-job-budget.json',value)
     return value
 
+class AdmissionCostMeter:
+    """Read-only timing wrapper. Calls the real admission function every time."""
+    def __init__(self, original, clock=None):
+        self.original=original;self.clock=clock or time.perf_counter_ns
+        self.elapsed_ns=0;self.calls=0;self.active=False
+
+    def __call__(self,*args,**kwargs):
+        require(not self.active,'FEASIBILITY_MEASUREMENT')
+        self.active=True;start=self.clock()
+        try:return self.original(*args,**kwargs)
+        finally:
+            elapsed=self.clock()-start;self.active=False
+            require(type(elapsed) is int and elapsed>0,'FEASIBILITY_MEASUREMENT')
+            self.elapsed_ns+=elapsed;self.calls+=1
+
+
 class TimedOfflineResult(unittest.TestResult):
     """Measure real wall/CPU cost; never replace a test's injected clock."""
     def __init__(self, destination):
@@ -840,12 +875,25 @@ class TimedOfflineResult(unittest.TestResult):
 
     def startTest(self, test):
         super().startTest(test)
-        self.started = (time.perf_counter(), time.process_time())
+        self.admission_patch=None;self.admission_meter=None
+        if test.id()==WORKLOAD_NODE:
+            from unittest.mock import patch
+            import alpha_radar_admission as admission
+            self.admission_meter=AdmissionCostMeter(admission.verify_inputs)
+            self.admission_patch=patch.object(admission,'verify_inputs',self.admission_meter)
+            self.admission_patch.start()
+        self.started = (time.perf_counter_ns(), time.process_time())
 
     def stopTest(self, test):
         wall, cpu = self.started
-        row = {'node': test.id(), 'wall_seconds': time.perf_counter()-wall,
+        elapsed=time.perf_counter_ns()-wall
+        if self.admission_patch is not None:self.admission_patch.stop()
+        row = {'node': test.id(), 'wall_seconds': elapsed/1_000_000_000,
                'cpu_seconds': time.process_time()-cpu}
+        if self.admission_meter is not None:
+            row['cost_partition']={'schema':'iios-workload-cost-partition-v1',
+                'wall_ns':elapsed,'admission_ns':self.admission_meter.elapsed_ns,
+                'admission_calls':self.admission_meter.calls}
         self.timings.append(row)
         document(self.destination/('test-duration-%04d.json' % len(self.timings)), row)
         super().stopTest(test)
