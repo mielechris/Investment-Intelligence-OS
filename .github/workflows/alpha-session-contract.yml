@@ -1,0 +1,34 @@
+name: Alpha session contract offline
+
+on:
+  push:
+    branches: [feature/iios-production-session-contract]
+  pull_request:
+    paths:
+      - BACK END/backend/alpha_session_contract.py
+      - BACK END/backend/test_alpha_session_contract.py
+      - .github/workflows/alpha-session-contract.yml
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.14.7'
+      - name: Session contract and existing readiness regressions
+        working-directory: BACK END/backend
+        run: >-
+          python -B -m unittest -v test_alpha_session_contract
+          test_alpha_session_readiness.ReadinessTests.test_final_join_missing_stages_is_yellow_and_flags_false
+          test_alpha_session_readiness.ReadinessTests.test_synthetic_complete_chain_never_live_green
+          test_alpha_session_readiness.SharedSchedulerBoundaryTests.test_runner_uses_shared_scheduler_and_retains_both_guards
+      - name: Whitespace
+        run: git diff --check HEAD^ HEAD
