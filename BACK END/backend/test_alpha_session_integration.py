@@ -107,7 +107,8 @@ class IntegrationTests(unittest.TestCase):
     def test_rehashed_schedule_mutations_rejected(self):
         original = self.build()
         for field, value in (('maximum_requests', 476), ('scope', 'LIVE_EVIDENCE'),
-                             ('execution_authorized', True), ('timeout_seconds', 21)):
+                             ('execution_authorized', True), ('timeout_seconds', 21),
+                             ('execution_authorized', 0), ('maximum_requests', 475.0)):
             plan = deepcopy(original); plan[field] = value
             with self.assertRaises(ValueError): self.verify(plan)
         plan = deepcopy(original); plan['rows'][1]['symbols'].reverse()

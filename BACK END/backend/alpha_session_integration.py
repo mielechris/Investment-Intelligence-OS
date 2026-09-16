@@ -64,7 +64,9 @@ def verify_session_plan(candidate, candidate_hash, contract, calendar, universe,
     pin(candidate, candidate_hash)
     rebuilt = session_plan(contract, calendar, universe, spine_session,
                            expected=expected, now=now, source_commit=source_commit)
-    require(candidate == rebuilt, 'SESSION_PLAN_SUBSTITUTION')
+    # Python equality treats False == 0 and 475 == 475.0. Compare canonical
+    # identities so rehashed type substitutions cannot pass reconstruction.
+    require(content_hash(candidate) == content_hash(rebuilt), 'SESSION_PLAN_SUBSTITUTION')
     return deepcopy(rebuilt)
 
 
