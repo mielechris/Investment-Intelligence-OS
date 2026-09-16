@@ -26,6 +26,16 @@ on:
       - BACK END/backend/alpha_observation_launch.py
       - BACK END/backend/alpha_observation_child.py
       - BACK END/backend/test_alpha_observation_launch.py
+      - BACK END/backend/alpha_observation_execution.py
+      - BACK END/backend/test_alpha_observation_execution.py
+      - BACK END/backend/alpha_denial_collector.py
+      - BACK END/backend/test_alpha_denial_collector.py
+      - BACK END/backend/alpha_runtime_bootstrap.py
+      - BACK END/backend/test_alpha_runtime_bootstrap.py
+      - BACK END/backend/alpha_market_baseline.py
+      - BACK END/backend/alpha_session_execution.py
+      - BACK END/backend/provider_gateway_qualification.py
+      - BACK END/backend/provider_gateway_transport.py
       - BACK END/backend/alpha_observation_billing.py
       - BACK END/backend/test_alpha_observation_billing.py
       - .github/workflows/alpha-session-contract.yml
@@ -47,20 +57,25 @@ jobs:
           python-version: '3.14.7'
       - name: Session contract and existing readiness regressions
         working-directory: BACK END/backend
-        run: >-
-          python -B -m unittest -v test_alpha_session_contract
-          test_alpha_session_integration
-          test_alpha_session_package
-          test_alpha_session_evidence
-          test_alpha_session_preflight
-          test_alpha_short_observation
-          test_alpha_production_runtime
-          test_alpha_observation_lifecycle
-          test_alpha_observation_adapter
-          test_alpha_observation_billing
-          test_alpha_observation_launch
-          test_alpha_session_readiness.ReadinessTests.test_final_join_missing_stages_is_yellow_and_flags_false
-          test_alpha_session_readiness.ReadinessTests.test_synthetic_complete_chain_never_live_green
-          test_alpha_session_readiness.SharedSchedulerBoundaryTests.test_runner_uses_shared_scheduler_and_retains_both_guards
+        run: |
+          set -eu
+          test_root=$(mktemp -d "${RUNNER_TEMP}/iios-provider-connection-source-tests-observation-XXXXXXXX")
+          export IIOS_GATEWAY_TEST_ROOT="$test_root" TMPDIR="$test_root"
+          python -B - <<'PYTEST'
+          import sys, unittest
+          from pathlib import Path
+          blocked = []
+          def guard(event, args):
+              if event.startswith('socket.') or event in ('subprocess.Popen', 'os.system', 'os.posix_spawn', 'os.kill', 'os.killpg'):
+                  blocked.append(event)
+                  raise RuntimeError('OFFLINE_EFFECT_REJECTED')
+              if event == 'open' and isinstance(args[0], str) and any(p.lower() in ('keychains', 'ledgers', '.ssh', '.aws') for p in Path(args[0]).parts):
+                  blocked.append('PROTECTED')
+                  raise RuntimeError('PROTECTED_REJECTED')
+          sys.addaudithook(guard)
+          names = ['test_alpha_session_contract', 'test_alpha_session_integration', 'test_alpha_session_package', 'test_alpha_session_evidence', 'test_alpha_session_preflight', 'test_alpha_short_observation', 'test_alpha_production_runtime', 'test_alpha_observation_lifecycle', 'test_alpha_observation_adapter', 'test_alpha_observation_billing', 'test_alpha_observation_launch', 'test_alpha_observation_execution', 'test_alpha_denial_collector', 'test_alpha_runtime_bootstrap', 'test_provider_gateway_live_contract', 'test_provider_gateway_qualification', 'test_provider_gateway_transport', 'test_provider_gateway_credentials', 'test_provider_gateway_wire', 'test_alpha_market_baseline.BulkTests', 'test_alpha_session_readiness.ReadinessTests.test_final_join_missing_stages_is_yellow_and_flags_false', 'test_alpha_session_readiness.ReadinessTests.test_synthetic_complete_chain_never_live_green', 'test_alpha_session_readiness.SharedSchedulerBoundaryTests']
+          result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
+          sys.exit(0 if result.wasSuccessful() and not blocked else 1)
+          PYTEST
       - name: Whitespace
         run: git diff --check HEAD^ HEAD

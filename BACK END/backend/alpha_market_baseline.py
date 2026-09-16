@@ -100,6 +100,10 @@ def verify_plan(value, expected):
     pin(value, expected)
     require(isinstance(value, dict) and 'schema' in value, 'PLAN_VERSION_REQUIRED')
     schema = value['schema']
+    if schema == 'iios-alpha-short-gateway-plan-v1':
+        from alpha_observation_execution import verify_gateway_plan
+        verify_gateway_plan(value, expected)
+        return
     require(schema in ('iios-alpha-bulk-plan-v1', 'iios-alpha-session-plan-v2', RADAR_SCHEMA),
             'PLAN_VERSION_UNSUPPORTED')
     require({'universe', 'universe_parent', 'calendar', 'calendar_parent', 'root'} <= set(value),
@@ -133,6 +137,10 @@ def admit_batch(manifest, account):
             'BULK_TRANSPORT_BOUND')
     require(account.get('qualification_parameters') == manifest['parameters'], 'BULK_ACCOUNT_FUNCTION_BINDING')
     require(account['rate_per_minute'] <= 150, 'RATE_CEILING')
+    if value['schema'] == 'iios-alpha-short-gateway-plan-v1':
+        from alpha_observation_execution import verify_allowance
+        verify_allowance(manifest, account)
+        require(manifest['maximum_age_seconds'] == 60, 'SHORT_FRESHNESS_BOUND')
     if value['schema'] == RADAR_SCHEMA:
         require(manifest['maximum_age_seconds'] == 60, 'RADAR_FRESHNESS_BOUND')
         require(utc(account['expires_at']) >= utc(value['finalization_deadline']), 'RADAR_ACCOUNT_EXPIRY')

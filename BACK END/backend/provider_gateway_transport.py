@@ -21,13 +21,14 @@ from provider_gateway_https import Response, DeadlineReader, DeadlineSocket, bou
 
 
 class NativeHTTPS:
-    def exchange(self, *, host, address, method, target, headers, body, tls_file, timeout, limit):
+    def exchange(self, *, host, address, method, target, headers, body, tls_file, timeout, limit, before_request=None):
         """Production route admission remains independent of shared wire mechanics."""
         require(any(host == route[1] and method == route[0] and target.split('?', 1)[0] == route[2] for route in ROUTES.values()), 'NATIVE_ROUTE_REJECTED')
         address = str(ipaddress.IPv4Address(address))
         return bounded_https(host=host, address=address, port=443, method=method,
                              target=target, headers=headers, body=body,
-                             tls_file=tls_file, timeout=timeout, limit=limit)
+                             tls_file=tls_file, timeout=timeout, limit=limit,
+                             before_request=before_request or (lambda: None))
 
 
 def _unique(pairs):
@@ -38,10 +39,10 @@ def _unique(pairs):
     return result
 
 
-def exchange(admission, material, *, network, now):
+def exchange(admission, material, *, network, now, dispatch_clock=None):
     require(type(admission) is Admission, 'ADMISSION_REQUIRED')
     admission.recheck(now)
-    m, _, r = admission.documents()
+    m, a, r = admission.documents()
     from provider_gateway_qualification import verify_runtime
     verify_runtime(admission)
     require((m['mode'] == 'LIVE_QUALIFICATION') == (type(network) is NativeHTTPS), 'NETWORK_BOUNDARY_SCOPE')
@@ -70,7 +71,15 @@ def exchange(admission, material, *, network, now):
         else:
             target = m['path'] + '?' + urlencode(parameters)
         require(len(target) <= 16000, 'URL_BOUND')
-        reply = network.exchange(host=m['host'], address=r['network_addresses'][p], method=m['method'], target=target, headers=headers, body=body, tls_file=str(Path(r['root']) / r['tls']), timeout=m['timeout_seconds'], limit=m['maximum_response_bytes'])
+        extra = {}
+        if a.get('bulk_plan', {}).get('schema') == 'iios-alpha-short-gateway-plan-v1':
+            from alpha_observation_execution import window
+            require(callable(dispatch_clock), 'SHORT_DISPATCH_CLOCK')
+            def before_send():
+                window(a, dispatch_clock())
+            before_send()
+            extra['before_request'] = before_send
+        reply = network.exchange(host=m['host'], address=r['network_addresses'][p], method=m['method'], target=target, headers=headers, body=body, tls_file=str(Path(r['root']) / r['tls']), timeout=m['timeout_seconds'], limit=m['maximum_response_bytes'], **extra)
         require(type(reply) is Response and type(reply.status) is int and type(reply.body) is bytes, 'RESPONSE_TYPE')
         status = reply.status
         request_start, response_end = reply.request_start, reply.response_end

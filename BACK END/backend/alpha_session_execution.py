@@ -104,6 +104,8 @@ def execute_day(m, a, *, clock, expected_bulk_previous, dispatch,
         require(stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and st.st_uid == os.getuid() and stat.S_IMODE(st.st_mode) == 0o600, 'DAY_LOCK_IDENTITY')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         allowed = {'day.lock'} | {row['id'] for row in day['rows']}
+        if day.get('schema') == 'iios-alpha-short-gateway-plan-v1':
+            allowed.add('controller-start.json')
         allowed |= {f'{i}.{suffix}.json' for i in range(slot) for suffix in ('reserved', 'complete')}
         names = set(os.listdir(fd))
         required = {f'{i}.{suffix}.json' for i in range(slot) for suffix in ('reserved', 'complete')}
@@ -134,6 +136,9 @@ def execute_day(m, a, *, clock, expected_bulk_previous, dispatch,
             require(all(utc(t) <= dispatch_now for t in prior_dispatches), 'CLOCK_ROLLBACK')
             require(sum(0 <= (dispatch_now - utc(t)).total_seconds() < 60 for t in prior_dispatches) < 3, 'ROLLING_RATE_GATE')
         verify_destination(fd, day['root'])
+        if day.get('schema') == 'iios-alpha-short-gateway-plan-v1':
+            from alpha_observation_execution import window
+            window(a, datetime.now(timezone.utc).isoformat() if clock is None else clock())
         reserved = write(fd, f'{slot}.reserved.json', {'plan': a['bulk_plan_parent'], 'slot': slot,
                            'source_commit': m['source_commit'], 'previous': previous})
         # An exception or process interruption leaves this immutable consumed slot.

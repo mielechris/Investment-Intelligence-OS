@@ -190,6 +190,9 @@ def _qualify(manifest, account, runtime, *, expected, credential_backend, networ
                        'maximum_cost': m['maximum_cost'], 'cost_unit': m['cost_unit'], 'attempts': 1,
                        'recovery_parent': expected_recovery, 'authority': locked_authority()}
         verify_destination(fd, m['root'])
+        if a.get('bulk_plan', {}).get('schema') == 'iios-alpha-short-gateway-plan-v1':
+            from alpha_observation_execution import window
+            window(a, clock())
         reservation_hash = publish(fd, slot, reservation)
         started = clock()
         result = {'schema': 'iios-provider-qualification-receipt-v1', **shared, 'recovery_parent': expected_recovery, 'scope': mode, 'provider': m['provider'], 'role': m['role'], 'parents': {**dict(admission.parents), 'reservation': reservation_hash}, 'start': started, 'end': None, 'result': 'UNVERIFIED', 'http_status': None, 'raw_response_sha256': None, 'normalized_sha256': None, 'observations': None, 'billing': 'UNVERIFIED', 'maximum_reserved_cost': m['maximum_cost'], 'cost_unit': m['cost_unit'], 'credential_selector_access_count': 0, 'retry_count': 0, 'provider_readiness': 'NOT_READY', 'authority': locked_authority()}
@@ -205,7 +208,7 @@ def _qualify(manifest, account, runtime, *, expected, credential_backend, networ
                 verify_destination(fd, m['root'])
                 if a.get('bulk_plan', {}).get('requires_preflight'):
                     result['dispatch_time'] = clock()
-                response = exchange(admission, material, network=network, now=clock())
+                response = exchange(admission, material, network=network, now=clock(), dispatch_clock=clock)
                 result['http_status'] = response['status']
                 if a.get('bulk_plan', {}).get('requires_preflight'):
                     result['response_time'] = clock()
