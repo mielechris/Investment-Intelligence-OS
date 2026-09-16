@@ -29,10 +29,15 @@ def report(result, *, failure=None, verified=None):
 
 
 def evaluate_bundle(bundle, *, now, approved_runtime_root, approved_claims_root):
-    require(type(bundle) is dict and set(bundle)==FIELDS and
-            bundle['schema']=='iios-alpha-preflight-input-v1','PREFLIGHT_BUNDLE_SCHEMA')
+    require(type(bundle) is dict and set(bundle)==FIELDS and bundle['schema'] in
+            ('iios-alpha-preflight-input-v1','iios-alpha-short-preflight-input-v1'),'PREFLIGHT_BUNDLE_SCHEMA')
+    from alpha_short_observation import PLAN_SCHEMA as SHORT_SCHEMA
+    short=bundle['schema']=='iios-alpha-short-preflight-input-v1'
+    require(type(bundle['plan']) is dict and
+            (bundle['plan'].get('schema')==SHORT_SCHEMA) is short,'PREFLIGHT_MODE_BINDING')
     inputs=bundle['package_inputs']
-    require(type(inputs) is dict and set(inputs)==INPUT_FIELDS,'PREFLIGHT_INPUT_SCHEMA')
+    fields=INPUT_FIELDS|{'observation'} if short else INPUT_FIELDS
+    require(type(inputs) is dict and set(inputs)==fields,'PREFLIGHT_INPUT_SCHEMA')
     verified=verify_candidate_evidence(bundle['candidate'],bundle['candidate_hash'],bundle['plan'],
         bundle['account'],bundle['runtime'],bundle['allowance'],runtime_manifest=bundle['runtime_manifest'],
         claims_manifest=bundle['claims_manifest'],claims_manifest_hash=bundle['claims_manifest_hash'],

@@ -37,11 +37,15 @@ def money(value):
 
 
 def bound_package(plan, account, runtime, allowance, *, input_pins, contract, calendar,
-                  universe, spine_session, expected, now, source_commit):
+                  universe, spine_session, expected, now, source_commit, observation=None):
     require(type(input_pins) is dict and set(input_pins) == {'plan', 'account', 'runtime', 'allowance'},
             'PACKAGE_PINS')
     plan = verify_session_plan(plan, input_pins['plan'], contract, calendar, universe, spine_session,
-                               expected=expected, now=now, source_commit=source_commit)
+                               expected=expected, now=now, source_commit=source_commit, observation=observation)
+    from alpha_short_observation import PLAN_SCHEMA as SHORT_SCHEMA, PACKAGE_SCHEMA as SHORT_PACKAGE
+    # Version discrimination precedes budget arithmetic. Never infer a mode from a count.
+    short = plan['schema'] == SHORT_SCHEMA
+    maximum_requests = 3 if short else 475
     for name, document, fields in (('account', account, ACCOUNT), ('runtime', runtime, RUNTIME),
                                     ('allowance', allowance, ALLOWANCE)):
         safe_document(document)
@@ -76,7 +80,7 @@ def bound_package(plan, account, runtime, allowance, *, input_pins, contract, ca
     require(allowance['account_parent'] == input_pins['account'] and
             allowance['runtime_parent'] == input_pins['runtime'] and
             allowance['account_identity'] == account['account_identity'], 'PACKAGE_ALLOWANCE_PARENTS')
-    require(type(allowance['maximum_requests']) is int and allowance['maximum_requests'] == 475 and
+    require(type(allowance['maximum_requests']) is int and allowance['maximum_requests'] == maximum_requests and
             type(allowance['enrichment_requests']) is int and allowance['enrichment_requests'] == 0,
             'PACKAGE_ALLOWANCE_COUNT')
     require(allowance['released'] is False and allowance['cost_unit'] == account['cost_unit'],
@@ -84,12 +88,12 @@ def bound_package(plan, account, runtime, allowance, *, input_pins, contract, ca
     # Precision is bounded independently of a caller's Decimal context.
     with localcontext() as ctx:
         ctx.prec = 64
-        total = 475 * money(account['maximum_request_cost'])
+        total = maximum_requests * money(account['maximum_request_cost'])
         require(money(allowance['maximum_cost']) == total <= money(account['available_unreserved']),
                 'PACKAGE_ALLOWANCE_COST')
-    return {'schema': SCHEMA, 'scope': SCOPE, 'source_commit': source_commit, 'session': plan['session'],
+    return {'schema': SHORT_PACKAGE if short else SCHEMA, 'scope': SCOPE, 'source_commit': source_commit, 'session': plan['session'],
             'parents': dict(input_pins), 'session_parents': dict(expected),
-            'maximum_requests': 475, 'maximum_cost': allowance['maximum_cost'],
+            'maximum_requests': maximum_requests, 'maximum_cost': allowance['maximum_cost'],
             'cost_unit': allowance['cost_unit'], 'status': 'BINDINGS_VALID_ONLY',
             'qualification_authorized': False, 'execution_authorized': False,
             'production_qualified': False, 'allowance_released': False, 'authority': locked_authority(),

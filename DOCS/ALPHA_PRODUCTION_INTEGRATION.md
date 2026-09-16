@@ -182,3 +182,92 @@ The original full synthetic run proves accelerated logical execution and a
 separate minute pacing boundary. It does not prove a full elapsed-time market
 session. CI cannot inspect the user's installed Mac services or protected ledger.
 Neither a branch merge nor a GREEN unit-test job establishes those local gates.
+
+## Short observation candidate (offline implementation)
+
+`alpha_short_observation.py` adds a separate, reconstructed contract. It does
+not truncate or relabel the 475-request plan. An independently pinned
+`iios-alpha-short-observation-window-v1` document supplies the exact source,
+exchange date, UTC start, ordered PILOT symbols, three-request maximum and false
+authorities. Its pin joins the existing session, reviewed calendar, ordered
+517-symbol universe and Truth Spine session pins. No start date/time is selected
+automatically. Closed/historical sessions, mismatched calendars, late starts and
+windows outside the actual reviewed exchange session fail closed. A reviewed
+shortened exchange day can contain this short window; it still cannot use the
+legacy normal-day 475-request contract.
+
+The proposed pilot is MU, SPY, XLK, VNQ, TLT, GLD, UUP, IBIT, PFF, BIL. These ten
+symbols are observed three times; this is neither 517-symbol coverage nor a full
+market-day observation. All requests are Alpha REALTIME_BULK_QUOTES over the
+existing HTTPS route. The contract specifies:
+
+| Phase | Relative time | Bound |
+|---|---|---|
+| Startup | T−60 through T | All runtime/confinement/ownership/ACK/TLS admission before dispatch |
+| Bulk preflight | T | Start in [T,T+5s); response before T+25s |
+| Observation 1 | T+60s | Same five-second start window and twenty-second request limit |
+| Observation 2 | T+120s | Same bounds; no start without accepted preflight |
+| Reconciliation | after final response through T+180s | Three independently bound reservations, responses and completions |
+| Cleanup/publication | by T+300s | Dedicated 120s reserve, ownership-verified exit and listener clearance |
+
+The selected T must place the entire five-minute window inside the reviewed
+exchange session. Authority/account validity must also cover startup and final
+cleanup. Maximum request size is 1 MB; maximum observed quote age is 60 seconds,
+as in the existing bulk contract. Provider timestamp absence, future timestamps,
+stale/partial/duplicate/unexpected coverage or ambiguous billing stops the run.
+HTTP success and a returned price never establish realtime freshness.
+
+Three starts per rolling minute remains a ceiling; the proposed start spacing is
+60 seconds. Actual UTC and monotonic timings are required; acceleration is not
+accepted. No retries, redirects, pagination, fallback, enrichment, rescheduling
+or backfill. A missed window is a failed/partial short observation, never a full
+day. Interrupted reservations remain consumed or ambiguous until separately
+resolved; invalid recovery evidence does not release budget. Owned roles must be
+cleaned independently, and an unverified process receives no signal.
+
+Costs are not constants in source: the existing decimal account/allowance checks
+require exactly **3 × independently reviewed per-request maximum**, sufficient
+available/unreserved allowance, zero enrichment, no overage/top-up and
+`released=false`. No subscription or old receipt supplies those missing facts.
+All nine existing reviewed account claims and exact runtime/evidence file checks
+remain required. Provider payloads stay ephemeral; only the existing sanitized
+coverage/timing/failure and accounting receipts may be retained, subject to the
+reviewed retention right. Raw quotes, raw bodies, arbitrary provider text and
+secret-bearing URLs must not be persisted.
+
+The package schema is `iios-alpha-short-observation-package-v1`; its input bundle
+schema is `iios-alpha-short-preflight-input-v1`. The latter adds exactly
+`observation` to `package_inputs`, and `observation` to its independently supplied
+`expected` pins. The CLI flags, approved roots and input-byte/hash requirements
+are unchanged. Full-day bundles retain `iios-alpha-preflight-input-v1` and their
+exact existing fields. Mode is selected only by explicit schema, never count.
+Both modes still report BLOCKED even when file/binding verification passes.
+
+### Production lifecycle boundary and remaining work
+
+This candidate declares lifecycle acceptance requirements, not a new supervisor
+or an executable capability. The unchanged production runner still enforces
+MONDAY_ONLY, CLI_LIVE_ONLY and RADAR_NATIVE_ADAPTER_PENDING and rejects this
+package. `truth_spine_service.configuration` currently admits isolated-shadow
+topology, while its publisher depends on validated ledger inputs. Do not invoke
+that path as a substitute for a ledger-free real-provider observation. The
+existing Truth Spine session supervisor/health interfaces and OS process-identity
+inspector are the integration points for a later reviewed adapter. Required
+bindings include selected release/runtime, session, generation, scheduler and
+publisher ownership, `/health/ready`, immutable receipt parents and shutdown.
+
+Replacing a pending guard requires a verified production admission adapter and
+qualified confinement. Python audit hooks and prior synthetic receipts are not
+that proof. A later execution proposal must bind accepted source, runtime,
+platform, TLS, exact provider address, reviewed account claims, unreleased then
+explicitly authorized cost cap, roots/ports, startup/stop owners and T. No such
+authority is generated by this module. Short-observation acceptance must precede
+a separately authorized full-day package; the latter retains its 475-request
+accounting and requires actual elapsed-time evidence.
+
+Fresh-runtime preparation must use independently pinned, admissible toolchain
+inputs, not a relabeled historical package. The historical runtime builder and
+production immutable-runtime manifest have different schemas. Ownership and
+non-group-writable input checks remain mandatory; missing build provenance or
+rejected inputs must be resolved before assembly. Test-runtime bytes and source
+CI do not establish a selected production runtime.

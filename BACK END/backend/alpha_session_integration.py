@@ -59,7 +59,12 @@ def session_plan(contract, calendar, universe, spine_session, *, expected, now, 
 
 
 def verify_session_plan(candidate, candidate_hash, contract, calendar, universe, spine_session,
-                        *, expected, now, source_commit):
+                        *, expected, now, source_commit, observation=None):
+    from alpha_short_observation import PLAN_SCHEMA as SHORT_SCHEMA, verify_short_plan
+    if type(candidate) is dict and candidate.get('schema') == SHORT_SCHEMA:
+        return verify_short_plan(candidate, candidate_hash, contract, calendar, universe, spine_session,
+                                 observation, expected=expected, now=now, source_commit=source_commit)
+    require(observation is None, 'FULL_SESSION_OBSERVATION_FORBIDDEN')
     safe_document(candidate)
     pin(candidate, candidate_hash)
     rebuilt = session_plan(contract, calendar, universe, spine_session,
