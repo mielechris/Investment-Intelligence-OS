@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+from urllib.parse import urlsplit
 
 from alpha_session_contract import require
 from alpha_session_evidence import verify_files, open_root, path_parts, identity
@@ -19,6 +20,49 @@ from truth_spine_lineage import check_pin
 
 SCHEMA = 'iios-production-runtime-build-input-v1'
 PROVENANCE = {'distribution', 'build_recipe', 'toolchain', 'dependency_artifacts', 'closure_review'}
+
+
+def select_wheels(metadata, metadata_hash, *, lock_bytes):
+    """Deterministic Darwin/arm64 CPython3.14 candidates, not import approval.
+
+    Reject Windows ARM lookalikes. Requires-Python, dependency closure, native
+    load commands and archive contents still require independent review.
+    """
+    safe_document(metadata); pin(metadata, metadata_hash)
+    versions = lock_versions(lock_bytes)
+    require(metadata.get('lock_sha256') == hashlib.sha256(lock_bytes).hexdigest(), 'WHEEL_LOCK')
+    require(type(metadata.get('rows')) is list and len(metadata['rows']) == len(versions), 'WHEEL_ROWS')
+    selected = []; seen = set()
+    for row in metadata['rows']:
+        name = re.sub('[-_.]+', '-', row['name']).lower()
+        require(name not in seen and name in versions and row['version'] == versions[name], 'WHEEL_DISTRIBUTION')
+        seen.add(name); candidates = []
+        for artifact in row['artifacts']:
+            filename = artifact['filename']
+            require(type(filename) is str and re.fullmatch('[A-Za-z0-9_.+-]{1,240}', filename), 'WHEEL_FILENAME')
+            tags = filename[:-4].rsplit('-', 3) if filename.endswith('.whl') else []
+            if len(tags) != 4: continue
+            prefix, interpreter, abi, platform = tags
+            expected_prefix = name.replace('-', '_') + '-' + row['version']
+            if prefix.lower() != expected_prefix.lower(): continue
+            pure = interpreter in ('py3', 'py2.py3') and abi == 'none' and platform == 'any'
+            mac = re.fullmatch(r'macosx_(\d+)_(\d+)_(arm64|universal2)', platform)
+            compatible = (interpreter == 'cp314' and abi == 'cp314') or (
+                re.fullmatch(r'cp3(?:[7-9]|1[0-4])', interpreter) and abi == 'abi3')
+            native = mac and int(mac[1]) <= 26 and compatible
+            if not (pure or native): continue
+            parsed = urlsplit(artifact['url'])
+            require(parsed.scheme == 'https' and parsed.hostname == 'files.pythonhosted.org' and
+                    parsed.username is None and parsed.password is None and parsed.port is None and
+                    not parsed.query and not parsed.fragment and parsed.path.endswith('/'+filename) and
+                    sha(artifact['sha256']) and type(artifact['bytes']) is int and
+                    0 < artifact['bytes'] <= 64*1024*1024, 'WHEEL_ARTIFACT')
+            rank = 0 if native and mac[3] == 'arm64' else 1 if native else 2
+            candidates.append((rank, filename, artifact))
+        require(bool(candidates), 'WHEEL_COMPATIBLE_MISSING')
+        _, _, artifact = sorted(candidates, key=lambda x: x[:2])[0]
+        selected.append({'distribution': name, 'version': row['version'], **artifact})
+    return sorted(selected, key=lambda x: x['distribution'])
 
 
 def lexical(value, *, absolute=True):

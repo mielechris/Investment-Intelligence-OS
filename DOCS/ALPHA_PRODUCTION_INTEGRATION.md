@@ -151,6 +151,55 @@ paths or exception messages. This entrypoint does not execute native validators.
    final reconciliation and shutdown evidence. Accelerated rehearsal results
    cannot substitute for elapsed-time evidence.
 
+## Observation controller and billing compatibility
+
+`alpha_observation_adapter.ObservationAdapter` implements the receipt-side
+lifecycle controller against the reconstructed short topology. It uses the
+existing Truth Spine `ProcessObservation`, UTC normalization and role set.
+Three complete observations must agree with the independently pinned parent
+launch and startup receipt, including PID, PPID, start time, executable/hash,
+exact argv and cwd. `collect_registration` performs exactly three independent
+inspection calls without package verification or publication in that loop.
+The native inspector/effect binding belongs to the existing Truth Spine owner;
+there is no new process launcher, hidden command mode or environment bypass.
+
+ACK eligibility requires registered ownership, exact startup parent and listener
+owner. TLS must follow all role acknowledgments. Each of three requests needs a
+bound reservation and a second dispatch-window check; a consumed send slot cannot
+be admitted again. Completion requires the independent response parent, coverage
+and freshness findings. Failure latches the controller closed without releasing
+reservations. Cleanup checks every role independently, reinspects identity before
+delegating to the existing owner, and never signals an unregistered or changed
+child. The owner must still reverify immediately before each signal. Verified
+forced exit is distinct from cooperative success. Final reconciliation, publication
+and three stable port-clear observations cannot override failed identity cleanup.
+
+Adapter results and receipt-only health projections are permanently
+OBSERVATION_ADAPTER_VALIDATION_ONLY, with native semantics, production qualification,
+market readiness and execution authority false. Supplied observations and proof
+hashes are not self-authenticating OS evidence. The current Truth Spine launcher
+still admits only its existing shadow commands; `/health/ready` and its ledger
+contract are unchanged. No runnable production effect binding has been granted.
+That exact command/root/confinement binding must be independently qualified before
+this controller can be connected to production effects; CLI guards stay closed.
+
+`alpha_observation_billing.review_billing` distinguishes PREPAID_UNITS,
+METERED_CURRENCY and FLAT_SUBSCRIPTION. All require independently pinned current
+cost/billing/rate reviews, exactly three local request slots, an explicit USD
+per-request maximum, spending cap and spending headroom. A flat subscription does
+not imply zero marginal cost or unlimited requests. Zero requires an explicit
+reviewed finding. Prepaid unit availability is checked separately from currency;
+non-prepaid models reject invented unit balances. Ambiguity retains the consumed
+request and maximum spending reservation with no retry. The currency projection
+fits existing package arithmetic without changing its assertions; available
+headroom means local authorized spending capacity, not assumed provider credits.
+It does not issue an allowance, reserve money or prove account entitlement.
+
+The runtime selector now rejects Windows ARM and incompatible Python ABI wheels
+before selecting one deterministic Darwin/arm64 candidate per locked distribution.
+Candidate tags do not prove Requires-Python, dependency resolution, signatures,
+dynamic linkage or successful imports; all remain build/qualification checks.
+
 ## Isolated runtime assembly and observation topology implementation
 
 `scripts/alpha_production_runtime.py` is an importable, non-executing assembler

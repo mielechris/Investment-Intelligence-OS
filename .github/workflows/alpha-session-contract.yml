@@ -21,6 +21,10 @@ on:
       - BACK END/backend/test_alpha_production_runtime.py
       - BACK END/backend/alpha_observation_lifecycle.py
       - BACK END/backend/test_alpha_observation_lifecycle.py
+      - BACK END/backend/alpha_observation_adapter.py
+      - BACK END/backend/test_alpha_observation_adapter.py
+      - BACK END/backend/alpha_observation_billing.py
+      - BACK END/backend/test_alpha_observation_billing.py
       - .github/workflows/alpha-session-contract.yml
 
 permissions:
@@ -49,6 +53,8 @@ jobs:
           test_alpha_short_observation
           test_alpha_production_runtime
           test_alpha_observation_lifecycle
+          test_alpha_observation_adapter
+          test_alpha_observation_billing
           test_alpha_session_readiness.ReadinessTests.test_final_join_missing_stages_is_yellow_and_flags_false
           test_alpha_session_readiness.ReadinessTests.test_synthetic_complete_chain_never_live_green
           test_alpha_session_readiness.SharedSchedulerBoundaryTests.test_runner_uses_shared_scheduler_and_retains_both_guards

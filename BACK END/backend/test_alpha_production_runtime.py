@@ -155,5 +155,35 @@ class RuntimeAssemblyTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.build()
         self.assertFalse((self.output/'runtime-test/runtime-manifest.json').exists())
 
+    def wheel_metadata(self, names):
+        return dict(lock_sha256=self.lock_hash,rows=[dict(name='example',version='1.0',artifacts=[
+            dict(filename=n,url='https://files.pythonhosted.org/packages/'+n,sha256='a'*64,bytes=100)
+            for n in names])])
+
+    def test_wheel_platform_selection_excludes_windows_arm(self):
+        names=['example-1.0-cp314-cp314-win_arm64.whl','example-1.0-py3-none-any.whl',
+               'example-1.0-cp314-cp314-macosx_11_0_arm64.whl']
+        m=self.wheel_metadata(names)
+        self.assertEqual(runtime.select_wheels(m,content_hash(m),lock_bytes=self.lock)[0]['filename'],names[-1])
+        m=self.wheel_metadata(names[:1])
+        with self.assertRaisesRegex(ValueError,'COMPATIBLE_MISSING'):runtime.select_wheels(m,content_hash(m),lock_bytes=self.lock)
+
+    def test_wheel_wrong_abi_platform_and_name(self):
+        for name in ('example-1.0-cp314-cp314t-macosx_11_0_arm64.whl','example-1.0-cp313-cp313-macosx_11_0_arm64.whl',
+            'example-1.0-cp314-cp314-manylinux_arm64.whl','other-1.0-py3-none-any.whl'):
+            m=self.wheel_metadata([name])
+            with self.subTest(name=name),self.assertRaises(ValueError):runtime.select_wheels(m,content_hash(m),lock_bytes=self.lock)
+
+    def test_wheel_origin_hash_size_and_independent_metadata(self):
+        original=self.wheel_metadata(['example-1.0-py3-none-any.whl'])
+        for key,value in [('url','https://untrusted.invalid/file'),('sha256',''),('bytes',True)]:
+            m=deepcopy(original);m['rows'][0]['artifacts'][0][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):runtime.select_wheels(m,content_hash(m),lock_bytes=self.lock)
+        with self.assertRaises(ValueError):runtime.select_wheels(original,'f'*64,lock_bytes=self.lock)
+
+    def test_wheel_duplicate_and_missing_distribution(self):
+        m=self.wheel_metadata(['example-1.0-py3-none-any.whl']);m['rows']*=2
+        with self.assertRaises(ValueError):runtime.select_wheels(m,content_hash(m),lock_bytes=self.lock)
+
 
 if __name__=='__main__':unittest.main()
