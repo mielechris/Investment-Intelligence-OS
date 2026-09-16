@@ -138,5 +138,11 @@ class IntegrationTests(unittest.TestCase):
         plan = self.build()
         with self.assertRaises(ValueError): validate_package(plan, content_hash(plan))
 
+    def test_observation_design_receipt_cannot_enter_full_day_join(self):
+        plan=self.build(); evidence,pins=self.chain(plan)
+        evidence[STAGES[0]]['schema']='iios-alpha-observation-design-stage-v1'
+        pins[STAGES[0]]=content_hash(evidence[STAGES[0]])
+        with self.assertRaisesRegex(ValueError,'STAGE_SCHEMA'):self.join(plan,evidence,pins)
+
 
 if __name__ == '__main__': unittest.main()

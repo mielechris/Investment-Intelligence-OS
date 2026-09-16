@@ -151,6 +151,68 @@ paths or exception messages. This entrypoint does not execute native validators.
    final reconciliation and shutdown evidence. Accelerated rehearsal results
    cannot substitute for elapsed-time evidence.
 
+## Isolated runtime assembly and observation topology implementation
+
+`scripts/alpha_production_runtime.py` is an importable, non-executing assembler
+for an already built/extracted immutable input closure. It does not download,
+extract, compile, install or run software. The caller independently supplies the
+input document hash, accepted source commit, exact approved input/output roots,
+platform-file paths, source-lock bytes and their expected hash. The input schema
+is `iios-production-runtime-build-input-v1`. It binds a complete file inventory,
+`bin/python3.14`, TLS-bundle path, Darwin/arm64/Python 3.14.7 target, and independent
+distribution/build-recipe/toolchain/dependency-artifact/closure-review hashes.
+Those references need semantic provenance review; their syntax is not trust.
+
+All lexical checks precede file access. Existing immutable file verification and
+platform pin checks retain ownership, no-follow, inventory, size, mode and hash
+requirements. Old runtime roots and protected paths are rejected. Dependencies
+must match the independently supplied source lock exactly (normalize package
+name spelling; never silently omit an extra package such as pip). File copies
+use bounded FD-relative reads and exclusive writes; inputs are reverified after
+copy. An interrupted output is preserved and cannot be resumed or overwritten.
+The output emits the deployment manifest schema directly, with a fresh source
+binding, computed dependency inventory, exact output inventory and sealed modes.
+It is never a historical-manifest conversion.
+
+The returned assembly result binds the full input hash and manifest byte hash,
+reports ASSEMBLED_BYTES_ONLY and leaves all authorities false. Preserve that
+result outside the runtime root with its own independently recorded hash. An
+assembled manifest is not proof of executable compatibility, complete dynamic
+linkage, platform trust, TLS operation, relocation rejection or confinement.
+The existing native runtime validator and later source-bound admission remain
+mandatory. The unit tests copy deliberately non-executable bytes and confer no
+runtime qualification. No real admissible build inputs have been substituted
+for missing provenance.
+
+`alpha_observation_lifecycle.py` defines a reconstructed production-observation
+**design**, not a running service. It verifies the short package and separately
+pinned release/runtime/generation/owner bindings. It reuses the existing Truth
+Spine role and probe names, preserves three-sample ownership, receipt/listener
+before ACK, TLS before dispatch, no restart/retry, and both pre-reservation and
+pre-send dispatch-window requirements. It proposes a sanitized receipt-only
+channel with no ledger access; the existing isolated-shadow topology is unchanged.
+
+`alpha_session_integration.offline_observation_join` reconstructs that topology
+before joining design-stage receipts. Stage order, independent parents, source,
+session, generation, owners, UTC windows, strictly increasing monotonic values,
+three-request accounting and request-receipt replay are checked. Failed stages
+stop observations while still allowing independent shutdown/publication findings;
+primary and cleanup failures remain separate. Partial cleanup cannot make an
+incomplete run successful. Design-stage evidence requires OFFLINE_INTEGRATION_ONLY
+and DESIGN_TEST_ONLY, never a live or synthetic-native receipt conversion.
+Even a complete design chain returns OFFLINE_COMPLETE with native semantics,
+production qualification and execution authority false. Proof hashes are references
+for future independent verifiers, not proof that ownership or a provider response
+was actually observed. The old full-day stage join remains unchanged.
+
+Remaining production implementation is the actual verified launch capability and
+receipt publisher/health adapter within Truth Spine, wired to the stricter
+short dispatch windows and bounded cleanup. That work must not relabel shadow
+services or remove MONDAY_ONLY, CLI_LIVE_ONLY or RADAR_NATIVE_ADAPTER_PENDING
+without implemented production admission. OS confinement and native lifecycle
+qualification remain separate gates. This increment creates no listener,
+subprocess, credential reader, provider request, install or arming path.
+
 The 475-request synthetic milestone is complete. The stages above remain
 unqualified until their own evidence passes; this roadmap is not authorization
 to install, spend provider credits, launch a market session, or enable trading.

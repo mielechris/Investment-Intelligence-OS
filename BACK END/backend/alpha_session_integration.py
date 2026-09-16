@@ -11,6 +11,13 @@ PLAN_SCHEMA = 'iios-alpha-session-candidate-v1'
 SCOPE = 'OFFLINE_INTEGRATION_ONLY'
 
 
+def offline_observation_join(topology, topology_hash, evidence, stage_pins, **topology_inputs):
+    """Separate short-observation join; never convert shadow or live receipts."""
+    from alpha_observation_lifecycle import verify_topology, reduce_design
+    checked = verify_topology(topology, topology_hash, **topology_inputs)
+    return reduce_design(checked, evidence, stage_pins)
+
+
 def session_plan(contract, calendar, universe, spine_session, *, expected, now, source_commit):
     """Reconcile independently pinned identities with the existing Truth Spine.
 
