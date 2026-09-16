@@ -76,6 +76,52 @@ cannot be passed to the existing runner as an executable package. A later live
 admission adapter must verify actual evidence and filesystem/runtime identity;
 changing a scope string or accepting these candidate hashes is insufficient.
 
+## Fourth increment: read-only evidence files
+
+`alpha_session_evidence.py` reads only independently approved artifact roots.
+Root equality and lexical path checks precede filesystem access. Directory-FD
+traversal uses no-follow opens. Exact inventories, owner/immutable modes, single
+links, byte limits, hashes and before/after identities reject substitutions.
+Reads are bounded to 5,000 files, 64 MiB per file and 256 MiB per root; only
+explicit claim JSON (at most 4 MiB total) is retained in memory. Unexpected or
+missing files, duplicate JSON keys and changes during reads fail closed.
+
+The existing deployment runtime-manifest schema is reused. Manifest bytes and
+listed runtime files are checked, with interpreter and platform-manifest hashes
+bound to the candidate. No interpreter is executed. Actual platform files and
+running interpreter/module provenance still require the existing production
+runtime validator; this check cannot replace it.
+
+Reviewed account claim files must match independent account claim hashes,
+account/tier, source, session, symbols, endpoint/feed and the entire account
+validity window. Independent reviewers must establish the underlying provider
+facts. A matching file or review reference is not proof of its semantic truth.
+Unit tests use invented claim documents and non-executable interpreter bytes.
+
+Output is FILES_AND_BINDINGS_VERIFIED_ONLY. It preserves all false authorities
+and explicitly requires semantic account review, platform/running interpreter,
+OS confinement, live preflight, production lifecycle and execution authority.
+This is the read-only portion of admission, not a live execution capability.
+
+## Path to a full market-day observation test
+
+1. Complete and review production runtime/admission integration without relaxing
+   the existing live guards; qualify isolation using disposable resources.
+2. Independently review real account entitlements, approved costs, current
+   universe/calendar and provider freshness; perform a separately admitted,
+   bounded live preflight. No broker or order authority is needed.
+3. Exercise the actual production lifecycle and Truth Spine/publisher handshake
+   in a short controlled observation session, including stop, cleanup and stale
+   or missing evidence behavior, on the selected runtime.
+4. Independently admit one fresh session package for an entire market day and
+   collect actual UTC/monotonic timing, request accounting, generation/health,
+   final reconciliation and shutdown evidence. Accelerated rehearsal results
+   cannot substitute for elapsed-time evidence.
+
+The 475-request synthetic milestone is complete. The stages above remain
+unqualified until their own evidence passes; this roadmap is not authorization
+to install, spend provider credits, launch a market session, or enable trading.
+
 ## Subsequent implementation and acceptance
 
 1. Connect the reviewed session identity to a versioned schedule/package and
