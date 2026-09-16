@@ -382,3 +382,54 @@ production immutable-runtime manifest have different schemas. Ownership and
 non-group-writable input checks remain mandatory; missing build provenance or
 rejected inputs must be resolved before assembly. Test-runtime bytes and source
 CI do not establish a selected production runtime.
+
+## Separate runnable observation process binding
+
+`alpha_observation_launch.LaunchOwner` now implements the previously missing
+**receipt-only process effect binding**. It launches the fixed
+`alpha_observation_child.py` command, through the pinned system sandbox launcher,
+for the existing scheduler, publisher and backend role names. It does not call,
+rename, widen or relabel the isolated-shadow launcher. Its child is a new service
+component; it never reads a ledger or runs the market-data scheduler.
+
+The independently supplied capability hash, approved roots, source and topology
+parent must match before filesystem effects. Canonical lexical checks precede
+file access. Exact immutable runtime/release/control inventories are checked
+before launch and once before each registration. Fixed argv, isolated Python,
+empty-by-construction credential-free environment, closed stdin and bounded
+nonblocking pipes prevent arbitrary launch commands or raw-output retention.
+The output root and receipts use exclusive creation and existing FD-relative
+publication/identity checks. An interrupted root cannot be resumed.
+
+A child publishes startup before waiting for ACK, so registration never waits on
+an ACK-dependent event. The parent collects three complete independent Truth
+Spine process observations without repeated package admission inside the loop.
+PID, PPID, UTC start, executable/hash, exact argv/command and cwd must agree.
+Ownership is retained before publication, permitting cleanup after a publication
+failure. Exact startup parent and listener-owner verification precede ACK. The
+backend exposes only one fixed loopback TLS component response. It is not a
+production health endpoint, quote, provider receipt or external transport.
+
+The descriptor binds one monotonic-nanosecond clock origin and startup/stop/final
+deadlines. Startup is at most120seconds, component total at most900seconds, and
+at least120seconds remain after stop for cleanup. Cleanup independently reinspects
+each role before publishing its cooperative stop. Each wait is bounded to30seconds
+and the remaining global deadline. This binding has no terminate/kill fallback;
+unverified or surviving children remain UNVERIFIED. Exit code, hash-bound child
+exit receipt, listener census and three stable port-clear observations are all
+required. Clear ports cannot override failed ownership or exit verification.
+
+Every result is permanently OBSERVATION_LAUNCH_COMPONENT_ONLY, with production
+qualification and all authority fields false. Actual confinement, runtime imports,
+OS inspection, TLS and cleanup still require a separately approved selected-host
+qualification. A capability digest identifies a reviewed invocation; it does not
+prove the semantics of its runtime, policy or account. No component receipt can
+satisfy the existing live CLI, synthetic-native or production package contracts.
+The old production guards and the accepted475-request rehearsal are unchanged.
+
+This closes the source-level receipt-process launch mechanism, **not the real-data
+production admission/dispatch bridge**. Connecting a qualified controller to three
+live gateway requests still requires actual account/runtime/confinement/preflight
+proofs, explicit credential/cost authority, and a separately reviewed integration
+that preserves the current production guards. It cannot be obtained by changing
+this component scope or interpreting its TLS response as provider readiness.
