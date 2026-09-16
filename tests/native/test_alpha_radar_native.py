@@ -3354,6 +3354,63 @@ class FullLexicalAdmissionTests(unittest.TestCase):
         with patch.object(Path,'resolve',return_value=out.parent),self.assertRaisesRegex(ValueError,'FULL_PATH_ALIAS'):
             guard('open',(str(path),'r',os.O_RDONLY))
 
+    def test_component_parser_control_characters_and_unicode(self):
+        import alpha_radar_runner as run
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])
+        for code in range(128):
+            value=str(root)+'/item'+chr(code)+'end'
+            rejected=code<32 or code==127 or chr(code) in ('\\','~')
+            if rejected:
+                with self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+                    run.full_lexical_path(value,roots=(root,))
+            else:self.assertEqual(run.full_lexical_path(value,roots=(root,)),Path(value))
+        for name in ('café','λ','中文','keychainish','l70'):
+            value=root/name
+            self.assertEqual(run.full_lexical_path(value,roots=(root,)),value)
+
+    def test_component_parser_revalidates_changed_roots_and_exact_paths(self):
+        import alpha_radar_runner as run
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT']);roots=[root]
+        value=root/'item'
+        self.assertEqual(run.full_lexical_path(value,roots=roots),value)
+        roots[0]=root/'elsewhere'
+        with self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+            run.full_lexical_path(value,roots=roots)
+        for bad in (str(root)+'ish/item',str(root)+'/../item',str(root)+'//item'):
+            with self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+                run.full_lexical_path(bad,roots=(root,))
+        self.assertEqual(run.full_lexical_path('/dev/null',roots=(root,),exact=('/dev/null',)),Path('/dev/null'))
+        with self.assertRaisesRegex(ValueError,'^FULL_PATH_LEXICAL$'):
+            run.full_lexical_path('/dev/null/child',roots=(root,),exact=('/dev/null',))
+
+    def test_canonical_observations_are_repeated_in_order(self):
+        import alpha_radar_runner as run
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT']);value=root/'sub'/'item'
+        import stat
+        from types import SimpleNamespace
+        for _ in range(2):
+            seen=[]
+            def observe(path):
+                seen.append(Path(path));return SimpleNamespace(st_mode=stat.S_IFDIR|0o700)
+            with patch.object(os,'lstat',side_effect=observe),patch.object(Path,'resolve',return_value=value) as resolve:
+                self.assertEqual(run.full_canonical_path(value,roots=(root,)),value)
+            self.assertEqual(seen,[root,root/'sub',value]);resolve.assert_called_once_with()
+
+    def test_canonical_symlink_mutation_is_not_cached(self):
+        import alpha_radar_runner as run
+        import stat
+        from types import SimpleNamespace
+        root=Path(os.environ['IIOS_GATEWAY_TEST_ROOT']);value=root/'item'
+        with patch.object(os,'lstat',return_value=SimpleNamespace(st_mode=stat.S_IFREG|0o400)), \
+                patch.object(Path,'resolve',return_value=value):
+            self.assertEqual(run.full_canonical_path(value,roots=(root,)),value)
+        with patch.object(os,'lstat',return_value=SimpleNamespace(st_mode=stat.S_IFLNK|0o777)), \
+                patch.object(Path,'resolve',side_effect=AssertionError('SYMLINK_RESOLVED')) as resolve, \
+                self.assertRaisesRegex(ValueError,'^FULL_PATH_ALIAS$'):
+            run.full_canonical_path(value,roots=(root,))
+        resolve.assert_not_called()
+
+
 def measured_workload(seconds=1200, admission_ns=300_000_000_000, calls=2375):
     import alpha_radar_ci as ci
     return {'node':ci.WORKLOAD_NODE,'wall_seconds':seconds,

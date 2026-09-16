@@ -2237,55 +2237,58 @@ class FullOwnedProcesses(LifecycleOwnedProcesses):
             'signals':0,'clean':clean}
 
 def full_lexical_path(path, *, roots, exact=(), parent=None):
-    """Pure component admission. Never resolve, expand aliases or touch a path.
+    """Pure component admission; no filesystem reads or approval cache.
 
-    Roots and exact files are supplied by the independently admitted run.
-    Custom PathLike objects are rejected: __fspath__ could perform arbitrary IO.
-    Symlinks cannot be identified from spelling; admitted directory entries are
-    checked without following links by full_canonical_path before resolution.
+    Compare tuples of complete components, not string prefixes. All spellings
+    are revalidated on every call, including the independently supplied roots.
+    Custom PathLike objects remain rejected without invoking their methods.
     """
     from pathlib import PurePosixPath, PosixPath
     def spelling(value):
         require(type(value) in (str, PurePosixPath, PosixPath), 'FULL_PATH_LEXICAL')
         text = os.fspath(value)
-        require(type(text) is str and text and not any(ord(c)<32 or ord(c)==127 for c in text)
+        require(type(text) is str and text and re.search(r'[\x00-\x1f\x7f]', text) is None
                 and '\\' not in text and '~' not in text and '//' not in text,
                 'FULL_PATH_LEXICAL')
         parts = text.split('/')
         require(not any(v in ('.','..') for v in parts) and
                 not (len(text)>1 and text.endswith('/')), 'FULL_PATH_LEXICAL')
-        # No protected/home aliases, even if an untrusted caller lists a root.
         folded = tuple(v.casefold() for v in parts)
         require(not any(v in ('keychains','keychain','application support','l7','l8')
                         for v in folded) and not text.startswith(('/Users/','/home/','/var/','/tmp/')),
                 'FULL_PATH_LEXICAL')
-        return PurePosixPath(text)
+        return PurePosixPath(text).parts
+    def within(value, root):
+        return value[:len(root)] == root
     admitted = tuple(spelling(v) for v in roots)
     singles = tuple(spelling(v) for v in exact)
-    require(admitted and all(v.is_absolute() and len(v.parts)>3 and
-            v.parts[:3]==('/','private','tmp') and
-            v.parts[3].startswith('iios-provider-connection-source-tests-') for v in admitted),
+    require(admitted and all(len(v)>3 and v[:3]==('/','private','tmp') and
+            v[3].startswith('iios-provider-connection-source-tests-') for v in admitted),
             'FULL_PATH_LEXICAL')
     value = spelling(path)
     if parent is not None:
         base = spelling(parent)
-        require(base.is_absolute() and any(base==v or base.is_relative_to(v) for v in admitted)
-                and not value.is_absolute(), 'FULL_PATH_LEXICAL')
-        value = base/value
-    require(value.is_absolute() and (value in singles or any(value==v or value.is_relative_to(v)
-            for v in admitted)), 'FULL_PATH_LEXICAL')
-    return Path(value)
+        require(base[0]=='/' and any(within(base,v) for v in admitted)
+                and value[0]!='/', 'FULL_PATH_LEXICAL')
+        value = base + value
+    require(value[0]=='/' and (value in singles or any(within(value,v) for v in admitted)),
+            'FULL_PATH_LEXICAL')
+    return Path(*value)
 
 
 def full_canonical_path(path, *, roots, exact=()):
     """Additional no-follow entry checks; only called after lexical admission."""
     import stat
     value = full_lexical_path(path, roots=roots, exact=exact)
-    # Walk from the pinned admitted root, never through a substituted symlink.
-    anchors = [Path(v) for v in roots if value==Path(v) or value.is_relative_to(Path(v))]
-    anchor = max(anchors,key=lambda p:len(p.parts)) if anchors else value
-    entries = [anchor]
-    for part in value.relative_to(anchor).parts: entries.append(entries[-1]/part)
+    parts = value.parts
+    anchors = [Path(v).parts for v in roots if parts[:len(Path(v).parts)]==Path(v).parts]
+    anchor = max(anchors,key=len) if anchors else parts
+    # Preserve the same ordered lstat observations and final canonical resolve.
+    entry = os.path.join(*anchor)
+    entries = [entry]
+    for part in parts[len(anchor):]:
+        entry = os.path.join(entry,part)
+        entries.append(entry)
     for entry in entries:
         try: mode = os.lstat(entry).st_mode
         except FileNotFoundError: break
