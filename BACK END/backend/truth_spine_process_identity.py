@@ -260,7 +260,7 @@ def normalized(observation, root):
 
 
 def receipt_path(root, instance):
-    if not re.fullmatch(r'shadow-child-[0-9a-f]{32}', instance):
+    if not re.fullmatch(r'(?:shadow|observation)-child-[0-9a-f]{32}', instance):
         raise IdentityFailure('INSTANCE_ID_INVALID')
     return Path(root)/('startup-'+instance+'.json')
 
@@ -280,7 +280,11 @@ def read_receipt(root, instance):
     return result
 
 
-def binding(root, instance, runner, role, port, created):
+def binding(root, instance, runner, role, port, created, *, observation=None):
+    if observation is not None:
+        return observation_binding(root, instance, runner, role, port, created, observation)
+    if not instance.startswith('shadow-child-'):
+        raise IdentityFailure('STARTUP_BINDING_INVALID')
     root = Path(root).resolve()
     receipt_path(root, instance)
     if not re.fullmatch(r'shadow-runner-[0-9a-f]{32}', runner) or role not in {'scheduler', 'publisher', 'backend'}:
@@ -292,22 +296,23 @@ def binding(root, instance, runner, role, port, created):
             'topology_hash': file_hash(root/'topology.json'), 'authority_hash': file_hash(root/'authority.json')}
 
 
-def write_startup(root, instance, runner, role, port, created):
+def write_startup(root, instance, runner, role, port, created, *, observation=None):
     """Called after topology validation, before the irreversible I/O guard.
 
     Fixed self-only OS probes are the sole subprocesses. This receipt grants
     no authority. Backend/service work starts only after the guard is installed.
     """
     root = Path(root).resolve()
-    expected = binding(root, instance, runner, role, port, created)
+    expected = binding(root, instance, runner, role, port, created, observation=observation)
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
         raise IdentityFailure('STARTUP_ROOT_INVALID')
     now = datetime.now(timezone.utc)
     if not 0 <= (now-datetime.fromisoformat(expected['created_at'])).total_seconds() <= 30:
         raise IdentityFailure('STARTUP_CREATION_TIME_INVALID')
+    expected_cwd = str(root/'release/backend') if observation is None else observation.document()['roots']['release']
     observation = inspect_macos(os.getpid())
-    if observation is None or observation.parent_pid != os.getppid() or observation.cwd != str(root/'release/backend'):
+    if observation is None or observation.parent_pid != os.getppid() or observation.cwd != expected_cwd:
         raise IdentityFailure('STARTUP_SELF_OBSERVATION_INVALID')
     record = {**expected, 'observation': normalized(observation, root)}
     record['content_hash'] = digest(record)
@@ -328,3 +333,28 @@ def write_startup(root, instance, runner, role, port, created):
     finally:
         if stage.exists(): stage.unlink()
     return record
+
+
+def observation_binding(root, instance, runner, role, port, created, capability):
+    """Distinct startup identity; shadow receipts never authorize observation."""
+    from alpha_observation_lifecycle import ObservationExecution, EXECUTION_SCOPE
+    from alpha_observation_launch import lexical
+    from provider_gateway_contract import locked_authority
+    if type(capability) is not ObservationExecution:
+        raise IdentityFailure('OBSERVATION_CAPABILITY_REQUIRED')
+    d = capability.document()
+    if (str(lexical(str(root))) != d['roots']['output'] or
+            not re.fullmatch(r'observation-child-[0-9a-f]{32}', instance) or
+            not re.fullmatch(r'observation-runner-[0-9a-f]{32}', runner) or
+            role not in {'scheduler','publisher','backend'} or
+            port != (d['launch']['port'] if role == 'backend' else None)):
+        raise IdentityFailure('OBSERVATION_STARTUP_BINDING')
+    return {'schema':'iios-observation-startup-v1','scope':EXECUTION_SCOPE,
+        'instance_id':instance,'runner_identity':runner,'role':role,'port':port,
+        'created_at':utc_stamp(created),'root_hash':digest(str(root)),
+        'topology_hash':file_hash(Path(root)/'topology.json'),
+        'authority_hash':d['grant_parent'],'admission_parent':capability.identity,
+        'source_commit':d['source_commit'],'release_parent':d['release_parent'],
+        'runtime_parent':d['preflight']['runtime']['runtime_manifest_sha256'],
+        'startup_ns':d['launch']['startup_ns'],'authority':locked_authority(),
+        'production_qualified':False}

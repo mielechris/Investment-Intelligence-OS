@@ -185,3 +185,109 @@ class ConnectedTests(unittest.TestCase):
             NativeHTTPS().exchange(host='www.alphavantage.co',address='192.0.2.1',method='GET',target='/query',
                 headers={},body=None,tls_file='/disposable/tls',timeout=20,limit=1_000_000,before_request=guard)
         self.assertIs(wire.call_args.kwargs['before_request'],guard)
+
+
+class TruthPublicationTests(ConnectedTests):
+    """Real gateway -> journal -> publisher -> independent health derivation."""
+    # Inherited assertions are intentionally retained; report inherited reuse.
+    def setUp(self):
+        super().setUp()
+        from test_alpha_observation_lifecycle import ExecutionAdmissionTests
+        h=ExecutionAdmissionTests();h.setUp();self.addCleanup(h.doCleanups)
+        self.cap=h.admit()
+        d=self.cap.document();self.outer=Path(d['roots']['output']);self.outer.mkdir(mode=0o700)
+        self.root=self.outer/'requests';self.root.mkdir(mode=0o700)
+        self.plan['root']=str(self.root)
+        self.assertEqual(self.plan['planning_parent'],d['preflight']['candidate']['parents']['plan'])
+        for row,bundle in zip(self.plan['rows'],self.requests):
+            row['root']=str(self.root/row['id']);Path(row['root']).mkdir(mode=0o700)
+            bundle['manifest']['root']=row['root'];bundle['account']['bulk_plan']=self.plan
+            bundle['account']['bulk_plan_parent']=content_hash(self.plan)
+            bundle['account']['short_allowance']['plan_parent']=content_hash(self.plan)
+        for bundle in self.requests:
+            bundle['account']['bulk_plan_parent']=content_hash(self.plan)
+            bundle['account']['short_allowance']['plan_parent']=content_hash(self.plan)
+        self.pins=[repin(b['manifest'],b['account'],b['runtime']) for b in self.requests]
+        self.config=dict(roots=d['roots'],plan=self.plan,requests=self.requests,request_pins=self.pins)
+        def observe(slot,receipt,pins,completion):
+            from alpha_session_execution import safe_root,publish
+            fd=safe_root(str(self.outer))
+            from alpha_observation_execution import publish_observation_checkpoint
+            try:publish_observation_checkpoint(fd,slot,dict(schema='iios-observation-dispatcher-receipt-v1',
+                admission_parent=self.cap.identity,slot=slot,parents=pins,receipt_parent=content_hash(receipt),
+                completion_parent=content_hash(completion),authority=locked_authority()))
+            finally:os.close(fd)
+        self.effects.observe_receipt=observe
+
+    def publication(self):
+        from truth_spine_full_day_service import publish_observation_once,observation_response
+        from truth_spine_integration import atomic
+        p=publish_observation_once(self.config,self.cap,self.now)
+        atomic(self.outer/'observation-probes.json',dict(schema='iios-observation-probes-v1',
+            admission_parent=self.cap.identity,projection_parent=content_hash(p),
+            owners=dict.fromkeys(('scheduler','publisher','backend'),'a'*64),observed_at=self.now.isoformat(),
+            authority=locked_authority(),production_qualified=False))
+        return observation_response(self.config,self.cap,'/health/ready',now=self.now)
+
+    def test_connected_publication_rederives_three_receipts(self):
+        result=self.run_path();self.assertEqual(result['result'],'OFFLINE_COMPLETE')
+        code,p=self.publication();self.assertEqual(code,200);self.assertEqual(p['completed'],3)
+        self.assertEqual(p['response_parents'],result['response_parents'])
+        self.assertEqual(p['evidence_mode'],'OFFLINE_TEST');self.assertEqual(p['governance'],'NOT_EXECUTED')
+        self.assertFalse(p['production_qualified']);self.assertEqual(self.calls,3)
+
+    def test_get_never_writes_dispatches_or_refreshes_timestamp(self):
+        from truth_spine_full_day_service import observation_response
+        self.run_path();self.publication()
+        before={p: p.read_bytes() for p in self.outer.rglob('*.json')}
+        with patch('truth_spine_full_day_service.atomic',side_effect=AssertionError('NO_WRITE')):
+            for method in ('GET','HEAD','POST','PUT','PATCH','DELETE'):
+                code,_=observation_response(self.config,self.cap,'/health/ready',now=self.now,method=method)
+                self.assertEqual(code,200 if method in ('GET','HEAD') else 405)
+        self.assertEqual(before,{p:p.read_bytes() for p in before});self.assertEqual(self.calls,3)
+
+    def test_stale_and_changed_projection_rejected(self):
+        from truth_spine_full_day_service import observation_response
+        self.run_path();self.publication()
+        self.assertEqual(observation_response(self.config,self.cap,'/health/ready',now=self.now+timedelta(seconds=31))[0],503)
+        from truth_spine_integration import atomic
+        p=json.loads((self.outer/'observation-projection.json').read_bytes());p['completed']=4
+        atomic(self.outer/'observation-projection.json',p)
+        self.assertEqual(observation_response(self.config,self.cap,'/health/ready',now=self.now)[0],503)
+
+    def test_journal_tamper_never_repaired_by_publisher(self):
+        from truth_spine_full_day_service import publish_observation_once
+        self.run_path();target=self.root/'1.complete.json';before=target.read_bytes()
+        target.chmod(0o600);target.write_bytes(before.replace(b'OBSERVED',b'ALTERED_'));target.chmod(0o400)
+        with self.assertRaises(ValueError):publish_observation_once(self.config,self.cap,self.now)
+        self.assertNotEqual(target.read_bytes(),before);self.assertEqual(self.calls,3)
+
+    def test_publication_ack_is_exclusive_and_prefix_bound(self):
+        from alpha_session_execution import safe_root,read_record
+        self.run_path();self.publication();fd=safe_root(str(self.outer))
+        try:ack=read_record(fd,'publisher-slot-2.json')
+        finally:os.close(fd)
+        self.assertEqual(ack['slot'],2);self.assertEqual(len(ack['response_parents']),3)
+        self.assertEqual(ack['admission_parent'],self.cap.identity)
+        before=(self.outer/'publisher-slot-2.json').read_bytes();self.publication()
+        self.assertEqual((self.outer/'publisher-slot-2.json').read_bytes(),before)
+
+    def test_expired_grant_never_returns_ready(self):
+        from truth_spine_full_day_service import observation_response
+        self.run_path();self.publication()
+        at=instant(self.cap.document()['grant']['expires_at'])
+        self.assertEqual(observation_response(self.config,self.cap,'/health/ready',now=at)[0],503)
+
+    def test_uncommitted_checkpoint_never_counts_as_verified_completion(self):
+        from truth_spine_full_day_service import publish_observation_once
+        self.run_path();p=self.outer/'observer-slot-2.json';p.rename(self.outer/'observer-slot-2.json.staging')
+        result=publish_observation_once(self.config,self.cap,self.now)
+        self.assertEqual(result['completed'],2);self.assertEqual(result['status'],'PARTIAL')
+
+    def test_boolean_authority_and_production_label_cannot_be_coerced_to_zero(self):
+        from truth_spine_full_day_service import observation_response
+        from truth_spine_integration import atomic
+        self.run_path();self.publication()
+        p=json.loads((self.outer/'observation-projection.json').read_bytes());p['production_qualified']=0
+        atomic(self.outer/'observation-projection.json',p)
+        self.assertEqual(observation_response(self.config,self.cap,'/health/ready',now=self.now)[0],503)

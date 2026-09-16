@@ -709,3 +709,124 @@ class SQLiteTransactionSnapshotTests(unittest.TestCase):
 
 
 if __name__ == "__main__": unittest.main()
+
+
+class ObservationPublicationTests(unittest.TestCase):
+    def setUp(self):
+        from test_alpha_observation_execution import TruthPublicationTests
+        from test_truth_spine_runner import runner,Child
+        from truth_spine_process_identity import encoded
+        from truth_spine_integration import atomic
+        from provider_gateway_contract import locked_authority,content_hash
+        self.h=TruthPublicationTests();self.h.setUp();self.addCleanup(self.h.doCleanups)
+        self.assertEqual(self.h.run_path()['result'],'OFFLINE_COMPLETE');self.h.publication()
+        self.observations={};root=self.h.outer;(root/'topology.json').write_text('{}')
+        self.owner=runner.OwnedChildren(root,observation=self.h.cap,service_module='truth_spine_full_day_service',
+            inspector=lambda pid:self.observations.get(pid),writer=lambda *_:None,
+            parent_pid=900000,port_clear=lambda:True,pause=lambda _:None)
+        self.clock=patch.object(runner.time,'monotonic_ns',return_value=2);self.clock.start();self.addCleanup(self.clock.stop)
+        for i,role in enumerate(('scheduler','publisher','backend')):
+            port=38493 if role=='backend' else None
+            argv=['/synthetic/python','-B','-m','truth_spine_full_day_service','--config',str(root/'topology.json'),
+                '--role',role,'--observation-admission',self.h.cap.identity]+(['--port',str(port)] if port else [])
+            launch=self.owner.prepare_launch(role,argv,executable_hashes={'/synthetic/python':'a'*64},port=port)
+            child=Child(900001+i);cwd=self.h.cap.document()['roots']['release']
+            obs=runner.ProcessObservation(child.pid,900000,'2026-09-14T13:00:00+00:00',' '.join(launch.argv),
+                '/synthetic/python','a'*64,cwd,launch.argv);self.observations[child.pid]=obs
+            receipt={**dict(launch.values),'observation':runner.normalized(obs,root)};receipt['content_hash']=runner.digest(receipt)
+            p=root/('startup-'+receipt['instance_id']+'.json');p.write_bytes(encoded(receipt));p.chmod(0o600)
+            fp=self.owner.register(role,child,launch.argv,cwd,port,executable_hashes={'/synthetic/python':'a'*64},launch=launch)
+            atomic(root/(role+'-observation-heartbeat.json'),dict(schema='iios-observation-heartbeat-v1',
+                admission_parent=self.h.cap.identity,role=role,startup_parent=fp.startup_receipt_hash,
+                pid=child.pid,at=self.h.now.isoformat(),authority=locked_authority()))
+        from truth_spine_session_package import ObservationProbeReader
+        self.reader=ObservationProbeReader(root=root,capability=self.h.cap,plan=self.h.plan,requests=self.h.requests,
+            request_pins=self.h.pins,children=self.owner,expected_responses=[
+                json.loads((Path(r['root'])/'ALPHA_VANTAGE.receipt.json').read_bytes()) for r in self.h.plan['rows']])
+        self.reader.expected_responses=[content_hash(v) for v in self.reader.expected_responses]
+
+    def test_actual_owner_receipts_gateway_and_probe_chain(self):
+        from provider_gateway_contract import locked_authority
+        result=self.reader.collect(self.h.now)
+        self.assertEqual(set(result['owners']),{'scheduler','publisher','backend'})
+        self.assertEqual(result['authority'],locked_authority());self.assertFalse(result['production_qualified'])
+        self.assertEqual(self.h.calls,3)
+
+    def test_stale_heartbeat_and_changed_owner_rejected(self):
+        from dataclasses import replace
+        with self.assertRaises(ValueError):self.reader.collect(self.h.now+timedelta(seconds=31))
+        pid=next(iter(self.observations));self.observations[pid]=replace(self.observations[pid],parent_pid=1)
+        from test_truth_spine_runner import runner
+        with self.assertRaises(runner.RunnerFailure):self.reader.collect(self.h.now)
+
+    def test_independent_response_pin_and_dispatcher_marker_required(self):
+        self.reader.expected_responses[0]='f'*64
+        with self.assertRaises(ValueError):self.reader.collect(self.h.now)
+        path=self.h.outer/'observer-slot-1.json';path.chmod(0o600);path.write_bytes(b'{}');path.chmod(0o400)
+        from truth_spine_full_day_service import publish_observation_once
+        with self.assertRaises(ValueError):publish_observation_once(self.h.config,self.h.cap,self.h.now)
+
+    def test_current_state_reader_rejects_receipt_alias_and_writable_modes(self):
+        from truth_spine_session_package import read_observation_current
+        from alpha_session_execution import safe_root
+        fd=safe_root(str(self.h.outer))
+        try:
+            with self.assertRaises(ValueError):read_observation_current(fd,'observer-slot-0.json')
+            p=self.h.outer/'observation-projection.json';p.chmod(0o666)
+            with self.assertRaises(ValueError):read_observation_current(fd,'observation-projection.json')
+        finally:os.close(fd)
+
+
+class ObservationCIContractTests(unittest.TestCase):
+    def script(self):
+        source=Path(__file__).resolve().parents[2]
+        text=(source/'.github/workflows/alpha-session-contract.yml').read_text()
+        start=text.index("          python -B - <<'PYTEST'\n")+len("          python -B - <<'PYTEST'\n")
+        end=text.index('          PYTEST\n',start)
+        return text,'\n'.join(line[10:] for line in text[start:end].splitlines())
+
+    def test_preparation_events_pins_permissions_and_guard_before_import(self):
+        import ast
+        text,body=self.script();ast.parse(body)
+        self.assertNotIn('workflow_dispatch:',text);self.assertNotIn('schedule:',text)
+        self.assertIn('contents: read',text);self.assertIn('persist-credentials: false',text)
+        self.assertIn('ref: ${{ github.sha }}',text)
+        actions=[line.strip().split('@') for line in text.splitlines() if 'uses: actions/' in line]
+        self.assertEqual([v[1] for v in actions],['11d5960a326750d5838078e36cf38b85af677262',
+            'a26af69be951a213d495a4c3e4e4022e16d87065','ea165f8d65b6e75b540449e92b4886f43607fa02'])
+        self.assertLess(body.index('sys.addaudithook(guard)'),body.index('loadTestsFromNames'))
+        self.assertIn('not blocked',body);self.assertIn('not result.skipped',body)
+        self.assertIn('len(ids)==len(set(ids))',body);self.assertIn('source_unchanged',body)
+        self.assertNotIn('CI_SYNTHETIC_FULL_SESSION_ONLY',body)
+
+    def test_policy_rejects_effects_without_executing_them(self):
+        import ast
+        from pathlib import PurePosixPath
+        _,body=self.script();module=ast.parse(body)
+        funcs=[n for n in module.body if isinstance(n,ast.FunctionDef) and n.name in ('lexical','allowed_write','policy')]
+        namespace=dict(os=os,PurePosixPath=PurePosixPath,source=Path('/checkout'),roots=('/test/a','/test/b'),
+            fds={7:'/test/a'},active=[],protected={'keychains','ledgers','ledger','.ssh','.aws','credentials'})
+        exec(compile(ast.Module(body=funcs,type_ignores=[]),'<guard-policy>','exec'),namespace)
+        policy=namespace['policy']
+        for event,args in [('socket.connect',()),('socket.getaddrinfo',()),('subprocess.Popen',()),
+            ('os.kill',(1,0)),('os.posix_spawn',()),('ctypes.dlopen',()),
+            ('open',('/unapproved/file','w',os.O_WRONLY)),('open',('/dummy/Keychains/item','r',os.O_RDONLY))]:
+            with self.subTest(event=event):self.assertIsNotNone(policy(event,args))
+        self.assertIsNone(policy('open',('/test/a/output','w',os.O_WRONLY)))
+        self.assertIsNone(policy('os.mkdir',('child',0o700,7)))
+        self.assertIsNotNone(policy('os.mkdir',('child',0o700,999)))
+
+    def test_descriptor_relative_and_symlink_targets_do_not_expand_writes(self):
+        import ast
+        from pathlib import PurePosixPath
+        _,body=self.script();module=ast.parse(body)
+        funcs=[n for n in module.body if isinstance(n,ast.FunctionDef) and n.name in ('lexical','allowed_write','policy','scoped_dup')]
+        ns=dict(os=os,PurePosixPath=PurePosixPath,source=Path('/checkout'),roots=('/test/a','/test/b'),
+            fds={7:'/test/a',8:'/checkout'},active=[],protected={'keychains','ledgers','ledger','.ssh','.aws','credentials'},
+            real_dup=lambda fd:99)
+        exec(compile(ast.Module(body=funcs,type_ignores=[]),'<guard-policy>','exec'),ns)
+        self.assertEqual(ns['scoped_dup'](7),99);self.assertEqual(ns['fds'][99],'/test/a')
+        policy=ns['policy'];self.assertIsNone(policy('os.mkdir',('child',0o700,99)))
+        self.assertEqual(policy('os.chmod',(8,0o600,-1)),'WRITE_ROOT')
+        self.assertIsNone(policy('os.symlink',('/nonexistent-synthetic-target','/test/a/alias',-1)))
+        self.assertEqual(policy('os.symlink',('/test/a/target','/checkout/alias',-1)),'WRITE_ROOT')

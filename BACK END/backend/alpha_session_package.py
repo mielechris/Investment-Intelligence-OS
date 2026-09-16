@@ -1,4 +1,4 @@
-"""Offline package bindings; no filesystem, credentials, budget release or execution.
+"""Candidate package bindings and read-only independently pinned release checks.
 
 Documents here are planning evidence references. Independently pinned hashes
 prove identity, not the truth of entitlement claims or actual runtime files.
@@ -107,3 +107,65 @@ def verify_bound_package(candidate, candidate_hash, *args, **kwargs):
     rebuilt = bound_package(*args, **kwargs)
     require(content_hash(candidate) == content_hash(rebuilt), 'PACKAGE_SUBSTITUTION')
     return rebuilt
+
+
+OBSERVATION_RELEASE_SCHEMA = 'iios-truth-observation-release-v1'
+OBSERVATION_ENTRYPOINTS = {
+    'parent': 'truth_spine_full_day_runner.py',
+    'child': 'truth_spine_full_day_service.py',
+}
+
+
+def verify_observation_release(document, expected, *, source_commit, approved_root):
+    """Verify an independently pinned, immutable observation source closure.
+
+    This is release identity, never runtime/host/confinement acceptance. The
+    complete inventory is checked, including files not used by an entrypoint.
+    A caller cannot approve an arbitrary command by changing an entrypoint.
+    """
+    from alpha_session_evidence import verify_files
+    from alpha_observation_launch import lexical
+    import ast
+    safe_document(document); pin(document, expected)
+    require(type(document) is dict and set(document) == {'schema', 'source_commit',
+        'root', 'files', 'entrypoints', 'module_graph'}, 'OBSERVATION_RELEASE_SCHEMA')
+    require(document['schema'] == OBSERVATION_RELEASE_SCHEMA and
+        document['source_commit'] == source_commit and
+        re.fullmatch('[0-9a-f]{40}', source_commit) is not None, 'OBSERVATION_RELEASE_SOURCE')
+    require(document['root'] == approved_root, 'OBSERVATION_RELEASE_ROOT')
+    lexical(approved_root)
+    require(document['entrypoints'] == OBSERVATION_ENTRYPOINTS, 'OBSERVATION_ENTRYPOINTS')
+    rows = document['files']
+    require(type(rows) is list and all(type(r) is dict for r in rows), 'OBSERVATION_RELEASE_FILES')
+    names = [r.get('path') for r in rows]
+    require(all(type(n) is str and '/' not in n and n.endswith('.py') for n in names),
+            'OBSERVATION_RELEASE_MODULE')
+    required = {'alpha_observation_lifecycle.py', 'alpha_observation_execution.py',
+        'alpha_session_package.py', 'alpha_short_observation.py', 'alpha_session_execution.py',
+        'provider_gateway_qualification.py', 'truth_spine_process_identity.py',
+        'truth_spine_integration_runner.py', 'truth_spine_session_package.py',
+        *OBSERVATION_ENTRYPOINTS.values()}
+    require(required <= set(names), 'OBSERVATION_RELEASE_CLOSURE')
+    # verify_files rejects duplicates, aliases, writable files and raced reads.
+    bodies = verify_files(approved_root, rows, approved_root=approved_root, retain=names)
+    graph = {}
+    for name, body in bodies.items():
+        imports = set()
+        for node in ast.walk(ast.parse(body, filename=name)):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name.split('.')[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                require(node.level == 0, 'OBSERVATION_RELATIVE_IMPORT')
+                if node.module: imports.add(node.module.split('.')[0])
+        graph[name] = sorted(imports)
+    require(document['module_graph'] == graph, 'OBSERVATION_IMPORT_GRAPH')
+    # All project-local imports must be in this exact independently reviewed
+    # closure. Third-party/stdlib closure is separately bound by runtime proof.
+    local_prefixes = ('alpha_', 'truth_spine_', 'provider_gateway_', 'opportunity_spine_', 'deployment_')
+    require(all(module + '.py' in names for modules in graph.values() for module in modules
+                if module.startswith(local_prefixes)), 'OBSERVATION_MISSING_IMPORT')
+    return {'schema': 'iios-observation-release-verification-v1',
+        'release_parent': expected, 'source_commit': source_commit,
+        'root': approved_root, 'entrypoints': dict(OBSERVATION_ENTRYPOINTS),
+        'files_parent': content_hash(rows), 'module_graph_parent': content_hash(graph),
+        'production_qualified': False, 'authority': locked_authority()}

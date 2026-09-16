@@ -686,3 +686,131 @@ class IsolatedOwnershipTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ObservationOwnerTests(unittest.TestCase):
+    def setUp(self):
+        from test_alpha_observation_lifecycle import ExecutionAdmissionTests
+        from alpha_session_execution import safe_root
+        h=ExecutionAdmissionTests();h.setUp();self.addCleanup(h.doCleanups);self.cap=h.admit()
+        self.root=Path(h.roots['output']);self.root.mkdir(mode=0o700);(self.root/'topology.json').write_text('{}')
+        self.fd=safe_root(str(self.root));self.addCleanup(os.close,self.fd)
+        self.ns=2;self.tick=0;self.obs={};self.receipts={};self.written={}
+        self.patcher=patch.object(runner.time,'monotonic_ns',side_effect=lambda:self.ns)
+        self.patcher.start();self.addCleanup(self.patcher.stop)
+        self.owner=runner.OwnedChildren(self.root,observation=self.cap,service_module='truth_spine_full_day_service',
+            inspector=lambda pid:self.obs.get(pid),receipt_reader=lambda root,instance:self.receipts.get(instance),
+            writer=lambda root,name,value:self.written.update({name:value}),parent_pid=900000,
+            port_clear=lambda:True,monotonic=lambda:self.tick,pause=lambda _:None,timeout=1)
+
+    def add(self,role='scheduler'):
+        child=Child(900001+len(self.obs));port=self.cap.document()['launch']['port'] if role=='backend' else None
+        argv=['/test/python','-B','-m','truth_spine_full_day_service','--config',str(self.root/'topology.json'),
+            '--role',role,'--observation-admission',self.cap.identity]+(['--port',str(port)] if port else [])
+        launch=self.owner.prepare_launch(role,argv,executable_hashes={'/test/python':'a'*64},port=port)
+        cwd=self.cap.document()['roots']['release']
+        obs=runner.ProcessObservation(child.pid,900000,'2026-09-14T13:00:00+00:00',' '.join(launch.argv),
+            '/test/python','a'*64,cwd,launch.argv);self.obs[child.pid]=obs
+        receipt={**dict(launch.values),'observation':runner.normalized(obs,self.root)}
+        receipt['content_hash']=runner.digest(receipt);self.receipts[receipt['instance_id']]=receipt
+        fp=self.owner.register(role,child,launch.argv,cwd,port,executable_hashes={'/test/python':'a'*64},launch=launch)
+        return child,fp
+
+    def test_three_complete_samples_and_exact_ack_binding(self):
+        from alpha_session_execution import read_record
+        child,fp=self.add();self.assertGreaterEqual(len(self.owner.observation_sequences),4)
+        self.owner.acknowledge_observation('scheduler',self.fd)
+        ack=read_record(self.fd,'scheduler-observation-ack.json')
+        self.assertEqual(ack['startup_parent'],fp.startup_receipt_hash)
+        self.assertEqual(ack['pid'],child.pid);self.assertEqual(ack['admission_parent'],self.cap.identity)
+        with self.assertRaises(FileExistsError):self.owner.acknowledge_observation('scheduler',self.fd)
+
+    def test_listener_mismatch_no_ack(self):
+        child,_=self.add('backend')
+        with self.assertRaisesRegex(runner.RunnerFailure,'OBSERVATION_LISTENER_OWNER'):
+            self.owner.acknowledge_observation('backend',self.fd,listeners=lambda _:[child.pid+1])
+        self.assertFalse((self.root/'backend-observation-ack.json').exists())
+
+    def test_reused_pid_neither_ack_nor_signal(self):
+        child,_=self.add();self.obs[child.pid]=replace(self.obs[child.pid],start_time='2026-09-14T13:00:01+00:00')
+        with self.assertRaises(runner.RunnerFailure):self.owner.acknowledge_observation('scheduler',self.fd)
+        result=self.owner.cleanup({});self.assertEqual(child.signals,[]);self.assertEqual(result['result'],'RED')
+
+    def test_deadline_and_altered_startup_parent_prevent_ack(self):
+        child,fp=self.add();self.ns=self.cap.document()['launch']['startup_ns']
+        with self.assertRaisesRegex(runner.RunnerFailure,'OBSERVATION_STARTUP_DEADLINE'):
+            self.owner.acknowledge_observation('scheduler',self.fd)
+        self.ns=2;self.receipts[fp.instance_id]['admission_parent']='f'*64
+        with self.assertRaises(runner.RunnerFailure):self.owner.acknowledge_observation('scheduler',self.fd)
+
+    def test_each_role_cleanup_continues_and_false_authority_survives(self):
+        first,_=self.add();second,_=self.add('publisher')
+        self.obs[second.pid]=None
+        result=self.owner.cleanup({})
+        self.assertEqual(first.signals,['terminate']);self.assertEqual(second.signals,[])
+        self.assertEqual(result['result'],'RED');self.assertFalse(result['production_qualified'])
+        self.assertTrue(all(v is False for v in result['authority'].values()))
+
+    def test_expired_cleanup_deadline_never_signals(self):
+        child,_=self.add();self.ns=self.cap.document()['launch']['final_ns']
+        self.assertFalse(self.owner.stop('scheduler'));self.assertEqual(child.signals,[])
+
+    def test_unregistered_partial_child_is_retained_and_never_signaled(self):
+        args=['/test/python','-B','-m','truth_spine_full_day_service','--config',str(self.root/'topology.json'),
+            '--role','scheduler','--observation-admission',self.cap.identity]
+        launch=self.owner.prepare_launch('scheduler',args,executable_hashes={'/test/python':'a'*64})
+        child=Child(900100);self.owner.retain_observation_child('scheduler',child,launch)
+        report=self.owner.cleanup({})
+        self.assertEqual(child.signals,[]);self.assertEqual(report['result'],'RED')
+        self.assertEqual(report['unresolved_children'][0]['pid'],child.pid)
+
+
+    def lifecycle(self):
+        from alpha_session_execution import safe_root,publish
+        import importlib
+        scripts=str(Path(__file__).resolve().parents[2]/'scripts')
+        with patch.object(sys,'path',[scripts,*sys.path]):module=importlib.import_module('truth_spine_full_day_runner')
+        obj=module.ObservationLifecycle({},self.cap);obj.children=self.owner;obj.fd=safe_root(str(self.root))
+        for role in ('scheduler','publisher','backend'):
+            child,fp=self.add(role)
+            publish(obj.fd,role+'-observation-exit.json',dict(schema='iios-observation-exit-v1',
+                admission_parent=self.cap.identity,role=role,pid=child.pid,startup_parent=fp.startup_receipt_hash,
+                cooperative=True,authority=self.cap.document()['authority']))
+        return module,obj
+
+    def test_observation_cooperative_exit_requires_all_owned_roles_and_clearance(self):
+        module,obj=self.lifecycle()
+        listeners=lambda _:([self.owner.active['backend']['child'].pid] if self.owner.active else [])
+        with patch('alpha_observation_launch.listener_pids',side_effect=listeners),patch.object(module,'port_is_clear',return_value=True),patch.object(module.time,'sleep'):
+            result=obj.cleanup()
+        self.assertTrue(result['verified']);self.assertTrue(result['cooperative'])
+        self.assertFalse(self.owner.active);self.assertEqual(result['port_clear'],[True]*3)
+        self.assertTrue(all(row['returncode']==0 for row in self.owner.completed))
+        self.assertFalse(any(row['action'] in ('TERMINATE','KILL') for row in self.owner.attempts))
+
+    def test_listener_clearance_cannot_override_missing_cooperative_exit(self):
+        module,obj=self.lifecycle()
+        path=self.root/'scheduler-observation-exit.json';path.chmod(0o600);path.write_text('{}');path.chmod(0o400)
+        listeners=lambda _:([self.owner.active['backend']['child'].pid] if self.owner.active else [])
+        with patch('alpha_observation_launch.listener_pids',side_effect=listeners),patch.object(module,'port_is_clear',return_value=True),patch.object(module.time,'sleep'):
+            result=obj.cleanup()
+        self.assertFalse(result['verified']);self.assertFalse(result['cooperative'])
+        self.assertFalse(self.owner.active);self.assertEqual(result['port_clear'],[True]*3)
+        self.assertEqual(len(self.owner.completed),3)
+
+    def test_listener_owner_mismatch_preserved_after_all_exits(self):
+        module,obj=self.lifecycle()
+        with patch('alpha_observation_launch.listener_pids',side_effect=lambda _:([999999] if self.owner.active else [])),patch.object(module,'port_is_clear',return_value=True),patch.object(module.time,'sleep'):
+            result=obj.cleanup()
+        self.assertFalse(result['verified']);self.assertFalse(result['cooperative'])
+        self.assertFalse(self.owner.active);self.assertTrue(any(e['category']=='OBSERVATION_LISTENER_OWNER' for e in self.owner.errors))
+
+
+class OfflineSchedulerHealthTests(unittest.TestCase):
+    def test_existing_health_recovery_with_exact_mocked_existence_probe(self):
+        helper=RunnerTests('test_scheduler_actual_health_200_503_200_new_fingerprint')
+        helper.setUp();self.addCleanup(helper.doCleanups)
+        with patch('os.kill') as existence:
+            helper.test_scheduler_actual_health_200_503_200_new_fingerprint()
+        self.assertTrue(existence.called)
+        self.assertTrue(all(call.args==(os.getpid(),0) for call in existence.call_args_list))

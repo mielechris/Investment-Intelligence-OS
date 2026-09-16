@@ -99,17 +99,25 @@ class OwnedChildren:
     def __init__(self, root, *, inspector=inspect_macos, writer=atomic_evidence,
                  port_clear=None, timeout=30, parent_pid=None, receipt_reader=read_receipt,
                  monotonic=time.monotonic, pause=time.sleep, stabilization_seconds=10,
-                 service_module='truth_spine_integration_service'):
+                 service_module='truth_spine_integration_service', observation=None):
         if not 0 < timeout <= 30:
             raise ValueError('STOP_TIMEOUT_INVALID')
         self.root = Path(root)
         if service_module not in {'truth_spine_integration_service', 'truth_spine_full_day_service'}:
             raise ValueError('CHILD_SERVICE_MODULE_INVALID')
+        self.observation = observation
+        if observation is not None:
+            from alpha_observation_lifecycle import ObservationExecution
+            if type(observation) is not ObservationExecution or service_module != 'truth_spine_full_day_service':
+                raise RunnerFailure('OBSERVATION_OWNER_BINDING')
+            if str(root) != observation.document()['roots']['output']:
+                raise RunnerFailure('OBSERVATION_OWNER_ROOT')
+        self.cwd = str(Path(root)/'release/backend') if observation is None else observation.document()['roots']['release']
         self.service_module = service_module
         self.inspector, self.writer, self.timeout = inspector, writer, timeout
         self.parent_pid = os.getpid() if parent_pid is None else parent_pid
         self.port_clear = port_clear or (lambda: False)
-        self.identity = 'shadow-runner-'+uuid.uuid4().hex
+        self.identity = ('shadow-runner-' if observation is None else 'observation-runner-')+uuid.uuid4().hex
         self.active, self.completed, self.fingerprints = {}, [], []
         self.attempts, self.errors, self.logs, self.log_results = [], [], [], []
         self.finished = None
@@ -121,11 +129,13 @@ class OwnedChildren:
 
     def prepare_launch(self, role, argv, *, executable_hashes, port=None, final_executable=None):
         """Must run before Popen. An instance is identification, never authority."""
-        instance = 'shadow-child-'+uuid.uuid4().hex
+        instance = ('shadow-child-' if self.observation is None else 'observation-child-')+uuid.uuid4().hex
         created = datetime.now(timezone.utc).isoformat()
-        values = binding(self.root, instance, self.identity, role, port, created)
+        values = binding(self.root, instance, self.identity, role, port, created, observation=self.observation)
         expected = [argv[0], '-B', '-m', self.service_module, '--config',
                     str(self.root/'topology.json'), '--role', role]
+        if self.observation is not None:
+            expected += ['--observation-admission', self.observation.identity]
         if port is not None:
             expected += ['--port', str(port)]
         if list(argv) != expected:
@@ -187,7 +197,7 @@ class OwnedChildren:
             hashes = dict(launch.executable_hashes)
             exe = str(Path(o.executable).resolve())
             expected = {'pid': entry['child'].pid, 'parent_pid': self.parent_pid,
-                        'cwd': str(self.root/'release/backend'), 'argv_tail': list(launch.argv[1:]),
+                        'cwd': self.cwd, 'argv_tail': list(launch.argv[1:]),
                         'executable_hash': hashes.get(exe), 'argv0_pinned': True, 'executable_pinned': True}
             actual = {'pid': o.pid, 'parent_pid': o.parent_pid, 'cwd': str(Path(o.cwd).resolve()),
                       'argv_tail': list(o.argv[1:]), 'executable_hash': o.executable_hash,
@@ -225,10 +235,20 @@ class OwnedChildren:
             row['exception_type'] = type(error).__name__
         self.errors.append(row)
 
+    def retain_observation_child(self, role, child, launch):
+        """Track immediately after Popen, before stdio or inspection can fail."""
+        if (self.observation is None or role not in ROLES or role in self.active or
+                self.launches.get(dict(launch.values)['instance_id']) != launch or launch.role != role):
+            raise RunnerFailure('OBSERVATION_CHILD_RETENTION_INVALID')
+        self.active[role]={'child':child,'fingerprint':None,'role':role,'pending_launch':launch}
+
     def register(self, role, child, argv, cwd, port=None, *, executable_hashes,
                  registry_key=None, launch=None):
         key = role if registry_key is None else registry_key
-        if role not in ROLES or key in self.active:
+        pending=self.active.get(key)
+        admitted_pending=(self.observation is not None and pending is not None and
+            pending.get('pending_launch') is launch and pending['child'] is child and pending['role']==role)
+        if role not in ROLES or (key in self.active and not admitted_pending):
             raise RunnerFailure('CHILD_ROLE_ALREADY_TRACKED')
         entry = {'child': child, 'fingerprint': None, 'role': role}
         self.active[key] = entry  # Never lose a live child on failed verification.
@@ -240,12 +260,14 @@ class OwnedChildren:
             if (launch is None or self.launches.get(dict(launch.values)['instance_id']) != launch
                     or launch.role != role or tuple(argv) != launch.argv
                     or dict(launch.executable_hashes) != {str(Path(k).resolve()):v for k,v in executable_hashes.items()}
-                    or Path(cwd) != self.root/'release/backend' or dict(launch.values)['port'] != port):
+                    or str(cwd) != self.cwd or dict(launch.values)['port'] != port):
                 self.diagnostic(role, 'launch', 'PRESPAWN_BOUND_LAUNCH', None, 'LAUNCH_INVALID')
                 raise RunnerFailure('LAUNCH_INVALID')
             end = self.monotonic()+self.stabilization_seconds
             anchor, previous, stable, final_seen = None, None, 0, False
             while self.monotonic() < end:
+                if self.observation is not None and time.monotonic_ns() >= self.observation.document()['launch']['startup_ns']:
+                    raise RunnerFailure('OBSERVATION_STARTUP_DEADLINE')
                 if child.poll() is not None:
                     self.diagnostic(role, 'process_present', True, False, 'PROCESS_EXITED')
                     raise RunnerFailure('PROCESS_EXITED')
@@ -272,6 +294,8 @@ class OwnedChildren:
             if self.monotonic() >= end:
                 self.diagnostic(role, 'stabilization_deadline', 'WITHIN_BOUND', 'EXCEEDED', 'STABILIZATION_TIMEOUT')
                 raise RunnerFailure('STABILIZATION_TIMEOUT')
+            if self.observation is not None and time.monotonic_ns() >= self.observation.document()['launch']['startup_ns']:
+                raise RunnerFailure('OBSERVATION_STARTUP_DEADLINE')
             fp = ProcessFingerprint(role, o, tuple(argv), str(cwd), str(self.root), port,
                                     dict(launch.values)['created_at'], self.identity,
                                     dict(launch.values)['instance_id'], receipt_hash, launch)
@@ -289,12 +313,12 @@ class OwnedChildren:
         fp = entry['fingerprint']
         try:
             if (fp is None or fp.role != entry['role'] or fp.runner_identity != self.identity
-                    or fp.shadow_root != str(self.root) or fp.expected_cwd != str(self.root/'release/backend')):
+                    or fp.shadow_root != str(self.root) or fp.expected_cwd != self.cwd):
                 self.diagnostic(entry['role'], 'fingerprint', 'STABILIZED_BOUND_CHILD', None, 'FINGERPRINT_INVALID')
                 raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
             _, n = self.observe(entry, fp.launch)
             self.require_fields(fp.role, normalized(fp.observed, self.root), n)
-            expected_binding = binding(self.root, fp.instance_id, self.identity, fp.role, fp.port, fp.created_at)
+            expected_binding = binding(self.root, fp.instance_id, self.identity, fp.role, fp.port, fp.created_at, observation=self.observation)
             self.require_fields(fp.role, dict(fp.launch.values), expected_binding, 'CONFIGURATION')
             h = self.reconcile_receipt(fp.launch, n)
             self.require_fields(fp.role, {'startup_receipt_hash': fp.startup_receipt_hash}, {'startup_receipt_hash': h}, 'STARTUP_RECEIPT')
@@ -307,7 +331,32 @@ class OwnedChildren:
             self.persist_identity()
             raise
 
+    def acknowledge_observation(self, role, fd, *, listeners=None):
+        """No ACK before exact ownership, startup receipt and listener proof."""
+        from alpha_session_execution import publish,verify_destination
+        from alpha_observation_launch import listener_pids
+        from provider_gateway_contract import locked_authority
+        if self.observation is None or role not in self.active:
+            raise RunnerFailure('OBSERVATION_ACK_SCOPE')
+        d=self.observation.document()
+        if time.monotonic_ns()>=d['launch']['startup_ns']:
+            raise RunnerFailure('OBSERVATION_STARTUP_DEADLINE')
+        entry=self.active[role];fp=self.verify(entry)
+        if role=='backend' and (listeners or listener_pids)(fp.port)!=[entry['child'].pid]:
+            raise RunnerFailure('OBSERVATION_LISTENER_OWNER')
+        if time.monotonic_ns()>=d['launch']['startup_ns']:
+            raise RunnerFailure('OBSERVATION_STARTUP_DEADLINE')
+        verify_destination(fd,str(self.root))
+        return publish(fd,role+'-observation-ack.json',dict(schema='iios-observation-ack-v1',
+            admission_parent=self.observation.identity,role=role,pid=entry['child'].pid,
+            startup_parent=fp.startup_receipt_hash,startup_ns=d['launch']['startup_ns'],authority=locked_authority()))
+
     def stop(self, role):
+        def remaining():
+            if self.observation is None:return self.timeout
+            ns=self.observation.document()['launch']['final_ns']-time.monotonic_ns()
+            if ns<=0:raise RunnerFailure('OBSERVATION_CLEANUP_DEADLINE')
+            return min(self.timeout,ns/1_000_000_000)
         entry = self.active[role]
         child = entry['child']
         action = 'VERIFY'
@@ -320,10 +369,11 @@ class OwnedChildren:
                 self.verify(entry)
                 action = 'TERMINATE'
                 self.attempts.append({'role': role, 'action': action})
+                remaining()
                 child.terminate()
                 action = 'WAIT'
                 try:
-                    child.wait(timeout=self.timeout)
+                    child.wait(timeout=remaining())
                     outcome = 'STOPPED_CLEANLY'
                 except subprocess.TimeoutExpired:
                     self.attempts.append({'role': role, 'action': 'GRACEFUL_TIMEOUT'})
@@ -331,9 +381,10 @@ class OwnedChildren:
                     self.verify(entry)  # Mandatory independent reinspection before kill.
                     action = 'KILL'
                     self.attempts.append({'role': role, 'action': action})
+                    remaining()
                     child.kill()
                     action = 'FORCE_WAIT'
-                    child.wait(timeout=self.timeout)
+                    child.wait(timeout=remaining())
                     outcome = 'FORCE_STOPPED_AFTER_VERIFIED_TIMEOUT'
                 if child.poll() is None:
                     raise RunnerFailure('EXIT_NOT_CONFIRMED')
@@ -350,6 +401,11 @@ class OwnedChildren:
     def cleanup(self, report, primary=None):
         if self.finished is not None:
             return self.finished
+        if self.observation is not None:
+            from provider_gateway_contract import locked_authority
+            from alpha_observation_lifecycle import EXECUTION_SCOPE
+            report.update(scope=EXECUTION_SCOPE,admission_parent=self.observation.identity,
+                production_qualified=False,authority=locked_authority())
         if primary is not None:
             report['primary_exception'] = {'type': type(primary).__name__}
             if isinstance(primary, RunnerFailure) and re.fullmatch(r'[A-Z_]{1,80}', str(primary)):

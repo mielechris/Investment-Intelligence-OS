@@ -155,13 +155,275 @@ def run(root, topology_pin, *, owner_session):
             runner_lease.close()
 
 
+class ObservationLifecycle:
+    """Fixed observation adapter using the existing Truth Spine process owner.
+
+    No injected process, credential or network effects are exposed by the native
+    entrypoint. Offline tests substitute those boundaries with mocks.
+    """
+    def __init__(self, config, capability):
+        from alpha_session_contract import require
+        from alpha_observation_lifecycle import ObservationExecution
+        require(type(capability) is ObservationExecution, 'OBSERVATION_CAPABILITY_REQUIRED')
+        self.config,self.capability=config,capability
+        self.document=capability.document();self.root=Path(self.document['roots']['output'])
+        self.launch=self.document['launch'];self.started=False;self.closed=False;self.fd=None
+        self.last_ns=self.launch['start_ns'];self.streams={};self.acks={};self.lease=None
+        self.children=OwnedChildren(self.root,service_module='truth_spine_full_day_service',
+            observation=capability,port_clear=lambda:port_is_clear(self.launch['port']))
+        self.result=None;self.response_pins=[]
+
+    def check(self, deadline):
+        from alpha_session_contract import require
+        ns=time.monotonic_ns()
+        require(self.last_ns<=ns<deadline, 'OBSERVATION_MONOTONIC_DEADLINE')
+        self.last_ns=ns
+
+    def drain(self):
+        from alpha_session_contract import require
+        for streams in self.streams.values():
+            for name,(stream,count) in list(streams.items()):
+                try:data=os.read(stream.fileno(),min(512,4097-count))
+                except BlockingIOError:continue
+                streams[name]=(stream,count+len(data))
+                require(count+len(data)<=4096, 'OBSERVATION_OUTPUT_OVERFLOW')
+                # Fixed failure only. Raw child output is never persisted.
+                require(not data, 'OBSERVATION_UNEXPECTED_CHILD_OUTPUT')
+
+    def start(self):
+        from alpha_session_contract import require,instant
+        from alpha_session_execution import safe_root,publish
+        from alpha_observation_launch import listener_pids
+        from alpha_observation_lifecycle import verify_observation_execution
+        from provider_gateway_contract import content_hash,locked_authority
+        from truth_spine_integration_service import Lease
+        import platform
+        require(not self.started, 'OBSERVATION_DUPLICATE_START');self.started=True
+        self.check(self.launch['startup_ns'])
+        require(instant(self.config['plan']['startup_not_before']) <= datetime.now(timezone.utc) <
+            instant(self.config['plan']['startup_deadline']), 'OBSERVATION_UTC_STARTUP_WINDOW')
+        verify_observation_execution(self.capability,self.capability.identity,now=datetime.now(timezone.utc))
+        require(self.launch['host_identity']==dict(system=platform.system(),release=platform.release(),
+            version=platform.version(),machine=platform.machine(),uid=os.getuid()), 'OBSERVATION_SELECTED_HOST')
+        runtime=self.config['requests'][0]['runtime'];python=Path(runtime['root'])/runtime['interpreter']
+        require(Path(sys.executable).resolve()==python and Path(__file__).resolve()==
+            Path(self.document['roots']['release'])/'truth_spine_full_day_runner.py', 'OBSERVATION_RUNNING_RELEASE')
+        require(hashlib.sha256(Path('/usr/bin/sandbox-exec').read_bytes()).hexdigest()==self.launch['sandbox_hash'],
+            'OBSERVATION_SANDBOX_IDENTITY')
+        require(listener_pids(self.launch['port'])==[] and port_is_clear(self.launch['port']),
+            'OBSERVATION_PORT_OCCUPIED')
+        self.fd=safe_root(str(self.root));self.lease=Lease(self.root,'runner')
+        # Mandatory fresh output/config created by run_observation only.
+        require(set(os.listdir(self.fd))=={'topology.json','requests','runner.lock'}, 'OBSERVATION_OUTPUT_REUSE')
+        pins={str(python):next(r['sha256'] for r in runtime['files'] if r['path']==runtime['interpreter'])}
+        for role in ('scheduler','publisher','backend'):
+            self.check(self.launch['startup_ns'])
+            args=[str(python),'-B','-m','truth_spine_full_day_service','--config',str(self.root/'topology.json'),
+                '--role',role,'--observation-admission',self.capability.identity]
+            port=self.launch['port'] if role=='backend' else None
+            if port is not None:args+=['--port',str(port)]
+            launch=self.children.prepare_launch(role,args,executable_hashes=pins,port=port,final_executable=str(python))
+            child=subprocess.Popen(['/usr/bin/sandbox-exec','-f',self.document['roots']['control']+'/profile.sb',*launch.argv],
+                cwd=self.document['roots']['release'],env={'LANG':'C','LC_ALL':'C','TZ':'UTC'},
+                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
+            self.children.retain_observation_child(role,child,launch)
+            child.stdin.close()
+            for name in ('stdout','stderr'):os.set_blocking(getattr(child,name).fileno(),False)
+            self.streams[role]={name:(getattr(child,name),0) for name in ('stdout','stderr')}
+            # Existing owner retains a child even if registration fails.
+            fp=self.children.register(role,child,launch.argv,self.document['roots']['release'],port,
+                executable_hashes=pins,launch=launch)
+            self.check(self.launch['startup_ns']);self.drain()
+            if role=='backend':
+                require(listener_pids(port)==[child.pid], 'OBSERVATION_LISTENER_OWNER')
+            self.acks[role]=self.children.acknowledge_observation(role,self.fd)
+        self.check(self.launch['startup_ns']);self.verify_tls()
+        # Wait only for first functional heartbeat/projection, under SAME startup deadline.
+        while True:
+            self.check(self.launch['startup_ns']);self.drain()
+            try:self.publish_probes();break
+            except FileNotFoundError:time.sleep(.05)
+        return True
+
+    def verify_tls(self):
+        import socket,ssl
+        from alpha_session_contract import require
+        from alpha_observation_launch import listener_pids
+        require(listener_pids(self.launch['port'])==[self.children.active['backend']['child'].pid],
+            'OBSERVATION_LISTENER_OWNER')
+        context=ssl.create_default_context(cafile=self.document['roots']['control']+'/loopback.crt')
+        with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as sock:
+            sock.settimeout(2);sock.connect(('127.0.0.1',self.launch['port']))
+            with context.wrap_socket(sock,server_hostname='127.0.0.1') as secured:
+                require(hashlib.sha256(secured.getpeercert(binary_form=True)).hexdigest()==self.launch['peer_hash'],
+                    'OBSERVATION_TLS_PEER')
+        self.check(self.launch['startup_ns'])
+
+    def observe_receipt(self, slot, receipt, pins, completion):
+        from alpha_session_contract import require
+        from alpha_session_execution import publish
+        from provider_gateway_contract import content_hash,locked_authority
+        require(slot==len(self.response_pins) and receipt['scope']=='LIVE_QUALIFICATION' and
+            receipt['request_id']==pins['manifest'] and completion['receipt']==content_hash(receipt),
+            'OBSERVATION_DISPATCHER_RECEIPT')
+        from alpha_observation_execution import publish_observation_checkpoint
+        publish_observation_checkpoint(self.fd,slot,dict(schema='iios-observation-dispatcher-receipt-v1',
+            admission_parent=self.capability.identity,slot=slot,parents=pins,receipt_parent=content_hash(receipt),
+            completion_parent=content_hash(completion),authority=locked_authority()))
+        self.response_pins.append(content_hash(receipt))
+        from alpha_session_execution import read_record
+        # Readiness waits only for a positively bound publication ACK. No
+        # provider retry, window extension or malformed-evidence recovery occurs.
+        deadline=datetime.fromisoformat(self.config['plan']['rows'][slot]['expires_at'])
+        while True:
+            self.check(self.launch['stop_ns'])
+            require(datetime.now(timezone.utc)<deadline,'OBSERVATION_PUBLICATION_DEADLINE')
+            try:ack=read_record(self.fd,'publisher-slot-'+str(slot)+'.json')
+            except FileNotFoundError:time.sleep(.05);continue
+            require(ack==dict(schema='iios-observation-publication-ack-v1',admission_parent=self.capability.identity,
+                slot=slot,response_parents=self.response_pins,completion_parent=content_hash(completion),
+                authority=locked_authority()),'OBSERVATION_PUBLICATION_ACK')
+            self.verify_ready();break
+
+    def publish_probes(self):
+        from truth_spine_session_package import ObservationProbeReader
+        from truth_spine_integration import atomic
+        p=ObservationProbeReader(root=self.root,capability=self.capability,plan=self.config['plan'],
+            requests=self.config['requests'],request_pins=self.config['request_pins'],children=self.children,expected_responses=self.response_pins).collect(
+                datetime.now(timezone.utc))
+        atomic(self.root/'observation-probes.json',p)
+        return p
+
+    def verify_ready(self):
+        from alpha_session_contract import require
+        from alpha_session_execution import read_record
+        from provider_gateway_contract import content_hash
+        require(self.started and not self.closed and len(self.acks)==3, 'OBSERVATION_STARTUP_INCOMPLETE')
+        self.check(self.launch['stop_ns']);self.capability.recheck(datetime.now(timezone.utc));self.drain()
+        for role,parent in self.acks.items():
+            self.children.verify(self.children.active[role])
+            require(content_hash(read_record(self.fd,role+'-observation-ack.json'))==parent, 'OBSERVATION_ACK_CHANGED')
+        self.publish_probes()
+        return True
+
+    def cleanup(self):
+        from alpha_session_contract import require
+        from alpha_session_execution import read_record,publish
+        from alpha_observation_launch import listener_pids
+        from provider_gateway_contract import locked_authority
+        if self.closed:return self.result
+        self.closed=True;report={};cooperative=True;exit_parents={}
+        try:
+            self.check(self.launch['final_ns'])
+            try:
+                entry=self.children.active['backend'];self.children.verify(entry)
+                require(listener_pids(self.launch['port'])==[entry['child'].pid],'OBSERVATION_LISTENER_OWNER')
+            except Exception:
+                cooperative=False;self.children.error('OBSERVATION_LISTENER_OWNER','backend')
+            if self.fd is not None:
+                publish(self.fd,'observation-stop.json',{'admission_parent':self.capability.identity,
+                    'authority':locked_authority()})
+            # Every role is independent; one failure never prevents another cleanup.
+            for role,entry in list(self.children.active.items()):
+                try:
+                    fp=self.children.verify(entry)
+                    remaining=(self.launch['final_ns']-time.monotonic_ns())/1e9
+                    require(remaining>0,'OBSERVATION_CLEANUP_DEADLINE')
+                    entry['child'].wait(timeout=min(5,remaining))
+                    e=read_record(self.fd,role+'-observation-exit.json')
+                    require(e=={'schema':'iios-observation-exit-v1','admission_parent':self.capability.identity,
+                        'role':role,'pid':entry['child'].pid,'startup_parent':fp.startup_receipt_hash,
+                        'cooperative':True,'authority':locked_authority()} and entry['child'].poll()==0,
+                        'OBSERVATION_COOPERATIVE_EXIT')
+                    exit_parents[role]=e['startup_parent']
+                except Exception:
+                    cooperative=False;self.children.error('OBSERVATION_COOPERATIVE_CLEANUP_FAILED',role)
+        except Exception:
+            cooperative=False;self.children.error('OBSERVATION_STOP_PUBLICATION_FAILED')
+        finally:
+            # Existing owner re-verifies before each fallback signal; forced exit
+            # can never be classified as cooperative success.
+            self.children.cleanup(report)
+            clear=[]
+            for _ in range(3):
+                try:
+                    self.check(self.launch['final_ns'])
+                    clear.append(listener_pids(self.launch['port'])==[] and port_is_clear(self.launch['port']))
+                except Exception:clear.append(False)
+                time.sleep(.05)
+            for streams in self.streams.values():
+                for stream,_ in streams.values():stream.close()
+            self.result={'verified':bool(report.get('clean_shutdown')) and all(clear) and len(exit_parents)==3,
+                'cooperative':cooperative and len(exit_parents)==3,'roles':['scheduler','publisher','backend'],
+                'listener_owner_reconciled':not self.children.active and all(clear),'port_clear':clear}
+            if self.lease is not None:self.lease.close()
+            if self.fd is not None:os.close(self.fd);self.fd=None
+        return self.result
+
+
+def run_observation(config, expected, *, approved_roots, qualification_pins):
+    """Explicit independently pinned entrypoint; no shadow state is repurposed."""
+    from alpha_observation_lifecycle import admit_observation_execution
+    from alpha_observation_launch import lexical,directory
+    from alpha_session_contract import require
+    from alpha_session_execution import publish
+    from alpha_observation_execution import run_admitted_observation
+    from provider_gateway_contract import pin
+    pin(config,expected)
+    cap=admit_observation_execution(config['admission'],config['admission_parent'],
+        approved_roots=approved_roots,approved_qualification_pins=qualification_pins,now=datetime.now(timezone.utc))
+    require(config['roots']==approved_roots and config['qualification_pins']==qualification_pins,
+        'OBSERVATION_INVOCATION_PINS')
+    root=lexical(approved_roots['output']);fd=directory(str(root.parent))
+    try:
+        os.mkdir(root.name,0o700,dir_fd=fd)
+        out=os.open(root.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+    finally:os.close(fd)
+    try:
+        publish(out,'topology.json',config);os.mkdir('requests',0o700,dir_fd=out)
+        req=os.open('requests',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=out)
+        try:
+            for row in config['plan']['rows']:
+                require(row['root']==str(root/'requests'/row['id']),'OBSERVATION_REQUEST_ROOT')
+                os.mkdir(row['id'],0o700,dir_fd=req)
+        finally:os.close(req)
+    finally:os.close(out)
+    lifecycle=ObservationLifecycle(config,cap)
+    return run_admitted_observation(cap,cap.identity,config['plan'],config['plan_parent'],config['requests'],
+        config['request_pins'],lifecycle=lifecycle)
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--owner-topology-sha256', required=True)
-    parser.add_argument('--owner-session-identity', required=True)
+    parser.add_argument('--mode',choices=('SHADOW','BOUNDED_REAL_PROVIDER_OBSERVATION'),default='SHADOW')
+    parser.add_argument('--root', type=Path)
+    parser.add_argument('--owner-topology-sha256')
+    parser.add_argument('--owner-session-identity')
+    parser.add_argument('--observation-config',type=Path)
+    parser.add_argument('--observation-config-sha256')
+    parser.add_argument('--observation-roots-json')
+    parser.add_argument('--observation-qualification-pins-json')
     a = parser.parse_args()
-    return run(a.root, a.owner_topology_sha256, owner_session=a.owner_session_identity)
+    from alpha_session_contract import require
+    if a.mode=='SHADOW':
+        require(a.root is not None and a.owner_topology_sha256 and a.owner_session_identity and
+            all(getattr(a,n) is None for n in ('observation_config','observation_config_sha256',
+                'observation_roots_json','observation_qualification_pins_json')), 'SHADOW_ARGUMENTS_REQUIRED')
+        return run(a.root, a.owner_topology_sha256, owner_session=a.owner_session_identity)
+    require(a.root is a.owner_topology_sha256 is a.owner_session_identity is None and
+        all(getattr(a,n) is not None for n in ('observation_config','observation_config_sha256',
+            'observation_roots_json','observation_qualification_pins_json')), 'OBSERVATION_ARGUMENTS_REQUIRED')
+    from alpha_observation_launch import lexical
+    from alpha_session_evidence import json_document
+    from alpha_session_execution import read_record,safe_root
+    lexical(str(a.observation_config));fd=safe_root(str(a.observation_config.parent))
+    try:config=read_record(fd,a.observation_config.name,expected_hash=a.observation_config_sha256)
+    finally:os.close(fd)
+    # Canonical module identity also when this file executes as __main__.
+    from truth_spine_full_day_runner import run_observation as admitted_run
+    result=admitted_run(config,a.observation_config_sha256,
+        approved_roots=json_document(a.observation_roots_json.encode()),
+        qualification_pins=json_document(a.observation_qualification_pins_json.encode()))
+    return 0 if result['result']=='OBSERVATION_COMPLETE' else 1
 
 
 if __name__ == '__main__':

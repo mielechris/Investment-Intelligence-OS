@@ -119,3 +119,43 @@ class PackageTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class ObservationReleaseTests(unittest.TestCase):
+    def setUp(self):
+        from test_alpha_observation_lifecycle import ExecutionAdmissionTests
+        self.h=ExecutionAdmissionTests();self.h.setUp();self.addCleanup(self.h.doCleanups)
+        self.doc=deepcopy(self.h.document['release'])
+
+    def verify(self,document=None,expected=None):
+        from alpha_session_package import verify_observation_release
+        d=document or self.doc
+        return verify_observation_release(d,expected or content_hash(d),source_commit='a'*40,
+            approved_root=self.h.roots['release'])
+
+    def test_release_exact_bytes_and_graph(self):
+        result=self.verify();self.assertFalse(result['production_qualified'])
+        from pathlib import Path
+        p=Path(self.h.roots['release'])/'alpha_observation_execution.py'
+        p.chmod(0o600);p.write_bytes(b'# altered\n');p.chmod(0o400)
+        with self.assertRaises(ValueError):self.verify()
+
+    def test_missing_duplicate_and_substituted_closure(self):
+        for action in ('missing','duplicate','source','entrypoint','graph','mode'):
+            d=deepcopy(self.doc)
+            if action=='missing':d['files'].pop()
+            if action=='duplicate':d['files'].append(d['files'][0])
+            if action=='source':d['source_commit']='f'*40
+            if action=='entrypoint':d['entrypoints']['parent']='alpha_observation_child.py'
+            if action=='graph':d['module_graph'][next(iter(d['module_graph']))]=['subprocess']
+            if action=='mode':d['files'][0]['mode']=0o600
+            with self.subTest(action=action),self.assertRaises(ValueError):self.verify(d)
+
+    def test_candidate_component_and_synthetic_not_release(self):
+        for schema in ('iios-alpha-bound-package-candidate-v1','OBSERVATION_COMPONENT_ONLY','SYNTHETIC_TEST_ONLY'):
+            with self.subTest(schema=schema),self.assertRaises(ValueError):self.verify(self.doc|{'schema':schema})
+
+    def test_unapproved_release_root_before_filesystem(self):
+        from unittest.mock import patch
+        with patch('os.open',side_effect=AssertionError('NO_EFFECT')),self.assertRaises(ValueError):
+            self.verify(self.doc|{'root':self.h.roots['release']+'-lookalike'})

@@ -57,20 +57,53 @@ def verify_runtime(admission):
                     if a_plan.get('schema') == 'iios-alpha-opportunity-plan-v3':
                         required.update({'alpha_session_readiness.py', 'opportunity_spine_contract.py',
                                          'alpha_session_runner.py'})
+            native_required=set(required)
+            extra = None
+            if admission.documents()[1].get('bulk_plan', {}).get('schema') == 'iios-alpha-short-gateway-plan-v1':
+                extra = observation_runtime_closure(admission, identities)
+                required = set(extra)
             require({Path(p).name for p in r['source_files']} == required, 'SOURCE_CLOSURE')
-            for name in required:
+            for name in native_required:
                 module = sys.modules.get(name[:-3])
-                require(module is not None and Path(module.__file__).resolve() in [root / p for p in r['source_files']], 'IMPORTED_SOURCE_MISMATCH')
+                origin = Path(module.__file__).resolve() if module is not None and getattr(module,'__file__',None) else None
+                require(origin is not None and origin == (extra[name] if extra is not None else next(root / p for p in r['source_files'] if Path(p).name==name)), 'IMPORTED_SOURCE_MISMATCH')
             # Every loaded Python/extension file must belong to the pinned closure.
             for module in tuple(sys.modules.values()):
                 path = getattr(module, '__file__', None)
                 if path:
                     resolved = Path(path).resolve()
-                    require(resolved.is_relative_to(root) and resolved.relative_to(root).as_posix() in identities, 'EXTERNAL_MODULE_REJECTED')
+                    in_runtime = resolved.is_relative_to(root) and resolved.relative_to(root).as_posix() in identities
+                    in_release = extra is not None and resolved in extra.values()
+                    require(in_runtime or in_release, 'EXTERNAL_MODULE_REJECTED')
         return identities
     finally:
         os.close(fd)
 
+
+
+def observation_runtime_closure(admission, identities):
+    """Add only independently verified release origins; keep complete runtime pins."""
+    from alpha_observation_execution import require_active_observation
+    from alpha_session_package import verify_observation_release
+    m,a,r=admission.documents();cap=require_active_observation(m,a);d=cap.document()
+    manifest=d['preflight']['runtime_manifest']
+    require(r['root']==d['roots']['runtime'] and r['root']==manifest['runtime_root'] and
+        r['source_commit']==manifest['release_commit'] and
+        r['root']+'/'+r['interpreter']==manifest['interpreter'], 'OBSERVATION_RUNTIME_PARENT')
+    from provider_gateway_contract import canonical
+    manifest_row=dict(path='runtime-manifest.json',size=len(canonical(manifest)),mode=0o400,
+        sha256=hashlib.sha256(canonical(manifest)).hexdigest())
+    require(r['files']==manifest['file_inventory']+[manifest_row], 'OBSERVATION_RUNTIME_INVENTORY')
+    verify_observation_release(d['release'],d['release_parent'],source_commit=d['source_commit'],
+        approved_root=d['roots']['release'])
+    release={row['path']:row for row in d['release']['files']}
+    sources={Path(name).name:name for name in r['source_files']}
+    require(len(sources)==len(r['source_files']) and set(sources)==set(release), 'OBSERVATION_RUNTIME_SOURCE_CLOSURE')
+    rows={row['path']:row for row in r['files']}
+    for name,path in sources.items():
+        require(rows[path]['sha256']==release[name]['sha256'] and rows[path]['size']==release[name]['size'] and
+            rows[path]['mode']==release[name]['mode'], 'OBSERVATION_RUNTIME_SOURCE_BYTES')
+    return {name:Path(d['roots']['release'])/name for name in release}
 
 def recover_prior(fd, admission, *, recovery, expected_recovery, existing_batch):
     """Use only caller-trusted recovery pins, never pins inferred from disk records.

@@ -596,3 +596,68 @@ class SharedJournalBoundaryTests(unittest.TestCase):
         self.assertNotIn('MacKeychain', text)
         self.assertNotIn('provider_gateway_credentials', text)
         self.assertNotIn('LIVE_QUALIFICATION', text)
+
+
+class ObservationRuntimeTests(unittest.TestCase):
+    def test_short_live_runtime_requires_independent_observation_admission(self):
+        from alpha_observation_execution import require_active_observation
+        with self.assertRaisesRegex(ValueError,'SHORT_NATIVE_ADMISSION_PENDING'):
+            require_active_observation({}, {})
+
+    def test_observation_runtime_cannot_substitute_manifest_or_source(self):
+        from unittest.mock import patch
+        from copy import deepcopy
+        from test_alpha_observation_lifecycle import ExecutionAdmissionTests
+        from provider_gateway_live_contract import Admission
+        from provider_gateway_contract import canonical
+        from provider_gateway_qualification import observation_runtime_closure
+        h=ExecutionAdmissionTests();h.setUp();self.addCleanup(h.doCleanups);cap=h.admit()
+        d=cap.document();manifest=d['preflight']['runtime_manifest']
+        r=dict(root=manifest['runtime_root'],source_commit='a'*40,
+            interpreter=manifest['interpreter'][len(manifest['runtime_root'])+1:],files=[],source_files=[])
+        a=Admission(canonical({}),canonical({}),canonical(r),())
+        with patch('alpha_observation_execution.require_active_observation',return_value=cap):
+            with self.assertRaisesRegex(ValueError,'OBSERVATION_RUNTIME_INVENTORY'):
+                observation_runtime_closure(a,{})
+            r['root']=d['roots']['release']
+            a=Admission(canonical({}),canonical({}),canonical(r),())
+            with self.assertRaisesRegex(ValueError,'OBSERVATION_RUNTIME_PARENT'):
+                observation_runtime_closure(a,{})
+
+    def test_exact_observation_release_closure_and_each_source_mutation(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from copy import deepcopy
+        from test_alpha_observation_lifecycle import ExecutionAdmissionTests
+        from provider_gateway_live_contract import Admission
+        from provider_gateway_contract import canonical
+        from provider_gateway_qualification import observation_runtime_closure
+        h=ExecutionAdmissionTests();h.setUp();self.addCleanup(h.doCleanups)
+        d=h.admit().document();manifest=d['preflight']['runtime_manifest']
+        rows=[dict(row,path='app/'+row['path']) for row in d['release']['files']]
+        manifest['file_inventory']+=rows
+        body=canonical(manifest)
+        r=dict(root=manifest['runtime_root'],source_commit=d['source_commit'],
+            interpreter=manifest['interpreter'][len(manifest['runtime_root'])+1:],
+            files=manifest['file_inventory']+[dict(path='runtime-manifest.json',size=len(body),mode=0o400,
+                sha256=hashlib.sha256(body).hexdigest())],source_files=[row['path'] for row in rows])
+        def check(value):
+            return observation_runtime_closure(Admission(canonical({}),canonical({}),canonical(value),()),{})
+        # Substitute previously independently admitted capability only. Actual
+        # release file verification and exact runtime/source joins still run.
+        with patch('alpha_observation_execution.require_active_observation',return_value=SimpleNamespace(document=lambda:d)):
+            origins=check(r)
+            self.assertEqual(origins,{row['path']:Path(d['roots']['release'])/row['path'] for row in d['release']['files']})
+            for key,value in [('source_files',r['source_files'][:-1]),
+                              ('source_files',r['source_files']+[r['source_files'][0]]),
+                              ('source_files',r['source_files']+['unreviewed.py']),('files',r['files'][:-1])]:
+                changed=deepcopy(r);changed[key]=value
+                with self.subTest(key=key),self.assertRaises(ValueError):check(changed)
+            for field,value in [('sha256','f'*64),('size',999),('mode',0o600)]:
+                changed=deepcopy(d);changed['preflight']['runtime_manifest']['file_inventory'][-1][field]=value
+                bad=deepcopy(r);bad['files']=deepcopy(changed['preflight']['runtime_manifest']['file_inventory'])
+                encoded=canonical(changed['preflight']['runtime_manifest'])
+                bad['files'].append(dict(path='runtime-manifest.json',size=len(encoded),mode=0o400,
+                    sha256=hashlib.sha256(encoded).hexdigest()))
+                with patch('alpha_observation_execution.require_active_observation',return_value=SimpleNamespace(document=lambda:changed)):
+                    with self.subTest(field=field),self.assertRaisesRegex(ValueError,'OBSERVATION_RUNTIME_SOURCE_BYTES'):check(bad)

@@ -289,3 +289,145 @@ def captured_cycle(root, generation, *, store, session, now, require_fresh=True)
     if value["generation"] != generation["content_hash"]:
         raise ValueError("SOURCE_CYCLE_CAPTURE_MISMATCH")
     return value
+
+
+
+def read_observation_current(fd, name):
+    """Bounded, no-follow read of replaceable derived state (never a receipt)."""
+    from alpha_session_contract import require
+    from alpha_session_evidence import json_document,identity
+    require(name in {'observation-projection.json','observation-probes.json'} |
+        {r+'-observation-heartbeat.json' for r in ('scheduler','publisher','backend')},
+        'OBSERVATION_CURRENT_NAME')
+    file=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=fd)
+    try:
+        st=os.fstat(file)
+        require(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_uid==os.getuid() and
+            stat.S_IMODE(st.st_mode)==0o600, 'OBSERVATION_CURRENT_IDENTITY')
+        with os.fdopen(os.dup(file),'rb') as stream:raw=stream.read(1_000_001)
+        require(len(raw)<=1_000_000,'OBSERVATION_CURRENT_SIZE')
+        require(identity(st)==identity(os.fstat(file))==identity(os.stat(name,dir_fd=fd,follow_symlinks=False)),
+            'OBSERVATION_CURRENT_CHANGED')
+        return json_document(raw)
+    finally:os.close(file)
+
+def observation_projection(capability, plan, requests, request_pins, *, now):
+    """Derive observation state from gateway journals, never caller-ready flags.
+
+    Partial journals remain visible. Only complete, independently bound response
+    and completion records advance the verified prefix. No ledger is consulted.
+    """
+    from alpha_observation_lifecycle import ObservationExecution, EXECUTION_SCOPE
+    from alpha_observation_execution import verify_gateway_plan
+    from alpha_session_execution import safe_root, read_record
+    from provider_gateway_contract import content_hash, locked_authority, pin
+    from provider_gateway_live_contract import verify_qualification_receipt
+    from alpha_session_contract import require, instant
+    require(type(capability) is ObservationExecution, 'OBSERVATION_CAPABILITY_REQUIRED')
+    d = capability.document(); verify_gateway_plan(plan, content_hash(plan))
+    require(plan['planning_parent'] == d['preflight']['candidate']['parents']['plan'] and
+        plan['root'] == d['roots']['output']+'/requests' and len(requests) == len(request_pins) == 3,
+        'OBSERVATION_PROJECTION_PLAN')
+    fd = safe_root(plan['root']); previous = None; receipts = []; reserved = 0
+    try:
+        names = set(os.listdir(fd))
+        allowed = {'controller-start.json','controller-final.json','day.lock'} | {r['id'] for r in plan['rows']}
+        allowed |= {f'{i}.{suffix}.json' for i in range(3) for suffix in ('reserved','complete')}
+        require(names <= allowed, 'OBSERVATION_JOURNAL_EXTRA')
+        for slot, (bundle, pins) in enumerate(zip(requests,request_pins)):
+            require(set(bundle) == set(pins) == {'manifest','account','runtime'}, 'OBSERVATION_REQUEST_PINS')
+            for k,v in bundle.items():pin(v,pins[k])
+            m = bundle['manifest']; a = bundle['account']; row = plan['rows'][slot]
+            require(a['bulk_plan']==plan and a['bulk_slot']==slot and m['root']==row['root'] and
+                m['batch_id']==row['id'] and m['source_commit']==d['source_commit'], 'OBSERVATION_REQUEST_IDENTITY')
+            reservation_name=f'{slot}.reserved.json'; complete_name=f'{slot}.complete.json'
+            if reservation_name not in names:
+                require(complete_name not in names and not any(
+                    f'{i}.{suffix}.json' in names for i in range(slot+1,3) for suffix in ('reserved','complete')),
+                    'OBSERVATION_JOURNAL_GAP')
+                break
+            trusted_fd=safe_root(d['roots']['output'])
+            try:
+                try:trusted=read_record(trusted_fd,'observer-slot-'+str(slot)+'.json')
+                except FileNotFoundError:
+                    require(not any('observer-slot-'+str(i)+'.json' in os.listdir(trusted_fd)
+                        for i in range(slot+1,3)), 'OBSERVATION_DISPATCHER_GAP')
+                    reserved += 1
+                    break
+            finally:os.close(trusted_fd)
+            reservation=read_record(fd,reservation_name)
+            require(reservation=={'plan':content_hash(plan),'slot':slot,'source_commit':d['source_commit'],
+                'previous':previous}, 'OBSERVATION_RESERVATION_PARENT')
+            reserved += 1
+            if complete_name not in names:
+                require(not any(f'{i}.reserved.json' in names for i in range(slot+1,3)), 'OBSERVATION_JOURNAL_GAP')
+                break
+            child=safe_root(row['root'])
+            try:
+                request_reservation=read_record(child,'ALPHA_VANTAGE.reserved.json')
+                receipt=read_record(child,'ALPHA_VANTAGE.receipt.json')
+                parent=content_hash(receipt)
+                verify_qualification_receipt(receipt,parent,parents={**pins,'reservation':content_hash(request_reservation)})
+                require(receipt['request_id']==pins['manifest'] and receipt['batch_id']==m['batch_id'] and
+                    receipt['root']==row['root'] and receipt['scope']==m['mode'], 'OBSERVATION_RECEIPT_SCOPE')
+            finally:os.close(child)
+            complete=read_record(fd,complete_name)
+            require(complete=={'slot':slot,'previous':previous,'reservation':content_hash(reservation),
+                'receipt':parent,'result':receipt['result']}, 'OBSERVATION_COMPLETION_PARENT')
+            require(receipt['result']=='OBSERVED' and receipt['bulk_checks']['coverage']=='COMPLETE' and
+                receipt['bulk_checks']['freshness']=='WITHIN_AGE_BOUND', 'OBSERVATION_RESPONSE_FAILED')
+            require(trusted==dict(schema='iios-observation-dispatcher-receipt-v1',
+                admission_parent=capability.identity,slot=slot,parents=pins,receipt_parent=parent,
+                completion_parent=content_hash(complete),authority=locked_authority()),
+                'OBSERVATION_DISPATCHER_PARENT')
+            previous=content_hash(complete);receipts.append(parent)
+        return {'schema':'iios-truth-observation-projection-v1','scope':EXECUTION_SCOPE,
+            'admission_parent':capability.identity,'source_commit':d['source_commit'],
+            'session':plan['session'],'plan_parent':content_hash(plan),'request_parents':list(request_pins),
+            'response_parents':receipts,'completion_parent':previous,'reserved':reserved,'completed':len(receipts),
+            'evidence_mode':requests[0]['manifest']['mode'],
+            'status':'COMPLETE' if len(receipts)==3 else 'PARTIAL',
+            'published_at':now.isoformat(),'coverage':'TEN_SYMBOL_PILOT_ONLY',
+            'freshness':'RECEIPT_TIME_VERIFIED_NOT_CONTINUOUS_MARKET_TRUTH',
+            'governance':'NOT_EXECUTED','production_qualified':False,'authority':locked_authority()}
+    finally:os.close(fd)
+
+
+class ObservationProbeReader:
+    """Truth Spine owner and heartbeat evidence, with independent journal read."""
+    def __init__(self, *, root, capability, plan, requests, request_pins, children, expected_responses):
+        self.expected_responses=list(expected_responses)
+        self.root=Path(root);self.capability=capability;self.plan=plan
+        self.requests,self.request_pins,self.children=requests,request_pins,children
+
+    def collect(self, now):
+        from alpha_session_execution import safe_root,read_record
+        from alpha_session_contract import require,instant
+        from provider_gateway_contract import content_hash,locked_authority
+        fd=safe_root(str(self.root))
+        try:
+            identities={}
+            for role in ('scheduler','publisher','backend'):
+                entry=self.children.active[role];fp=self.children.verify(entry)
+                h=read_observation_current(fd,role+'-observation-heartbeat.json')
+                require(h.get('authority')==locked_authority() and
+                    all(v is False for v in h['authority'].values()), 'OBSERVATION_HEARTBEAT_AUTHORITY')
+                at=instant(h['at'])
+                require(0 <= (now-at).total_seconds() <= 30, 'OBSERVATION_HEARTBEAT_STALE')
+                require(h=={'schema':'iios-observation-heartbeat-v1','admission_parent':self.capability.identity,
+                    'role':role,'startup_parent':fp.startup_receipt_hash,'pid':entry['child'].pid,
+                    'authority':locked_authority(),'at':h['at']}, 'OBSERVATION_HEARTBEAT_BINDING')
+                identities[role]=content_hash(asdict(fp))
+            # Current projection is replaceable derived state. Immutable upstream
+            # gateway records remain authoritative; GET never refreshes time.
+            expected=observation_projection(self.capability,self.plan,self.requests,self.request_pins,now=now)
+            p=read_observation_current(fd,'observation-projection.json')
+            require(p['response_parents']==self.expected_responses, 'OBSERVATION_PROBE_RESPONSE_PINS')
+            published=instant(p['published_at'])
+            require(0 <= (now-published).total_seconds() <= 30, 'OBSERVATION_PROJECTION_STALE')
+            require(content_hash(p)==content_hash(observation_projection(self.capability,self.plan,self.requests,self.request_pins,now=published)),
+                    'OBSERVATION_PROJECTION_SUBSTITUTION')
+            return {'schema':'iios-observation-probes-v1','admission_parent':self.capability.identity,
+                'owners':identities,'projection_parent':content_hash(p),'observed_at':now.isoformat(),
+                'authority':locked_authority(),'production_qualified':False}
+        finally:os.close(fd)

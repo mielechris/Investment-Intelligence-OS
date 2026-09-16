@@ -153,3 +153,117 @@ class ObservationTopologyTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class ExecutionAdmissionTests(unittest.TestCase):
+    """Disposable documents exercise admission, never native truth or effects."""
+    def setUp(self):
+        from pathlib import Path
+        from test_alpha_session_evidence import write, seal_directories
+        from alpha_session_package import OBSERVATION_ENTRYPOINTS
+        from alpha_observation_lifecycle import QUALIFICATION_KINDS, QUALIFICATION_CHECKS, EXECUTION_SCOPE
+        from provider_gateway_contract import canonical
+        self.helper = short_helpers.ShortReadOnlyEvidenceTests(); self.helper.setUp()
+        self.addCleanup(self.helper.tearDown)
+        b = self.helper.bundle; self.now = self.helper.now
+        self.roots = {k:str(self.helper.e.base/k) for k in
+                      ('runtime','claims','release','qualification','control','output')}
+        release = Path(self.roots['release']); release.mkdir()
+        names = {'alpha_observation_lifecycle.py','alpha_observation_execution.py','alpha_session_package.py',
+            'alpha_short_observation.py','alpha_session_execution.py','provider_gateway_qualification.py',
+            'truth_spine_process_identity.py','truth_spine_integration_runner.py','truth_spine_session_package.py',
+            *OBSERVATION_ENTRYPOINTS.values()}
+        rows = [write(release,n,b'# synthetic non-executable release fixture\n') for n in sorted(names)]
+        seal_directories(release)
+        rel = dict(schema='iios-truth-observation-release-v1',source_commit='a'*40,root=str(release),
+            files=rows,entrypoints=dict(OBSERVATION_ENTRYPOINTS),module_graph={n:[] for n in sorted(names)})
+        control=Path(self.roots['control']);control.mkdir()
+        launch=dict(host='127.0.0.1',port=38493,peer_hash='b'*64,sandbox_hash='c'*64,
+            control_files=[write(control,n,b'synthetic non-executable control fixture')
+                for n in ('profile.sb','loopback.crt','loopback.pem')],
+            host_identity=dict(system='Darwin',release='test',version='test',machine='arm64',uid=123),
+            start_ns=1,startup_ns=60_000_000_001,stop_ns=240_000_000_001,final_ns=360_000_000_001)
+        seal_directories(control)
+        parents = dict(launch=content_hash(launch),package=b['candidate_hash'],release=content_hash(rel),runtime=b['runtime']['runtime_manifest_sha256'],
+            claims=b['claims_manifest_hash'],roots=content_hash(self.roots),session=b['plan']['session'])
+        self.pins={}; qs={}; qroot=Path(self.roots['qualification']);qroot.mkdir();qrows=[]
+        for kind in ('host',*(k for k in QUALIFICATION_KINDS if k!='host')):
+            q=dict(schema='iios-reviewed-observation-qualification-v1',scope=EXECUTION_SCOPE,kind=kind,
+                source_commit='a'*40,parents=parents,host_parent=None if kind=='host' else self.pins['host'],
+                valid_from=b['account']['valid_from'],expires_at=b['plan']['finalization_deadline'],
+                checks={k:'INDEPENDENTLY_QUALIFIED' for k in QUALIFICATION_CHECKS[kind]},
+                evidence_parents={k:content_hash(['synthetic',kind,k]) for k in QUALIFICATION_CHECKS[kind]},
+                authority=locked_authority())
+            qs[kind]=q;self.pins[kind]=content_hash(q);qrows.append(write(qroot,kind+'.json',canonical(q)))
+        seal_directories(qroot)
+        grant=dict(schema='iios-owner-observation-grant-v1',scope=EXECUTION_SCOPE,source_commit='a'*40,
+            parents=parents,qualification_parents=dict(self.pins),valid_from=b['account']['valid_from'],
+            expires_at=b['plan']['finalization_deadline'],maximum_requests=3,maximum_cost='3',cost_unit=b['allowance']['cost_unit'],
+            retry_count=0,authority=locked_authority())
+        self.document=dict(schema='iios-truth-observation-execution-v1',scope=EXECUTION_SCOPE,
+            source_commit='a'*40,roots=self.roots,launch=launch,preflight=b,release=rel,release_parent=content_hash(rel),
+            qualifications=qs,qualification_files=qrows,grant=grant,grant_parent=content_hash(grant),authority=locked_authority())
+        self.expected=content_hash(self.document)
+
+    def admit(self):
+        from alpha_observation_lifecycle import admit_observation_execution
+        return admit_observation_execution(self.document,self.expected,approved_roots=self.roots,
+            approved_qualification_pins=self.pins,now=self.now)
+
+    def test_complete_file_binding_is_immutable_and_not_native_execution(self):
+        cap=self.admit()
+        self.assertEqual(cap.identity,self.expected)
+        with self.assertRaises(AttributeError):cap._expected='f'*64
+        doc=cap.document();doc['authority']['live_execution']=True
+        self.assertEqual(cap.document()['authority'],locked_authority())
+        self.assertEqual(cap.recheck(self.now).identity,self.expected)
+
+    def test_document_hash_and_every_independent_qualification_pin(self):
+        original=self.expected;self.expected='f'*64
+        with self.assertRaises(ValueError):self.admit()
+        self.expected=original
+        for key in self.pins:
+            saved=self.pins[key];self.pins[key]='f'*64
+            with self.subTest(key=key),self.assertRaises(ValueError):self.admit()
+            self.pins[key]=saved
+
+    def test_no_direct_capability_or_cross_scope_relabel(self):
+        from alpha_observation_lifecycle import ObservationExecution
+        with self.assertRaises(TypeError):ObservationExecution()
+        for scope in ('OFFLINE_TEST','OBSERVATION_LAUNCH_COMPONENT_ONLY','CI_SYNTHETIC_FULL_SESSION_ONLY'):
+            d=deepcopy(self.document);d['scope']=scope
+            with self.subTest(scope=scope),self.assertRaises(ValueError):
+                from alpha_observation_lifecycle import admit_observation_execution
+                admit_observation_execution(d,content_hash(d),approved_roots=self.roots,
+                    approved_qualification_pins=self.pins,now=self.now)
+
+    def test_qualification_changed_bytes_cannot_be_replaced_by_inmemory_claim(self):
+        from pathlib import Path
+        p=Path(self.roots['qualification'])/'confinement.json';p.chmod(0o600);p.write_bytes(b'{}');p.chmod(0o400)
+        with self.assertRaises(ValueError):self.admit()
+
+    def test_rehashed_grant_budget_and_authority_mutations(self):
+        for key,value in [('maximum_requests',4),('maximum_requests',True),('retry_count',1),
+                          ('maximum_cost','4'),('expires_at','2099-01-01T00:00:00+00:00'),
+                          ('authority',dict.fromkeys(locked_authority(),True))]:
+            old=deepcopy(self.document)
+            self.document['grant'][key]=value;self.document['grant_parent']=content_hash(self.document['grant'])
+            self.expected=content_hash(self.document)
+            with self.subTest(key=key),self.assertRaises(ValueError):self.admit()
+            self.document=old;self.expected=content_hash(old)
+
+    def test_live_clock_expiry_not_planning_clock(self):
+        self.now=instant(self.document['preflight']['plan']['finalization_deadline'])
+        with self.assertRaises(ValueError):self.admit()
+
+    def test_unapproved_roots_rejected_before_filesystem(self):
+        self.roots=dict(self.roots,output='/not-approved')
+        with patch('os.open',side_effect=AssertionError('NO_FS')),self.assertRaises(ValueError):self.admit()
+
+    def test_monotonic_phase_binding_rejects_one_tick_mutations(self):
+        from alpha_observation_lifecycle import admit_observation_execution
+        for key in ('startup_ns','stop_ns','final_ns'):
+            d=deepcopy(self.document);d['launch'][key]-=1
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'OBSERVATION_(PHASE_DEADLINE_BINDING|LAUNCH_BUDGET)'):
+                admit_observation_execution(d,content_hash(d),approved_roots=self.roots,
+                    approved_qualification_pins=self.pins,now=self.now)

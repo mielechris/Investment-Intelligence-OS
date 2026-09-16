@@ -215,6 +215,172 @@ def serve(path, port, on_bound=None):
     finally: server.server_close()
 
 
+
+def load_observation_config(path, expected, *, now):
+    """Independent CLI pin selects a distinct contract, never shadow inference."""
+    from alpha_observation_lifecycle import admit_observation_execution
+    from alpha_observation_launch import lexical
+    from alpha_session_contract import require
+    from alpha_session_execution import safe_root, read_record
+    from provider_gateway_contract import pin
+    lexical(str(path)); require(path.name == 'topology.json', 'OBSERVATION_CONFIG_NAME')
+    fd=safe_root(str(path.parent))
+    try:c=read_record(fd,path.name)
+    finally:os.close(fd)
+    require(set(c)=={'schema','admission','admission_parent','roots','qualification_pins','plan','plan_parent',
+        'requests','request_pins'}, 'OBSERVATION_CONFIG_SCHEMA')
+    require(c['schema']=='iios-truth-observation-config-v1' and c['admission_parent']==expected,
+            'OBSERVATION_CONFIG_SCOPE')
+    cap=admit_observation_execution(c['admission'],expected,approved_roots=c['roots'],
+        approved_qualification_pins=c['qualification_pins'],now=now)
+    require(str(path.parent)==c['roots']['output'], 'OBSERVATION_CONFIG_ROOT')
+    from alpha_observation_execution import verify_gateway_plan
+    verify_gateway_plan(c['plan'],c['plan_parent'])
+    require(c['plan']['planning_parent']==cap.document()['preflight']['candidate']['parents']['plan'] and
+        c['plan']['root']==str(path.parent/'requests') and len(c['requests'])==len(c['request_pins'])==3,
+        'OBSERVATION_CONFIG_PLAN')
+    for bundle,pins in zip(c['requests'],c['request_pins']):
+        require(set(bundle)==set(pins)=={'manifest','account','runtime'},'OBSERVATION_CONFIG_REQUESTS')
+        for key in bundle:pin(bundle[key],pins[key])
+    return c,cap
+
+
+def read_observation_state(config, capability, now):
+    from truth_spine_session_package import observation_projection
+    return observation_projection(capability,config['plan'],config['requests'],config['request_pins'],now=now)
+
+
+def publish_observation_once(config, capability, at):
+    """Only publisher role calls this; no upstream evidence is issued here."""
+    value=read_observation_state(config,capability,at)
+    atomic(Path(config['roots']['output'])/'observation-projection.json',value)
+    if value['completed']:
+        from alpha_session_execution import safe_root,read_record
+        from alpha_observation_execution import publish_observation_checkpoint
+        from alpha_session_contract import require
+        from provider_gateway_contract import locked_authority
+        slot=value['completed']-1
+        ack=dict(schema='iios-observation-publication-ack-v1',admission_parent=capability.identity,
+            slot=slot,response_parents=value['response_parents'],completion_parent=value['completion_parent'],
+            authority=locked_authority())
+        fd=safe_root(config['roots']['output'])
+        try:
+            try:old=read_record(fd,'publisher-slot-'+str(slot)+'.json')
+            except FileNotFoundError:publish_observation_checkpoint(fd,slot,ack,publisher=True)
+            else:require(old==ack,'OBSERVATION_PUBLICATION_ACK_CHANGED')
+        finally:os.close(fd)
+    return value
+
+
+def observation_response(config, capability, request, *, now, method='GET'):
+    """Read-only health; source journals are independently re-derived per read."""
+    from alpha_session_execution import safe_root,read_record
+    from alpha_session_contract import require,instant
+    from provider_gateway_contract import content_hash,locked_authority
+    if method not in ('GET','HEAD'):return 405,{'status':'READ_ONLY'}
+    if request not in ('/health/live','/health/ready','/truth-spine/observation'):
+        return 404,{'status':'NOT_FOUND'}
+    if request=='/health/live':return 200,{'status':'LIVE','readiness_claimed':False}
+    fd=None
+    try:
+        capability.recheck(now)
+        fd=safe_root(config['roots']['output'])
+        from truth_spine_session_package import read_observation_current
+        p=read_observation_current(fd,'observation-projection.json');at=instant(p['published_at'])
+        require(0 <= (now-at).total_seconds() <= 30, 'OBSERVATION_PROJECTION_STALE')
+        require(content_hash(p)==content_hash(read_observation_state(config,capability,at)), 'OBSERVATION_PROJECTION_SUBSTITUTION')
+        probes=read_observation_current(fd,'observation-probes.json')
+        require(probes['schema']=='iios-observation-probes-v1' and
+            probes['admission_parent']==capability.identity and probes['projection_parent']==content_hash(p) and
+            set(probes['owners'])=={'scheduler','publisher','backend'} and
+            all(type(v) is str and len(v)==64 for v in probes['owners'].values()) and
+            0 <= (now-instant(probes['observed_at'])).total_seconds() <= 15 and
+            probes['authority']==locked_authority() and probes['production_qualified'] is False,
+            'OBSERVATION_PROBES')
+        return (200 if p['status']=='COMPLETE' else 503),p
+    except (OSError,ValueError,KeyError,TypeError):
+        return 503,{'status':'EVIDENCE_UNVERIFIED','production_qualified':False,'authority':locked_authority()}
+    finally:
+        if fd is not None:os.close(fd)
+
+
+def run_observation_role(args):
+    """Fixed existing roles with no gateway or credentials in child effects."""
+    import ssl
+    from alpha_session_contract import require
+    from alpha_session_execution import safe_root,read_record,publish
+    from provider_gateway_contract import locked_authority
+    from truth_spine_process_identity import write_startup
+    c,cap=load_observation_config(args.config,args.observation_admission,now=datetime.now(timezone.utc))
+    d=cap.document();launch=d['launch'];root=Path(d['roots']['output']);last=launch['start_ns']
+    runtime=c['requests'][0]['runtime']
+    require(Path(__file__).resolve()==Path(d['roots']['release'])/'truth_spine_full_day_service.py' and
+        Path(sys.executable).resolve()==Path(runtime['root'])/runtime['interpreter'] and
+        args.port==(launch['port'] if args.role=='backend' else None),'OBSERVATION_CHILD_LOCATION')
+    def check(deadline):
+        nonlocal last
+        ns=time.monotonic_ns();require(last<=ns<deadline,'OBSERVATION_CHILD_DEADLINE');last=ns
+    check(launch['startup_ns']);lease=Lease(root,args.role);fd=safe_root(str(root));server=None
+    receipt=None;cooperative=False
+    try:
+        if args.role=='backend':
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self,*_):pass
+                def respond(self):
+                    code,value=observation_response(c,cap,self.path,now=datetime.now(timezone.utc),method=self.command)
+                    raw=canonical(value);self.send_response(code);self.send_header('Content-Type','application/json')
+                    self.send_header('Content-Length',str(len(raw)));self.end_headers()
+                    if self.command!='HEAD':self.wfile.write(raw)
+                do_GET=do_HEAD=do_POST=do_PUT=do_PATCH=do_DELETE=respond
+            from socketserver import TCPServer
+            class LoopbackServer(ThreadingHTTPServer):
+                def server_bind(self):
+                    TCPServer.server_bind(self)
+                    self.server_name='127.0.0.1';self.server_port=launch['port']
+            server=LoopbackServer(('127.0.0.1',launch['port']),Handler);server.daemon_threads=True
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(d['roots']['control']+'/loopback.crt',d['roots']['control']+'/loopback.pem')
+            server.socket=context.wrap_socket(server.socket,server_side=True);server.timeout=.1
+        receipt=write_startup(root,args.instance_id,args.runner_id,args.role,args.port,args.created_at,observation=cap)
+        deny_external_io()  # Existing irreversible child guard, after self-inspection only.
+        def observation_guard(event, values):
+            if event in ('socket.getaddrinfo','socket.gethostbyname','socket.gethostbyaddr','socket.gethostname'):
+                raise PermissionError('OBSERVATION_DNS_DISABLED')
+            if event=='socket.bind':
+                raise PermissionError('OBSERVATION_REBIND_DISABLED')
+        sys.addaudithook(observation_guard)
+        while True:
+            check(launch['startup_ns'])
+            try:ack=read_record(fd,args.role+'-observation-ack.json');break
+            except FileNotFoundError:time.sleep(.01)
+        require(ack=={'schema':'iios-observation-ack-v1','admission_parent':cap.identity,'role':args.role,
+            'pid':os.getpid(),'startup_parent':receipt['content_hash'],'startup_ns':launch['startup_ns'],
+            'authority':locked_authority()},'OBSERVATION_ACK_INVALID')
+        while True:
+            check(launch['final_ns'])
+            try:
+                stop=read_record(fd,'observation-stop.json')
+                require(stop=={'admission_parent':cap.identity,'authority':locked_authority()},'OBSERVATION_STOP_INVALID')
+                cooperative=True;break
+            except FileNotFoundError:pass
+            check(launch['stop_ns']);at=datetime.now(timezone.utc)
+            # Scheduler and publisher both inspect actual bounded gateway records.
+            if args.role=='scheduler':read_observation_state(c,cap,at)
+            if args.role=='publisher':publish_observation_once(c,cap,at)
+            atomic(root/(args.role+'-observation-heartbeat.json'),dict(schema='iios-observation-heartbeat-v1',
+                admission_parent=cap.identity,role=args.role,startup_parent=receipt['content_hash'],
+                pid=os.getpid(),at=at.isoformat(),authority=locked_authority()))
+            if server is not None:server.handle_request()
+            else:time.sleep(.1)
+    finally:
+        if server is not None:server.server_close()
+        try:
+            if receipt is not None:
+                publish(fd,args.role+'-observation-exit.json',dict(schema='iios-observation-exit-v1',
+                    admission_parent=cap.identity,role=args.role,pid=os.getpid(),startup_parent=receipt['content_hash'],
+                    cooperative=cooperative,authority=locked_authority()))
+        finally:os.close(fd);lease.close()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -222,7 +388,10 @@ def main():
     parser.add_argument("--port", type=int)
     for key in ("instance-id", "runner-id", "created-at"):
         parser.add_argument("--"+key, required=True)
+    parser.add_argument("--observation-admission")
     args = parser.parse_args()
+    if args.observation_admission is not None:
+        return run_observation_role(args)
     c, session, manifest, _, registry = load_config(args.config)
     root = args.config.parent
     if Path(__file__).resolve().parent != root/"release/backend" or Path(sys.executable) != root/"runtime/bin/python":

@@ -452,3 +452,30 @@ time.sleep(2)
 
 
 if __name__=='__main__':unittest.main()
+
+
+class ObservationEnvelopeTests(unittest.TestCase):
+    def setUp(self):
+        from test_alpha_observation_lifecycle import ExecutionAdmissionTests
+        h=ExecutionAdmissionTests();h.setUp();self.addCleanup(h.doCleanups)
+        self.cap=h.admit();self.root=Path(h.roots['output']);self.root.mkdir(mode=0o700)
+        (self.root/'topology.json').write_text('{}')
+
+    def bind(self,**kw):
+        values=dict(root=self.root,instance='observation-child-'+'a'*32,runner='observation-runner-'+'b'*32,
+            role='scheduler',port=None,created='2026-09-14T13:00:00+00:00',observation=self.cap)
+        values.update(kw);return identity.binding(**values)
+
+    def test_distinct_startup_parents_and_no_shadow_relabel(self):
+        b=self.bind();d=self.cap.document()
+        self.assertEqual(b['admission_parent'],self.cap.identity)
+        self.assertEqual(b['release_parent'],d['release_parent'])
+        self.assertEqual(b['runtime_parent'],d['preflight']['runtime']['runtime_manifest_sha256'])
+        self.assertFalse(b['production_qualified']);self.assertTrue(all(v is False for v in b['authority'].values()))
+        for kw in ({'observation':None},{'instance':'shadow-child-'+'a'*32},{'runner':'shadow-runner-'+'b'*32},
+                   {'role':'worker'},{'port':38493},{'root':self.root.parent}):
+            with self.subTest(kw=kw),self.assertRaises(ValueError):self.bind(**kw)
+
+    def test_topology_mutation_changes_bound_parent(self):
+        a=self.bind();(self.root/'topology.json').write_text('{"changed":true}')
+        self.assertNotEqual(a['topology_hash'],self.bind()['topology_hash'])
