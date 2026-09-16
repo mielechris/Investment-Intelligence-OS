@@ -13,6 +13,8 @@ on:
       - BACK END/backend/test_alpha_session_package.py
       - BACK END/backend/alpha_session_evidence.py
       - BACK END/backend/test_alpha_session_evidence.py
+      - BACK END/backend/alpha_session_preflight.py
+      - BACK END/backend/test_alpha_session_preflight.py
       - .github/workflows/alpha-session-contract.yml
 
 permissions:
@@ -37,6 +39,7 @@ jobs:
           test_alpha_session_integration
           test_alpha_session_package
           test_alpha_session_evidence
+          test_alpha_session_preflight
           test_alpha_session_readiness.ReadinessTests.test_final_join_missing_stages_is_yellow_and_flags_false
           test_alpha_session_readiness.ReadinessTests.test_synthetic_complete_chain_never_live_green
           test_alpha_session_readiness.SharedSchedulerBoundaryTests.test_runner_uses_shared_scheduler_and_retains_both_guards

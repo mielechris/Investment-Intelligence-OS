@@ -105,6 +105,39 @@ This is the read-only portion of admission, not a live execution capability.
 
 ## Path to a full market-day observation test
 
+The runnable read-only entrypoint is `alpha_session_preflight.py`. It has no
+default roots, execution flag, credential discovery or CLI clock override.
+The independently approved input directory contains only an immutable
+`admission-input.json`, whose exact raw SHA-256 and byte length are supplied
+outside the document. The schema is `iios-alpha-preflight-input-v1`; its fields
+are candidate/candidate_hash, plan, account, runtime, allowance, runtime_manifest,
+claims_manifest/claims_manifest_hash and package_inputs. package_inputs includes
+input_pins, contract, calendar, universe, spine_session, expected and source_commit.
+It must not contain `now` or any filesystem-root approval.
+
+On the selected host, the reviewed invocation is:
+
+```sh
+python -B alpha_session_preflight.py \
+  --input-root APPROVED_IMMUTABLE_INPUT_ROOT \
+  --expected-sha256 INDEPENDENT_BUNDLE_SHA256 \
+  --expected-bytes INDEPENDENT_BUNDLE_BYTE_LENGTH \
+  --approved-runtime-root APPROVED_IMMUTABLE_RUNTIME_ROOT \
+  --approved-claims-root APPROVED_IMMUTABLE_CLAIMS_ROOT
+```
+
+These are placeholders, not ready-to-run pins. Do not infer approvals from paths
+inside the bundle. Account facts must be independently reviewed, not generated
+from the test fixtures. No actual selected-host artifacts have been inspected
+or qualified by the source CI.
+
+The CLI always reports BLOCKED: verified file/binding checks return exit 2 with
+candidate_evidence=FILES_AND_BINDINGS_VERIFIED_ONLY and explicit remaining gates;
+failed checks return exit 1 with a fixed sanitized category. Consumers must parse
+the report schema and fields; exit 2 alone also denotes argparse usage errors.
+Neither result grants execution. Missing inputs are reported without their raw
+paths or exception messages. This entrypoint does not execute native validators.
+
 1. Complete and review production runtime/admission integration without relaxing
    the existing live guards; qualify isolation using disposable resources.
 2. Independently review real account entitlements, approved costs, current
