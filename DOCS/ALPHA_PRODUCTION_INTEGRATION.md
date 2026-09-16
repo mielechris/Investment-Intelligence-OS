@@ -49,6 +49,33 @@ The old production CLI rejects the new candidate schema. Wiring that schema to
 execution remains a later separately qualified increment, and every existing
 production admission guard remains intact.
 
+## Third increment: account, runtime and allowance references
+
+`alpha_session_package.py` builds an OFFLINE_INTEGRATION_ONLY package candidate
+from independently pinned plan, account, runtime and allowance documents.
+It reuses the gateway's required account claim names and amount parser and the
+deployment contract's Python version. Every document binds the same source,
+session, plan and validity window. Account coverage includes PILOT separately
+from the ordered 517-symbol universe; no fallback provider or feed is accepted.
+
+Runtime references bind the manifest, interpreter and platform hashes to the
+Darwin/arm64/Python 3.14.7 target. This function performs no disk inspection;
+those hashes do not prove installed-file integrity. Account claim hashes likewise
+do not prove actual entitlements, retention rights, billing or credential access.
+No real account or runtime has been accepted by these synthetic tests.
+
+The allowance binds both account and runtime hashes, exactly 475 requests,
+zero enrichment, matching cost units, and 475 times the per-request ceiling
+within the stated available balance. Overage, automatic top-up and budget
+release remain false. Arithmetic uses bounded decimal inputs and explicit
+precision, not floating point or a caller's ambient precision.
+
+Output status is BINDINGS_VALID_ONLY and enumerates the remaining live-evidence,
+runtime, confinement, preflight, adapter and installation gates. The package
+cannot be passed to the existing runner as an executable package. A later live
+admission adapter must verify actual evidence and filesystem/runtime identity;
+changing a scope string or accepting these candidate hashes is insufficient.
+
 ## Subsequent implementation and acceptance
 
 1. Connect the reviewed session identity to a versioned schedule/package and
