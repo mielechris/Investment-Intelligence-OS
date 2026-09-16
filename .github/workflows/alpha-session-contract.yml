@@ -7,6 +7,8 @@ on:
     paths:
       - BACK END/backend/alpha_session_contract.py
       - BACK END/backend/test_alpha_session_contract.py
+      - BACK END/backend/alpha_session_integration.py
+      - BACK END/backend/test_alpha_session_integration.py
       - .github/workflows/alpha-session-contract.yml
 
 permissions:
@@ -28,6 +30,7 @@ jobs:
         working-directory: BACK END/backend
         run: >-
           python -B -m unittest -v test_alpha_session_contract
+          test_alpha_session_integration
           test_alpha_session_readiness.ReadinessTests.test_final_join_missing_stages_is_yellow_and_flags_false
           test_alpha_session_readiness.ReadinessTests.test_synthetic_complete_chain_never_live_green
           test_alpha_session_readiness.SharedSchedulerBoundaryTests.test_runner_uses_shared_scheduler_and_retains_both_guards

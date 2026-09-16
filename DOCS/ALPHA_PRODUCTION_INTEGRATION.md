@@ -25,6 +25,30 @@ The dedicated CI job runs offline unit tests on Python 3.14.7. It launches no
 fixture, provider request, native qualification, production service or order.
 It does not establish an installed immutable runtime identity.
 
+## Second increment: existing Truth Spine binding
+
+`alpha_session_integration.py` reconciles the separately pinned Alpha session
+with `truth_spine_session.parse_session`. It requires matching date, opening
+and closing times, and independently expected source commit. Closed, shortened
+and historical replay sessions cannot use the normal-session 475-request policy.
+The existing calendar's bounded year and closure limitations remain in force.
+
+The versioned candidate preserves one separately bound PILOT preflight and 79
+six-batch scans (100/100/100/100/100/17). The final scan ends 5m30s after close,
+as in the accepted legacy policy, and must fit the 15-minute reconciliation
+window. Short-session request counts are deliberately not inferred.
+
+Reconstruction rejects even rehashed plan changes. The offline stage join binds
+every stage to the new date, source, candidate and previous accepted stage hash.
+Missing stages block completion; even a complete chain is OFFLINE_COMPLETE,
+never production GREEN. Real stage semantics remain the responsibility of
+existing governance owners. This is a planning/receipt interface, not a running
+Factory adapter. No live receipt converter or new supervisor is introduced.
+
+The old production CLI rejects the new candidate schema. Wiring that schema to
+execution remains a later separately qualified increment, and every existing
+production admission guard remains intact.
+
 ## Subsequent implementation and acceptance
 
 1. Connect the reviewed session identity to a versioned schedule/package and
