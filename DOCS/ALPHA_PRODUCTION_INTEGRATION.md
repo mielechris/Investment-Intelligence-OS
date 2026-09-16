@@ -433,3 +433,121 @@ live gateway requests still requires actual account/runtime/confinement/prefligh
 proofs, explicit credential/cost authority, and a separately reviewed integration
 that preserves the current production guards. It cannot be obtained by changing
 this component scope or interpreting its TLS response as provider readiness.
+
+## Reviewed qualification boundaries
+
+These corrections distinguish an observed failure, its attributable cause, and
+acceptance. None supplies runtime, account, confinement or execution authority.
+
+### Attributable denial
+
+`EACCES` and `EPERM` are observed access failures, not proof of Seatbelt enforcement.
+The disposable probe must report `OBSERVED_ACCESS_DENIAL_UNATTRIBUTED`; UNKNOWN,
+exit 65, SIGABRT, timeout and connection refusal never establish policy success.
+For dummy regular-file comparisons, independently bind the same executable,
+argv, cwd, principal, environment, host, operation and target identity/metadata.
+Show an allowed baseline before the confined trial. For exclusive writes use
+separate, identically prepared, independently inventoried targets and account for
+that difference; do not reuse a now-existing baseline destination. The trial must
+bind its own PID/start and profile hash. Record DAC/ACL/flags and any observable
+other access-control context; unexplained differences prevent attribution.
+
+A denial claim additionally needs an independently reviewed OS-policy observation
+that attributes the denied operation to that process and policy. Bind actual
+capture identity, timestamps, operation and target; a hash of self-reported JSON
+or a synthetic event is insufficient. No supported bounded collector or native
+attribution evidence is currently qualified. A report-consistency checker is not
+such a collector. No unrestricted logs, unrelated process inspection or raw
+sensitive diagnostics may be gathered to fill the gap. Do not create unconfined
+DNS/public-network comparison traffic. Network/process restrictions remain
+UNQUALIFIED without equivalent attributable evidence. No production guard changes.
+
+### Final-destination relocation
+
+The assembler correctly returns `ASSEMBLED_BYTES_ONLY`. It does not establish
+working relocation. Qualify the immutable interpreter at its exact final runtime
+destination, not the staging executable. Resolve every Mach-O dependency/load
+command and rpath against that destination; reject staging and historical
+framework references, unresolved edges, and unapproved fallback paths. Include
+extensions and dependencies not exercised by the initial import set.
+
+Under a scrubbed environment, invoke only the final interpreter with isolated,
+no-bytecode options and a pinned observation script. Bind actual executable,
+prefix/base-prefix, search paths, stdlib/dependency/extension origins, loaded dyld
+images, TLS provenance and exact approved OS dependencies. No PYTHONPATH or DYLD
+repair may conceal a relocation failure. Verify unchanged closure inventories
+before and after. Static closure review and actual native observation are both
+required; a consistent supplied report proves neither completeness nor execution.
+A successful staging import cannot substitute for this gate. Testing without the
+newly owned staging tree must be separately pinned and must not modify or hide
+system/historical runtimes. No runtime has passed this native gate yet.
+
+### Build-control bootstrap
+
+Before running extraction, assembly or relocation Python scripts, independently
+qualify the build-control interpreter, stdlib, shared libraries, loaded helpers,
+script bytes, ownership/modes and platform/dependency closure. Verify vendor and
+bootstrap provenance independently of that interpreter; it cannot self-certify
+its own admission. A main-binary SHA alone is insufficient. The observed installed
+framework interpreter is group-writable and lacks this reviewed closure. It is
+not currently admitted for assembly. Existing offline test use does not confer
+that permission. Do not chmod, relabel or copy rejected inputs into compliance.
+
+Missing input: a separately reviewed build-control closure/provenance manifest
+with a trusted verifier/bootstrap and applicable host identity. If a different
+bootstrap distribution is proposed, identify its exact acquisition and trust
+chain for review; it is not implicitly included among the existing 41 artifacts.
+Public acquisition, private assembly and native qualification remain separate
+phases. Assembly stops before any Python build script until this gate passes.
+
+### Remaining real-data connection
+
+The short-observation planner/preflight is not an executable gateway package.
+`alpha_market_baseline.verify_plan` rejects its schema. The public gateway path
+is `provider_gateway_qualification.qualify` -> admission/runtime validation ->
+`alpha_session_execution.execute_day` -> per-request `_qualify` -> transport.
+The private bulk permit and both reservation levels cannot be bypassed. The
+current `NativeHTTPS` does not forward a short-window guard to the shared HTTPS
+`before_request` hook. The shared wire implementation already has that hook; no
+new HTTP implementation is needed. The scheduler's expiry check is not the
+short plan's five-second dispatch cutoff.
+
+The missing implementation is a positively admitted, separately versioned live
+short-session package and controller-to-gateway execution entrypoint. It must
+bind the selected source/runtime/generation, session/calendar, exact ten ordered
+symbols, three rows, account/retention/billing evidence, unreleased allowance,
+explicit credential/cost authority, roots, actual-time dispatch cutoffs and
+qualified native confinement/lifecycle evidence. Recheck time before session and
+request reservation and immediately before HTTP send; preserve consumed or
+ambiguous reservations and zero retries. A late slot fails, without backfill.
+
+Use a separate production owner/worker admission path reusing reviewed ownership
+primitives. The receipt-only `LaunchOwner`, its child and shadow service remain
+component-only. Do not widen their scope or remove `CLI_LIVE_ONLY`,
+`RADAR_NATIVE_ADAPTER_PENDING` or the old runner's date guard. Final acceptance
+must reconcile three actual requests and receipts with owned startup, health,
+publication and cleanup; a dummy TLS response or synthetic receipt is inadequate.
+
+Concrete proposed bridge review scope (not implemented or executable here):
+
+- New `alpha_observation_admission.py` and `test_alpha_observation_admission.py`:
+  independently pinned production capability/package, account and execution gates.
+- New `alpha_observation_execution.py` and `test_alpha_observation_execution.py`:
+  production owner/worker entrypoint, scheduler/gateway connection and final join.
+- Existing `alpha_market_baseline.py` / `test_alpha_market_baseline.py`:
+  explicit additional short-live plan version; preserve all legacy reconstruction.
+- Existing `provider_gateway_live_contract.py` / `test_provider_gateway_live_contract.py`:
+  bind per-request admission to the separately capped three-row session.
+- Existing `provider_gateway_qualification.py` / `test_provider_gateway_qualification.py`:
+  reviewed runtime closure, request-reservation cutoff and existing bulk permit.
+- Existing `alpha_session_execution.py` / `test_alpha_session_readiness.py`:
+  short-window session-reservation cutoff and scheduler completion/recovery.
+- Existing `provider_gateway_transport.py` / `test_provider_gateway_transport.py`:
+  admitted short-window check forwarded to the existing pre-send hook.
+- This document and `.github/workflows/alpha-session-contract.yml`:
+  exact new contract tests and component/production status separation.
+
+All Python paths above are under `BACK END/backend`. No shared HTTP-mechanics,
+Truth Spine, credential-selector, shadow-service or confinement-policy edit is
+proposed. If implementation proves another path necessary, review that scope
+before editing. This is source integration scope, not real-provider authority.
