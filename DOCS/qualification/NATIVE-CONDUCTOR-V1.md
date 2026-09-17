@@ -140,3 +140,18 @@ adapters are still missing. The bootstrap acceptance cannot be relabeled as fina
 runtime acceptance, nor can functional lifecycle or a single correlated denial
 be promoted to complete confinement qualification. There is no launch-ready
 package at this checkpoint; source-controlled execution readiness remains false.
+
+## Final-runtime reference admission
+
+The final-runtime stage requires a separately pinned final-runtime image reference.
+The bootstrap identity receipt cannot supply this reference: its required imports
+and ordered loaded-image set include components excluded by the production layout.
+The source admission rejects a missing, expired, cross-scope or incompatible
+reference before native dispatch. The new reference validator does not construct
+expected observations from the process under test or establish runtime acceptance.
+
+Preparation installs its audit hook before non-builtin imports. This is a
+preparation-mode effect barrier, not a completed native audit policy. The native
+readiness gate remains closed. Assembly, dynamic acceptance, confinement and
+native resume integration remain incomplete; no runnable qualification bundle
+is produced by this checkpoint.

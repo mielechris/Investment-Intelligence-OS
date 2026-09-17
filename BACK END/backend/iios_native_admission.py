@@ -2,8 +2,9 @@
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
-from iios_native_conductor import STAGES,QualificationFailure,require,pin_file,digest,AUTHORITIES
+from iios_native_conductor import STAGES,QualificationFailure,require,pin_file,digest,AUTHORITIES,failure
 
 # Source-controlled gate: a manifest cannot authorize an unfinished dispatcher.
 NATIVE_DISPATCHER_READY = False
@@ -41,6 +42,17 @@ def review_bindings(manifest):
             blockers.append({'stage':row['id'],'predicate':'NATIVE_ADAPTER_REVIEW','expected':'COMPLETE','observed':'INCOMPLETE','exception_subtype':'NONE','errno_category':'NONE'})
         else:
             pin_file(binding['adapter_path'],binding['adapter_sha256'])
+    if manifest.get('native',{}).get('runtime_reference') is None:
+        blockers.append({'stage':STAGES[6],'predicate':'FINAL_RUNTIME_IMAGE_REFERENCE_REQUIRED','expected':'INDEPENDENT_FINAL_RUNTIME_REFERENCE','observed':'MISSING','exception_subtype':'NONE','errno_category':'NONE'})
+    else:
+        from iios_native_runtime_reference import admit_reference
+        try:
+            context=manifest['native'].get('runtime_reference_context')
+            require(type(context) is dict and set(context)=={'source','root','host','layout_parent','policy','imports'},STAGES[6],'FINAL_RUNTIME_REFERENCE_CONTEXT')
+            require(context['source']==manifest['source']['commit'],STAGES[6],'FINAL_RUNTIME_REFERENCE_SOURCE')
+            admit_reference(manifest['native']['runtime_reference'],now=time.time(),**context)
+        except Exception as error:
+            blockers.append(failure(error,STAGES[6],'FINAL_RUNTIME_REFERENCE_ADMISSION'))
     if not NATIVE_DISPATCHER_READY:
         blockers.append({'stage':STAGES[0],'predicate':'NATIVE_DISPATCHER_INTEGRATION_REQUIRED','expected':'COMPLETE_REVIEWED_IMPLEMENTATION','observed':'INCOMPLETE','exception_subtype':'NONE','errno_category':'NONE'})
     return blockers

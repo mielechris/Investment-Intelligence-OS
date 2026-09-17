@@ -58,7 +58,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(ctx.exception.detail['predicate'],predicate)
     def test_missing_all_four_native_adapters_is_blocked(self):
         m=manifest();rows=review_bindings(m)
-        self.assertEqual([r['stage'] for r in rows[:-1]],list(REQUIRED_NATIVE))
+        self.assertEqual([r['stage'] for r in rows if r['predicate']=='NATIVE_ADAPTER_BINDING_REQUIRED'],list(REQUIRED_NATIVE))
         with self.assertRaises(QualificationFailure):require_execution_ready(m)
     def test_malformed_adapter_is_blocked(self):
         m=manifest();m['stages'][4]['native_binding']={'command':['old-consumed-command']}

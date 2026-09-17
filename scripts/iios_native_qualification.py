@@ -3,6 +3,34 @@
 Review mode is source-only. Native execution requires a complete pinned adapter
 bundle; migration blockers produce a consolidated YELLOW report before effects.
 """
+import sys
+sys.dont_write_bytecode=True
+_preparation_mode=True
+
+
+def _preparation_audit(event,args):
+    if not _preparation_mode:return
+    if event.startswith(('socket.','subprocess.','ctypes.')) or event in (
+            'os.system','os.fork','os.forkpty','os.exec','os.posix_spawn','os.kill','os.killpg',
+            'os.mkdir','os.remove','os.rmdir','os.rename','os.link','os.symlink','os.chmod',
+            'os.chown','os.truncate','os.utime','os.setxattr','os.removexattr'):
+        raise PermissionError('PREPARATION_EFFECT_DENIED')
+    if event=='open':
+        path,mode,flags=args
+        if isinstance(path,int):
+            if path not in (0,1,2):raise PermissionError('PREPARATION_UNBOUND_FD')
+        elif isinstance(path,(str,bytes)):
+            text=path.decode() if isinstance(path,bytes) else path
+            if '\0' in text or '..' in text.split('/') or any(part.lower() in ('credentials','keychains','ledger','ledgers','.ssh','.aws') or part.startswith('~') for part in text.split('/')):
+                raise PermissionError('PREPARATION_PROTECTED_PATH')
+        else:raise PermissionError('PREPARATION_PATH_TYPE')
+        if (isinstance(mode,str) and any(c in mode for c in 'wax+')) or (isinstance(flags,int) and flags&(1|2|8|512|1024|2048)):
+            raise PermissionError('PREPARATION_WRITE_DENIED')
+
+
+# Builtin sys is the only import preceding the no-effects hook. Native handoff
+# remains behind the independently admitted source-controlled readiness gate.
+sys.addaudithook(_preparation_audit)
 import argparse
 import hashlib
 import json
@@ -28,6 +56,7 @@ def review(path,parent):
 
 
 def main(argv=None):
+    global _preparation_mode
     p=argparse.ArgumentParser();p.add_argument('--manifest',required=True,type=Path);p.add_argument('--manifest-sha256',required=True)
     p.add_argument('--review',action='store_true');p.add_argument('--authorize-manifest');args=p.parse_args(argv)
     execution_entered=False
@@ -45,6 +74,8 @@ def main(argv=None):
         pin_file(dispatch['path'],dispatch['sha256'])
         namespace={'__name__':'iios_pinned_native_dispatcher','__file__':dispatch['path']}
         exec(compile(Path(dispatch['path']).read_bytes(),dispatch['path'],'exec'),namespace)
+        # This is unreachable while the source-controlled native gate is closed.
+        _preparation_mode=False
         execution_entered=True
         result=namespace['run'](manifest,args.manifest_sha256)
         print(json.dumps(result,sort_keys=True));return 0 if result['status']=='GREEN' else 2 if result['status']=='YELLOW' else 1
