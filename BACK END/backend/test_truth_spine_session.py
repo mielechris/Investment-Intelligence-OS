@@ -778,6 +778,89 @@ class ObservationPublicationTests(unittest.TestCase):
 
 
 class ObservationCIContractTests(unittest.TestCase):
+    def historical_fetch(self):
+        import ast,subprocess
+        text,_=self.script()
+        start=text.index("          python -B - <<'PYBASE'\n")+len("          python -B - <<'PYBASE'\n")
+        end=text.index('          PYBASE\n',start)
+        body='\n'.join(line[10:] for line in text[start:end].splitlines())
+        nodes=ast.parse(body).body
+        selected=[n for n in nodes if isinstance(n,ast.FunctionDef) or
+            isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='HISTORICAL_BASES' for t in n.targets)]
+        ns={'subprocess':subprocess}
+        exec(compile(ast.Module(body=selected,type_ignores=[]),'<pinned-base-check>','exec'),ns)
+        return text,ns['HISTORICAL_BASES'],ns['verify_historical_bases']
+
+    def historical_case(self,mutation=None):
+        import subprocess
+        from types import SimpleNamespace
+        text,bases,verify=self.historical_fetch();calls=[];objects=set();fetched=None;head_reads=0
+        def run(argv,**kwargs):
+            nonlocal fetched,head_reads
+            self.assertEqual(kwargs,dict(check=True,capture_output=True,text=True,timeout=60))
+            calls.append(argv);args=argv[1:]
+            if args==['rev-parse','--verify','HEAD^{commit}']:
+                head_reads+=1
+                value='b'*40 if mutation=='head' and head_reads>1 else 'a'*40
+            elif args[0]=='fetch':
+                self.assertEqual(args[:-1],['fetch','--no-tags','--no-recurse-submodules','--depth=1','origin'])
+                self.assertIn(args[-1],bases)
+                if mutation=='fetch':raise subprocess.CalledProcessError(128,argv)
+                fetched=args[-1]
+                if mutation!='missing':objects.add(fetched)
+                value=''
+            elif args==['rev-parse','--verify','FETCH_HEAD^{commit}']:
+                value='c'*40 if mutation=='altered' else fetched
+            elif args[0]=='rev-parse':
+                base=args[-1].removesuffix('^{commit}')
+                if base not in objects:raise subprocess.CalledProcessError(128,argv)
+                value=base
+            elif args[0]=='cat-file':
+                self.assertIn(args[-1],objects);value='blob' if mutation=='type' else 'commit'
+            else:raise AssertionError('UNREVIEWED_GIT_COMMAND')
+            return SimpleNamespace(stdout=value+'\n')
+        return verify,run,calls,objects,bases
+
+    def test_shallow_checkout_fetches_both_exact_historical_bases(self):
+        verify,run,calls,objects,bases=self.historical_case()
+        self.assertFalse(objects)
+        self.assertEqual(verify(run),dict(head='a'*40,bases=list(bases),verified=True))
+        self.assertEqual(objects,set(bases))
+        self.assertEqual([a[-1] for a in calls if a[1]=='fetch'],list(bases))
+
+    def test_missing_historical_object_rejects(self):
+        verify,run,calls,_,_=self.historical_case('missing')
+        with self.assertRaisesRegex(RuntimeError,'PINNED_BASE_COMMAND_FAILED'):verify(run)
+        self.assertEqual(sum(a[1]=='fetch' for a in calls),1)
+
+    def test_altered_historical_base_rejects(self):
+        verify,run,calls,_,_=self.historical_case('altered')
+        with self.assertRaisesRegex(RuntimeError,'PINNED_BASE_FETCH_MISMATCH'):verify(run)
+        self.assertEqual(sum(a[1]=='fetch' for a in calls),1)
+
+    def test_historical_fetch_failure_stops_without_retry(self):
+        verify,run,calls,_,_=self.historical_case('fetch')
+        with self.assertRaisesRegex(RuntimeError,'PINNED_BASE_COMMAND_FAILED'):verify(run)
+        self.assertEqual(sum(a[1]=='fetch' for a in calls),1)
+
+    def test_noncommit_base_and_changed_head_reject(self):
+        for mutation,code in [('type','PINNED_BASE_OBJECT_MISMATCH'),('head','PINNED_BASE_HEAD_CHANGED')]:
+            verify,run,_,_,_=self.historical_case(mutation)
+            with self.subTest(mutation=mutation),self.assertRaisesRegex(RuntimeError,code):verify(run)
+
+    def test_all_historical_checks_follow_verified_fetch_and_keep_exact_range(self):
+        import ast
+        text,bases,_=self.historical_fetch();_,body=self.script()
+        self.assertEqual(bases,('3342c9629131a69254f2ceef8c0a5f6cf657530c','ae465e1d41f895e2e5fc1b8ee85b628270f7c74e'))
+        self.assertLess(text.index('name: Verify pinned historical bases'),text.index('name: Exact-source guarded offline validation'))
+        self.assertLess(text.index('name: Verify pinned historical bases'),text.index('name: Whitespace and workflow parser'))
+        self.assertIn('git diff --check '+bases[1]+' HEAD',text)
+        base=next(n.value.value for n in ast.parse(body).body if isinstance(n,ast.Assign) and
+            any(isinstance(t,ast.Name) and t.id=='BASE' for t in n.targets))
+        self.assertEqual(base,bases[0]);self.assertIn("git('show',BASE+':'+name)",body)
+        self.assertIn("put('historical-bases.json',historical)",body)
+        self.assertNotIn('continue-on-error:',text)
+
     def script(self):
         source=Path(__file__).resolve().parents[2]
         text=(source/'.github/workflows/alpha-session-contract.yml').read_text()

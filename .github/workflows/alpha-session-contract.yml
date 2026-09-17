@@ -101,6 +101,35 @@ jobs:
           echo "IIOS_SB38D_TEST_ROOT=$PWD/$spine_root" >> "$GITHUB_ENV"
           echo "TMPDIR=$PWD/$test_root" >> "$GITHUB_ENV"
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
+      - name: Verify pinned historical bases
+        run: |
+          set -eu
+          python -B - <<'PYBASE'
+          import json,os,subprocess
+          from pathlib import Path
+          HISTORICAL_BASES=('3342c9629131a69254f2ceef8c0a5f6cf657530c',
+                            'ae465e1d41f895e2e5fc1b8ee85b628270f7c74e')
+          def verify_historical_bases(run=subprocess.run):
+              def git(*args):
+                  try:
+                      result=run(['git',*args],check=True,capture_output=True,text=True,timeout=60)
+                  except (subprocess.SubprocessError,OSError):
+                      raise RuntimeError('PINNED_BASE_COMMAND_FAILED') from None
+                  return result.stdout.strip()
+              head=git('rev-parse','--verify','HEAD^{commit}')
+              for base in HISTORICAL_BASES:
+                  git('fetch','--no-tags','--no-recurse-submodules','--depth=1','origin',base)
+                  if git('rev-parse','--verify','FETCH_HEAD^{commit}')!=base:
+                      raise RuntimeError('PINNED_BASE_FETCH_MISMATCH')
+                  if git('rev-parse','--verify',base+'^{commit}')!=base or git('cat-file','-t',base)!='commit':
+                      raise RuntimeError('PINNED_BASE_OBJECT_MISMATCH')
+              if git('rev-parse','--verify','HEAD^{commit}')!=head:
+                  raise RuntimeError('PINNED_BASE_HEAD_CHANGED')
+              return dict(head=head,bases=list(HISTORICAL_BASES),verified=True)
+          result=verify_historical_bases()
+          with (Path(os.environ['IIOS_GATEWAY_TEST_ROOT'])/'historical-bases.json').open('x') as f:
+              json.dump(result,f,sort_keys=True)
+          PYBASE
       - name: Exact-source guarded offline validation
         run: |
           set -eu
@@ -117,6 +146,9 @@ jobs:
               with (evidence/name).open('x') as f:json.dump(value,f,sort_keys=True,indent=2,allow_nan=False)
           def git(*args):return subprocess.check_output(['git',*args],cwd=source)
           head=git('rev-parse','HEAD').decode().strip();tree=git('rev-parse','HEAD^{tree}').decode().strip()
+          historical=json.loads((root/'historical-bases.json').read_text())
+          assert historical==dict(head=head,bases=[BASE,'ae465e1d41f895e2e5fc1b8ee85b628270f7c74e'],verified=True)
+          put('historical-bases.json',historical)
           event=os.environ['GITHUB_EVENT_NAME'];ref=os.environ['GITHUB_REF']
           assert event in ('push','pull_request') and head==os.environ['GITHUB_SHA']
           assert event!='push' or ref=='refs/heads/feature/iios-production-session-contract'
