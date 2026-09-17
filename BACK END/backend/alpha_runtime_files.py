@@ -602,6 +602,118 @@ def admit_pin_inventory(rows, system_contract, system_contract_parent,
     }
 
 
+ASSEMBLY_OUTPUT_PARENT_SCHEMA = 'iios-private-assembly-output-parent-v1'
+
+
+def _directory_binding(st):
+    return {'device': st.st_dev, 'inode': st.st_ino, 'uid': st.st_uid,
+            'gid': st.st_gid, 'mode': stat.S_IMODE(st.st_mode)}
+
+
+def validate_assembly_output_parent(document, expected):
+    required = {'schema', 'boundary_path', 'parent_path', 'execution_path',
+                'owner_uid', 'mode', 'parent_identity', 'containment', 'records'}
+    require(type(document) is dict and set(document) == required and
+            document['schema'] == ASSEMBLY_OUTPUT_PARENT_SCHEMA and
+            type(expected) is str and re.fullmatch('[a-f0-9]{64}', expected) and
+            content_hash(document) == expected, 'ASSEMBLY_OUTPUT_BINDING')
+    for key in ('boundary_path', 'parent_path', 'execution_path'):
+        path_parts(document[key], absolute=True)
+    require(document['parent_path'] == document['boundary_path'] + '/assembly-output' and
+            document['execution_path'] == document['parent_path'] + '/execution-01' and
+            type(document['owner_uid']) is int and document['owner_uid'] == os.getuid() and
+            type(document['mode']) is int and document['mode'] == 0o700 and
+            document['records'] == [], 'ASSEMBLY_OUTPUT_SCOPE')
+    expected_paths = ['/']
+    for part in path_parts(document['boundary_path'], absolute=True):
+        expected_paths.append(expected_paths[-1].rstrip('/') + '/' + part)
+    rows = document['containment']
+    require(type(rows) is list and len(rows) == len(expected_paths),
+            'ASSEMBLY_OUTPUT_CONTAINMENT')
+    for row, path in zip(rows, expected_paths):
+        require(type(row) is dict and set(row) ==
+                {'path', 'device', 'inode', 'uid', 'gid', 'mode'} and row['path'] == path and
+                all(type(row[key]) is int and row[key] >= 0
+                    for key in ('device', 'inode', 'uid', 'gid', 'mode')),
+                'ASSEMBLY_OUTPUT_CONTAINMENT')
+    require(rows[-1]['uid'] == document['owner_uid'] and rows[-1]['mode'] == 0o700,
+            'ASSEMBLY_OUTPUT_BOUNDARY_MODE')
+    ident = document['parent_identity']
+    require(type(ident) is list and len(ident) == 8 and
+            all(type(x) is int for x in ident) and ident[6] == document['owner_uid'] and
+            stat.S_ISDIR(ident[5]) and stat.S_IMODE(ident[5]) == 0o700,
+            'ASSEMBLY_OUTPUT_PARENT_IDENTITY')
+    return document
+
+
+def open_assembly_output_parent(document, expected):
+    """Read-only no-follow admission; return the verified parent fd to mkdirat.
+
+    Rehearsal and execution use this same check. The caller owns the returned
+    descriptor. No output directory, marker, budget or process is created here.
+    """
+    binding = validate_assembly_output_parent(document, expected)
+    opened = []
+    try:
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened.append(fd)
+        for index, row in enumerate(binding['containment']):
+            if index:
+                fd = os.open(PurePosixPath(row['path']).name,
+                             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                opened.append(fd)
+            observed = os.fstat(fd)
+            require(stat.S_ISDIR(observed.st_mode) and
+                    _directory_binding(observed) == {k: v for k, v in row.items() if k != 'path'},
+                    'ASSEMBLY_OUTPUT_CONTAINMENT_CHANGED')
+        parent = os.open('assembly-output', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                         dir_fd=fd)
+        opened.append(parent)
+        before = os.fstat(parent)
+        require(stat.S_ISDIR(before.st_mode) and before.st_uid == os.getuid() and
+                stat.S_IMODE(before.st_mode) == 0o700 and
+                list(identity(before)) == binding['parent_identity'],
+                'ASSEMBLY_OUTPUT_PARENT_CHANGED')
+        require(os.listdir(parent) == binding['records'], 'ASSEMBLY_OUTPUT_NOT_EMPTY')
+        require(identity(os.fstat(parent)) == identity(before), 'ASSEMBLY_OUTPUT_RACE')
+        for row, held in zip(binding['containment'], opened[:-1]):
+            current = os.lstat(row['path'])
+            require(stat.S_ISDIR(current.st_mode) and not stat.S_ISLNK(current.st_mode) and
+                    _directory_binding(current) == _directory_binding(os.fstat(held)) ==
+                    {k: v for k, v in row.items() if k != 'path'},
+                    'ASSEMBLY_OUTPUT_CONTAINMENT_CHANGED')
+        require(identity(os.lstat(binding['parent_path'])) == identity(before) ==
+                identity(os.fstat(parent)), 'ASSEMBLY_OUTPUT_RACE')
+        opened.pop()
+        return parent
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+
+
+def admit_assembly_output_parent(document, expected):
+    for _ in range(3):
+        descriptor = open_assembly_output_parent(document, expected)
+        os.close(descriptor)
+    return {'status': 'ADMITTED_EMPTY_ASSEMBLY_OUTPUT_PARENT',
+            'contract_parent': expected, 'parent_path': document['parent_path'],
+            'execution_path': document['execution_path'], 'observations': 3,
+            'execution_root_created': False}
+
+
+def admit_assembly_prelaunch(rows, system_contract, system_contract_parent,
+                            child_launch, child_launch_parent, output_parent,
+                            output_parent_parent):
+    """One shared, read-only admission path for rehearsal and execution."""
+    pins = admit_pin_inventory(rows, system_contract, system_contract_parent)
+    child = admit_assembly_child_launch(child_launch, child_launch_parent)
+    output = admit_assembly_output_parent(output_parent, output_parent_parent)
+    reverify_assembly_child_launch(child)
+    return {'status': 'PASS_ASSEMBLY_PRELAUNCH_ONLY', 'pins': pins['pins'],
+            'system_tool': pins['system_tool'], 'output_parent': output,
+            'side_effects': False, 'assembly_child_created': False}
+
+
 def _admission_audit(event, arguments):
     if (event == 'open' and len(arguments) >= 3 and type(arguments[2]) is int and
             arguments[2] & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)):

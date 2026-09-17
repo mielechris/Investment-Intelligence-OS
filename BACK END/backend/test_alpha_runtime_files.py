@@ -1042,3 +1042,121 @@ class AssemblyChildLaunchBindingTests(unittest.TestCase):
             binding['entrypoint_path']=str(alias/'assemble.py');binding['argv'][4]=binding['entrypoint_path']
             with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_PATH_SUBSTITUTION'):
                 rf.admit_assembly_child_launch(binding,content_hash(binding))
+
+
+class AssemblyOutputParentTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.boundary=Path(self.temp.name).resolve()
+        os.chmod(self.boundary,0o700)
+        self.parent=self.boundary/'assembly-output'
+        self.parent.mkdir(mode=0o700)
+        rows=[]
+        for p in reversed([self.boundary,*self.boundary.parents]):
+            rows.append({'path':str(p),**rf._directory_binding(p.lstat())})
+        self.document={'schema':rf.ASSEMBLY_OUTPUT_PARENT_SCHEMA,
+            'boundary_path':str(self.boundary),'parent_path':str(self.parent),
+            'execution_path':str(self.parent/'execution-01'),'owner_uid':os.getuid(),
+            'mode':0o700,'parent_identity':list(rf.identity(self.parent.lstat())),
+            'containment':rows,'records':[]}
+        self.digest=content_hash(self.document)
+
+    def admit(self):
+        return rf.admit_assembly_output_parent(self.document,self.digest)
+
+    def test_empty_exact_parent_passes_without_creating_any_outputs(self):
+        before=rf.identity(self.parent.lstat())
+        result=self.admit()
+        self.assertEqual(result['observations'],3)
+        self.assertEqual(result['status'],'ADMITTED_EMPTY_ASSEMBLY_OUTPUT_PARENT')
+        self.assertEqual(list(self.parent.iterdir()),[])
+        self.assertEqual(rf.identity(self.parent.lstat()),before)
+        self.assertFalse((self.parent/'execution-01').exists())
+
+    def test_0755_and_wrong_owner_reject(self):
+        os.chmod(self.parent,0o755)
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_PARENT_CHANGED'):self.admit()
+        self.document['owner_uid']=os.getuid()+1
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_SCOPE'):
+            rf.admit_assembly_output_parent(self.document,content_hash(self.document))
+
+    def test_observed_wrong_owner_rejects(self):
+        real=rf.os.fstat
+        def wrong(fd):
+            st=real(fd)
+            if st.st_ino==self.parent.stat().st_ino:
+                values=list(st);values[4]=st.st_uid+1
+                return os.stat_result(values)
+            return st
+        with patch.object(rf.os,'fstat',side_effect=wrong):
+            with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_PARENT_CHANGED'):self.admit()
+
+    def test_symlink_and_parent_replacement_reject(self):
+        moved=self.boundary/'preserved';self.parent.rename(moved)
+        self.parent.symlink_to(moved,target_is_directory=True)
+        with self.assertRaises((ValueError,OSError)):self.admit()
+        self.parent.unlink();self.parent.mkdir(mode=0o700)
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_PARENT_CHANGED'):self.admit()
+
+    def test_preexisting_execution_root_and_unadmitted_records_reject(self):
+        for name in ('execution-01','ATTEMPT-STARTED.json','unexpected'):
+            with self.subTest(name=name):
+                p=self.parent/name;p.write_bytes(b'')
+                # Re-pin the observed directory to prove membership also rejects.
+                d=deepcopy(self.document);d['parent_identity']=list(rf.identity(self.parent.lstat()))
+                with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_NOT_EMPTY'):
+                    rf.admit_assembly_output_parent(d,content_hash(d))
+                p.unlink()
+
+    def test_dangling_execution_symlink_rejects(self):
+        (self.parent/'execution-01').symlink_to(self.boundary/'missing')
+        d=deepcopy(self.document);d['parent_identity']=list(rf.identity(self.parent.lstat()))
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_NOT_EMPTY'):
+            rf.admit_assembly_output_parent(d,content_hash(d))
+
+    def test_transient_membership_race_rejects(self):
+        real=rf.os.listdir
+        def race(fd):
+            values=real(fd)
+            p=self.parent/'transient';p.write_bytes(b'x');p.unlink()
+            return values
+        with patch.object(rf.os,'listdir',side_effect=race):
+            with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_RACE'):self.admit()
+
+    def test_replacement_during_observation_rejects(self):
+        real=rf.os.listdir;mutated=[]
+        def replace(fd):
+            values=real(fd)
+            if not mutated:
+                self.parent.rename(self.boundary/'old-parent');self.parent.mkdir(mode=0o700);mutated.append(True)
+            return values
+        with patch.object(rf.os,'listdir',side_effect=replace):
+            with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_RACE'):self.admit()
+
+    def test_containment_substitution_and_descriptor_mutation_reject(self):
+        d=deepcopy(self.document);d['containment'][-1]['inode']+=1
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_CONTAINMENT_CHANGED'):
+            rf.admit_assembly_output_parent(d,content_hash(d))
+        d=deepcopy(self.document);d['execution_path']=str(self.boundary/'escape')
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_SCOPE'):
+            rf.admit_assembly_output_parent(d,content_hash(d))
+        self.document['parent_identity'][1]+=1
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_BINDING'):self.admit()
+
+    def test_execution_receives_the_same_admitted_directory_descriptor(self):
+        fd=rf.open_assembly_output_parent(self.document,self.digest)
+        try:self.assertEqual(list(rf.identity(os.fstat(fd))),self.document['parent_identity'])
+        finally:os.close(fd)
+        self.assertEqual(list(self.parent.iterdir()),[])
+
+    def test_shared_prelaunch_checks_parent_after_pin_and_child_admission(self):
+        with patch.object(rf,'admit_pin_inventory',return_value={'pins':456,'system_tool':{}}),\
+             patch.object(rf,'admit_assembly_child_launch',return_value={}),\
+             patch.object(rf,'reverify_assembly_child_launch',return_value=True):
+            result=rf.admit_assembly_prelaunch([],{},'a',{},'b',self.document,self.digest)
+            self.assertEqual(result['status'],'PASS_ASSEMBLY_PRELAUNCH_ONLY')
+            self.assertFalse(result['assembly_child_created'])
+            os.chmod(self.parent,0o755)
+            with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_PARENT_CHANGED'):
+                rf.admit_assembly_prelaunch([],{},'a',{},'b',self.document,self.digest)
