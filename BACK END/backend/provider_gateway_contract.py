@@ -37,6 +37,7 @@ AUTHORITY_KEYS = (
 PILOT = ("MU", "SPY", "XLK", "VNQ", "TLT", "GLD", "UUP", "IBIT", "PFF", "BIL")
 DENIED_KEYS = frozenset({
     "apikey", "api_key", "key", "secret", "password", "authorization", "headers",
+    "cookie", "cookies", "set-cookie",
     "token", "credential", "credential_value", "access_token", "refresh_token",
     "apca-api-key-id", "apca-api-secret-key", "x-api-key",
 })

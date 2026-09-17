@@ -333,3 +333,63 @@ class FrameworkAssemblyTests(TreeCase):
             with self.assertRaisesRegex(ValueError,'TREE_MISMATCH'):runtime.assemble(spec,content_hash(spec),**args)
         self.assertTrue((Path(spec['output_parent'])/spec['output_name']).exists())
         self.assertFalse((Path(spec['output_parent'])/spec['output_name']/'runtime-manifest.json').exists())
+
+class RuntimeHeadersAdmissionTests(TreeCase):
+    def add_headers(self):
+        self.root.chmod(0o700)
+        d=self.root/'Headers';d.mkdir(mode=0o700)
+        (d/'Python.h').write_bytes(b'public header fixture');(d/'Python.h').chmod(0o400)
+        d.chmod(0o500);self.root.chmod(0o500)
+        self.observed=runtime_files.inventory_runtime(str(self.root),self.policy,self.parent,approved_root=str(self.root))
+
+    def test_headers_complete_build_and_manifest_keep_independent_pins(self):
+        self.add_headers();spec,args=framework_spec(self)
+        result=runtime.assemble(spec,content_hash(spec),**args)
+        m=result['manifest'];runtime_files.safe_runtime_document(m)
+        runtime_files.verify_manifest(m['runtime_root'],m,source_commit='a'*40)
+        self.assertIn('Headers',m['metadata']);self.assertFalse(result['production_qualified'])
+        with self.assertRaisesRegex(ValueError,'PARENT_HASH_MISMATCH'):
+            runtime.admit(spec,'0'*64,**args)
+
+    def test_headers_requires_exact_approved_root(self):
+        self.add_headers();spec,args=framework_spec(self);args['approved_input_root']+='different'
+        with self.assertRaisesRegex(ValueError,'ROOT_APPROVAL'):runtime.admit(spec,content_hash(spec),**args)
+
+    def test_headers_symlink_and_replaced_payload_rejected(self):
+        self.add_headers();spec,args=framework_spec(self)
+        self.root.chmod(0o700);(self.root/'Headers').chmod(0o700)
+        (self.root/'Headers'/'Python.h').unlink();(self.root/'Headers').rmdir()
+        (self.root/'Headers').symlink_to('bin');self.root.chmod(0o500)
+        with self.assertRaises(ValueError):runtime.admit(spec,content_hash(spec),**args)
+
+    def test_header_content_substitution_rejected(self):
+        self.add_headers();spec,args=framework_spec(self)
+        p=self.root/'Headers'/'Python.h';p.chmod(0o600);p.write_bytes(b'changed');p.chmod(0o400)
+        with self.assertRaises(ValueError):runtime.admit(spec,content_hash(spec),**args)
+
+    def test_provider_sensitive_keys_remain_rejected(self):
+        from provider_gateway_contract import safe_document
+        for name in ('headers','Headers','cookies','cookie','authorization','token','api_key','credential','password'):
+            with self.subTest(name=name),self.assertRaisesRegex(ValueError,'SENSITIVE_DOCUMENT_REJECTED'):
+                safe_document({name:'not-a-real-secret'})
+
+    def test_metadata_sensitive_field_injection_rejected(self):
+        self.add_headers();spec,args=framework_spec(self)
+        for field in ('headers','cookies','authorization','token','api_key'):
+            changed=deepcopy(spec);changed['metadata']['Headers']={field:'not-a-real-secret'}
+            with self.subTest(field=field),self.assertRaises(ValueError):runtime.admit(changed,content_hash(changed),**args)
+
+    def test_case_traversal_and_outside_structure_rejected(self):
+        self.add_headers();spec,args=framework_spec(self)
+        for prefix in ('headers','HEADERS','other/Headers','Headers/../elsewhere','Headers/headers'):
+            changed=deepcopy(spec)
+            changed['files']=[dict(r,path=r['path'].replace('Headers/',prefix+'/',1)) if r['path'].startswith('Headers/') else r for r in changed['files']]
+            changed['metadata']={prefix+k[len('Headers'):] if k=='Headers' or k.startswith('Headers/') else k:v for k,v in changed['metadata'].items()}
+            for i in range(1,len(prefix.split('/'))):changed['metadata']['/'.join(prefix.split('/')[:i])]={}
+            with self.subTest(prefix=prefix),self.assertRaises(ValueError):runtime.admit(changed,content_hash(changed),**args)
+
+    def test_unapproved_policy_cannot_admit_headers(self):
+        self.add_headers();spec,args=framework_spec(self)
+        spec['layout_policy']['distribution_sha256']='0'*64
+        spec['layout_parent']=content_hash(spec['layout_policy'])
+        with self.assertRaisesRegex(ValueError,'LAYOUT_POLICY'):runtime.admit(spec,content_hash(spec),**args)

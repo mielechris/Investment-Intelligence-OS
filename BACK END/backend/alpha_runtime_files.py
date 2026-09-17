@@ -368,6 +368,49 @@ def verify_runtime_tree(root, rows, *, approved_root, layout_policy, layout_pare
     return result['identities']
 
 
+def safe_runtime_document(document):
+    """Public-data validation for exact v2 runtime metadata path maps only.
+
+    Path keys are not provider-document field names. Validate their complete
+    archive-specific structure first, then validate names as string values and
+    attribute documents as ordinary sensitive-document structures. Hashing and
+    independent admission always use the original, unmodified document.
+    This syntax check alone grants neither root approval nor file admission.
+    """
+    from provider_gateway_contract import safe_document
+    require(type(document) is dict, 'RUNTIME_DOCUMENT_SCHEMA')
+    schema = document.get('schema')
+    if schema not in (BUILD_SCHEMA, MANIFEST_SCHEMA):
+        safe_document(document)
+        return
+    links = validate_layout_policy(document['layout_policy'], document['layout_parent'])
+    rows = document['files'] if schema == BUILD_SCHEMA else document['file_inventory']
+    metadata = document['metadata']
+    if schema == MANIFEST_SCHEMA:
+        from deployment_contract import canonical
+        raw = canonical(document)
+        rows = rows + [dict(path='runtime-manifest.json', size=len(raw), mode=0o400,
+                            sha256=hashlib.sha256(raw).hexdigest())]
+    _validate_rows(rows, metadata, links)
+    approved_headers = {'Headers'} | {p for p in links if p.endswith('/Headers')} | {
+        _terminal(p, links) for p in links if p.endswith('/Headers')}
+    for path in metadata:
+        parts = path.split('/')
+        for index, part in enumerate(parts):
+            if part.lower() == 'headers':
+                require('/'.join(parts[:index+1]) in approved_headers, 'RUNTIME_HEADERS_LOCATION')
+    view = dict(document)
+    # Only the exact root directory key collides with provider field names.
+    # All other metadata keys retain the original sensitive-key checks.
+    view['metadata'] = {k:v for k,v in metadata.items() if k != 'Headers'}
+    safe_document(view)
+    if 'Headers' in metadata:
+        require('Headers' not in {r['path'] for r in rows} and
+                any(r['path'].startswith('Headers/') for r in rows), 'RUNTIME_HEADERS_DIRECTORY')
+        safe_document('Headers')
+        safe_document(metadata['Headers'])
+
+
 def copy_runtime_metadata(source_fd, destination_fd, expected):
     stage = 'SOURCE_ACL'
     try:

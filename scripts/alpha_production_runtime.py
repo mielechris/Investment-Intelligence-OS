@@ -106,7 +106,8 @@ def lock_versions(raw):
 
 def admit(spec, expected, *, source_commit, approved_input_root, approved_output_parent,
           approved_platform_paths, lock_bytes, expected_lock_hash):
-    safe_document(spec); pin(spec, expected)
+    from alpha_runtime_files import safe_runtime_document
+    safe_runtime_document(spec); pin(spec, expected)
     from alpha_runtime_files import BUILD_SCHEMA, EXTENSION_FIELDS, extension, verify_runtime_tree, VENDOR
     version2 = spec.get('schema') == BUILD_SCHEMA
     if version2:

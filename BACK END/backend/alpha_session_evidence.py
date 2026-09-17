@@ -149,7 +149,8 @@ def verify_candidate_evidence(candidate, candidate_hash, plan, account, runtime,
     execution-authority validators remain mandatory and are not called here.
     """
     verified = verify_bound_package(candidate,candidate_hash,plan,account,runtime,allowance,**package_inputs)
-    safe_document(runtime_manifest); pin(runtime_manifest,runtime['runtime_manifest_sha256'])
+    from alpha_runtime_files import safe_runtime_document
+    safe_runtime_document(runtime_manifest); pin(runtime_manifest,runtime['runtime_manifest_sha256'])
     from alpha_runtime_files import MANIFEST_SCHEMA, EXTENSION_FIELDS, verify_manifest
     version2 = runtime_manifest.get('schema') == MANIFEST_SCHEMA
     require(type(runtime_manifest) is dict and set(runtime_manifest) == ({
