@@ -109,7 +109,7 @@ package is launched manually once and produces one report.
 ## Offline validation
 
 The source suite uses mocked inspectors and child handles, synthetic clocks and
-isolated files. It exercises all nine transitions and stop paths, reviewed retry
+isolated files. It exercises all ten transitions and stop paths, reviewed retry
 limits, early exit, identity changes, inspection denial, interrupted stages,
 expired authority, stale and altered checkpoints, cleanup uncertainty, evidence
 tampering, launcher/image/script substitution and exact Terminal categories.
@@ -141,17 +141,48 @@ runtime acceptance, nor can functional lifecycle or a single correlated denial
 be promoted to complete confinement qualification. There is no launch-ready
 package at this checkpoint; source-controlled execution readiness remains false.
 
-## Final-runtime reference admission
+## Bootstrap and production image scopes
 
-The final-runtime stage requires a separately pinned final-runtime image reference.
-The bootstrap identity receipt cannot supply this reference: its required imports
-and ordered loaded-image set include components excluded by the production layout.
-The source admission rejects a missing, expired, cross-scope or incompatible
-reference before native dispatch. The new reference validator does not construct
-expected observations from the process under test or establish runtime acceptance.
+`BOOTSTRAP_IMAGE_REFERENCE_V1` wraps the unchanged accepted bootstrap payload and
+its exact 557-image contract. Its interpreter and original payload hash remain
+independently pinned. It cannot satisfy a production-runtime receipt.
 
-Preparation installs its audit hook before non-builtin imports. This is a
-preparation-mode effect barrier, not a completed native audit policy. The native
-readiness gate remains closed. Assembly, dynamic acceptance, confinement and
-native resume integration remain incomplete; no runnable qualification bundle
-is produced by this checkpoint.
+`PRODUCTION_RUNTIME_IMAGE_POLICY_V1` is compiled by `STATIC_RUNTIME_REFERENCE`,
+between static signature/inventory verification and final-runtime acceptance.
+Inputs are the external completed manifest, static Mach-O UUID/dependency
+reports, the approved production import plan, signed shared-cache catalogue and
+separately reviewed Apple-signed standalone images. Inputs are hash-bound. The
+policy is external to the runtime, published exclusively, reconstructed and bound
+to the preceding static GREEN receipt. No dynamic observation can extend it.
+
+All private dependencies must close within the seal or the admitted OS universe.
+Tk-related files, imports, dependencies and observed images are forbidden.
+Required private images and direct OS dependencies form the minimum count;
+independently approved optional OS candidates form the remaining allowed universe.
+Its total cardinality determines the upper count and complete report bound. This
+is an allowed-universe policy, not a claim that all optional OS images must load.
+Both dynamic scans must be complete, contain required images, match the exact
+policy identities, contain no duplicate paths, and match in order and content.
+The accepted image-address stability check also remains in the generated child.
+Mapped-memory integrity remains UNVERIFIED; boot attestation remains UNRESOLVED.
+
+## Adapter integration status
+
+Assembly reuses the migrated copy/staging/seal-delta/assemble functions. Its
+configuration binds fresh paths and the original outer budget; it does not set
+an alarm or reset a deadline. The migrated bottom-up signer retains the corrected
+bundle/dylib checks and independent child ownership checks.
+
+Runtime acceptance generates a separate production child from the pinned
+accepted bootstrap child, retaining startup flags, prefixes, sealed discovery,
+ACK, exact imports, TLS/CA checks and dyld APIs. The production image protocol
+replaces the bootstrap-only count/encoding. Parent transport uses three complete
+ownership observations, cooperative exit, reaping and independent absence.
+
+The native resume entry accepts a pinned root identity and journal tip, checks
+the existing deadline and boot-session identity, and delegates checkpoint/replay
+validation to the same core. Source/CI admission is repeated before dispatch.
+
+The full native audit installation and confinement/lifecycle integration are not
+complete. The source-controlled readiness gate remains false. No launch-ready
+package or native qualification claim is made by this source checkpoint.

@@ -18,10 +18,10 @@ STAGES = (
     'SOURCE_AND_CI_ADMISSION', 'HOST_AND_TERMINAL_ADMISSION',
     'HISTORICAL_PROCESS_RECONCILIATION', 'FRESH_OUTPUT_ROOT_QUALIFICATION',
     'PRIVATE_RUNTIME_ASSEMBLY', 'STATIC_SIGNATURE_AND_INVENTORY',
-    'FINAL_RUNTIME_ACCEPTANCE', 'DISPOSABLE_CONFINEMENT_AND_LIFECYCLE',
+    'STATIC_RUNTIME_REFERENCE', 'FINAL_RUNTIME_ACCEPTANCE', 'DISPOSABLE_CONFINEMENT_AND_LIFECYCLE',
     'EVIDENCE_EXPORT_AND_VERIFICATION',
 )
-EFFECTFUL = frozenset(STAGES[i] for i in (3, 4, 6, 7, 8))
+EFFECTFUL = frozenset(STAGES[i] for i in (3, 4, 6, 7, 8, 9))
 AUTHORITIES = ('provider_access', 'credential_access', 'broker_connected',
                'paper_order_permission', 'trade_execution_permission', 'live_execution')
 TOKEN = re.compile(r'[A-Z][A-Z0-9_]{0,95}\Z')
@@ -59,8 +59,22 @@ def failure(error, stage, predicate, expected='PASS'):
         lower = error.args[0]
     number = getattr(error, 'errno', None)
     category = errno.errorcode.get(number, 'OTHER_ERRNO') if number is not None else 'NONE'
-    return QualificationFailure(stage, token(lower, predicate), expected,
+    result=QualificationFailure(stage, token(lower, predicate), expected,
                                 'EXCEPTION_RAISED', exception=type(error).__name__, errno_category=category).detail
+    from alpha_assembly_file_type import DerivedFileTypeError,PATHS,MARKERS
+    if isinstance(error,DerivedFileTypeError):
+        value=error.file_type_failure
+        keys={'path','expected_category','observed_category','native_file_result','bytes_parent'}
+        if type(value) is dict and set(value)==keys:
+            native=value['native_file_result']
+            categories={'exit_category':{'ZERO','NONZERO_OR_INVALID'},'output_category':{'BOUNDED','INVALID_OR_OVERSIZE'},
+                        'type_category':set(MARKERS)|{'AMBIGUOUS_OR_UNKNOWN'},'stderr_category':{'EMPTY','PRESENT_OR_INVALID'}}
+            valid=(all(type(value[k]) is str for k in keys-{'native_file_result'}) and value['path'] in PATHS|{'UNADMITTED_PATH'} and value['expected_category'] in set(MARKERS)|{'UNKNOWN'} and
+                   value['observed_category'] in set(MARKERS)|{'UNKNOWN','INVALID_UNIVERSAL','MIXED_SLICES'} and
+                   value['bytes_parent'] in {'MATCH','MISMATCH'} and type(native) is dict and set(native)==set(categories)|{'universal_marker'} and
+                   type(native['universal_marker']) is bool and all(type(native[k]) is str and native[k] in options for k,options in categories.items()))
+            if valid:result['file_type_failure']=json.loads(canonical(value))
+    return result
 
 
 def require(value, stage, predicate, expected='PASS', observed='REJECTED'):
@@ -172,11 +186,11 @@ class CleanupBoundaryStop(Exception):
 
 
 class Conductor:
-    def __init__(self,manifest,manifest_hash,root,adapters,*,clock,wall,verify_receipt,cleanup,export,clock_identity=None):
+    def __init__(self,manifest,manifest_hash,root,adapters,*,clock,wall,verify_receipt,cleanup,export,clock_identity=None,initial_start=None):
         self.m=json.loads(canonical(validate_manifest(manifest,manifest_hash,now=wall())));self.parent=manifest_hash;self.root=Path(root)
         self.history=json.loads(canonical(self.m['history']))
         self.adapters=adapters;self.clock=clock;self.wall=wall;self.verify_receipt=verify_receipt;self.cleanup=cleanup;self.export=export
-        self.clock_identity=clock_identity
+        self.clock_identity=clock_identity;self.initial_start=initial_start
         self.journal=Journal(root,manifest_hash);self.events=[];self.primary=None;self.secondary=[];self.cleanup_failures=[];self.completed=[]
     def record_cleanup_failure(self,error):
         self.cleanup_failures.append(failure(error,'CLEANUP','CLEANUP_EXCEPTION'))
@@ -233,7 +247,7 @@ class Conductor:
                 budget=Budget(**header['budget']);self.completed=self.journal.completed(self.verify_checkpoint_receipt)
             else:
                 require(not list(self.root.glob('checkpoint-*.json')),'CONDUCTOR','FRESH_EXECUTION')
-                budget=Budget.create(self.clock(),self.m['limits'])
+                budget=Budget.create(self.clock() if self.initial_start is None else self.initial_start,self.m['limits'])
                 self.journal.append('BEGIN','CONDUCTOR',{'budget':budget.__dict__,'history':self.m['history'],'nonce':self.m['nonce'],'clock_identity':self.clock_identity() if self.clock_identity else None})
             for row in self.m['stages'][len(self.completed):]:
                 require(digest(self.m)==self.parent,'CONDUCTOR','MANIFEST_MUTATION')

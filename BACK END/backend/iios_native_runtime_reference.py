@@ -10,7 +10,7 @@ import re
 from pathlib import Path, PurePosixPath
 from iios_native_conductor import require, STAGES, pin_file
 
-STAGE=STAGES[6]
+STAGE=STAGES[7]
 SCHEMA='SCOPED_FINAL_RUNTIME_IMAGE_REFERENCE_V1'
 HEX=re.compile(r'[0-9a-f]{64}\Z')
 UUID=re.compile(r'[0-9a-f]{32}\Z')

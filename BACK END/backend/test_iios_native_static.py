@@ -14,7 +14,7 @@ class StaticAdapterTests(unittest.TestCase):
     def test_exact_existing_verifier_handoff(self):
         with tempfile.TemporaryDirectory() as root:
             c=NativeContext({'native':{'static_descriptor':{'source':'a'*40}},'history':{},'authority':{}},'a'*64,root)
-            parent={'detail':{'execution':str(Path(root)/'payload/execution-01')}}
+            parent={'detail':{'execution':str(Path(root)/'payload/assembly-output/execution-01')}}
             with patch.object(c,'require_completed',return_value=parent) as prerequisite,patch.object(static,'verify',return_value={'status':'PASS_STATIC_FINAL_LOCATION_ONLY'}) as verifier:
                 r=static.run_stage(c,{'id':STAGES[5],'predicates':['STATIC']},100,None)
             prerequisite.assert_called_once_with(STAGES[4]);self.assertEqual(verifier.call_args.kwargs['execution'],parent['detail']['execution']);self.assertEqual(r['status'],'GREEN')

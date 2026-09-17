@@ -58,7 +58,7 @@ def review(path,parent):
 def main(argv=None):
     global _preparation_mode
     p=argparse.ArgumentParser();p.add_argument('--manifest',required=True,type=Path);p.add_argument('--manifest-sha256',required=True)
-    p.add_argument('--review',action='store_true');p.add_argument('--authorize-manifest');args=p.parse_args(argv)
+    p.add_argument('--resume-binding',type=Path);p.add_argument('--resume-binding-sha256');p.add_argument('--review',action='store_true');p.add_argument('--authorize-manifest');args=p.parse_args(argv)
     execution_entered=False
     try:
         manifest,report=review(args.manifest,args.manifest_sha256)
@@ -75,9 +75,16 @@ def main(argv=None):
         namespace={'__name__':'iios_pinned_native_dispatcher','__file__':dispatch['path']}
         exec(compile(Path(dispatch['path']).read_bytes(),dispatch['path'],'exec'),namespace)
         # This is unreachable while the source-controlled native gate is closed.
+        resume=None
+        if args.resume_binding is not None:
+            require(args.resume_binding_sha256 is not None,STAGES[0],'RESUME_BINDING_PIN_REQUIRED')
+            pin_file(args.resume_binding,args.resume_binding_sha256);raw=args.resume_binding.read_bytes()
+            require(hashlib.sha256(raw).hexdigest()==args.resume_binding_sha256,STAGES[0],'RESUME_BINDING_MUTATION')
+            resume=json.loads(raw)
+        else:require(args.resume_binding_sha256 is None,STAGES[0],'RESUME_BINDING_PAIR')
         _preparation_mode=False
         execution_entered=True
-        result=namespace['run'](manifest,args.manifest_sha256)
+        result=namespace['run'](manifest,args.manifest_sha256,resume_binding=resume)
         print(json.dumps(result,sort_keys=True));return 0 if result['status']=='GREEN' else 2 if result['status']=='YELLOW' else 1
     except Exception as error:
         print(json.dumps({'status':'RED','primary_failure':failure(error,STAGES[0],'ENTRYPOINT_EXCEPTION'),'native_execution_entered':execution_entered},sort_keys=True));return 1

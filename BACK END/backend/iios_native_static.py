@@ -39,7 +39,9 @@ def verify(d,deadline,*,execution,tool,clock):
             else:need(value.startswith(('/usr/lib/','/System/Library/')),'FINAL_DEPENDENCY_LOCATION')
         rc,out,err=tool(['/usr/bin/codesign','--verify','--strict','--all-architectures',str(p)],deadline,d['tool_pins'])
         need(rc==0,'FINAL_IMAGE_SIGNATURE')
-        reports.append(dict(path=name,sha256=files[name]['sha256'],load_dependencies=names,signature='VERIFIED'))
+        from iios_native_macho import image_uuid
+        raw=p.read_bytes();need(sha(raw)==files[name]['sha256'],'FINAL_IMAGE_UUID_BYTES')
+        reports.append(dict(path=name,sha256=files[name]['sha256'],uuid=image_uuid(raw),load_dependencies=names,signature='VERIFIED'))
     receipt=json.loads((execution/'RESOURCE-SEAL-RECEIPT.json').read_bytes())
     from alpha_runtime_files import validate_production_signing_evidence
     from provider_gateway_contract import content_hash
@@ -60,7 +62,7 @@ def run_stage(context,row,deadline,budget):
     """Adapter invokes the migrated verifier only after durable assembly GREEN."""
     parent=context.require_completed(STAGES[4])
     from iios_native_conductor import digest
-    require(parent['detail'].get('execution')==str(context.root/'payload/execution-01'),STAGES[5],'STATIC_ASSEMBLY_ROOT_PARENT')
+    require(parent['detail'].get('execution')==str(context.root/'payload/assembly-output/execution-01'),STAGES[5],'STATIC_ASSEMBLY_ROOT_PARENT')
     d=context.manifest['native']['static_descriptor']
     result=verify(d,deadline,execution=parent['detail']['execution'],tool=context.tool,clock=context.clock)
     require(result['status']=='PASS_STATIC_FINAL_LOCATION_ONLY',STAGES[5],'STATIC_RESULT')

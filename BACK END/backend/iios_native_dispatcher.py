@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
+import select
 import subprocess
 import sys
 import time
@@ -92,6 +94,61 @@ class NativeContext:
             path=Path(row['path'])
             require(path.is_absolute() and path.is_relative_to(self.root) and '..' not in path.parts,receipt['stage'],'RECEIPT_OUTPUT_ROOT')
             pin_file(path,row['sha256'])
+    def run_owned_runtime(self,script,script_hash,policy,startup,deadline):
+        from iios_native_ownership import LaunchBinding,OwnedProcess
+        from iios_native_image_policy import MAX_REPORT_BYTES
+        d=self.manifest['native']['runtime_acceptance'];root=Path(policy['runtime_root'])
+        files={r['file']:r for r in policy['rows'] if r['kind']=='PRIVATE_SEALED'}
+        launcher=root/d['launcher_relative'];image=root/d['image_relative']
+        require(d['launcher_relative'] in files and d['image_relative'] in files,self.stage,'RUNTIME_PROCESS_IMAGES_IN_POLICY')
+        now=self.clock();startup=now+60_000_000_000;work=now+90_000_000_000
+        require(work<deadline,self.stage,'RUNTIME_EXISTING_DEADLINE_CONTRACT')
+        args=('-I','-B','-S',str(script),str(startup),str(work),d['clock_contract'])
+        binding=LaunchBinding(str(launcher),files[d['launcher_relative']]['sha256'],str(image),files[d['image_relative']]['sha256'],
+                              str(script),script_hash,(str(launcher),)+args,(str(image),)+args,4)
+        return self.execute_owned(binding,startup,deadline)
+
+    def execute_owned(self,binding,startup,deadline,*,on_tick=None):
+        from iios_native_ownership import OwnedProcess
+        from iios_native_image_policy import MAX_REPORT_BYTES
+        snapshot=binding.verify();self.check();binding.reverify(snapshot)
+        proc=subprocess.Popen(binding.command,cwd=self.manifest['cwd'],env=self.manifest['environment'],
+                              stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True,bufsize=0)
+        owner=OwnedProcess(proc,self.inspect,parent=os.getpid(),argv=binding.observed_argv,cwd=self.manifest['cwd'],
+                           executable=binding.image,executable_hash=binding.image_hash,stage=self.stage,clock=self.clock,deadline=deadline)
+        self.children.append(owner)
+        data=bytearray();errors=bytearray();streams=[proc.stdout,proc.stderr];acked=False
+        for stream in streams:os.set_blocking(stream.fileno(),False)
+        try:
+            while streams:
+                if acked and on_tick is not None:on_tick(owner)
+                require(self.clock()<(deadline if acked else startup),self.stage,'RUNTIME_TRANSPORT_DEADLINE')
+                for stream in select.select(streams,[],[],.01)[0]:
+                    raw=os.read(stream.fileno(),4096)
+                    if not raw:streams.remove(stream);continue
+                    buf=data if stream is proc.stdout else errors
+                    require(len(buf)+len(raw)<=MAX_REPORT_BYTES,self.stage,'RUNTIME_REPORT_OVERFLOW');buf.extend(raw)
+                require(not errors,self.stage,'RUNTIME_STDERR_REJECTED')
+                if not acked and b'\n' in data:
+                    first,rest=bytes(data).split(b'\n',1);require(first==b'READY_V1',self.stage,'RUNTIME_READY_PROTOCOL')
+                    owner.register();binding.reverify(snapshot);owner.verify()
+                    require(self.clock()<startup,self.stage,'RUNTIME_ACK_DEADLINE')
+                    require(os.write(proc.stdin.fileno(),b'ACK_V1\n')==7,self.stage,'RUNTIME_ACK_WRITE')
+                    proc.stdin.close();data=bytearray(rest);acked=True
+            require(acked,self.stage,'RUNTIME_READY_REQUIRED')
+            if on_tick is not None:on_tick(owner)
+            try:child_result=json.loads(data)
+            except (ValueError,UnicodeError):child_result={}
+            if type(child_result) is dict and child_result.get('status')=='FAIL':
+                detail=child_result.get('failure_detail',child_result)
+                raise QualificationFailure(child_result.get('stage',self.stage),child_result.get('predicate','CHILD_FAILURE'),
+                    'PASS','CHILD_REJECTED',exception=detail.get('exception_subtype','Exception'),errno_category=detail.get('errno_category','NONE'))
+            cleanup=owner.finish(max(.001,(deadline-self.clock())/1e9))
+            return {'report':bytes(data),'ownership':owner.observations,'cleanup':cleanup}
+        finally:
+            for stream in (proc.stdin,proc.stdout,proc.stderr):
+                if not stream.closed:stream.close()
+
     def cleanup(self,deadline):
         failures=[]
         for owned in reversed(self.children):
@@ -109,13 +166,35 @@ class NativeContext:
         return {'verified':outstanding==0,'outstanding':outstanding}
 
 
-def run(manifest,parent):
+def run(manifest,parent,*,resume_binding=None):
     require_execution_ready(manifest);admit_source(manifest)
-    root=fresh_root(manifest['output_parent'],manifest['output_name'],manifest['output_parent_identity'])
+    initial_start=clock()
+    if resume_binding is None:
+        root=fresh_root(manifest['output_parent'],manifest['output_name'],manifest['output_parent_identity'])
+    else:
+        require(type(resume_binding) is dict and set(resume_binding)=={'root','root_identity','tip'},'CONDUCTOR','NATIVE_RESUME_BINDING')
+        root=Path(manifest['output_parent'])/manifest['output_name']
+        require(str(root)==resume_binding['root'],'CONDUCTOR','NATIVE_RESUME_ROOT')
+        fd=owned_directory(root)
+        try:
+            st=os.fstat(fd);require([st.st_dev,st.st_ino,st.st_uid,st.st_mode]==resume_binding['root_identity'],'CONDUCTOR','NATIVE_RESUME_ROOT_IDENTITY')
+        finally:os.close(fd)
     # All source imports use the independently verified source inventory. Suppress
     # source-tree bytecode lookup as well as writes; this directory is never created.
     sys.pycache_prefix=str(root/'unused-bytecode');sys.dont_write_bytecode=True
     context=NativeContext(manifest,parent,root)
+    context.deadline=initial_start+min(manifest['limits']['work_ns'],30_000_000_000)
+    if resume_binding is not None:
+        from iios_native_conductor import Journal,Budget
+        records=Journal(root,parent).load()
+        require(records and records[-1]['hash']==resume_binding['tip'],'CONDUCTOR','RESUME_TRUSTED_TIP')
+        require(records[0]['kind']=='BEGIN','CONDUCTOR','RESUME_HEADER')
+        old_budget=Budget(**records[0]['payload']['budget']);old_budget.check(clock(),'CONDUCTOR')
+        context.deadline=min(context.deadline,old_budget.work_end)
+    def boot_identity():
+        rc,out,err=context.tool(['/usr/sbin/sysctl','-n','kern.bootsessionuuid'],context.deadline,manifest['tool_pins'])
+        require(rc==0 and not err and re.fullmatch(rb'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\n?',out) is not None,'CONDUCTOR','BOOT_SESSION_IDENTITY')
+        return out.decode().strip().lower()
     def builtin(row,deadline,budget):
         context.stage=row['id'];context.deadline=deadline;stage=row['id'];extra={}
         if stage==STAGES[0]:admit_source(manifest)
@@ -129,7 +208,7 @@ def run(manifest,parent):
             try:os.mkdir('payload',0o700,dir_fd=fd)
             finally:os.close(fd)
             child=owned_directory(root/'payload');os.close(child)
-        elif stage==STAGES[8]:
+        elif stage==STAGES[9]:
             require(not any(p.returncode is None for p in context.query_handles),stage,'INSPECTION_HELPERS_REAPED')
         return context.receipt(row,extra=extra)
     adapters={s:builtin for s in STAGES if s not in REQUIRED_NATIVE}
@@ -147,6 +226,6 @@ def run(manifest,parent):
         adapters[row['id']]=call
     conductor=Conductor(manifest,parent,root,adapters,clock=clock,wall=time.time,
                         verify_receipt=context.verify_receipt,cleanup=context.cleanup,
-                        export=lambda report,deadline:export(root,report,deadline,clock))
+                        export=lambda report,deadline:export(root,report,deadline,clock),clock_identity=boot_identity,initial_start=initial_start)
     context.conductor=conductor
-    return conductor.run()
+    return conductor.run(resume=resume_binding is not None,resume_tip=resume_binding['tip'] if resume_binding is not None else None)
