@@ -5,14 +5,11 @@ physical entries; it never traverses a symlink, even an admitted one.
 """
 import errno
 import hashlib
+import json
 import os
 from pathlib import PurePosixPath
 import re
 import stat
-
-from alpha_session_contract import require
-from alpha_session_evidence import path_parts, open_root, identity
-from provider_gateway_contract import content_hash
 
 MANIFEST_SCHEMA = 'iios-immutable-python-runtime-v2'
 DESCRIPTOR_SCHEMA = 'iios-observation-runtime-files-v2'
@@ -27,6 +24,13 @@ MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 VENDOR = '70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419'
 EXTENSION_FIELDS = {'layout_policy', 'layout_parent', 'metadata'}
+PYTHON_VERSION = '3.14.7'
+_DENIED_KEYS = frozenset({
+    'apikey', 'api_key', 'key', 'secret', 'password', 'authorization', 'headers',
+    'cookie', 'cookies', 'set-cookie', 'token', 'credential', 'credential_value',
+    'access_token', 'refresh_token', 'apca-api-key-id', 'apca-api-secret-key',
+    'x-api-key',
+})
 _XATTRS = frozenset({'com.apple.cs.CodeDirectory', 'com.apple.cs.CodeRequirements',
                     'com.apple.cs.CodeSignature', 'com.apple.quarantine', 'com.apple.provenance'})
 _LINKS = tuple(sorted((
@@ -38,6 +42,98 @@ _LINKS = tuple(sorted((
         (lower + 'Config.sh', 'Versions/Current/' + lower + 'Config.sh'),
         ('lib' + lower + 'stub.a', 'Versions/9.0/lib' + lower + 'stub.a'))
 )))
+
+
+# This module is the assembly/static-verification boundary.  Keep its complete
+# import graph in the standard library so the Python 3.9 build-control process
+# never imports production services or their Python 3.14-only dependencies.
+def require(condition, code):
+    if not condition:
+        raise ValueError(code)
+
+
+def canonical(value):
+    """Existing deployment-manifest byte contract."""
+    return (json.dumps(value, sort_keys=True, separators=(',', ':'),
+                       ensure_ascii=True) + '\n').encode('ascii')
+
+
+def _public_canonical(value):
+    """Existing provider/public-document byte contract (NaN is forbidden)."""
+    return (json.dumps(value, sort_keys=True, separators=(',', ':'),
+                       ensure_ascii=True, allow_nan=False) + '\n').encode('ascii')
+
+
+def content_hash(value):
+    return hashlib.sha256(_public_canonical(value)).hexdigest()
+
+
+def _digest(value):
+    clean = dict(value) if isinstance(value, dict) else value
+    if isinstance(clean, dict):
+        clean.pop('content_hash', None)
+    return hashlib.sha256(canonical(clean)).hexdigest()
+
+
+def _safe_document(value, serialized=None):
+    """Provider-equivalent public JSON validation without application imports."""
+    if serialized is None:
+        serialized = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            require(isinstance(key, str) and key.lower() not in _DENIED_KEYS,
+                    'SENSITIVE_DOCUMENT_REJECTED')
+            _safe_document(child, serialized)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _safe_document(child, serialized)
+    elif isinstance(value, str):
+        require(re.search(r'(?i)(bearer\s|api[_-]?key[=:]|password[=:]|'
+                          r'[?&](token|key)=|-----BEGIN .*PRIVATE KEY)', value) is None,
+                'SENSITIVE_DOCUMENT_REJECTED')
+    else:
+        require(value is None or type(value) in (int, float, bool),
+                'PUBLIC_JSON_REQUIRED')
+    primitive = type(value) in (str, int, float, bool, type(None))
+    key = (type(value), value) if primitive else None
+    if not primitive or key not in serialized:
+        _public_canonical(value)
+        if primitive and len(serialized) < 1024:
+            serialized.add(key)
+
+
+def path_parts(value, *, absolute=False):
+    require(type(value) is str and '\x00' not in value, 'EVIDENCE_PATH')
+    path = PurePosixPath(value)
+    require(path.is_absolute() == absolute and str(path) == value and
+            '..' not in path.parts and value not in ('', '.', '/'), 'EVIDENCE_PATH')
+    parts = path.parts[1:] if absolute else path.parts
+    require(len(parts) <= 32, 'EVIDENCE_PATH_DEPTH')
+    return parts
+
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, value.st_mode, value.st_uid, value.st_nlink)
+
+
+def open_root(root, approved_root):
+    require(type(root) is str and root == approved_root, 'EVIDENCE_ROOT_NOT_APPROVED')
+    parts = path_parts(root, absolute=True)
+    descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        observed = os.fstat(descriptor)
+        require(observed.st_uid == os.getuid() and not observed.st_mode & 0o222,
+                'EVIDENCE_ROOT_MODE')
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def layout_policy():
@@ -381,17 +477,15 @@ def safe_runtime_document(document):
     independent admission always use the original, unmodified document.
     This syntax check alone grants neither root approval nor file admission.
     """
-    from provider_gateway_contract import safe_document
     require(type(document) is dict, 'RUNTIME_DOCUMENT_SCHEMA')
     schema = document.get('schema')
     if schema not in (BUILD_SCHEMA, MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA, COMPLETED_BUILD_SCHEMA, COMPLETED_MANIFEST_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA):
-        safe_document(document)
+        _safe_document(document)
         return
     links = validate_layout_policy(document['layout_policy'], document['layout_parent'])
     rows = document['file_inventory'] if schema in (MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA) else document['files']
     metadata = document['metadata']
     if schema == MANIFEST_SCHEMA:
-        from deployment_contract import canonical
         raw = canonical(document)
         rows = rows + [dict(path='runtime-manifest.json', size=len(raw), mode=0o400,
                             sha256=hashlib.sha256(raw).hexdigest())]
@@ -411,17 +505,16 @@ def safe_runtime_document(document):
     # Only the exact root directory key collides with provider field names.
     # All other metadata keys retain the original sensitive-key checks.
     view['metadata'] = {k:v for k,v in metadata.items() if k != 'Headers'}
-    safe_document(view)
+    _safe_document(view)
     if 'Headers' in metadata:
         require('Headers' not in {r['path'] for r in rows} and
                 any(r['path'].startswith('Headers/') for r in rows), 'RUNTIME_HEADERS_DIRECTORY')
-        safe_document('Headers')
-        safe_document(metadata['Headers'])
+        _safe_document('Headers')
+        _safe_document(metadata['Headers'])
 
 
 def safe_runtime_envelope(document):
     """Exact existing runtime-bearing envelopes, never a provider validator."""
-    from provider_gateway_contract import safe_document
     require(type(document) is dict, 'RUNTIME_ENVELOPE_SCHEMA')
     schema = document.get('schema')
     view = dict(document)
@@ -440,7 +533,7 @@ def safe_runtime_envelope(document):
         safe_runtime_document(runtime)
         view['preflight'] = dict(document['preflight'])
         del view['preflight']['runtime_manifest']
-    safe_document(view)
+    _safe_document(view)
 
 
 def copy_runtime_metadata(source_fd, destination_fd, expected):
@@ -474,14 +567,13 @@ def copy_runtime_metadata(source_fd, destination_fd, expected):
 
 def verify_manifest(root, manifest, *, source_commit):
     """Complete static v2 admission; never executes the interpreter."""
-    from deployment_contract import digest, canonical, PYTHON_VERSION
     if manifest.get('schema') == COMPLETED_MANIFEST_SCHEMA:
         return verify_completed_manifest(root, manifest, source_commit=source_commit)
     required = {'schema','runtime_id','release_commit','runtime_root','interpreter',
         'interpreter_sha256','python_version','dependency_inventory','file_inventory',
         'platform_dependencies','content_hash'} | EXTENSION_FIELDS
     require(type(manifest) is dict and set(manifest) == required and
-        manifest['schema'] == MANIFEST_SCHEMA and manifest['content_hash'] == digest(manifest), 'RUNTIME_MANIFEST_INVALID')
+        manifest['schema'] == MANIFEST_SCHEMA and manifest['content_hash'] == _digest(manifest), 'RUNTIME_MANIFEST_INVALID')
     require(manifest['release_commit'] == source_commit and type(source_commit) is str and
         re.fullmatch('[a-f0-9]{40}',source_commit) and manifest['runtime_root'] == root and
         manifest['python_version'] == PYTHON_VERSION, 'RUNTIME_MANIFEST_BINDING')
@@ -507,8 +599,7 @@ def completed_paths(root):
 
 def validate_completion(value):
     """Structural pins, not a substitute for independent provenance review."""
-    from provider_gateway_contract import safe_document
-    safe_document(value)
+    _safe_document(value)
     require(type(value) is dict and set(value) == {'dependency_lock_sha256',
         'bootstrap_acceptance_sha256','bootstrap_tree_sha256','vendor_distribution_sha256',
         'vendor_signature_receipt_sha256','assembly_seal_receipt_sha256','assembly_seal_kind',
@@ -539,7 +630,6 @@ def completed_envelope(manifest):
     The caller's independent canonical manifest pin binds completion claims.
     Native signature/provenance qualification remains a separate prerequisite.
     """
-    from deployment_contract import canonical
     validate_completion(manifest['completion'])
     return dict(schema='iios-completed-runtime-envelope-v1',source_commit=manifest['release_commit'],
         runtime_root=manifest['runtime_root'],manifest_sha256=hashlib.sha256(canonical(manifest)).hexdigest(),
@@ -574,11 +664,10 @@ def _external_bytes(path, expected):
 
 
 def verify_completed_manifest(root, manifest, *, source_commit):
-    from deployment_contract import canonical,digest,PYTHON_VERSION
     required={'schema','runtime_id','release_commit','runtime_root','interpreter','interpreter_sha256',
         'python_version','dependency_inventory','file_inventory','platform_dependencies','content_hash'}|EXTENSION_FIELDS|COMPLETION_FIELDS
     require(type(manifest) is dict and set(manifest)==required and
-        manifest['schema']==COMPLETED_MANIFEST_SCHEMA and manifest['content_hash']==digest(manifest),
+        manifest['schema']==COMPLETED_MANIFEST_SCHEMA and manifest['content_hash']==_digest(manifest),
         'RUNTIME_COMPLETED_SCHEMA')
     require(type(source_commit) is str and re.fullmatch('[a-f0-9]{40}',source_commit) and
         manifest['release_commit']==source_commit and manifest['runtime_root']==root and

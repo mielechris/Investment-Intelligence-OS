@@ -1,4 +1,6 @@
 """Offline framework policy tests. Native xattr/ACL effects are substituted."""
+import ast
+import builtins
 from copy import deepcopy
 from contextlib import ExitStack
 import hashlib
@@ -502,3 +504,62 @@ class CompletedPathTests(unittest.TestCase):
              patch.object(rf,'identity',side_effect=['parent','before','changed']):
             with self.assertRaisesRegex(ValueError,'RUNTIME_EXTERNAL_RACE'):
                 rf._external_bytes('/synthetic/runtime-test.manifest.json',b'x')
+
+
+class AssemblyVerifierImportBoundaryTests(unittest.TestCase):
+    def test_complete_module_import_graph_is_standard_library_only(self):
+        tree=ast.parse(Path(rf.__file__).read_bytes())
+        imports=[]
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Import):imports.extend(alias.name.split('.')[0] for alias in node.names)
+            elif isinstance(node,ast.ImportFrom):imports.append((node.module or '').split('.')[0])
+        self.assertEqual(set(imports),{'ctypes','errno','hashlib','json','os','pathlib','re','stat','sys'})
+        self.assertFalse(set(imports)&{'alpha_session_contract','alpha_session_evidence',
+            'deployment_contract','provider_gateway_contract','truth_spine_session'})
+
+    def test_fresh_execution_rejects_accidental_application_imports(self):
+        source=Path(rf.__file__).read_bytes();real=builtins.__import__;attempted=[]
+        denied=('alpha_','deployment_','provider_','truth_')
+        def guarded(name,*args,**kwargs):
+            if name.startswith(denied):
+                attempted.append(name);raise AssertionError('APPLICATION_IMPORT_FORBIDDEN')
+            return real(name,*args,**kwargs)
+        namespace={'__name__':'alpha_runtime_files_isolated','__file__':rf.__file__}
+        with patch.object(builtins,'__import__',side_effect=guarded):
+            exec(compile(source,rf.__file__,'exec'),namespace)
+        self.assertEqual(attempted,[])
+        self.assertEqual(namespace['content_hash']({'a':1}),content_hash({'a':1}))
+        self.assertEqual(namespace['layout_policy'](),rf.layout_policy())
+
+    def test_canonical_hash_and_sensitive_document_behavior_are_unchanged(self):
+        from deployment_contract import canonical as deployment_canonical,digest
+        from provider_gateway_contract import safe_document
+        from truth_spine_contract import canonical as truth_canonical
+        values=({'schema':'example','nested':[1,True,None,'ASCII']},
+                {'z':'\N{SNOWMAN}','a':1.25})
+        for value in values:
+            self.assertEqual(rf.canonical(value),truth_canonical(value))
+            self.assertEqual(rf.canonical(value),deployment_canonical(value))
+            self.assertEqual(rf.content_hash(value),content_hash(value))
+            self.assertEqual(rf._digest(dict(value,content_hash='0'*64)),digest(dict(value,content_hash='0'*64)))
+            safe_document(value);rf._safe_document(value)
+        rejected=({'headers':{}},{'nested':{'Api_Key':'x'}},
+                  {'value':'Bearer sample'}, {'value':'?token=sample'},
+                  {'value':'-----BEGIN PRIVATE KEY'}, {'value':float('nan')},
+                  {'value':object()})
+        for value in rejected:
+            with self.subTest(value=repr(value)):
+                with self.assertRaises((TypeError,ValueError)):safe_document(value)
+                with self.assertRaises((TypeError,ValueError)):rf._safe_document(value)
+
+    def test_altered_runtime_documents_remain_rejected(self):
+        rows,metadata=structural_rows();policy=rf.layout_policy();parent=content_hash(policy)
+        document=dict(schema=rf.DESCRIPTOR_SCHEMA,files=rows,layout_policy=policy,
+                      layout_parent=parent,metadata=metadata)
+        rf.safe_runtime_document(document)
+        changes=(('layout_parent','0'*64),('files',rows+[rows[0]]),
+                 ('metadata',dict(metadata,unexpected={})))
+        for key,value in changes:
+            altered=deepcopy(document);altered[key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                rf.safe_runtime_document(altered)
