@@ -95,6 +95,7 @@ _PRODUCTION_STATIC_ARCHIVES = (
 
 SYSTEM_TOOL_IDENTITY_SCHEMA = 'iios-selected-mac-system-tool-identity-v1'
 PIN_ADMISSION_SCHEMA = 'iios-private-assembly-pin-admission-v1'
+ASSEMBLY_CHILD_LAUNCH_SCHEMA = 'iios-private-assembly-child-launch-v1'
 _SYSTEM_VERSION_PLIST = '/System/Library/CoreServices/SystemVersion.plist'
 _LIPO_PATH = '/usr/bin/lipo'
 _LIPO_TOPOLOGY = tuple('/usr/bin/' + name for name in (
@@ -413,6 +414,162 @@ def _admit_generic_pin(row):
                 identity(os.lstat(row['path'])), 'PIN_FILE_RACE')
     finally:
         os.close(descriptor)
+
+
+def validate_assembly_child_launch(document, expected):
+    """Bind interpreter and entrypoint as distinct launch identities.
+
+    This is deliberately separate from process inspection: a Python process
+    image is the interpreter, while the script is an independently admitted
+    argv member.  Neither hash can stand in for the other.
+    """
+    required = {'schema', 'interpreter_path', 'interpreter_sha256',
+                'interpreter_size', 'entrypoint_path', 'entrypoint_sha256',
+                'entrypoint_size', 'entrypoint_index', 'argv', 'cwd', 'environment'}
+    require(type(document) is dict and set(document) == required and
+            document.get('schema') == ASSEMBLY_CHILD_LAUNCH_SCHEMA and
+            type(expected) is str and re.fullmatch('[a-f0-9]{64}', expected) and
+            expected == content_hash(document), 'ASSEMBLY_CHILD_LAUNCH')
+    for name in ('interpreter', 'entrypoint'):
+        path = document[name + '_path']
+        size = document[name + '_size']
+        digest = document[name + '_sha256']
+        require(type(path) is str and type(size) is int and
+                0 < size <= 8_000_000 and type(digest) is str and
+                re.fullmatch('[a-f0-9]{64}', digest),
+                'ASSEMBLY_CHILD_FILE_BINDING')
+        path_parts(path, absolute=True)
+    require(document['interpreter_path'] != document['entrypoint_path'] and
+            document['interpreter_sha256'] != document['entrypoint_sha256'],
+            'ASSEMBLY_CHILD_ROLE_SEPARATION')
+    argv = document['argv']
+    index = document['entrypoint_index']
+    require(type(argv) is list and 6 <= len(argv) <= 16 and
+            all(type(value) is str and '\x00' not in value and len(value) <= 4096
+                for value in argv) and type(index) is int and index == 4 and
+            argv[0] == document['interpreter_path'] and
+            argv[1:4] == ['-I', '-B', '-S'] and
+            argv[index] == document['entrypoint_path'] and
+            argv.count(document['interpreter_path']) == 1 and
+            argv.count(document['entrypoint_path']) == 1,
+            'ASSEMBLY_CHILD_ARGV')
+    path_parts(document['cwd'], absolute=True)
+    require(document['environment'] == {
+        'LC_ALL': 'C', 'TZ': 'UTC', '__CF_USER_TEXT_ENCODING': '0x1F5:0x0:0x0'},
+        'ASSEMBLY_CHILD_ENVIRONMENT')
+    return document
+
+
+def _observe_assembly_child_file(row):
+    """One no-follow observation; callers require three stable observations."""
+    before = os.lstat(row['path'])
+    require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and
+            before.st_nlink == 1 and before.st_uid in (0, os.getuid()) and
+            not before.st_mode & 0o022 and before.st_size == row['size'],
+            'ASSEMBLY_CHILD_FILE_IDENTITY')
+    require(os.path.realpath(row['path']) == row['path'],
+            'ASSEMBLY_CHILD_PATH_SUBSTITUTION')
+    descriptor = os.open(row['path'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        require(identity(os.fstat(descriptor)) == identity(before),
+                'ASSEMBLY_CHILD_FILE_RACE')
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(65536, remaining))
+            require(bool(block), 'ASSEMBLY_CHILD_FILE_SHORT')
+            digest.update(block)
+            remaining -= len(block)
+        require(not os.read(descriptor, 1) and digest.hexdigest() == row['sha256'],
+                'ASSEMBLY_CHILD_FILE_HASH')
+        require(identity(os.fstat(descriptor)) == identity(before) ==
+                identity(os.lstat(row['path'])), 'ASSEMBLY_CHILD_FILE_RACE')
+    finally:
+        os.close(descriptor)
+    return {'path': row['path'], 'size': before.st_size,
+            'sha256': digest.hexdigest(), 'identity': identity(before)}
+
+
+def admit_assembly_child_launch(document, expected, *, observer=None):
+    """Admit both launch files immediately before process creation."""
+    binding = validate_assembly_child_launch(document, expected)
+    observe = _observe_assembly_child_file if observer is None else observer
+    observations = {'interpreter': [], 'entrypoint': []}
+    for _ in range(3):
+        for role in ('interpreter', 'entrypoint'):
+            row = {'path': binding[role + '_path'],
+                   'size': binding[role + '_size'],
+                   'sha256': binding[role + '_sha256']}
+            value = observe(dict(row))
+            require(type(value) is dict and value.get('path') == row['path'] and
+                    value.get('size') == row['size'] and
+                    value.get('sha256') == row['sha256'] and
+                    type(value.get('identity')) is tuple,
+                    'ASSEMBLY_CHILD_FILE_IDENTITY')
+            observations[role].append(value)
+    for role in observations:
+        values = observations[role]
+        require(values[0] == values[1] == values[2],
+                'ASSEMBLY_CHILD_FILE_MUTATION')
+    return {
+        'schema': ASSEMBLY_CHILD_LAUNCH_SCHEMA,
+        'contract_parent': expected,
+        '_document': json.loads(json.dumps(binding)),
+        'interpreter_path': binding['interpreter_path'],
+        'interpreter_sha256': binding['interpreter_sha256'],
+        'entrypoint_path': binding['entrypoint_path'],
+        'entrypoint_sha256': binding['entrypoint_sha256'],
+        'entrypoint_index': binding['entrypoint_index'],
+        'argv': list(binding['argv']),
+        'cwd': binding['cwd'],
+        'environment': dict(binding['environment']),
+        'observations_per_file': 3,
+        '_file_identities': {role: observations[role][0]['identity']
+                             for role in observations},
+        'status': 'ADMITTED_ASSEMBLY_CHILD_LAUNCH',
+    }
+
+
+def reverify_assembly_child_launch(admitted, *, observer=None):
+    """Detect a file replacement between admission and process registration."""
+    require(type(admitted) is dict and admitted.get('status') ==
+            'ADMITTED_ASSEMBLY_CHILD_LAUNCH' and
+            set(admitted.get('_file_identities', {})) == {'interpreter', 'entrypoint'},
+            'ASSEMBLY_CHILD_NOT_ADMITTED')
+    binding = validate_assembly_child_launch(admitted.get('_document'), admitted.get('contract_parent'))
+    require(all(admitted.get(key) == binding[key] for key in
+                ('interpreter_path', 'interpreter_sha256', 'entrypoint_path',
+                 'entrypoint_sha256', 'entrypoint_index', 'argv', 'cwd', 'environment')),
+            'ASSEMBLY_CHILD_ADMISSION_MUTATION')
+    observe = _observe_assembly_child_file if observer is None else observer
+    for role in ('interpreter', 'entrypoint'):
+        row = {'path': admitted[role + '_path'],
+               'sha256': admitted[role + '_sha256'],
+               'size': admitted['_file_identities'][role][2]}
+        value = observe(row)
+        require(type(value) is dict and value.get('path') == row['path'] and
+                value.get('size') == row['size'] and value.get('sha256') == row['sha256'] and
+                value.get('identity') == admitted['_file_identities'][role],
+                'ASSEMBLY_CHILD_POST_VERIFICATION_MUTATION')
+    return True
+
+
+def assembly_child_ownership_matches(observation, admitted):
+    """Process image binds only to the interpreter; argv also binds the script."""
+    require(type(admitted) is dict and admitted.get('status') ==
+            'ADMITTED_ASSEMBLY_CHILD_LAUNCH', 'ASSEMBLY_CHILD_NOT_ADMITTED')
+    def field(name):
+        return getattr(observation, name) if hasattr(observation, name) else observation[name]
+    argv = tuple(admitted['argv'])
+    observed_argv = tuple(field('argv'))
+    return {
+        'executable': field('executable') == admitted['interpreter_path'],
+        'executable_hash': field('executable_hash') == admitted['interpreter_sha256'],
+        'argv': observed_argv == argv,
+        'entrypoint_position': (len(observed_argv) > admitted['entrypoint_index'] and
+            observed_argv[admitted['entrypoint_index']] == admitted['entrypoint_path']),
+        'cwd': field('cwd') == admitted['cwd'],
+    }
 
 
 def admit_pin_inventory(rows, system_contract, system_contract_parent,

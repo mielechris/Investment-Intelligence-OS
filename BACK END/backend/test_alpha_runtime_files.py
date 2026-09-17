@@ -12,6 +12,7 @@ from unittest.mock import patch
 from unittest.mock import Mock
 import errno
 import json
+import stat
 
 import alpha_runtime_files as rf
 from alpha_session_evidence import verify_files
@@ -880,3 +881,164 @@ class SystemToolPinAdmissionTests(unittest.TestCase):
             ('\n'.join(contract['hardlink_topology'])+'\n').encode()).hexdigest())
         self.assertEqual(contract['signature']['anchor'],'APPLE')
         self.assertTrue(contract['signature']['designated_requirement'].endswith('anchor apple'))
+
+
+class AssemblyChildLaunchBindingTests(unittest.TestCase):
+    def binding(self):
+        document={
+            'schema':rf.ASSEMBLY_CHILD_LAUNCH_SCHEMA,
+            'interpreter_path':'/synthetic/runtime/bin/python3.14',
+            'interpreter_size':17,
+            'interpreter_sha256':'1'*64,
+            'entrypoint_path':'/synthetic/control/assemble.py',
+            'entrypoint_size':23,
+            'entrypoint_sha256':'2'*64,
+            'entrypoint_index':4,
+            'argv':['/synthetic/runtime/bin/python3.14','-I','-B','-S',
+                    '/synthetic/control/assemble.py','--assemble-once','3'*64],
+            'cwd':'/synthetic/control',
+            'environment':{'LC_ALL':'C','TZ':'UTC',
+                           '__CF_USER_TEXT_ENCODING':'0x1F5:0x0:0x0'},
+        }
+        return document
+
+    @staticmethod
+    def observation(row):
+        return {'path':row['path'],'size':row['size'],'sha256':row['sha256'],
+                'identity':(1,2,row['size'],3,4,stat.S_IFREG|0o500,501,1)}
+
+    def test_separate_interpreter_and_entrypoint_bindings_are_admitted(self):
+        binding=self.binding();calls=[]
+        def observe(row):
+            calls.append(row['path']);return self.observation(row)
+        admitted=rf.admit_assembly_child_launch(binding,content_hash(binding),observer=observe)
+        self.assertEqual(len(calls),6);self.assertEqual(admitted['observations_per_file'],3)
+        self.assertEqual(admitted['interpreter_sha256'],'1'*64)
+        self.assertEqual(admitted['entrypoint_sha256'],'2'*64)
+        self.assertEqual(admitted['entrypoint_index'],4)
+
+    def test_swapped_hashes_changed_files_and_reordered_argv_reject(self):
+        mutations=[]
+        value=self.binding();value['interpreter_path']='/synthetic/runtime/bin/changed';mutations.append(value)
+        value=self.binding();value['entrypoint_path']='/synthetic/control/changed.py';mutations.append(value)
+        value=self.binding();value['argv'][0]='/synthetic/runtime/bin/changed';mutations.append(value)
+        value=self.binding();value['argv'][4],value['argv'][5]=value['argv'][5],value['argv'][4];mutations.append(value)
+        value=self.binding();value['entrypoint_index']=5;mutations.append(value)
+        for document in mutations:
+            with self.subTest(document=document),self.assertRaises(ValueError):
+                rf.validate_assembly_child_launch(document,content_hash(document))
+        value=self.binding();value['interpreter_sha256'],value['entrypoint_sha256']=(
+            value['entrypoint_sha256'],value['interpreter_sha256'])
+        expected=self.binding()
+        def actual(row):
+            role='interpreter' if row['path']==expected['interpreter_path'] else 'entrypoint'
+            return self.observation({'path':expected[role+'_path'],'size':expected[role+'_size'],
+                                     'sha256':expected[role+'_sha256']})
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_FILE_IDENTITY'):
+            rf.admit_assembly_child_launch(value,content_hash(value),observer=actual)
+
+    def test_hash_role_cannot_be_substituted_during_admission(self):
+        binding=self.binding()
+        def swapped(row):
+            value=self.observation(row)
+            value['sha256']=('2'*64 if row['path']==binding['interpreter_path'] else '1'*64)
+            return value
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_FILE_IDENTITY'):
+            rf.admit_assembly_child_launch(binding,content_hash(binding),observer=swapped)
+
+    def test_post_verification_mutation_rejects(self):
+        binding=self.binding();calls={row:0 for row in ('interpreter','entrypoint')}
+        def changing(row):
+            role='interpreter' if row['path']==binding['interpreter_path'] else 'entrypoint'
+            calls[role]+=1;value=self.observation(row)
+            if role=='entrypoint' and calls[role]==3:
+                value['identity']=value['identity'][:-1]+(2,)
+            return value
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_FILE_MUTATION'):
+            rf.admit_assembly_child_launch(binding,content_hash(binding),observer=changing)
+
+    def test_mutation_after_admission_and_before_registration_rejects(self):
+        binding=self.binding()
+        admitted=rf.admit_assembly_child_launch(binding,content_hash(binding),
+            observer=self.observation)
+        def changed(row):
+            value=self.observation(row)
+            if row['path']==binding['entrypoint_path']:
+                value['identity']=value['identity'][:-1]+(2,)
+            return value
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_POST_VERIFICATION_MUTATION'):
+            rf.reverify_assembly_child_launch(admitted,observer=changed)
+        self.assertTrue(rf.reverify_assembly_child_launch(admitted,observer=self.observation))
+
+    def test_real_file_admission_rejects_symlink_and_detects_hash(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=Path(root)/'python';script=Path(root)/'assemble.py'
+            runtime.write_bytes(b'interpreter-bytes');script.write_bytes(b'entrypoint-bytes')
+            os.chmod(runtime,0o500);os.chmod(script,0o400)
+            binding=self.binding()
+            binding['interpreter_path']=str(runtime)
+            binding['interpreter_size']=len(b'interpreter-bytes')
+            binding['interpreter_sha256']=hashlib.sha256(b'interpreter-bytes').hexdigest()
+            binding['entrypoint_path']=str(script)
+            binding['entrypoint_size']=len(b'entrypoint-bytes')
+            binding['entrypoint_sha256']=hashlib.sha256(b'entrypoint-bytes').hexdigest()
+            binding['argv'][0]=str(runtime);binding['argv'][4]=str(script);binding['cwd']=root
+            admitted=rf.admit_assembly_child_launch(binding,content_hash(binding))
+            self.assertEqual(admitted['status'],'ADMITTED_ASSEMBLY_CHILD_LAUNCH')
+            script.unlink();target=Path(root)/'target';target.write_bytes(b'entrypoint-bytes')
+            os.chmod(target,0o400);script.symlink_to(target)
+            with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_FILE_IDENTITY'):
+                rf.admit_assembly_child_launch(binding,content_hash(binding))
+
+    def test_process_ownership_uses_interpreter_and_binds_script_position(self):
+        binding=self.binding()
+        admitted=rf.admit_assembly_child_launch(binding,content_hash(binding),
+            observer=self.observation)
+        observation={'executable':admitted['interpreter_path'],
+            'executable_hash':admitted['interpreter_sha256'],
+            'argv':tuple(admitted['argv']),'cwd':admitted['cwd']}
+        self.assertEqual(rf.assembly_child_ownership_matches(observation,admitted),{
+            'executable':True,'executable_hash':True,'argv':True,
+            'entrypoint_position':True,'cwd':True})
+        observation['executable_hash']=admitted['entrypoint_sha256']
+        self.assertFalse(rf.assembly_child_ownership_matches(observation,admitted)['executable_hash'])
+        observation['executable_hash']=admitted['interpreter_sha256']
+        observation['argv']=tuple(admitted['argv'][:4]+[admitted['argv'][5],admitted['argv'][4],
+            *admitted['argv'][6:]])
+        self.assertFalse(rf.assembly_child_ownership_matches(observation,admitted)['argv'])
+
+    def test_observed_entrypoint_position_and_admission_mutation_reject(self):
+        binding=self.binding()
+        admitted=rf.admit_assembly_child_launch(binding,content_hash(binding),observer=self.observation)
+        row={'executable':binding['interpreter_path'],'executable_hash':binding['interpreter_sha256'],
+             'argv':binding['argv'][:4]+list(reversed(binding['argv'][4:])), 'cwd':binding['cwd']}
+        self.assertFalse(rf.assembly_child_ownership_matches(row,admitted)['entrypoint_position'])
+        admitted['argv'][5]='--changed'
+        with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_ADMISSION_MUTATION'):
+            rf.reverify_assembly_child_launch(admitted,observer=self.observation)
+
+    def test_real_file_changes_replacements_and_parent_alias_reject(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve()
+            runtime=root/'python';script=root/'assemble.py'
+            runtime.write_bytes(b'interpreter-bytes');script.write_bytes(b'entrypoint-bytes')
+            binding=self.binding()
+            for role,path in (('interpreter',runtime),('entrypoint',script)):
+                binding[role+'_path']=str(path)
+                binding[role+'_size']=path.stat().st_size
+                binding[role+'_sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+            binding['argv'][0]=str(runtime);binding['argv'][4]=str(script);binding['cwd']=str(root)
+            for path in (runtime,script):
+                admitted=rf.admit_assembly_child_launch(binding,content_hash(binding))
+                original=path.read_bytes();path.write_bytes(b'X'*len(original))
+                with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_FILE_HASH'):
+                    rf.reverify_assembly_child_launch(admitted)
+                path.write_bytes(original)
+                admitted=rf.admit_assembly_child_launch(binding,content_hash(binding))
+                replacement=root/'replacement';replacement.write_bytes(original);replacement.replace(path)
+                with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_POST_VERIFICATION_MUTATION'):
+                    rf.reverify_assembly_child_launch(admitted)
+            alias=root/'alias';alias.symlink_to(root,target_is_directory=True)
+            binding['entrypoint_path']=str(alias/'assemble.py');binding['argv'][4]=binding['entrypoint_path']
+            with self.assertRaisesRegex(ValueError,'ASSEMBLY_CHILD_PATH_SUBSTITUTION'):
+                rf.admit_assembly_child_launch(binding,content_hash(binding))
