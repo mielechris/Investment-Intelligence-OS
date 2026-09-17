@@ -32,6 +32,16 @@ def fresh_root(parent,name,expected_identity):
             info=os.fstat(child)
             require(info.st_uid==os.getuid() and stat.S_IMODE(info.st_mode)==0o700,'CONDUCTOR','FRESH_ROOT_MODE')
         finally:os.close(child)
+        current=owned_directory(parent)
+        try:
+            observed=os.fstat(current)
+            require((before.st_dev,before.st_ino,before.st_uid,before.st_mode)==(observed.st_dev,observed.st_ino,observed.st_uid,observed.st_mode),'CONDUCTOR','OUTPUT_PARENT_REPLACED')
+            rebound=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=current)
+            try:
+                actual=os.fstat(rebound)
+                require((info.st_dev,info.st_ino,info.st_uid,info.st_mode)==(actual.st_dev,actual.st_ino,actual.st_uid,actual.st_mode),'CONDUCTOR','OUTPUT_ROOT_REPLACED')
+            finally:os.close(rebound)
+        finally:os.close(current)
         return Path(parent)/name
     finally:os.close(fd)
 

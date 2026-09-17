@@ -182,6 +182,25 @@ class Conductor:
         self.cleanup_failures.append(failure(error,'CLEANUP','CLEANUP_EXCEPTION'))
         for item in getattr(error,'secondary_cleanup',()):
             self.cleanup_failures.append(QualificationFailure(item['stage'],item['predicate'],item['expected'],item['observed'],exception=item['exception_subtype'],errno_category=item['errno_category']).detail)
+    def verify_checkpoint_receipt(self,receipt):
+        stage=receipt.get('stage')
+        require(stage in STAGES,'CONDUCTOR','RESUME_RECEIPT_STAGE')
+        row=self.m['stages'][STAGES.index(stage)]
+        require(receipt.get('status')=='GREEN',stage,'RESUME_RECEIPT_GREEN')
+        require(receipt.get('manifest')==self.parent and receipt.get('history')==self.history,stage,'RESUME_RECEIPT_PARENTS')
+        require(receipt.get('predicates')==dict.fromkeys(row['predicates'],True),stage,'RESUME_RECEIPT_PREDICATES')
+        require(receipt.get('authority')==self.m['authority'],stage,'RESUME_RECEIPT_AUTHORITY')
+        self.verify_receipt(receipt)
+    def preflight_resume(self,tip):
+        journal=Journal(self.root,self.parent);records=journal.load()
+        require(bool(records) and records[0]['kind']=='BEGIN','CONDUCTOR','RESUME_HEADER')
+        require(type(tip) is str and HEX.fullmatch(tip) and records[-1]['hash']==tip,'CONDUCTOR','RESUME_TRUSTED_TIP')
+        header=records[0]['payload']
+        require(header['history']==self.history and header['nonce']==self.m['nonce'],'CONDUCTOR','RESUME_HEADER_PARENTS')
+        require(self.clock_identity is not None and header.get('clock_identity') is not None and self.clock_identity()==header['clock_identity'],'CONDUCTOR','RESUME_CLOCK_IDENTITY')
+        journal.completed(self.verify_checkpoint_receipt)
+        Budget(**header['budget']).check(self.clock(),'CONDUCTOR')
+        require(self.wall()<self.m['expires_at'],'CONDUCTOR','AUTHORIZATION_EXPIRED')
     def run(self,*,resume=False,resume_tip=None):
         # An advisory exclusive lock prevents two admitted controllers consuming
         # the same root concurrently. It never signals or queries another PID.
@@ -190,6 +209,16 @@ class Conductor:
             try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:
                 raise QualificationFailure('CONDUCTOR','EXECUTION_ROOT_LOCK','EXCLUSIVE','BUSY') from None
+            if resume:
+                try:self.preflight_resume(resume_tip)
+                except BaseException as error:
+                    # A rejected resume cannot append to, export into, or clean up
+                    # a failed/untrusted historical run.
+                    return {'schema':SCHEMA,'manifest':self.parent,'nonce':self.m['nonce'],'status':'RED',
+                            'completed_stages':[],'primary_failure':failure(error,'CONDUCTOR','RESUME_PREFLIGHT'),
+                            'secondary_failures':[],'cleanup_failures':[],'read_only_retry_failures':[],
+                            'history':self.history,'authority':self.m['authority'],'provider_pilot_authorized':False,
+                            'full_market_day_authorized':False,'historical_root_unchanged':True}
             return self._run(resume=resume,resume_tip=resume_tip)
         finally:os.close(fd)
     def _run(self,*,resume=False,resume_tip=None):
@@ -201,7 +230,7 @@ class Conductor:
                 header=records[0]['payload'];require(header['history']==self.m['history'],'CONDUCTOR','HISTORY_IMMUTABLE')
                 require(self.clock_identity is not None and header.get('clock_identity') is not None and self.clock_identity()==header['clock_identity'],'CONDUCTOR','RESUME_CLOCK_IDENTITY')
                 require(header.get('nonce')==self.m['nonce'],'CONDUCTOR','RESUME_NONCE')
-                budget=Budget(**header['budget']);self.completed=self.journal.completed(self.verify_receipt)
+                budget=Budget(**header['budget']);self.completed=self.journal.completed(self.verify_checkpoint_receipt)
             else:
                 require(not list(self.root.glob('checkpoint-*.json')),'CONDUCTOR','FRESH_EXECUTION')
                 budget=Budget.create(self.clock(),self.m['limits'])

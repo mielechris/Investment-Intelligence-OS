@@ -123,3 +123,46 @@ class AdditionalCoreTests(unittest.TestCase):
         self.assertEqual(r['history']['attempt10'],'UNVERIFIED')
 
 if __name__=='__main__':unittest.main()
+
+class ResumeIntegrityTests(unittest.TestCase):
+    setUp=fixtures.CoreTests.setUp
+    tearDown=fixtures.CoreTests.tearDown
+    receipt=fixtures.CoreTests.receipt
+    adapter=fixtures.CoreTests.adapter
+    engine=fixtures.CoreTests.engine
+    prefix=fixtures.CoreTests.prefix
+    def test_rejected_resume_has_no_root_effects(self):
+        j=self.prefix(4);j.append('START',STAGES[4],{})
+        before={p.name:p.read_bytes() for p in self.root.iterdir()}
+        r=self.engine().run(resume=True,resume_tip=j.records[-1]['hash'])
+        self.assertEqual(r['primary_failure']['predicate'],'INTERRUPTED_STAGE_NO_REPLAY')
+        self.assertEqual({p.name:p.read_bytes() for p in self.root.iterdir()},before)
+        self.assertFalse(self.clean);self.assertFalse(self.exported)
+    def test_trusted_tip_cannot_promote_incomplete_receipt(self):
+        j=Journal(self.root,digest(self.m));b=Budget.create(self.now,self.m['limits'])
+        j.append('BEGIN','CONDUCTOR',{'budget':b.__dict__,'history':self.m['history'],'nonce':self.m['nonce'],'clock_identity':'FIXTURE_BOOT'})
+        j.append('START',STAGES[0],{});r=self.receipt(STAGES[0]);r['predicates']['EXACT_INPUT']=False;j.append('GREEN',STAGES[0],r)
+        result=self.engine().run(resume=True,resume_tip=j.records[-1]['hash'])
+        self.assertEqual(result['primary_failure']['predicate'],'RESUME_RECEIPT_PREDICATES');self.assertFalse(self.calls)
+
+class OutputRaceTests(unittest.TestCase):
+    def test_parent_replacement_after_exclusive_mkdir(self):
+        from iios_native_evidence import fresh_root
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp).resolve();parent=base/'parent';parent.mkdir(mode=0o700);old=base/'old';st=parent.stat();real=os.mkdir
+            def swapped(name,mode=0o777,*,dir_fd=None):
+                result=real(name,mode,dir_fd=dir_fd)
+                if name=='qualification-new':parent.rename(old);real(str(parent),0o700)
+                return result
+            with patch('iios_native_evidence.os.mkdir',side_effect=swapped),self.assertRaises(QualificationFailure) as ctx:
+                fresh_root(parent,'qualification-new',[st.st_dev,st.st_ino,st.st_uid,0o700])
+            self.assertEqual(ctx.exception.detail['predicate'],'OUTPUT_PARENT_REPLACED')
+    def test_wrong_owner_fails(self):
+        from iios_native_evidence import owned_directory
+        with tempfile.TemporaryDirectory() as tmp,patch('iios_native_evidence.os.getuid',return_value=os.getuid()+1):
+            with self.assertRaises(QualificationFailure):owned_directory(str(Path(tmp).resolve()))
+    def test_parent_symlink_fails(self):
+        from iios_native_evidence import owned_directory
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp).resolve();target=base/'parent';target.mkdir(mode=0o700);alias=base/'alias';alias.symlink_to(target)
+            with self.assertRaises(OSError):owned_directory(str(alias))

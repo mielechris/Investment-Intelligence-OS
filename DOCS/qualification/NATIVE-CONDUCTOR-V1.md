@@ -116,3 +116,27 @@ tampering, launcher/image/script substitution and exact Terminal categories.
 The existing guarded complete preparation suite blocks native subprocesses,
 signals, sockets and dynamic OS inspection. No native qualification is executed
 by these tests.
+
+## Integration follow-up
+
+The static verification function is migrated into `iios_native_static.verify`;
+its `run_stage` adapter requires a durable assembly GREEN receipt and the exact
+fresh execution path before invoking the verifier. Signed wheel-image identity
+now follows the existing signing evidence pre/post hashes; the existing signature,
+load-command, manifest and unchanged-bootstrap checks remain mandatory.
+
+`iios_native_terminal.admit_terminal` preserves the accepted exact shell/Terminal
+ancestry allowlist, bounded six-level walk, TTY, marker, host and selector checks.
+Its pure audit policy distinguishes audit-policy denial from OS errno. The policy
+is not installed by the current dispatcher: complete read/FD/command admission
+and child restrictions remain integration work, and execution stays blocked.
+
+Rejected resume preflight now leaves the historical root unchanged. Completed
+receipts are revalidated for status, predicates, authority, parents and output
+hashes. Fresh-root creation rechecks parent and child identities after mkdir.
+
+Assembly, final-runtime acceptance and complete confinement/lifecycle native
+adapters are still missing. The bootstrap acceptance cannot be relabeled as final
+runtime acceptance, nor can functional lifecycle or a single correlated denial
+be promoted to complete confinement qualification. There is no launch-ready
+package at this checkpoint; source-controlled execution readiness remains false.
