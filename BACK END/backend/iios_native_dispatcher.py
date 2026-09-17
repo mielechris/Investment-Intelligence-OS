@@ -191,10 +191,12 @@ def run(manifest,parent,*,resume_binding=None):
         require(records[0]['kind']=='BEGIN','CONDUCTOR','RESUME_HEADER')
         old_budget=Budget(**records[0]['payload']['budget']);old_budget.check(clock(),'CONDUCTOR')
         context.deadline=min(context.deadline,old_budget.work_end)
+    boot_observation=[]
     def boot_identity():
+        if boot_observation:return boot_observation[0]
         rc,out,err=context.tool(['/usr/sbin/sysctl','-n','kern.bootsessionuuid'],context.deadline,manifest['tool_pins'])
         require(rc==0 and not err and re.fullmatch(rb'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\n?',out) is not None,'CONDUCTOR','BOOT_SESSION_IDENTITY')
-        return out.decode().strip().lower()
+        boot_observation.append(out.decode().strip().lower());return boot_observation[0]
     def builtin(row,deadline,budget):
         context.stage=row['id'];context.deadline=deadline;stage=row['id'];extra={}
         if stage==STAGES[0]:admit_source(manifest)
@@ -228,4 +230,14 @@ def run(manifest,parent,*,resume_binding=None):
                         verify_receipt=context.verify_receipt,cleanup=context.cleanup,
                         export=lambda report,deadline:export(root,report,deadline,clock),clock_identity=boot_identity,initial_start=initial_start)
     context.conductor=conductor
+    if resume_binding is not None:
+        # Verify the entire durable chain before any new native stage. Repeated
+        # read-only admission does not replace, reset or rewrite old receipts.
+        conductor.preflight_resume(resume_binding['tip'])
+        context.stage=STAGES[1]
+        host={'system':platform.system(),'release':platform.release(),'machine':platform.machine(),'uid':os.getuid()}
+        admit_terminal(manifest['terminal_binding'],environment=dict(os.environ),ttys=[os.isatty(fd) for fd in (0,1,2)],host=host,parent_pid=os.getppid(),query=context.query,clock=clock,deadline=context.deadline)
+        context.stage=STAGES[2]
+        require(manifest['historical_pids']==[35731],STAGES[2],'RESUME_REGISTERED_PID_BINDING')
+        reconcile_pid(35731,context.inspect,stage=STAGES[2],deadline=context.deadline,clock=clock)
     return conductor.run(resume=resume_binding is not None,resume_tip=resume_binding['tip'] if resume_binding is not None else None)
