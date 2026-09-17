@@ -280,3 +280,21 @@ class FrameworkRoleTests(unittest.TestCase):
         for key,value in [('runtime_parent','f'*64),('schema','iios-disposable-observation-roles-v1'),('scope','LIVE_QUALIFICATION')]:
             bad=deepcopy(d);bad[key]=value
             with self.assertRaises(ValueError):admit_roles(bad,content_hash(bad),approved_roots=roots,now=now)
+
+class RuntimeHeadersRoleTests(unittest.TestCase):
+    def test_real_headers_shape_reaches_disposable_runtime_admission(self):
+        from test_alpha_runtime_files import structural_rows,policy_fields
+        from alpha_runtime_files import DESCRIPTOR_SCHEMA
+        d,roots,now,_=fixture();rows,meta=structural_rows()
+        rows.append(dict(path='Headers/Python.h',size=1,mode=0o400,sha256='a'*64))
+        meta.update({'Headers':{},'Headers/Python.h':{}})
+        d['schema']='iios-disposable-observation-roles-v2'
+        d['runtime'].update(schema=DESCRIPTOR_SCHEMA,files=rows,**policy_fields(meta))
+        d['runtime_parent']=content_hash(d['runtime'])
+        cap=admit_roles(d,content_hash(d),approved_roots=roots,now=now)
+        self.assertFalse(record(cap,{})['production_qualified'])
+        for key in ('headers','cookies','authorization','api_key'):
+            bad=deepcopy(d);bad[key]='not-a-real-secret'
+            with self.assertRaises(ValueError):admit_roles(bad,content_hash(bad),approved_roots=roots,now=now)
+        bad=deepcopy(d);bad['runtime']['metadata']['Headers']={'token':'not-a-real-secret'}
+        with self.assertRaises(ValueError):admit_roles(bad,content_hash(bad),approved_roots=roots,now=now)

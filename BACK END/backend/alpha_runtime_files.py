@@ -380,11 +380,11 @@ def safe_runtime_document(document):
     from provider_gateway_contract import safe_document
     require(type(document) is dict, 'RUNTIME_DOCUMENT_SCHEMA')
     schema = document.get('schema')
-    if schema not in (BUILD_SCHEMA, MANIFEST_SCHEMA):
+    if schema not in (BUILD_SCHEMA, MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA):
         safe_document(document)
         return
     links = validate_layout_policy(document['layout_policy'], document['layout_parent'])
-    rows = document['files'] if schema == BUILD_SCHEMA else document['file_inventory']
+    rows = document['file_inventory'] if schema == MANIFEST_SCHEMA else document['files']
     metadata = document['metadata']
     if schema == MANIFEST_SCHEMA:
         from deployment_contract import canonical
@@ -409,6 +409,30 @@ def safe_runtime_document(document):
                 any(r['path'].startswith('Headers/') for r in rows), 'RUNTIME_HEADERS_DIRECTORY')
         safe_document('Headers')
         safe_document(metadata['Headers'])
+
+
+def safe_runtime_envelope(document):
+    """Exact existing runtime-bearing envelopes, never a provider validator."""
+    from provider_gateway_contract import safe_document
+    require(type(document) is dict, 'RUNTIME_ENVELOPE_SCHEMA')
+    schema = document.get('schema')
+    view = dict(document)
+    if schema == 'iios-disposable-observation-roles-v2':
+        runtime = document['runtime']
+        require(runtime.get('schema') == DESCRIPTOR_SCHEMA, 'RUNTIME_ENVELOPE_VERSION')
+        safe_runtime_document(runtime)
+        del view['runtime']
+    elif schema == 'iios-observation-launch-v2':
+        runtime = dict(schema=DESCRIPTOR_SCHEMA, files=document['inventories']['runtime'],
+                       **extension(document))
+        safe_runtime_document(runtime)
+        del view['metadata']
+    elif schema == 'iios-truth-observation-execution-v1':
+        runtime = document['preflight']['runtime_manifest']
+        safe_runtime_document(runtime)
+        view['preflight'] = dict(document['preflight'])
+        del view['preflight']['runtime_manifest']
+    safe_document(view)
 
 
 def copy_runtime_metadata(source_fd, destination_fd, expected):

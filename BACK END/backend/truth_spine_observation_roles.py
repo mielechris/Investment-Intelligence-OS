@@ -39,7 +39,8 @@ class DisposableRoles:
 
 def admit_roles(document, expected, *, approved_roots, now):
     """Pure exact descriptor admission, explicitly not provenance qualification."""
-    safe_document(document);pin(document,expected)
+    from alpha_runtime_files import safe_runtime_envelope
+    safe_runtime_envelope(document);pin(document,expected)
     d=document
     require(type(d) is dict and set(d)=={'schema','scope','source_commit','roots','release_parent',
         'runtime_parent','runtime','launch','input_files','control_parent','seed_parents','valid_from','expires_at','authority'},'DISPOSABLE_SCHEMA')

@@ -187,7 +187,8 @@ def admit_observation_execution(document, expected, *, approved_roots,
     from alpha_session_evidence import verify_candidate_evidence, verify_files, json_document
     from alpha_session_package import verify_observation_release
     from alpha_observation_launch import lexical
-    safe_document(document); pin(document, expected)
+    from alpha_runtime_files import safe_runtime_envelope
+    safe_runtime_envelope(document); pin(document, expected)
     fields = {'schema', 'scope', 'source_commit', 'roots', 'preflight', 'release', 'release_parent',
         'qualifications', 'qualification_files', 'grant', 'grant_parent', 'launch', 'authority'}
     require(type(document) is dict and set(document) == fields, 'OBSERVATION_EXECUTION_SCHEMA')

@@ -277,6 +277,8 @@ class FrameworkLifecycleTests(TreeCase):
         from test_alpha_production_runtime import framework_spec,runtime as assembler
         from alpha_session_package import bound_package
         from alpha_session_evidence import verify_candidate_evidence
+        from test_alpha_production_runtime import RuntimeHeadersAdmissionTests
+        RuntimeHeadersAdmissionTests.add_headers(self)
         spec,args=framework_spec(self);m=assembler.assemble(spec,content_hash(spec),**args)['manifest']
         h=ExecutionAdmissionTests();h.setUp()
         try:

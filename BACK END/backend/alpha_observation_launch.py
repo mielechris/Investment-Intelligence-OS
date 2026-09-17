@@ -42,7 +42,8 @@ def validate_spec(spec, expected, *, roots, source, topology_parent, now_ns):
     A component capability is not an account, OS-confinement, or production proof.
     Sandbox application remains mandatory on every child command.
     """
-    safe_document(spec); pin(spec, expected)
+    from alpha_runtime_files import safe_runtime_envelope
+    safe_runtime_envelope(spec); pin(spec, expected)
     from alpha_runtime_files import EXTENSION_FIELDS, extension
     version2 = spec.get('schema') == 'iios-observation-launch-v2'
     if version2: extension(spec)

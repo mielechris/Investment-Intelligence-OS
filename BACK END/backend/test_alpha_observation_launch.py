@@ -374,6 +374,8 @@ class FrameworkLaunchTests(unittest.TestCase):
     def test_v2_input_dispatch_is_runtime_only_and_failure_blocks_launcher(self):
         from test_alpha_runtime_files import structural_rows,policy_fields
         h=LaunchTests();h.setUp();rows,meta=structural_rows()
+        rows.append(dict(path='Headers/Python.h',size=1,mode=0o400,sha256='a'*64))
+        meta.update({'Headers':{},'Headers/Python.h':{}})
         spec=deepcopy(h.spec);spec.update(schema='iios-observation-launch-v2',**policy_fields(meta))
         spec['inventories']['runtime']=rows
         self.assertEqual(h.validate(spec)['scope'],launch.SCOPE)
