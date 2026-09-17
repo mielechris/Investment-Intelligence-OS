@@ -778,6 +778,18 @@ class ObservationPublicationTests(unittest.TestCase):
 
 
 class ObservationCIContractTests(unittest.TestCase):
+    def test_runtime_envelope_source_paths_are_in_exact_ci_scope(self):
+        import ast
+        text,_=self.script()
+        line=next(line.strip() for line in text.splitlines() if line.strip().startswith('ALLOWED='))
+        paths=ast.literal_eval(line.split('=',1)[1])
+        self.assertEqual(len(paths),len(set(paths)))
+        for path in ('BACK END/backend/alpha_runtime_files.py',
+                     'BACK END/backend/alpha_observation_launch.py',
+                     'BACK END/backend/alpha_observation_lifecycle.py',
+                     'BACK END/backend/truth_spine_observation_roles.py'):
+            self.assertIn(path,paths)
+
     def historical_fetch(self):
         import ast,subprocess
         text,_=self.script()
