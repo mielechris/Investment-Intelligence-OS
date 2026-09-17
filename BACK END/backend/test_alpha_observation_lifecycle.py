@@ -267,3 +267,34 @@ class ExecutionAdmissionTests(unittest.TestCase):
             with self.subTest(key=key),self.assertRaisesRegex(ValueError,'OBSERVATION_(PHASE_DEADLINE_BINDING|LAUNCH_BUDGET)'):
                 admit_observation_execution(d,content_hash(d),approved_roots=self.roots,
                     approved_qualification_pins=self.pins,now=self.now)
+
+from test_alpha_runtime_files import TreeCase
+
+
+class FrameworkLifecycleTests(TreeCase):
+    def test_v2_runtime_does_not_replace_independent_native_qualification_parents(self):
+        from pathlib import Path
+        from test_alpha_production_runtime import framework_spec,runtime as assembler
+        from alpha_session_package import bound_package
+        from alpha_session_evidence import verify_candidate_evidence
+        spec,args=framework_spec(self);m=assembler.assemble(spec,content_hash(spec),**args)['manifest']
+        h=ExecutionAdmissionTests();h.setUp()
+        try:
+            b=h.document['preflight'];f=h.helper.e.fixture
+            h.helper.e.runtime_root=Path(m['runtime_root']);h.roots['runtime']=m['runtime_root']
+            b['runtime_manifest']=m;f.runtime.update(runtime_manifest_sha256=content_hash(m),interpreter_sha256=m['interpreter_sha256'])
+            f.repin();b['package_inputs']=dict(f.kwargs(),observation=h.helper.obs);b['package_inputs'].pop('now')
+            b['candidate']=bound_package(f.plan,f.account,f.runtime,f.allowance,observation=h.helper.obs,**f.kwargs())
+            b['candidate_hash']=content_hash(b['candidate']);h.expected=content_hash(h.document)
+            # Static v2 file verification passes; old native qualification/owner
+            # parents cannot be relabelled for this different runtime and root.
+            verified=[]
+            def verify(*args,**kwargs):
+                result=verify_candidate_evidence(*args,**kwargs);verified.append(result);return result
+            with patch('alpha_session_evidence.verify_candidate_evidence',side_effect=verify) as evidence:
+                with self.assertRaises(ValueError):h.admit()
+                evidence.assert_called_once()
+                self.assertEqual(verified[0]['status'],'FILES_AND_BINDINGS_VERIFIED_ONLY')
+                self.assertEqual(evidence.call_args.kwargs['runtime_manifest']['schema'],'iios-immutable-python-runtime-v2')
+            self.assertTrue(all(v is False for v in h.document['authority'].values()))
+        finally:h.doCleanups()

@@ -103,12 +103,17 @@ class OwnedChildren:
         if not 0 < timeout <= 30:
             raise ValueError('STOP_TIMEOUT_INVALID')
         self.root = Path(root)
-        if service_module not in {'truth_spine_integration_service', 'truth_spine_full_day_service'}:
+        from truth_spine_observation_roles import disposable, MODULE
+        if service_module not in {'truth_spine_integration_service', 'truth_spine_full_day_service', MODULE}:
             raise ValueError('CHILD_SERVICE_MODULE_INVALID')
+        if service_module==MODULE and not disposable(observation):
+            raise RunnerFailure('DISPOSABLE_OWNER_BINDING')
         self.observation = observation
         if observation is not None:
             from alpha_observation_lifecycle import ObservationExecution
-            if type(observation) is not ObservationExecution or service_module != 'truth_spine_full_day_service':
+            valid_live=type(observation) is ObservationExecution and service_module=='truth_spine_full_day_service'
+            valid_test=disposable(observation) and service_module==MODULE
+            if not (valid_live or valid_test):
                 raise RunnerFailure('OBSERVATION_OWNER_BINDING')
             if str(root) != observation.document()['roots']['output']:
                 raise RunnerFailure('OBSERVATION_OWNER_ROOT')
@@ -136,6 +141,8 @@ class OwnedChildren:
                     str(self.root/'topology.json'), '--role', role]
         if self.observation is not None:
             expected += ['--observation-admission', self.observation.identity]
+        from truth_spine_observation_roles import disposable,invocation_pins
+        if disposable(self.observation):expected += invocation_pins(self.observation)
         if port is not None:
             expected += ['--port', str(port)]
         if list(argv) != expected:
@@ -347,9 +354,10 @@ class OwnedChildren:
         if time.monotonic_ns()>=d['launch']['startup_ns']:
             raise RunnerFailure('OBSERVATION_STARTUP_DEADLINE')
         verify_destination(fd,str(self.root))
-        return publish(fd,role+'-observation-ack.json',dict(schema='iios-observation-ack-v1',
+        from truth_spine_observation_roles import record
+        return publish(fd,role+'-observation-ack.json',record(self.observation,dict(schema='iios-observation-ack-v1',
             admission_parent=self.observation.identity,role=role,pid=entry['child'].pid,
-            startup_parent=fp.startup_receipt_hash,startup_ns=d['launch']['startup_ns'],authority=locked_authority()))
+            startup_parent=fp.startup_receipt_hash,startup_ns=d['launch']['startup_ns'],authority=locked_authority())))
 
     def stop(self, role):
         def remaining():
@@ -403,9 +411,9 @@ class OwnedChildren:
             return self.finished
         if self.observation is not None:
             from provider_gateway_contract import locked_authority
-            from alpha_observation_lifecycle import EXECUTION_SCOPE
-            report.update(scope=EXECUTION_SCOPE,admission_parent=self.observation.identity,
-                production_qualified=False,authority=locked_authority())
+            from truth_spine_observation_roles import role_scope, record
+            report.update(record(self.observation,dict(scope=role_scope(self.observation),admission_parent=self.observation.identity,
+                production_qualified=False,authority=locked_authority())))
         if primary is not None:
             report['primary_exception'] = {'type': type(primary).__name__}
             if isinstance(primary, RunnerFailure) and re.fullmatch(r'[A-Z_]{1,80}', str(primary)):

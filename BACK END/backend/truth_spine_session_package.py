@@ -393,6 +393,20 @@ def observation_projection(capability, plan, requests, request_pins, *, now):
     finally:os.close(fd)
 
 
+def role_projection(capability, plan, requests, request_pins, *, now):
+    from truth_spine_observation_roles import disposable, seed_projection
+    if not disposable(capability):
+        return observation_projection(capability,plan,requests,request_pins,now=now)
+    from alpha_session_execution import safe_root,read_record
+    fd=safe_root(capability.document()['roots']['output']+'/requests')
+    try:
+        if set(os.listdir(fd))!={f'{i}.seed.json' for i in range(3)}:
+            raise ValueError('DISPOSABLE_SEED_FILES')
+        records=[read_record(fd,f'{i}.seed.json') for i in range(3)]
+    finally:os.close(fd)
+    return seed_projection(capability,{'session':plan['session'],'seed_parents':plan['seed_parents']},records=records,now=now)
+
+
 class ObservationProbeReader:
     """Truth Spine owner and heartbeat evidence, with independent journal read."""
     def __init__(self, *, root, capability, plan, requests, request_pins, children, expected_responses):
@@ -404,6 +418,7 @@ class ObservationProbeReader:
         from alpha_session_execution import safe_root,read_record
         from alpha_session_contract import require,instant
         from provider_gateway_contract import content_hash,locked_authority
+        from truth_spine_observation_roles import record
         fd=safe_root(str(self.root))
         try:
             identities={}
@@ -414,20 +429,20 @@ class ObservationProbeReader:
                     all(v is False for v in h['authority'].values()), 'OBSERVATION_HEARTBEAT_AUTHORITY')
                 at=instant(h['at'])
                 require(0 <= (now-at).total_seconds() <= 30, 'OBSERVATION_HEARTBEAT_STALE')
-                require(h=={'schema':'iios-observation-heartbeat-v1','admission_parent':self.capability.identity,
+                require(h==record(self.capability,{'schema':'iios-observation-heartbeat-v1','admission_parent':self.capability.identity,
                     'role':role,'startup_parent':fp.startup_receipt_hash,'pid':entry['child'].pid,
-                    'authority':locked_authority(),'at':h['at']}, 'OBSERVATION_HEARTBEAT_BINDING')
+                    'authority':locked_authority(),'at':h['at']}), 'OBSERVATION_HEARTBEAT_BINDING')
                 identities[role]=content_hash(asdict(fp))
             # Current projection is replaceable derived state. Immutable upstream
             # gateway records remain authoritative; GET never refreshes time.
-            expected=observation_projection(self.capability,self.plan,self.requests,self.request_pins,now=now)
+            expected=role_projection(self.capability,self.plan,self.requests,self.request_pins,now=now)
             p=read_observation_current(fd,'observation-projection.json')
             require(p['response_parents']==self.expected_responses, 'OBSERVATION_PROBE_RESPONSE_PINS')
             published=instant(p['published_at'])
             require(0 <= (now-published).total_seconds() <= 30, 'OBSERVATION_PROJECTION_STALE')
-            require(content_hash(p)==content_hash(observation_projection(self.capability,self.plan,self.requests,self.request_pins,now=published)),
+            require(content_hash(p)==content_hash(role_projection(self.capability,self.plan,self.requests,self.request_pins,now=published)),
                     'OBSERVATION_PROJECTION_SUBSTITUTION')
-            return {'schema':'iios-observation-probes-v1','admission_parent':self.capability.identity,
+            return record(self.capability,{'schema':'iios-observation-probes-v1','admission_parent':self.capability.identity,
                 'owners':identities,'projection_parent':content_hash(p),'observed_at':now.isoformat(),
-                'authority':locked_authority(),'production_qualified':False}
+                'authority':locked_authority(),'production_qualified':False})
         finally:os.close(fd)

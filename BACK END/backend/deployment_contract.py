@@ -169,7 +169,12 @@ def validate_runtime_manifest(root: Path, manifest: dict[str, Any], *, expected_
     required = {"schema", "runtime_id", "release_commit", "runtime_root", "interpreter",
                 "interpreter_sha256", "python_version", "dependency_inventory",
                 "file_inventory", "platform_dependencies", "content_hash"}
-    if set(manifest) != required or manifest.get("schema") != RUNTIME_MANIFEST_SCHEMA or manifest.get("content_hash") != digest(manifest):
+    from alpha_runtime_files import MANIFEST_SCHEMA, EXTENSION_FIELDS, verify_manifest
+    version2 = manifest.get("schema") == MANIFEST_SCHEMA
+    if version2:
+        verify_manifest(str(root), manifest, source_commit=expected_release_commit)
+        required |= EXTENSION_FIELDS
+    if set(manifest) != required or manifest.get("schema") not in (RUNTIME_MANIFEST_SCHEMA, MANIFEST_SCHEMA) or manifest.get("content_hash") != digest(manifest):
         raise RuntimeError("RUNTIME_MANIFEST_INVALID")
     if manifest.get("release_commit") != expected_release_commit or not HEX40.fullmatch(expected_release_commit):
         raise RuntimeError("RUNTIME_RELEASE_MISMATCH")
@@ -181,10 +186,20 @@ def validate_runtime_manifest(root: Path, manifest: dict[str, Any], *, expected_
     info = _owner_regular(interpreter)
     if info.st_mode & 0o222 or file_hash(interpreter) != manifest.get("interpreter_sha256"):
         raise RuntimeError("RUNTIME_INTERPRETER_INVALID")
+    if version2:
+        # All closure and platform checks precede even the --version invocation.
+        if manifest['dependency_inventory'] != dependency_inventory(root) or not manifest['dependency_inventory']:
+            raise RuntimeError('RUNTIME_DEPENDENCIES_INVALID')
+        for dependency in manifest['platform_dependencies']:
+            path = Path(dependency['path'])
+            if not path.is_absolute() or '/GitHub/' in str(path) or path.is_symlink() or not path.is_file() or file_hash(path) != dependency['sha256']:
+                raise RuntimeError('RUNTIME_PLATFORM_DEPENDENCY_INVALID')
     version = subprocess.run((str(interpreter), "--version"), check=True, capture_output=True, text=True, timeout=5).stdout.strip()
     if version != f"Python {PYTHON_VERSION}" or manifest.get("python_version") != PYTHON_VERSION:
         raise RuntimeError("RUNTIME_VERSION_INVALID")
-    observed = inventory_tree(root)
+    if version2:
+        verify_manifest(str(root), manifest, source_commit=expected_release_commit)
+    observed = manifest['file_inventory'] if version2 else inventory_tree(root)
     manifest_name = "runtime-manifest.json"
     observed_without_manifest = [row for row in observed if row["path"] != manifest_name]
     if manifest.get("file_inventory") != observed_without_manifest:

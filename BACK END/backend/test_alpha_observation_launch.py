@@ -368,3 +368,24 @@ class LaunchTests(unittest.TestCase):
     def test_child_ack_requires_listener_proof(self):
         records,failure=self.child_case(listener=True)
         self.assertEqual(failure,'CHILD_ACK');self.assertEqual(len(records),1)
+
+
+class FrameworkLaunchTests(unittest.TestCase):
+    def test_v2_input_dispatch_is_runtime_only_and_failure_blocks_launcher(self):
+        from test_alpha_runtime_files import structural_rows,policy_fields
+        h=LaunchTests();h.setUp();rows,meta=structural_rows()
+        spec=deepcopy(h.spec);spec.update(schema='iios-observation-launch-v2',**policy_fields(meta))
+        spec['inventories']['runtime']=rows
+        self.assertEqual(h.validate(spec)['scope'],launch.SCOPE)
+        with patch('alpha_runtime_files.verify_runtime_tree',side_effect=ValueError('TREE_CHANGED')) as verify,\
+            patch.object(launch,'verify_files') as generic,patch('builtins.open',side_effect=AssertionError('NO_LAUNCHER_READ')):
+            with self.assertRaisesRegex(ValueError,'TREE_CHANGED'):launch.verify_inputs(spec)
+            verify.assert_called_once();generic.assert_not_called()
+        spec['schema']='iios-observation-launch-v1'
+        with self.assertRaises(ValueError):h.validate(spec)
+    def test_v2_wrong_policy_parent_and_source(self):
+        from test_alpha_runtime_files import structural_rows,policy_fields
+        h=LaunchTests();h.setUp();rows,meta=structural_rows()
+        spec=deepcopy(h.spec);spec.update(schema='iios-observation-launch-v2',**policy_fields(meta))
+        for key,value in [('layout_parent','0'*64),('source','f'*40),('scope','LIVE_QUALIFICATION')]:
+            with self.assertRaises(ValueError):h.validate(dict(spec,**{key:value}))

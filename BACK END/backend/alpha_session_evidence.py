@@ -150,11 +150,13 @@ def verify_candidate_evidence(candidate, candidate_hash, plan, account, runtime,
     """
     verified = verify_bound_package(candidate,candidate_hash,plan,account,runtime,allowance,**package_inputs)
     safe_document(runtime_manifest); pin(runtime_manifest,runtime['runtime_manifest_sha256'])
-    require(type(runtime_manifest) is dict and set(runtime_manifest) == {
+    from alpha_runtime_files import MANIFEST_SCHEMA, EXTENSION_FIELDS, verify_manifest
+    version2 = runtime_manifest.get('schema') == MANIFEST_SCHEMA
+    require(type(runtime_manifest) is dict and set(runtime_manifest) == ({
         'schema','runtime_id','release_commit','runtime_root','interpreter','interpreter_sha256',
-        'python_version','dependency_inventory','file_inventory','platform_dependencies','content_hash'},
-        'EVIDENCE_RUNTIME_SCHEMA')
-    require(runtime_manifest.get('schema') == RUNTIME_MANIFEST_SCHEMA and
+        'python_version','dependency_inventory','file_inventory','platform_dependencies','content_hash'} |
+        (EXTENSION_FIELDS if version2 else set())), 'EVIDENCE_RUNTIME_SCHEMA')
+    require(runtime_manifest.get('schema') in (RUNTIME_MANIFEST_SCHEMA, MANIFEST_SCHEMA) and
             runtime_manifest.get('content_hash') == digest(runtime_manifest) and
             runtime_manifest.get('release_commit') == verified['source_commit'] and
             runtime_manifest.get('python_version') == runtime['python_version'], 'EVIDENCE_RUNTIME_BINDING')
@@ -177,8 +179,11 @@ def verify_candidate_evidence(candidate, candidate_hash, plan, account, runtime,
     from provider_gateway_contract import canonical
     manifest_bytes = canonical(runtime_manifest)
     require(all(r['path'] != 'runtime-manifest.json' for r in rows), 'EVIDENCE_MANIFEST_RECURSION')
-    verify_files(root,rows+[{'path':'runtime-manifest.json','size':len(manifest_bytes),'mode':0o400,
-                            'sha256':hashlib.sha256(manifest_bytes).hexdigest()}],approved_root=approved_runtime_root)
+    if version2:
+        verify_manifest(root,runtime_manifest,source_commit=verified['source_commit'])
+    else:
+        verify_files(root,rows+[{'path':'runtime-manifest.json','size':len(manifest_bytes),'mode':0o400,
+                                'sha256':hashlib.sha256(manifest_bytes).hexdigest()}],approved_root=approved_runtime_root)
     safe_document(claims_manifest); pin(claims_manifest,claims_manifest_hash)
     require(set(claims_manifest)=={'schema','account_parent','root','files','claims'} and
             claims_manifest['schema']=='iios-alpha-reviewed-claim-files-v1' and

@@ -661,3 +661,24 @@ class ObservationRuntimeTests(unittest.TestCase):
                     sha256=hashlib.sha256(encoded).hexdigest()))
                 with patch('alpha_observation_execution.require_active_observation',return_value=SimpleNamespace(document=lambda:changed)):
                     with self.subTest(field=field),self.assertRaisesRegex(ValueError,'OBSERVATION_RUNTIME_SOURCE_BYTES'):check(bad)
+
+from test_alpha_runtime_files import TreeCase,policy_fields
+
+
+class FrameworkGatewayTests(TreeCase):
+    def test_actual_admitted_v2_tree_rechecked_before_provider_effects(self):
+        from alpha_runtime_files import DESCRIPTOR_SCHEMA
+        m,a,r=fixture();r.update(schema=DESCRIPTOR_SCHEMA,root=str(self.root),files=self.observed['files'],
+            interpreter='bin/python3.14',tls='tls/ca.pem',source_files=['tls/ca.pem'],**policy_fields(self.observed['metadata']))
+        cap=admit(m,a,r,expected=repin(m,a,r),now=NOW)
+        self.assertEqual(len(verify_runtime(cap)),len(self.observed['files']))
+        # Revalidation must inspect the physical tree on every request.
+        p=self.root/'tls/ca.pem';p.chmod(0o600);p.write_bytes(b'changed');p.chmod(0o400)
+        with self.assertRaises(ValueError):verify_runtime(cap)
+    def test_wrong_policy_parent_and_cross_version_before_secret_or_network(self):
+        from alpha_runtime_files import DESCRIPTOR_SCHEMA
+        m,a,r=fixture();r.update(schema=DESCRIPTOR_SCHEMA,root=str(self.root),files=self.observed['files'],
+            interpreter='bin/python3.14',tls='tls/ca.pem',source_files=['tls/ca.pem'],**policy_fields(self.observed['metadata']))
+        for change in ({'layout_parent':'0'*64},{'schema':'unreviewed'}):
+            bad=dict(r,**change);cap=admit(m,a,bad,expected=repin(m,a,bad),now=NOW)
+            with self.assertRaises(ValueError):verify_runtime(cap)

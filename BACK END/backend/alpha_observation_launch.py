@@ -43,10 +43,13 @@ def validate_spec(spec, expected, *, roots, source, topology_parent, now_ns):
     Sandbox application remains mandatory on every child command.
     """
     safe_document(spec); pin(spec, expected)
-    require(set(spec) == {'schema','scope','source','topology_parent','roots','inventories','interpreter',
+    from alpha_runtime_files import EXTENSION_FIELDS, extension
+    version2 = spec.get('schema') == 'iios-observation-launch-v2'
+    if version2: extension(spec)
+    require(set(spec) == ({'schema','scope','source','topology_parent','roots','inventories','interpreter',
         'interpreter_hash','sandbox_hash','host','port','peer_hash','parent_pid','start_ns','startup_ns',
-        'stop_ns','final_ns','authority'}, 'LAUNCH_SCHEMA')
-    require(spec['schema'] == 'iios-observation-launch-v1' and spec['scope'] == SCOPE and
+        'stop_ns','final_ns','authority'} | (EXTENSION_FIELDS if version2 else set())), 'LAUNCH_SCHEMA')
+    require(spec['schema'] in ('iios-observation-launch-v1','iios-observation-launch-v2') and spec['scope'] == SCOPE and
             re.fullmatch('[0-9a-f]{40}', source) and spec['source'] == source and
             spec['topology_parent'] == topology_parent and re.fullmatch('[0-9a-f]{64}', topology_parent), 'LAUNCH_PARENT')
     require(type(roots) is dict and set(roots) == {'runtime','release','control','output'} and
@@ -78,7 +81,11 @@ def validate_spec(spec, expected, *, roots, source, topology_parent, now_ns):
 
 def verify_inputs(spec):
     for role in ('runtime','release','control'):
-        verify_files(spec['roots'][role], spec['inventories'][role], approved_root=spec['roots'][role])
+        if role == 'runtime' and spec['schema'] == 'iios-observation-launch-v2':
+            from alpha_runtime_files import verify_runtime_tree, extension
+            verify_runtime_tree(spec['roots'][role],spec['inventories'][role],approved_root=spec['roots'][role],**extension(spec))
+        else:
+            verify_files(spec['roots'][role], spec['inventories'][role], approved_root=spec['roots'][role])
     # This fixed system launcher is never replaced by a caller-supplied executable.
     with open('/usr/bin/sandbox-exec','rb') as stream:
         require(hashlib.sha256(stream.read(4*1024*1024)).hexdigest()==spec['sandbox_hash'], 'LAUNCH_SANDBOX_IDENTITY')

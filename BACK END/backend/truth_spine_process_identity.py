@@ -338,9 +338,10 @@ def write_startup(root, instance, runner, role, port, created, *, observation=No
 def observation_binding(root, instance, runner, role, port, created, capability):
     """Distinct startup identity; shadow receipts never authorize observation."""
     from alpha_observation_lifecycle import ObservationExecution, EXECUTION_SCOPE
+    from truth_spine_observation_roles import disposable, role_scope, record
     from alpha_observation_launch import lexical
     from provider_gateway_contract import locked_authority
-    if type(capability) is not ObservationExecution:
+    if type(capability) is not ObservationExecution and not disposable(capability):
         raise IdentityFailure('OBSERVATION_CAPABILITY_REQUIRED')
     d = capability.document()
     if (str(lexical(str(root))) != d['roots']['output'] or
@@ -349,12 +350,12 @@ def observation_binding(root, instance, runner, role, port, created, capability)
             role not in {'scheduler','publisher','backend'} or
             port != (d['launch']['port'] if role == 'backend' else None)):
         raise IdentityFailure('OBSERVATION_STARTUP_BINDING')
-    return {'schema':'iios-observation-startup-v1','scope':EXECUTION_SCOPE,
+    return record(capability, {'schema':'iios-observation-startup-v1','scope':role_scope(capability),
         'instance_id':instance,'runner_identity':runner,'role':role,'port':port,
         'created_at':utc_stamp(created),'root_hash':digest(str(root)),
         'topology_hash':file_hash(Path(root)/'topology.json'),
-        'authority_hash':d['grant_parent'],'admission_parent':capability.identity,
+        'authority_hash':capability.identity if disposable(capability) else d['grant_parent'],'admission_parent':capability.identity,
         'source_commit':d['source_commit'],'release_parent':d['release_parent'],
-        'runtime_parent':d['preflight']['runtime']['runtime_manifest_sha256'],
+        'runtime_parent':d['runtime_parent'] if disposable(capability) else d['preflight']['runtime']['runtime_manifest_sha256'],
         'startup_ns':d['launch']['startup_ns'],'authority':locked_authority(),
-        'production_qualified':False}
+        'production_qualified':False})

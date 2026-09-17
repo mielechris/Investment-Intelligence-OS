@@ -24,22 +24,29 @@ from alpha_session_execution import (digest, safe_root, relative, read_pinned,
 def verify_runtime(admission):
     require(type(admission) is Admission, 'ADMISSION_REQUIRED')
     m, _, r = admission.documents()
-    require(set(r) == {'scope', 'source_commit', 'root', 'files', 'interpreter', 'tls', 'source_files', 'network_addresses'}, 'RUNTIME_SCHEMA')
+    from alpha_runtime_files import DESCRIPTOR_SCHEMA, EXTENSION_FIELDS, extension, verify_runtime_tree
+    version2 = r.get('schema') == DESCRIPTOR_SCHEMA
+    require(set(r) == ({'scope', 'source_commit', 'root', 'files', 'interpreter', 'tls', 'source_files', 'network_addresses'} |
+        ({'schema'} | EXTENSION_FIELDS if version2 else set())), 'RUNTIME_SCHEMA')
+    if version2: extension(r)
     root = Path(r['root'])
     fd = safe_root(root, immutable=True)
     try:
-        names = [row['path'] for row in r['files']]
-        require(names and len(names) == len(set(names)), 'RUNTIME_INVENTORY')
-        actual = set()
-        for path in root.rglob('*'):
-            require(not path.is_symlink(), 'RUNTIME_ALIAS')
-            if path.is_dir():
-                st = path.stat()
-                require(st.st_uid == os.getuid() and not st.st_mode & 0o222, 'RUNTIME_DIRECTORY_MODE')
-            else:
-                actual.add(path.relative_to(root).as_posix())
-        require(actual == set(names), 'RUNTIME_INVENTORY')
-        identities = {row['path']: read_pinned(root, row) for row in r['files']}
+        if version2:
+            identities = verify_runtime_tree(str(root),r['files'],approved_root=str(root),**extension(r))
+        else:
+            names = [row['path'] for row in r['files']]
+            require(names and len(names) == len(set(names)), 'RUNTIME_INVENTORY')
+            actual = set()
+            for path in root.rglob('*'):
+                require(not path.is_symlink(), 'RUNTIME_ALIAS')
+                if path.is_dir():
+                    st = path.stat()
+                    require(st.st_uid == os.getuid() and not st.st_mode & 0o222, 'RUNTIME_DIRECTORY_MODE')
+                else:
+                    actual.add(path.relative_to(root).as_posix())
+            require(actual == set(names), 'RUNTIME_INVENTORY')
+            identities = {row['path']: read_pinned(root, row) for row in r['files']}
         require(r['interpreter'] in identities and r['tls'] in identities and r['source_files'], 'RUNTIME_COMPONENTS')
         require(all(path in identities for path in r['source_files']), 'SOURCE_INVENTORY')
         require(next(x for x in r['files'] if x['path'] == r['interpreter'])['mode'] == 0o500, 'EXECUTABLE_MODE')
@@ -87,6 +94,11 @@ def observation_runtime_closure(admission, identities):
     from alpha_session_package import verify_observation_release
     m,a,r=admission.documents();cap=require_active_observation(m,a);d=cap.document()
     manifest=d['preflight']['runtime_manifest']
+    from alpha_runtime_files import MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA, extension
+    if manifest['schema'] == MANIFEST_SCHEMA:
+        require(r.get('schema') == DESCRIPTOR_SCHEMA and extension(r) == extension(manifest), 'OBSERVATION_RUNTIME_POLICY')
+    else:
+        require('schema' not in r, 'OBSERVATION_RUNTIME_POLICY')
     require(r['root']==d['roots']['runtime'] and r['root']==manifest['runtime_root'] and
         r['source_commit']==manifest['release_commit'] and
         r['root']+'/'+r['interpreter']==manifest['interpreter'], 'OBSERVATION_RUNTIME_PARENT')

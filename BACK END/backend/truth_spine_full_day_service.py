@@ -246,8 +246,8 @@ def load_observation_config(path, expected, *, now):
 
 
 def read_observation_state(config, capability, now):
-    from truth_spine_session_package import observation_projection
-    return observation_projection(capability,config['plan'],config['requests'],config['request_pins'],now=now)
+    from truth_spine_session_package import role_projection
+    return role_projection(capability,config['plan'],config['requests'],config['request_pins'],now=now)
 
 
 def publish_observation_once(config, capability, at):
@@ -312,6 +312,18 @@ def run_observation_role(args):
     from provider_gateway_contract import locked_authority
     from truth_spine_process_identity import write_startup
     c,cap=load_observation_config(args.config,args.observation_admission,now=datetime.now(timezone.utc))
+    return run_bound_observation_role(args,c,cap)
+
+
+def run_bound_observation_role(args,c,cap):
+    """Same functional roles, called only after explicit live or disposable admission."""
+    import ssl
+    from alpha_session_contract import require
+    from alpha_session_execution import safe_root,read_record,publish
+    from provider_gateway_contract import locked_authority
+    from truth_spine_process_identity import write_startup
+    from truth_spine_observation_roles import record,role_scope
+    role_scope(cap);cap.recheck(datetime.now(timezone.utc))
     d=cap.document();launch=d['launch'];root=Path(d['roots']['output']);last=launch['start_ns']
     runtime=c['requests'][0]['runtime']
     require(Path(__file__).resolve()==Path(d['roots']['release'])/'truth_spine_full_day_service.py' and
@@ -353,32 +365,32 @@ def run_observation_role(args):
             check(launch['startup_ns'])
             try:ack=read_record(fd,args.role+'-observation-ack.json');break
             except FileNotFoundError:time.sleep(.01)
-        require(ack=={'schema':'iios-observation-ack-v1','admission_parent':cap.identity,'role':args.role,
+        require(ack==record(cap,{'schema':'iios-observation-ack-v1','admission_parent':cap.identity,'role':args.role,
             'pid':os.getpid(),'startup_parent':receipt['content_hash'],'startup_ns':launch['startup_ns'],
-            'authority':locked_authority()},'OBSERVATION_ACK_INVALID')
+            'authority':locked_authority()}),'OBSERVATION_ACK_INVALID')
         while True:
             check(launch['final_ns'])
             try:
                 stop=read_record(fd,'observation-stop.json')
-                require(stop=={'admission_parent':cap.identity,'authority':locked_authority()},'OBSERVATION_STOP_INVALID')
+                require(stop==record(cap,{'admission_parent':cap.identity,'authority':locked_authority()}),'OBSERVATION_STOP_INVALID')
                 cooperative=True;break
             except FileNotFoundError:pass
             check(launch['stop_ns']);at=datetime.now(timezone.utc)
             # Scheduler and publisher both inspect actual bounded gateway records.
             if args.role=='scheduler':read_observation_state(c,cap,at)
             if args.role=='publisher':publish_observation_once(c,cap,at)
-            atomic(root/(args.role+'-observation-heartbeat.json'),dict(schema='iios-observation-heartbeat-v1',
+            atomic(root/(args.role+'-observation-heartbeat.json'),record(cap,dict(schema='iios-observation-heartbeat-v1',
                 admission_parent=cap.identity,role=args.role,startup_parent=receipt['content_hash'],
-                pid=os.getpid(),at=at.isoformat(),authority=locked_authority()))
+                pid=os.getpid(),at=at.isoformat(),authority=locked_authority())))
             if server is not None:server.handle_request()
             else:time.sleep(.1)
     finally:
         if server is not None:server.server_close()
         try:
             if receipt is not None:
-                publish(fd,args.role+'-observation-exit.json',dict(schema='iios-observation-exit-v1',
+                publish(fd,args.role+'-observation-exit.json',record(cap,dict(schema='iios-observation-exit-v1',
                     admission_parent=cap.identity,role=args.role,pid=os.getpid(),startup_parent=receipt['content_hash'],
-                    cooperative=cooperative,authority=locked_authority()))
+                    cooperative=cooperative,authority=locked_authority())))
         finally:os.close(fd);lease.close()
 
 def main():

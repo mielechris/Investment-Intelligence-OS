@@ -165,13 +165,23 @@ class ObservationLifecycle:
         from alpha_session_contract import require
         from alpha_observation_lifecycle import ObservationExecution
         require(type(capability) is ObservationExecution, 'OBSERVATION_CAPABILITY_REQUIRED')
+        self._initialize(config,capability)
+
+    @classmethod
+    def for_disposable(cls,config,capability):
+        from truth_spine_observation_roles import disposable
+        if not disposable(capability):raise ValueError('DISPOSABLE_CAPABILITY_REQUIRED')
+        value=object.__new__(cls);value._initialize(config,capability);return value
+
+    def _initialize(self,config,capability):
+        from truth_spine_observation_roles import disposable,MODULE
         self.config,self.capability=config,capability
         self.document=capability.document();self.root=Path(self.document['roots']['output'])
         self.launch=self.document['launch'];self.started=False;self.closed=False;self.fd=None
         self.last_ns=self.launch['start_ns'];self.streams={};self.acks={};self.lease=None
-        self.children=OwnedChildren(self.root,service_module='truth_spine_full_day_service',
+        self.children=OwnedChildren(self.root,service_module=MODULE if disposable(capability) else 'truth_spine_full_day_service',
             observation=capability,port_clear=lambda:port_is_clear(self.launch['port']))
-        self.result=None;self.response_pins=[]
+        self.result=None;self.response_pins=self.document['seed_parents'][:] if disposable(capability) else []
 
     def check(self, deadline):
         from alpha_session_contract import require
@@ -202,7 +212,9 @@ class ObservationLifecycle:
         self.check(self.launch['startup_ns'])
         require(instant(self.config['plan']['startup_not_before']) <= datetime.now(timezone.utc) <
             instant(self.config['plan']['startup_deadline']), 'OBSERVATION_UTC_STARTUP_WINDOW')
-        verify_observation_execution(self.capability,self.capability.identity,now=datetime.now(timezone.utc))
+        from truth_spine_observation_roles import disposable,record
+        if disposable(self.capability):self.capability.recheck(datetime.now(timezone.utc))
+        else:verify_observation_execution(self.capability,self.capability.identity,now=datetime.now(timezone.utc))
         require(self.launch['host_identity']==dict(system=platform.system(),release=platform.release(),
             version=platform.version(),machine=platform.machine(),uid=os.getuid()), 'OBSERVATION_SELECTED_HOST')
         runtime=self.config['requests'][0]['runtime'];python=Path(runtime['root'])/runtime['interpreter']
@@ -218,8 +230,10 @@ class ObservationLifecycle:
         pins={str(python):next(r['sha256'] for r in runtime['files'] if r['path']==runtime['interpreter'])}
         for role in ('scheduler','publisher','backend'):
             self.check(self.launch['startup_ns'])
-            args=[str(python),'-B','-m','truth_spine_full_day_service','--config',str(self.root/'topology.json'),
+            args=[str(python),'-B','-m',self.children.service_module,'--config',str(self.root/'topology.json'),
                 '--role',role,'--observation-admission',self.capability.identity]
+            from truth_spine_observation_roles import disposable,invocation_pins
+            if disposable(self.capability):args+=invocation_pins(self.capability)
             port=self.launch['port'] if role=='backend' else None
             if port is not None:args+=['--port',str(port)]
             launch=self.children.prepare_launch(role,args,executable_hashes=pins,port=port,final_executable=str(python))
@@ -263,6 +277,8 @@ class ObservationLifecycle:
         from alpha_session_contract import require
         from alpha_session_execution import publish
         from provider_gateway_contract import content_hash,locked_authority
+        from truth_spine_observation_roles import disposable
+        require(not disposable(self.capability),'DISPOSABLE_PROVIDER_FORBIDDEN')
         require(slot==len(self.response_pins) and receipt['scope']=='LIVE_QUALIFICATION' and
             receipt['request_id']==pins['manifest'] and completion['receipt']==content_hash(receipt),
             'OBSERVATION_DISPATCHER_RECEIPT')
@@ -312,6 +328,7 @@ class ObservationLifecycle:
         from alpha_observation_launch import listener_pids
         from provider_gateway_contract import locked_authority
         if self.closed:return self.result
+        from truth_spine_observation_roles import record
         self.closed=True;report={};cooperative=True;exit_parents={}
         try:
             self.check(self.launch['final_ns'])
@@ -321,8 +338,8 @@ class ObservationLifecycle:
             except Exception:
                 cooperative=False;self.children.error('OBSERVATION_LISTENER_OWNER','backend')
             if self.fd is not None:
-                publish(self.fd,'observation-stop.json',{'admission_parent':self.capability.identity,
-                    'authority':locked_authority()})
+                publish(self.fd,'observation-stop.json',record(self.capability,{'admission_parent':self.capability.identity,
+                    'authority':locked_authority()}))
             # Every role is independent; one failure never prevents another cleanup.
             for role,entry in list(self.children.active.items()):
                 try:
@@ -331,9 +348,9 @@ class ObservationLifecycle:
                     require(remaining>0,'OBSERVATION_CLEANUP_DEADLINE')
                     entry['child'].wait(timeout=min(5,remaining))
                     e=read_record(self.fd,role+'-observation-exit.json')
-                    require(e=={'schema':'iios-observation-exit-v1','admission_parent':self.capability.identity,
+                    require(e==record(self.capability,{'schema':'iios-observation-exit-v1','admission_parent':self.capability.identity,
                         'role':role,'pid':entry['child'].pid,'startup_parent':fp.startup_receipt_hash,
-                        'cooperative':True,'authority':locked_authority()} and entry['child'].poll()==0,
+                        'cooperative':True,'authority':locked_authority()}) and entry['child'].poll()==0,
                         'OBSERVATION_COOPERATIVE_EXIT')
                     exit_parents[role]=e['startup_parent']
                 except Exception:
@@ -353,9 +370,9 @@ class ObservationLifecycle:
                 time.sleep(.05)
             for streams in self.streams.values():
                 for stream,_ in streams.values():stream.close()
-            self.result={'verified':bool(report.get('clean_shutdown')) and all(clear) and len(exit_parents)==3,
+            self.result=record(self.capability,{'verified':bool(report.get('clean_shutdown')) and all(clear) and len(exit_parents)==3,
                 'cooperative':cooperative and len(exit_parents)==3,'roles':['scheduler','publisher','backend'],
-                'listener_owner_reconciled':not self.children.active and all(clear),'port_clear':clear}
+                'listener_owner_reconciled':not self.children.active and all(clear),'port_clear':clear})
             if self.lease is not None:self.lease.close()
             if self.fd is not None:os.close(self.fd);self.fd=None
         return self.result

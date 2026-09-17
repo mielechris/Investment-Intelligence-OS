@@ -126,3 +126,26 @@ class DeploymentContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+from test_alpha_runtime_files import TreeCase
+from test_alpha_production_runtime import framework_spec, runtime as assembler
+from provider_gateway_contract import content_hash
+
+
+class FrameworkRuntimeTests(TreeCase):
+    def test_v2_static_admission_before_any_execution(self):
+        spec,args=framework_spec(self);m=assembler.assemble(spec,content_hash(spec),**args)['manifest']
+        with patch('deployment_contract.subprocess.run') as execute:
+            bad=dict(m,layout_parent='0'*64);bad['content_hash']=digest(bad)
+            with self.assertRaises(ValueError):validate_runtime_manifest(Path(m['runtime_root']),bad,expected_release_commit='a'*40)
+            execute.assert_not_called()
+            execute.return_value.stdout='Python 3.14.7\n'
+            self.assertEqual(validate_runtime_manifest(Path(m['runtime_root']),m,expected_release_commit='a'*40),m)
+            execute.assert_called_once()
+    def test_v2_staging_or_source_mismatch_cannot_execute(self):
+        spec,args=framework_spec(self);m=assembler.assemble(spec,content_hash(spec),**args)['manifest']
+        with patch('deployment_contract.subprocess.run',side_effect=AssertionError('NO_EXECUTION')):
+            for changes in ({'runtime_root':str(self.root)},{'release_commit':'b'*40},
+                {'interpreter':str(self.root)+'/bin/python3.14'}):
+                bad=dict(m,**changes);bad['content_hash']=digest(bad)
+                with self.assertRaises(ValueError):validate_runtime_manifest(Path(m['runtime_root']),bad,expected_release_commit='a'*40)

@@ -38,3 +38,27 @@ class BootstrapTests(unittest.TestCase):
     def test_missing_native_bootstrap_evidence_rejected(self):
         with self.assertRaises(ValueError):admit_build_control({},content_hash({}),recipe_parent='a'*64,
             bootstrap_manifest_parent='b'*64,vendor_parent='c'*64,tools_parent='d'*64,script_parent='e'*64,host_parent='f'*64)
+
+    def test_v2_vendor_and_layout_are_independent_and_no_execution_grant(self):
+        from alpha_runtime_files import layout_policy,VENDOR
+        p=layout_policy();r=deepcopy(self.r);r.update(schema='iios-vendor-bootstrap-recipe-v2',
+            vendor_parent=VENDOR,layout_policy=p,layout_parent=content_hash(p))
+        args=dict(roots=self.roots,source='a'*40,vendor_parent=VENDOR,tool_parents=self.tools,script_parent='c'*64)
+        result=validate_recipe(r,content_hash(r),**args);self.assertFalse(result['execution_authorized'])
+        r['layout_policy']['links'][0]['target']='elsewhere';r['layout_parent']=content_hash(r['layout_policy'])
+        with self.assertRaises(ValueError):validate_recipe(r,content_hash(r),**args)
+
+    def test_v2_build_control_requires_final_signature_metadata_and_link_evidence(self):
+        from alpha_runtime_files import layout_policy,VENDOR
+        parents=dict(recipe_parent='a'*64,bootstrap_manifest_parent='b'*64,vendor_parent=VENDOR,
+            tools_parent='d'*64,script_parent='e'*64,host_parent='f'*64)
+        p=layout_policy();required=('vendor_signature','os_tool_trust','complete_closure','immutable_ownership',
+            'final_destination_imports','no_historical_dependencies','scrubbed_environment',
+            'final_signatures','final_metadata','final_link_graph')
+        e=dict(schema='iios-reviewed-build-control-v2',scope='PRIVATE_BUILD_CONTROL_ONLY',**parents,
+            layout_policy=p,layout_parent=content_hash(p),authority=locked_authority(),
+            checks={k:dict(status='ACCEPTED',independent_parent='1'*64) for k in required})
+        self.assertFalse(admit_build_control(e,content_hash(e),**parents)['production_qualified'])
+        for missing in required:
+            bad=deepcopy(e);del bad['checks'][missing]
+            with self.assertRaises(ValueError):admit_build_control(bad,content_hash(bad),**parents)

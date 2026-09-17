@@ -21,9 +21,14 @@ STEPS=('VERIFY_VENDOR_AND_TOOLS','INSPECT_ARCHIVE','EXTRACT_BOOTSTRAP_WITH_OS_TO
 
 def validate_recipe(recipe, expected, *, roots, source, vendor_parent, tool_parents, script_parent):
     safe_document(recipe);pin(recipe,expected)
-    require(set(recipe)=={'schema','scope','source','roots','vendor_parent','tools','script_parent',
-        'steps','dependencies','authority'},'BOOTSTRAP_SCHEMA')
-    require(recipe['schema']==SCHEMA and recipe['scope']=='PRIVATE_BUILD_DESIGN_ONLY' and
+    from alpha_runtime_files import validate_layout_policy, VENDOR
+    version2 = recipe.get('schema') == 'iios-vendor-bootstrap-recipe-v2'
+    if version2:
+        validate_layout_policy(recipe.get('layout_policy'),recipe.get('layout_parent'))
+        require(vendor_parent == VENDOR,'BOOTSTRAP_VENDOR_LAYOUT')
+    require(set(recipe)==({'schema','scope','source','roots','vendor_parent','tools','script_parent',
+        'steps','dependencies','authority'} | ({'layout_policy','layout_parent'} if version2 else set())),'BOOTSTRAP_SCHEMA')
+    require(recipe['schema'] in (SCHEMA,'iios-vendor-bootstrap-recipe-v2') and recipe['scope']=='PRIVATE_BUILD_DESIGN_ONLY' and
         recipe['source']==source and re.fullmatch('[0-9a-f]{40}',source),'BOOTSTRAP_SOURCE')
     require(recipe['roots']==roots and set(roots)=={'quarantine','bootstrap','staging','output'},'BOOTSTRAP_ROOTS')
     paths=[lexical(p) for p in roots.values()]
@@ -53,9 +58,15 @@ def admit_build_control(evidence, expected, *, recipe_parent, bootstrap_manifest
     Failed installed-tool verification cannot be replaced by a supplied PASS.
     """
     safe_document(evidence);pin(evidence,expected)
-    require(set(evidence)=={'schema','scope','recipe_parent','bootstrap_manifest_parent','vendor_parent',
-        'tools_parent','script_parent','host_parent','checks','authority'},'BUILD_CONTROL_SCHEMA')
-    require(evidence['schema']=='iios-reviewed-build-control-v1' and evidence['scope']=='PRIVATE_BUILD_CONTROL_ONLY',
+    from alpha_runtime_files import validate_layout_policy, VENDOR
+    version2 = evidence.get('schema') == 'iios-reviewed-build-control-v2'
+    if version2:
+        validate_layout_policy(evidence.get('layout_policy'),evidence.get('layout_parent'))
+        require(vendor_parent == VENDOR,'BUILD_CONTROL_VENDOR_LAYOUT')
+    require(set(evidence)==({'schema','scope','recipe_parent','bootstrap_manifest_parent','vendor_parent',
+        'tools_parent','script_parent','host_parent','checks','authority'} |
+        ({'layout_policy','layout_parent'} if version2 else set())),'BUILD_CONTROL_SCHEMA')
+    require(evidence['schema'] in ('iios-reviewed-build-control-v1','iios-reviewed-build-control-v2') and evidence['scope']=='PRIVATE_BUILD_CONTROL_ONLY',
             'BUILD_CONTROL_SCOPE')
     parents=dict(recipe_parent=recipe_parent,bootstrap_manifest_parent=bootstrap_manifest_parent,
         vendor_parent=vendor_parent,tools_parent=tools_parent,script_parent=script_parent,host_parent=host_parent)
@@ -63,6 +74,7 @@ def admit_build_control(evidence, expected, *, recipe_parent, bootstrap_manifest
             'BUILD_CONTROL_PARENT')
     required={'vendor_signature','os_tool_trust','complete_closure','immutable_ownership','final_destination_imports',
         'no_historical_dependencies','scrubbed_environment'}
+    if version2: required |= {'final_signatures','final_metadata','final_link_graph'}
     require(set(evidence['checks'])==required,'BUILD_CONTROL_CHECKS')
     require(all(type(v) is dict and set(v)=={'status','independent_parent'} and v['status']=='ACCEPTED' and
         re.fullmatch('[0-9a-f]{64}',v['independent_parent']) for v in evidence['checks'].values()),'BUILD_CONTROL_UNVERIFIED')

@@ -107,10 +107,16 @@ def lock_versions(raw):
 def admit(spec, expected, *, source_commit, approved_input_root, approved_output_parent,
           approved_platform_paths, lock_bytes, expected_lock_hash):
     safe_document(spec); pin(spec, expected)
-    require(type(spec) is dict and set(spec) == {'schema', 'source_commit', 'input_root', 'output_parent',
+    from alpha_runtime_files import BUILD_SCHEMA, EXTENSION_FIELDS, extension, verify_runtime_tree, VENDOR
+    version2 = spec.get('schema') == BUILD_SCHEMA
+    if version2:
+        extension(spec)
+        require(spec['provenance']['distribution'] == VENDOR, 'BUILD_DISTRIBUTION_LAYOUT')
+    require(type(spec) is dict and set(spec) == ({'schema', 'source_commit', 'input_root', 'output_parent',
             'output_name', 'files', 'interpreter', 'tls_bundle', 'platform_dependencies',
-            'provenance', 'lock_sha256', 'python_version', 'system', 'architecture'}, 'BUILD_SCHEMA')
-    require(spec['schema'] == SCHEMA and type(source_commit) is str and
+            'provenance', 'lock_sha256', 'python_version', 'system', 'architecture'} |
+            (EXTENSION_FIELDS if version2 else set())), 'BUILD_SCHEMA')
+    require(spec['schema'] in (SCHEMA, BUILD_SCHEMA) and type(source_commit) is str and
             re.fullmatch('[0-9a-f]{40}', source_commit) and spec['source_commit'] == source_commit, 'BUILD_SOURCE')
     require(spec['input_root'] == approved_input_root and spec['output_parent'] == approved_output_parent,
             'BUILD_ROOT_APPROVAL')
@@ -140,7 +146,11 @@ def admit(spec, expected, *, source_commit, approved_input_root, approved_output
         lexical(row['path']); require(type(row['mode']) is int and row['mode'] in (0o400, 0o500), 'BUILD_PLATFORM_MODE')
     # All lexical checks precede filesystem access. The shared validators retain
     # their owner, hardlink, immutable-mode, inventory and race checks unchanged.
-    verify_files(spec['input_root'], spec['files'], approved_root=approved_input_root)
+    if version2:
+        require(len(spec['files']) < 7000, 'BUILD_MANIFEST_FILE_CAPACITY')
+        verify_runtime_tree(spec['input_root'],spec['files'],approved_root=approved_input_root,**extension(spec))
+    else:
+        verify_files(spec['input_root'], spec['files'], approved_root=approved_input_root)
     for row in spec['platform_dependencies']: check_pin(row)
     deps = dependency_inventory(Path(spec['input_root']))
     found = {}
@@ -152,9 +162,10 @@ def admit(spec, expected, *, source_commit, approved_input_root, approved_output
     return destination, deps
 
 
-def copy_row(source_fd, output_fd, row):
+def copy_row(source_fd, output_fd, row, *, metadata=None):
     """FD-relative streaming copy; no source execution or path-following writes."""
     parts = path_parts(row['path'])
+    require(type(row['mode']) is int and row['mode'] in (0o400, 0o500), 'BUILD_COPY_MODE')
     src, dst = os.dup(source_fd), os.dup(output_fd)
     try:
         for part in parts[:-1]:
@@ -169,25 +180,126 @@ def copy_row(source_fd, output_fd, row):
             before = os.fstat(incoming)
             require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid() and before.st_nlink == 1 and
                     before.st_size == row['size'] and stat.S_IMODE(before.st_mode) == row['mode'], 'BUILD_SOURCE_CHANGED')
-            outgoing = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, row['mode'], dir_fd=dst)
+            # Darwin authorizes xattr writes against the inode mode, even when
+            # this exclusive descriptor was opened writable. Seal only after
+            # metadata copying; the temporary file is owner-only, non-executable.
+            outgoing = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dst)
             h, count = hashlib.sha256(), 0
             with os.fdopen(outgoing, 'wb') as stream:
-                while True:
-                    chunk = os.read(incoming, min(65536, row['size'] - count + 1))
-                    if not chunk: break
-                    count += len(chunk); require(count <= row['size'], 'BUILD_COPY_BOUND')
-                    h.update(chunk); stream.write(chunk)
-                stream.flush(); os.fsync(stream.fileno())
+                primary = None
+                try:
+                    os.fchmod(stream.fileno(), 0o600)  # independent of caller umask
+                    while True:
+                        chunk = os.read(incoming, min(65536, row['size'] - count + 1))
+                        if not chunk: break
+                        count += len(chunk); require(count <= row['size'], 'BUILD_COPY_BOUND')
+                        h.update(chunk); stream.write(chunk)
+                    stream.flush()
+                    if metadata is not None:
+                        from alpha_runtime_files import copy_runtime_metadata
+                        copy_runtime_metadata(incoming,stream.fileno(),metadata)
+                except BaseException as error:
+                    primary = error
+                    raise
+                finally:
+                    try:
+                        os.fchmod(stream.fileno(), row['mode'])
+                        require(stat.S_IMODE(os.fstat(stream.fileno()).st_mode) == row['mode'], 'BUILD_COPY_SEAL')
+                        os.fsync(stream.fileno())
+                    except BaseException:
+                        if primary is None:
+                            raise ValueError('BUILD_COPY_SEAL') from None
+                        # Keep the original error; cleanup cannot replace it.
+                        primary.copy_cleanup_failure = 'BUILD_COPY_SEAL'
             require(count == row['size'] and h.hexdigest() == row['sha256'] and
                     identity(os.fstat(incoming)) == identity(before) ==
                     identity(os.stat(parts[-1], dir_fd=src, follow_symlinks=False)), 'BUILD_COPY_CHANGED')
             os.fsync(dst)
         finally: os.close(incoming)
+    except BaseException as error:
+        # Hash-only row context, usable by bounded artifact supervisors without
+        # retaining paths, data, xattr contents or unrestricted exception text.
+        error.copy_file_identity = {
+            'sha256': row['sha256'] if type(row['sha256']) is str and re.fullmatch('[a-f0-9]{64}',row['sha256']) else 'UNKNOWN',
+            'size': row['size'] if type(row['size']) is int and 0 <= row['size'] <= 64*1024*1024 else None,
+            'path_sha256': hashlib.sha256(row['path'].encode()).hexdigest()}
+        raise
     finally: os.close(src); os.close(dst)
 
 
 def assemble(spec, expected, **approvals):
     destination, deps = admit(spec, expected, **approvals)
+    from alpha_runtime_files import (BUILD_SCHEMA, MANIFEST_SCHEMA, extension, inventory_runtime,
+        verify_runtime_tree, verify_manifest, copy_runtime_metadata)
+    if spec['schema'] == BUILD_SCHEMA:
+        def subdirectory(fd, parts):
+            child = os.dup(fd)
+            try:
+                for part in parts:
+                    nxt = os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=child)
+                    os.close(child); child = nxt
+                return child
+            except BaseException:
+                os.close(child); raise
+        parent = directory(spec['output_parent']); source = output = manifest_fd = None
+        try:
+            os.mkdir(spec['output_name'],0o700,dir_fd=parent)
+            output = os.open(spec['output_name'],os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            output_id = os.fstat(output)
+            source = open_root(spec['input_root'],approvals['approved_input_root'])
+            for row in spec['files']:
+                copy_row(source,output,row,metadata=spec['metadata'][row['path']])
+            for link in spec['layout_policy']['links']:
+                parts = path_parts(link['path']); fd = subdirectory(output,parts[:-1])
+                try: os.symlink(link['target'],parts[-1],dir_fd=fd)
+                finally: os.close(fd)
+            # Preserve directory metadata as well; never follow or chmod aliases.
+            file_names = {r['path'] for r in spec['files']}
+            link_names = {r['path'] for r in spec['layout_policy']['links']}
+            directories = sorted(set(spec['metadata']) - file_names - link_names - {'.'},key=lambda x:(-x.count('/'),x))
+            for name in directories + ['.']:
+                parts = () if name == '.' else path_parts(name)
+                incoming = subdirectory(source,parts); outgoing = subdirectory(output,parts)
+                try:
+                    copy_runtime_metadata(incoming,outgoing,spec['metadata'][name])
+                    if name != '.': os.fchmod(outgoing,0o500)
+                finally: os.close(incoming); os.close(outgoing)
+            verify_runtime_tree(spec['input_root'],spec['files'],approved_root=spec['input_root'],**extension(spec))
+            for row in spec['platform_dependencies']: check_pin(row)
+            # Create the manifest inode before sealing. Its metadata can be pinned
+            # without recursively including the manifest's own data hash.
+            manifest_fd = os.open('runtime-manifest.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400,dir_fd=output)
+            os.fchmod(output,0o500)
+            observed = inventory_runtime(destination,spec['layout_policy'],spec['layout_parent'],approved_root=destination)
+            rows = [r for r in observed['files'] if r['path'] != 'runtime-manifest.json']
+            require(rows == sorted(spec['files'],key=lambda r:r['path']) and dependency_inventory(Path(destination)) == deps,
+                'BUILD_OUTPUT_INVENTORY')
+            interpreter = next(r for r in rows if r['path'] == spec['interpreter'])
+            manifest = dict(schema=MANIFEST_SCHEMA,runtime_id='alpha-runtime-'+expected[:24],
+                release_commit=approvals['source_commit'],runtime_root=destination,interpreter=destination+'/'+spec['interpreter'],
+                interpreter_sha256=interpreter['sha256'],python_version=PYTHON_VERSION,dependency_inventory=deps,
+                file_inventory=rows,platform_dependencies=[{'path':r['path'],'sha256':r['sha256']} for r in spec['platform_dependencies']],
+                layout_policy=spec['layout_policy'],layout_parent=spec['layout_parent'],metadata=observed['metadata'])
+            manifest['content_hash'] = digest(manifest); data = canonical(manifest)
+            # Byte limits include the final serialized manifest and metadata.
+            from alpha_runtime_files import _validate_rows, validate_layout_policy
+            manifest_row = dict(path='runtime-manifest.json',size=len(data),mode=0o400,sha256=hashlib.sha256(data).hexdigest())
+            _validate_rows(rows+[manifest_row],manifest['metadata'],validate_layout_policy(spec['layout_policy'],spec['layout_parent']))
+            view = memoryview(data)
+            while view:
+                count = os.write(manifest_fd,view); require(count > 0,'BUILD_WRITE'); view = view[count:]
+            os.fsync(manifest_fd); os.fsync(output); os.fsync(parent)
+            require((os.stat(spec['output_name'],dir_fd=parent,follow_symlinks=False).st_dev,
+                os.stat(spec['output_name'],dir_fd=parent,follow_symlinks=False).st_ino) == (output_id.st_dev,output_id.st_ino),
+                'BUILD_OUTPUT_REPLACED')
+            verify_manifest(destination,manifest,source_commit=approvals['source_commit'])
+            return {'schema':'iios-production-runtime-assembly-result-v2','input_parent':expected,'manifest':manifest,
+                'manifest_sha256':hashlib.sha256(data).hexdigest(),'status':'ASSEMBLED_BYTES_ONLY',
+                'authority':locked_authority(),'production_qualified':False,'execution_authorized':False,
+                'pending':['PROVENANCE_SEMANTICS','NATIVE_IMPORTS_PLATFORM_TLS','OS_CONFINEMENT','PRODUCTION_ADMISSION']}
+        finally:
+            for fd in (manifest_fd,source,output,parent):
+                if fd is not None: os.close(fd)
     parent = directory(spec['output_parent'])
     source = output = None
     try:
