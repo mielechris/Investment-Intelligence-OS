@@ -563,3 +563,174 @@ class AssemblyVerifierImportBoundaryTests(unittest.TestCase):
             altered=deepcopy(document);altered[key]=value
             with self.subTest(key=key),self.assertRaises(ValueError):
                 rf.safe_runtime_document(altered)
+
+
+def production_projection_fixture():
+    rows,_=structural_rows()
+    additions={
+        'bin/idle3','bin/idle3.14',
+        'lib/python3.14/idlelib/entry.py',
+        'lib/python3.14/lib-dynload/_tkinter.cpython-314-darwin.so',
+        'lib/python3.14/test/test_tkinter/entry.py',
+        'lib/python3.14/test/tkinterdata/image.bin',
+        'lib/python3.14/tkinter/__init__.py',
+        'lib/python3.14/site-packages/kept/module.py',
+    }
+    additions.update(path for path,_ in rf._PRODUCTION_WHEEL_CODE)
+    for name in sorted(additions):
+        rows.append(dict(path=name,size=1,mode=0o400,sha256='b'*64))
+    rows=sorted(rows,key=lambda row:row['path'])
+    directories={'.'}
+    for name in [row['path'] for row in rows]+list(dict(rf._LINKS)):
+        parts=name.split('/');directories.update('/'.join(parts[:i]) for i in range(1,len(parts)))
+    metadata={name:{} for name in directories|set(dict(rf._LINKS))|{row['path'] for row in rows}}
+    closure=dict(schema=rf.PRODUCTION_IMPORT_CLOSURE_SCHEMA,
+        source_inventory_sha256='c'*64,
+        modules=['hashlib','json','ssl'])
+    policy=rf.production_layout_policy()
+    return rows,metadata,closure,policy
+
+
+class ProductionRuntimeProjectionTests(unittest.TestCase):
+    def project(self,rows=None,metadata=None,closure=None,policy=None):
+        base_rows,base_metadata,base_closure,base_policy=production_projection_fixture()
+        rows=base_rows if rows is None else rows
+        metadata=base_metadata if metadata is None else metadata
+        closure=base_closure if closure is None else closure
+        policy=base_policy if policy is None else policy
+        return rf.project_production_runtime(rows,metadata,closure=closure,
+            closure_parent=content_hash(closure),policy=policy,policy_parent=content_hash(policy))
+
+    def test_exact_versioned_projection_excludes_unreachable_gui_stack(self):
+        result=self.project();names={row['path'] for row in result['files']}
+        self.assertIn('lib/python3.14/site-packages/kept/module.py',names)
+        for prefix in rf._PRODUCTION_EXCLUDED_PREFIXES:
+            self.assertFalse(any(name==prefix or name.startswith(prefix+'/') for name in names))
+            self.assertFalse(any(name==prefix or name.startswith(prefix+'/') for name in result['metadata']))
+        self.assertEqual(result['excluded_prefixes'],list(rf._PRODUCTION_EXCLUDED_PREFIXES))
+        self.assertEqual(rf.validate_layout_policy(rf.production_layout_policy(),
+            content_hash(rf.production_layout_policy())),{})
+
+    def test_missing_altered_case_and_additional_policy_rejected(self):
+        rows,metadata,closure,policy=production_projection_fixture()
+        removed='bin/idle3';rows=[row for row in rows if row['path']!=removed];metadata.pop(removed)
+        with self.assertRaisesRegex(ValueError,'EXCLUSION_MISSING'):self.project(rows,metadata,closure,policy)
+        rows,metadata,closure,policy=production_projection_fixture()
+        target=next(row for row in rows if row['path']=='bin/idle3');target['path']='bin/Idle3'
+        metadata['bin/Idle3']=metadata.pop('bin/idle3')
+        with self.assertRaisesRegex(ValueError,'EXCLUSION_ALIAS'):self.project(rows,metadata,closure,policy)
+        policy=rf.production_layout_policy();policy['excluded_prefixes'].append('unreviewed')
+        with self.assertRaisesRegex(ValueError,'LAYOUT_POLICY'):self.project(policy=policy)
+
+    def test_forbidden_imports_and_closure_mutations_rejected(self):
+        for module in ('tkinter','tkinter.ttk','_tkinter','idlelib','turtle','turtledemo.demo'):
+            _,_,closure,_=production_projection_fixture();closure['modules']=sorted(closure['modules']+[module])
+            with self.subTest(module=module),self.assertRaisesRegex(ValueError,'FORBIDDEN_IMPORT'):
+                self.project(closure=closure)
+        _,_,closure,_=production_projection_fixture()
+        for mutation in (['json','hashlib','ssl'],['hashlib','json','json'],['hashlib','bad-name!','ssl']):
+            changed=deepcopy(closure);changed['modules']=mutation
+            with self.subTest(mutation=mutation),self.assertRaisesRegex(ValueError,'IMPORT_CLOSURE'):
+                self.project(closure=changed)
+
+    def test_lookalike_traversal_and_unapproved_symlink_paths_fail_closed(self):
+        for path in ('Frameworks/Tcl.framework/../escape',
+                     'Frameworks//Tcl.framework/file','frameworks/tcl.framework/file'):
+            with self.subTest(path=path),self.assertRaises(ValueError):rf._excluded_production_path(path)
+        projected=self.project()
+        mutated=dict(projected['metadata']);mutated[rf._LINKS[0][0]]={}
+        with self.assertRaises(ValueError):rf._validate_rows(projected['files'],mutated,{})
+
+    def test_final_policy_rejects_excluded_content_and_missing_required_code(self):
+        projected=self.project();policy=rf.production_layout_policy();parent=content_hash(policy)
+        document=dict(schema=rf.DESCRIPTOR_SCHEMA,files=projected['files'],layout_policy=policy,
+                      layout_parent=parent,metadata=projected['metadata'])
+        rf.safe_runtime_document(document)
+        missing=deepcopy(document);path=rf._PRODUCTION_WHEEL_CODE[0][0]
+        missing['files']=[row for row in missing['files'] if row['path']!=path];missing['metadata'].pop(path)
+        with self.assertRaisesRegex(ValueError,'REQUIRED_CODE_MISSING'):rf.safe_runtime_document(missing)
+        added=deepcopy(document);path='lib/python3.14/tkinter/reintroduced.py'
+        added['files'].append(dict(path=path,size=1,mode=0o400,sha256='d'*64))
+        for name in ('lib/python3.14/tkinter',path):added['metadata'][name]={}
+        with self.assertRaisesRegex(ValueError,'EXCLUDED_CONTENT'):rf.safe_runtime_document(added)
+
+
+def signing_evidence_fixture():
+    policy=rf.production_layout_policy();pre=[];post=[]
+    for index,item in enumerate(policy['required_derived_code']):
+        common=dict(path=item['path'],size=100+index,file_type=item['file_type'],
+            architectures=['x86_64','arm64'],load_commands_sha256=('%x'%(index+1))*64,
+            install_names=item['install_names'],dependencies=item['dependencies'])
+        pre.append(dict(common,sha256=('%x'%(index+5))*64,
+                        signature='STRICT_VERIFICATION_FAILED_UNSIGNED'))
+        post.append(dict(common,sha256=('%x'%(index+9))*64,
+                         signature='IIOS_ADHOC_DERIVED_VERIFIED'))
+    document=dict(schema=rf.PRODUCTION_SIGNING_EVIDENCE_SCHEMA,
+        policy_parent=content_hash(policy),pre_transform=pre,post_sign=post,
+        signing_order=policy['signing_order'],
+        sign_commands=[['/usr/bin/codesign','--force','--sign','-','--timestamp=none',row['path']]
+                       for row in policy['required_derived_code']],
+        final_verification=['/usr/bin/codesign']+policy['final_verification']+['Python'],
+        enclosing_runtime={'path':'Python','signed_after':[row['path'] for row in policy['required_derived_code']],
+                           'signature':'IIOS_ADHOC_RESOURCE_SEAL_VERIFIED'})
+    return document
+
+
+class ProductionSigningContractTests(unittest.TestCase):
+    def test_exact_bottom_up_contract_and_static_archive_disposition(self):
+        document=signing_evidence_fixture()
+        self.assertTrue(rf.validate_production_signing_evidence(document,content_hash(document)))
+        policy=rf.production_layout_policy()
+        self.assertFalse(policy['signing_deep'])
+        self.assertEqual(policy['signing_order'][-1],'Python')
+        self.assertEqual({row['path'] for row in policy['static_archives']},set(rf._PRODUCTION_STATIC_ARCHIVES))
+        self.assertTrue(all(not row['runtime_executable'] and
+            row['disposition']=='EXCLUDED_WITH_UNREACHABLE_FRAMEWORK'
+            for row in policy['static_archives']))
+        self.assertTrue(all('--deep' not in command for command in document['sign_commands']))
+        policy['required_derived_code'][0]['dependencies'].append('/unexpected/lib.dylib')
+        self.assertNotIn('/unexpected/lib.dylib',
+            rf.production_layout_policy()['required_derived_code'][0]['dependencies'])
+
+    def test_missing_additional_substituted_and_reordered_images_rejected(self):
+        for kind in ('missing','additional','substituted','reordered'):
+            document=signing_evidence_fixture()
+            if kind=='missing':document['post_sign'].pop()
+            elif kind=='additional':document['post_sign'].append(deepcopy(document['post_sign'][-1]))
+            elif kind=='substituted':document['post_sign'][0]['path']='lib/substituted.so'
+            else:document['post_sign'].reverse()
+            with self.subTest(kind=kind),self.assertRaises(ValueError):
+                rf.validate_production_signing_evidence(document,content_hash(document))
+
+    def test_architecture_signature_dependency_and_identity_mutations_rejected(self):
+        changes=(('architectures',['arm64']),('signature','VERIFIED'),
+                 ('load_commands_sha256','0'*64),
+                 ('dependencies',['/usr/lib/libSystem.B.dylib','/unexpected/lib.dylib']),
+                 ('sha256',signing_evidence_fixture()['pre_transform'][0]['sha256']))
+        for key,value in changes:
+            document=signing_evidence_fixture();document['post_sign'][0][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                rf.validate_production_signing_evidence(document,content_hash(document))
+
+    def test_unexpected_dependency_rejected_even_when_pre_and_post_match(self):
+        document=signing_evidence_fixture()
+        for phase in ('pre_transform','post_sign'):
+            document[phase][0]['dependencies']=['/unexpected/lib.dylib']
+        with self.assertRaisesRegex(ValueError,'SIGNING_IDENTITY'):
+            rf.validate_production_signing_evidence(document,content_hash(document))
+
+    def test_command_order_deep_signing_and_enclosing_order_rejected(self):
+        document=signing_evidence_fixture();document['sign_commands'][0].insert(1,'--deep')
+        with self.assertRaisesRegex(ValueError,'SIGNING_COMMAND'):
+            rf.validate_production_signing_evidence(document,content_hash(document))
+        document=signing_evidence_fixture();document['signing_order'].reverse()
+        with self.assertRaises(ValueError):rf.validate_production_signing_evidence(document,content_hash(document))
+        document=signing_evidence_fixture();document['enclosing_runtime']['signed_after'].reverse()
+        with self.assertRaisesRegex(ValueError,'SIGNING_ENCLOSURE'):
+            rf.validate_production_signing_evidence(document,content_hash(document))
+
+    def test_independent_parent_and_complete_serialization_are_required(self):
+        document=signing_evidence_fixture()
+        with self.assertRaises(ValueError):rf.validate_production_signing_evidence(document,'0'*64)
+        document['policy_parent']='0'*64
+        with self.assertRaises(ValueError):rf.validate_production_signing_evidence(document,content_hash(document))

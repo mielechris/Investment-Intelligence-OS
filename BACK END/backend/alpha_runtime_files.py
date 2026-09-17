@@ -43,6 +43,53 @@ _LINKS = tuple(sorted((
         ('lib' + lower + 'stub.a', 'Versions/9.0/lib' + lower + 'stub.a'))
 )))
 
+# The accepted Apple bootstrap retains its complete vendor layout and signature.
+# Production assembly derives a smaller, separately sealed runtime from it.  The
+# application/source closure has no Tcl/Tk edge, so GUI modules, tools, tests and
+# frameworks are explicitly absent from that derived runtime rather than being
+# silently ignored by signing.
+PRODUCTION_LAYOUT_SCHEMA = 'iios-python3147-production-layout-v1'
+PRODUCTION_IMPORT_CLOSURE_SCHEMA = 'iios-production-import-closure-v1'
+PRODUCTION_SIGNING_EVIDENCE_SCHEMA = 'iios-production-signing-evidence-v1'
+_PRODUCTION_EXCLUDED_PREFIXES = (
+    'Frameworks/Tcl.framework',
+    'Frameworks/Tk.framework',
+    'bin/idle3',
+    'bin/idle3.14',
+    'lib/python3.14/idlelib',
+    'lib/python3.14/lib-dynload/_tkinter.cpython-314-darwin.so',
+    'lib/python3.14/test/test_tkinter',
+    'lib/python3.14/test/tkinterdata',
+    'lib/python3.14/tkinter',
+)
+_PRODUCTION_FORBIDDEN_IMPORTS = ('_tkinter', 'idlelib', 'tkinter', 'turtle', 'turtledemo')
+_PRODUCTION_WHEEL_CODE = (
+    ('lib/python3.14/site-packages/charset_normalizer/cd.cpython-314-darwin.so', 'MACH_O_BUNDLE'),
+    ('lib/python3.14/site-packages/charset_normalizer/md.cpython-314-darwin.so', 'MACH_O_BUNDLE'),
+    ('lib/python3.14/site-packages/google/_upb/_message.abi3.so', 'MACH_O_DYLIB'),
+    ('lib/python3.14/site-packages/grpc/_cython/cygrpc.cpython-314-darwin.so', 'MACH_O_BUNDLE'),
+)
+_PRODUCTION_WHEEL_LOADS = {
+    _PRODUCTION_WHEEL_CODE[0][0]: {'install_names': [],
+        'dependencies': ['/usr/lib/libSystem.B.dylib']},
+    _PRODUCTION_WHEEL_CODE[1][0]: {'install_names': [],
+        'dependencies': ['/usr/lib/libSystem.B.dylib']},
+    _PRODUCTION_WHEEL_CODE[2][0]: {
+        'install_names': [
+            'bazel-out/osx-aarch_64-opt-ST-7858336329b6/bin/python/lib_message_binary.so',
+            'bazel-out/osx-x86_64-opt-ST-7858336329b6/bin/python/lib_message_binary.so'],
+        'dependencies': [
+            '/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation',
+            '/usr/lib/libSystem.B.dylib', '/usr/lib/libc++.1.dylib']},
+    _PRODUCTION_WHEEL_CODE[3][0]: {'install_names': [], 'dependencies': [
+        '/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation',
+        '/usr/lib/libSystem.B.dylib', '/usr/lib/libc++.1.dylib']},
+}
+_PRODUCTION_STATIC_ARCHIVES = (
+    'Frameworks/Tcl.framework/Versions/9.0/libtclstub.a',
+    'Frameworks/Tk.framework/Versions/9.0/libtkstub.a',
+)
+
 
 # This module is the assembly/static-verification boundary.  Keep its complete
 # import graph in the standard library so the Python 3.9 build-control process
@@ -143,13 +190,182 @@ def layout_policy():
             'max_file_bytes': MAX_FILE_BYTES, 'max_total_bytes': MAX_TOTAL_BYTES}
 
 
+def production_layout_policy():
+    """Exact derived-runtime projection and bottom-up signing contract.
+
+    This does not alter, re-sign or reinterpret the accepted Apple bootstrap.
+    Static archives are classified as build-time resources and excluded with
+    their unreachable frameworks; they are never treated as executable code.
+    """
+    return {
+        'schema': PRODUCTION_LAYOUT_SCHEMA,
+        'distribution_sha256': VENDOR,
+        'vendor_layout_parent': content_hash(layout_policy()),
+        'links': [],
+        'excluded_prefixes': list(_PRODUCTION_EXCLUDED_PREFIXES),
+        'forbidden_import_roots': list(_PRODUCTION_FORBIDDEN_IMPORTS),
+        'static_archives': [
+            {'path': path, 'classification': 'UNIVERSAL_STATIC_ARCHIVE',
+             'runtime_executable': False, 'disposition': 'EXCLUDED_WITH_UNREACHABLE_FRAMEWORK'}
+            for path in _PRODUCTION_STATIC_ARCHIVES
+        ],
+        'required_derived_code': [
+            {'path': path, 'file_type': kind, 'architectures': ['x86_64', 'arm64'],
+             'install_names': list(_PRODUCTION_WHEEL_LOADS[path]['install_names']),
+             'dependencies': list(_PRODUCTION_WHEEL_LOADS[path]['dependencies']),
+             'pre_transform_signature': 'STRICT_VERIFICATION_FAILED_UNSIGNED',
+             'post_sign_signature': 'IIOS_ADHOC_DERIVED_VERIFIED'}
+            for path, kind in _PRODUCTION_WHEEL_CODE
+        ],
+        'signing_order': [path for path, _ in _PRODUCTION_WHEEL_CODE] + ['Python'],
+        'signing_deep': False,
+        'final_verification': ['--verify', '--deep', '--strict', '--all-architectures'],
+        'max_files': MAX_FILES,
+        'max_file_bytes': MAX_FILE_BYTES,
+        'max_total_bytes': MAX_TOTAL_BYTES,
+    }
+
+
 def validate_layout_policy(policy, expected):
     # An edited/rehashed policy cannot become an independent approval.
-    approved = layout_policy()
+    approved = (production_layout_policy() if isinstance(policy, dict) and
+                policy.get('schema') == PRODUCTION_LAYOUT_SCHEMA else layout_policy())
     require(type(policy) is dict and policy == approved and
             type(expected) is str and expected == content_hash(approved) == content_hash(policy),
             'RUNTIME_LAYOUT_POLICY')
-    return dict(_LINKS)
+    return {row['path']: row['target'] for row in approved['links']}
+
+
+def validate_production_import_closure(closure, expected):
+    """Admit the source-bound module closure, never a dynamic import guess."""
+    require(type(closure) is dict and set(closure) == {
+        'schema', 'source_inventory_sha256', 'modules'}, 'RUNTIME_IMPORT_CLOSURE')
+    require(closure['schema'] == PRODUCTION_IMPORT_CLOSURE_SCHEMA and
+        type(closure['source_inventory_sha256']) is str and
+        re.fullmatch('[a-f0-9]{64}', closure['source_inventory_sha256']) and
+        type(closure['modules']) is list and closure['modules'] == sorted(closure['modules']) and
+        len(closure['modules']) == len(set(closure['modules'])) and
+        all(type(name) is str and re.fullmatch('[A-Za-z_][A-Za-z0-9_.]{0,199}', name)
+            for name in closure['modules']) and
+        type(expected) is str and expected == content_hash(closure), 'RUNTIME_IMPORT_CLOSURE')
+    forbidden = set(_PRODUCTION_FORBIDDEN_IMPORTS)
+    require(not any(name.split('.', 1)[0] in forbidden for name in closure['modules']),
+            'RUNTIME_FORBIDDEN_IMPORT')
+    return tuple(closure['modules'])
+
+
+def _excluded_production_path(path):
+    path_parts(path)
+    lowered = path.casefold()
+    for prefix in _PRODUCTION_EXCLUDED_PREFIXES:
+        match = path == prefix or path.startswith(prefix + '/')
+        folded = lowered == prefix.casefold() or lowered.startswith(prefix.casefold() + '/')
+        require(not (folded and not match), 'RUNTIME_EXCLUSION_ALIAS')
+        if match:
+            return True
+    return False
+
+
+def _validate_production_content(rows, metadata):
+    names = [row['path'] for row in rows]
+    for path in set(names) | (set(metadata) - {'.'}):
+        require(not _excluded_production_path(path), 'RUNTIME_EXCLUDED_CONTENT')
+    require({path for path, _ in _PRODUCTION_WHEEL_CODE} <= set(names),
+            'RUNTIME_REQUIRED_CODE_MISSING')
+
+
+def project_production_runtime(rows, metadata, *, closure, closure_parent,
+                               policy, policy_parent):
+    """Project an exact vendor-derived tree before any mutation or signing."""
+    validate_production_import_closure(closure, closure_parent)
+    links = validate_layout_policy(policy, policy_parent)
+    require(policy['schema'] == PRODUCTION_LAYOUT_SCHEMA and not links,
+            'RUNTIME_PRODUCTION_POLICY')
+    vendor_links = dict(_LINKS)
+    _validate_rows(rows, metadata, vendor_links)
+    observed = set(metadata) | {row['path'] for row in rows}
+    for path in observed - {'.'}:
+        _excluded_production_path(path)  # Reject case-fold aliases before absence checks.
+    for prefix in _PRODUCTION_EXCLUDED_PREFIXES:
+        require(any(path == prefix or path.startswith(prefix + '/') for path in observed),
+                'RUNTIME_EXCLUSION_MISSING')
+    kept_rows = [dict(row) for row in rows if not _excluded_production_path(row['path'])]
+    kept_names = {row['path'] for row in kept_rows}
+    kept_directories = {'.'}
+    for path in kept_names:
+        parts = path.split('/')
+        kept_directories.update('/'.join(parts[:index]) for index in range(1, len(parts)))
+    kept_metadata = {path: dict(metadata[path]) for path in kept_names | kept_directories}
+    require(not any(path in kept_metadata for path in vendor_links), 'RUNTIME_EXCLUDED_LINK')
+    _validate_rows(kept_rows, kept_metadata, {})
+    _validate_production_content(kept_rows, kept_metadata)
+    return {'files': sorted(kept_rows, key=lambda row: row['path']),
+            'metadata': kept_metadata,
+            'excluded_prefixes': list(_PRODUCTION_EXCLUDED_PREFIXES),
+            'policy_parent': policy_parent, 'closure_parent': closure_parent}
+
+
+def validate_production_signing_evidence(document, expected):
+    """Bind pre-transform vendor bytes and post-sign IIOS bytes separately."""
+    policy = production_layout_policy()
+    required_paths = [row['path'] for row in policy['required_derived_code']]
+    require(type(document) is dict and set(document) == {
+        'schema', 'policy_parent', 'pre_transform', 'post_sign', 'signing_order',
+        'sign_commands', 'final_verification', 'enclosing_runtime'},
+        'RUNTIME_SIGNING_EVIDENCE')
+    require(document['schema'] == PRODUCTION_SIGNING_EVIDENCE_SCHEMA and
+        document['policy_parent'] == content_hash(policy) and
+        type(expected) is str and expected == content_hash(document) and
+        document['signing_order'] == policy['signing_order'], 'RUNTIME_SIGNING_EVIDENCE')
+
+    def identities(values, signature):
+        require(type(values) is list and [row.get('path') for row in values] == required_paths,
+                'RUNTIME_SIGNING_ORDER')
+        result = {}
+        kinds = dict(_PRODUCTION_WHEEL_CODE)
+        for row in values:
+            require(type(row) is dict and set(row) == {'path', 'size', 'sha256',
+                'file_type', 'architectures', 'load_commands_sha256', 'install_names', 'dependencies',
+                'signature'} and type(row['size']) is int and 0 < row['size'] <= MAX_FILE_BYTES and
+                type(row['sha256']) is str and re.fullmatch('[a-f0-9]{64}', row['sha256']) and
+                row['file_type'] == kinds[row['path']] and
+                row['architectures'] == ['x86_64', 'arm64'] and
+                type(row['load_commands_sha256']) is str and
+                re.fullmatch('[a-f0-9]{64}', row['load_commands_sha256']) and
+                row['install_names'] == _PRODUCTION_WHEEL_LOADS[row['path']]['install_names'] and
+                type(row['install_names']) is list and
+                type(row['dependencies']) is list and row['dependencies'] == sorted(row['dependencies']) and
+                len(row['dependencies']) == len(set(row['dependencies'])) and
+                all(type(value) is str and 0 < len(value) <= 512 and '\x00' not in value
+                    for value in row['install_names'] + row['dependencies']) and
+                row['dependencies'] == _PRODUCTION_WHEEL_LOADS[row['path']]['dependencies'] and
+                row['signature'] == signature,
+                'RUNTIME_SIGNING_IDENTITY')
+            result[row['path']] = row
+        return result
+
+    before = identities(document['pre_transform'], 'STRICT_VERIFICATION_FAILED_UNSIGNED')
+    after = identities(document['post_sign'], 'IIOS_ADHOC_DERIVED_VERIFIED')
+    for path in required_paths:
+        require(before[path]['sha256'] != after[path]['sha256'] and
+            before[path]['file_type'] == after[path]['file_type'] and
+            before[path]['architectures'] == after[path]['architectures'] and
+            before[path]['load_commands_sha256'] == after[path]['load_commands_sha256'] and
+            before[path]['install_names'] == after[path]['install_names'] and
+            before[path]['dependencies'] == after[path]['dependencies'],
+            'RUNTIME_SIGNING_TRANSFORM')
+    expected_commands = [['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none', path]
+                         for path in required_paths]
+    require(document['sign_commands'] == expected_commands and
+        all('--deep' not in command for command in document['sign_commands']) and
+        document['final_verification'] == ['/usr/bin/codesign'] + policy['final_verification'] + ['Python'],
+        'RUNTIME_SIGNING_COMMAND')
+    enclosing = document['enclosing_runtime']
+    require(type(enclosing) is dict and set(enclosing) == {'path', 'signed_after', 'signature'} and
+        enclosing == {'path': 'Python', 'signed_after': required_paths,
+                      'signature': 'IIOS_ADHOC_RESOURCE_SEAL_VERIFIED'},
+        'RUNTIME_SIGNING_ENCLOSURE')
+    return True
 
 
 def extension(document):
@@ -463,6 +679,8 @@ def inventory_runtime(root, policy, expected, *, approved_root):
 def verify_runtime_tree(root, rows, *, approved_root, layout_policy, layout_parent, metadata):
     _root(root, approved_root); links = validate_layout_policy(layout_policy, layout_parent)
     _validate_rows(rows, metadata, links)  # All structural rejection precedes filesystem access.
+    if layout_policy['schema'] == PRODUCTION_LAYOUT_SCHEMA:
+        _validate_production_content(rows, metadata)
     result = _scan(root, approved_root, links)
     require(result['files'] == sorted(rows,key=lambda x:x['path']) and result['metadata'] == metadata, 'RUNTIME_TREE_MISMATCH')
     return result['identities']
@@ -490,6 +708,8 @@ def safe_runtime_document(document):
         rows = rows + [dict(path='runtime-manifest.json', size=len(raw), mode=0o400,
                             sha256=hashlib.sha256(raw).hexdigest())]
     _validate_rows(rows, metadata, links)
+    if document['layout_policy']['schema'] == PRODUCTION_LAYOUT_SCHEMA:
+        _validate_production_content(rows, metadata)
     approved_headers = {'Headers'} | {p for p in links if p.endswith('/Headers')} | {
         _terminal(p, links) for p in links if p.endswith('/Headers')}
     for path in metadata:
