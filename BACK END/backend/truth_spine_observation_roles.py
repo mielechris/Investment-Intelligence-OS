@@ -79,15 +79,17 @@ def admit_roles(document, expected, *, approved_roots, now):
     require({r['path'] for r in d['input_files']['control']}=={'profile.sb','loopback.crt','loopback.pem'},'DISPOSABLE_CONTROL')
     require({'alpha_observation_qualification.py','truth_spine_full_day_runner.py','truth_spine_full_day_service.py'} <=
         {r['path'] for r in d['input_files']['release']},'DISPOSABLE_ENTRYPOINTS')
-    from alpha_runtime_files import DESCRIPTOR_SCHEMA, EXTENSION_FIELDS, extension, _validate_rows
+    from alpha_runtime_files import (DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA, EXTENSION_FIELDS,
+        extension, _validate_rows, verify_completed_descriptor)
     version2 = d['schema'] == 'iios-disposable-observation-roles-v2'
     rt=d['runtime']
+    version3=rt.get('schema')==COMPLETED_DESCRIPTOR_SCHEMA
     if version2:
-        require(rt.get('schema') == DESCRIPTOR_SCHEMA,'DISPOSABLE_RUNTIME_VERSION')
+        require(rt.get('schema') in (DESCRIPTOR_SCHEMA,COMPLETED_DESCRIPTOR_SCHEMA),'DISPOSABLE_RUNTIME_VERSION')
         extension(rt)
         _validate_rows(rt['files'],rt['metadata'],{x['path']:x['target'] for x in rt['layout_policy']['links']})
     require(type(rt) is dict and set(rt)==({'root','interpreter','files'} |
-        ({'schema'} | EXTENSION_FIELDS if version2 else set())) and
+        ({'schema'} | EXTENSION_FIELDS if version2 else set()) | ({'completed_manifest'} if version3 else set())) and
         rt['root']==approved_roots['runtime'] and rt['interpreter']=='bin/python3.14','DISPOSABLE_RUNTIME')
     require(type(rt['files']) is list and bool(rt['files']) and content_hash(rt)==d['runtime_parent'],
         'DISPOSABLE_RUNTIME_PARENT')
@@ -105,6 +107,9 @@ def admit_roles(document, expected, *, approved_roots, now):
             seen.add(row['path'])
         return seen
     require(rt['interpreter'] in inventory(rt['files']),'DISPOSABLE_INTERPRETER')
+    if version3:
+        require(version2,'DISPOSABLE_RUNTIME_VERSION')
+        verify_completed_descriptor(rt,source_commit=d['source_commit'])
     for rows in d['input_files'].values():inventory(rows)
     launch=d['launch']
     require(type(launch) is dict and set(launch)=={'host','port','peer_hash','sandbox_hash','host_identity',

@@ -680,5 +680,24 @@ class FrameworkGatewayTests(TreeCase):
         m,a,r=fixture();r.update(schema=DESCRIPTOR_SCHEMA,root=str(self.root),files=self.observed['files'],
             interpreter='bin/python3.14',tls='tls/ca.pem',source_files=['tls/ca.pem'],**policy_fields(self.observed['metadata']))
         for change in ({'layout_parent':'0'*64},{'schema':'unreviewed'}):
-            bad=dict(r,**change);cap=admit(m,a,bad,expected=repin(m,a,bad),now=NOW)
-            with self.assertRaises(ValueError):verify_runtime(cap)
+            bad=dict(r,**change)
+            # Schema-aware admission now rejects invalid policy parents earlier.
+            with self.assertRaises(ValueError):
+                cap=admit(m,a,bad,expected=repin(m,a,bad),now=NOW)
+                verify_runtime(cap)
+
+
+class CompletedGatewayTests(TreeCase):
+    def test_completed_external_manifest_rechecked_before_effects(self):
+        from provider_gateway_contract import content_hash
+        from test_alpha_production_runtime import completed_spec,runtime as assembler
+        from alpha_runtime_files import COMPLETED_DESCRIPTOR_SCHEMA
+        spec,args=completed_spec(self);manifest=assembler.assemble(spec,content_hash(spec),**args)['manifest']
+        m,a,r=fixture();r.update(schema=COMPLETED_DESCRIPTOR_SCHEMA,source_commit='a'*40,
+            root=manifest['runtime_root'],files=manifest['file_inventory'],interpreter='bin/python3.14',tls='tls/ca.pem',
+            source_files=['tls/ca.pem'],completed_manifest=manifest,**policy_fields(manifest['metadata']))
+        m['source_commit']='a'*40
+        cap=admit(m,a,r,expected=repin(m,a,r),now=NOW)
+        self.assertEqual(len(verify_runtime(cap)),len(manifest['file_inventory']))
+        p=Path(manifest['runtime_root']+'.envelope.json');p.chmod(0o600)
+        with self.assertRaises(ValueError):verify_runtime(cap)

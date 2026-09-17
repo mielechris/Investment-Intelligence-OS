@@ -393,3 +393,111 @@ class RuntimeHeadersAdmissionTests(TreeCase):
         spec['layout_policy']['distribution_sha256']='0'*64
         spec['layout_parent']=content_hash(spec['layout_policy'])
         with self.assertRaisesRegex(ValueError,'LAYOUT_POLICY'):runtime.admit(spec,content_hash(spec),**args)
+
+
+def completed_spec(case):
+    """Synthetic seal bytes only; never native signature qualification."""
+    case.root.chmod(0o700)
+    (case.root/'_CodeSignature').mkdir(mode=0o700)
+    (case.root/'Headers').mkdir(mode=0o700)
+    (case.root/'Headers/Python.h').write_bytes(b'PUBLIC_OFFLINE_HEADER')
+    (case.root/'Headers/Python.h').chmod(0o400);(case.root/'Headers').chmod(0o500)
+    for name in ('Python','_CodeSignature/CodeResources'):
+        p=case.root/name;p.write_bytes(b'OFFLINE-NOT-A-SIGNATURE');p.chmod(0o400)
+    (case.root/'_CodeSignature').chmod(0o500);case.root.chmod(0o500)
+    case.observed=runtime_files.inventory_runtime(str(case.root),case.policy,case.parent,approved_root=str(case.root))
+    spec,args=framework_spec(case);spec['schema']=runtime_files.COMPLETED_BUILD_SCHEMA
+    spec['completion']=dict(dependency_lock_sha256=spec['lock_sha256'],bootstrap_acceptance_sha256='b'*64,
+        bootstrap_tree_sha256='c'*64,vendor_distribution_sha256=runtime_files.VENDOR,
+        vendor_signature_receipt_sha256='d'*64,assembly_seal_receipt_sha256='e'*64,
+        assembly_seal_kind='IIOS_ADHOC_RESOURCE_SEAL',host_contract=dict(system='Darwin',release='26',version='OFFLINE',
+            machine='arm64',uid=501,host_identity_sha256='f'*64),sealed_payload_sha256=runtime_files.sealed_payload_parent(spec))
+    return spec,args
+
+
+class CompletedRuntimeTests(TreeCase):
+    def build_completed(self):
+        spec,args=completed_spec(self)
+        with patch('subprocess.run',side_effect=AssertionError('NO_EXECUTION_OR_SIGNING')):
+            result=runtime.assemble(spec,content_hash(spec),**args)
+        return spec,args,result
+
+    def test_external_manifest_and_detached_context_have_no_cycle(self):
+        spec,args,r=self.build_completed();m=r['manifest'];root=Path(m['runtime_root'])
+        self.assertFalse((root/'runtime-manifest.json').exists())
+        self.assertEqual(m['file_inventory'],spec['files']);self.assertEqual(m['metadata'],spec['metadata'])
+        self.assertEqual(Path(r['manifest_path']).parent,root.parent)
+        self.assertEqual(Path(r['manifest_path']).read_bytes(),runtime.canonical(m))
+        env=json.loads(Path(r['envelope_path']).read_bytes())
+        self.assertEqual(env['manifest_sha256'],r['manifest_sha256']);self.assertEqual(env['source_commit'],args['source_commit'])
+        self.assertEqual(env['completion'],spec['completion']);self.assertNotIn('envelope_sha256',m)
+        self.assertEqual(set(runtime_files.verify_manifest(str(root),m,source_commit=args['source_commit'])),{x['path'] for x in spec['files']})
+        self.assertFalse(r['production_qualified']);self.assertTrue(all(v is False for v in r['authority'].values()))
+        self.assertEqual(self.verify().keys(),{x['path'] for x in spec['files']})
+
+    def test_wrong_context_and_seal_kind_rejected_before_copy(self):
+        spec,args=completed_spec(self)
+        for key,value in [('dependency_lock_sha256','0'*64),('sealed_payload_sha256','0'*64),
+                          ('assembly_seal_kind','APPLE_VENDOR_SIGNATURE'),('vendor_distribution_sha256','0'*64)]:
+            bad=deepcopy(spec);bad['completion'][key]=value
+            with self.subTest(key=key),patch.object(runtime,'copy_row',side_effect=AssertionError('COPY')):
+                with self.assertRaises(ValueError):runtime.assemble(bad,content_hash(bad),**args)
+
+    def test_each_host_claim_and_parent_is_pinned(self):
+        spec,args,r=self.build_completed();m=r['manifest']
+        for key in spec['completion']:
+            bad=deepcopy(m)
+            if key=='host_contract':bad['completion'][key]['uid']=502
+            elif key=='assembly_seal_kind':bad['completion'][key]='APPLE_VENDOR_SIGNATURE'
+            else:bad['completion'][key]='0'*64
+            bad['content_hash']=runtime.digest(bad)
+            with self.subTest(key=key),self.assertRaises(ValueError):runtime_files.verify_manifest(m['runtime_root'],bad,source_commit='a'*40)
+
+    def test_missing_duplicate_reordered_and_substituted_payload_rejected(self):
+        spec,args,r=self.build_completed();m=r['manifest'];rows=m['file_inventory']
+        mutations=[rows[:-1],rows+[rows[-1]],list(reversed(rows)),[dict(rows[0],sha256='0'*64)]+rows[1:]]
+        for values in mutations:
+            bad=deepcopy(m);bad['file_inventory']=values;bad['content_hash']=runtime.digest(bad)
+            with self.assertRaises(ValueError):runtime_files.verify_manifest(m['runtime_root'],bad,source_commit='a'*40)
+
+    def test_added_payload_rejected(self):
+        _,_,r=self.build_completed();root=Path(r['manifest']['runtime_root']);root.chmod(0o700)
+        p=root/'extra';p.write_bytes(b'x');p.chmod(0o400);root.chmod(0o500)
+        with self.assertRaises(ValueError):runtime_files.verify_manifest(str(root),r['manifest'],source_commit='a'*40)
+
+    def test_external_manifest_mutation_rejected(self):
+        _,_,r=self.build_completed();p=Path(r['manifest_path']);p.chmod(0o600);p.write_bytes(p.read_bytes()+b' ');p.chmod(0o400)
+        with self.assertRaises(ValueError):runtime_files.verify_manifest(r['manifest']['runtime_root'],r['manifest'],source_commit='a'*40)
+
+    def test_external_envelope_missing_rejected(self):
+        _,_,r=self.build_completed();Path(r['envelope_path']).unlink()
+        with self.assertRaises(FileNotFoundError):runtime_files.verify_manifest(r['manifest']['runtime_root'],r['manifest'],source_commit='a'*40)
+
+    def test_external_envelope_altered_rejected(self):
+        _,_,r=self.build_completed();p=Path(r['envelope_path']);v=json.loads(p.read_bytes());v['source_commit']='b'*40
+        p.chmod(0o600);p.write_bytes(runtime.canonical(v));p.chmod(0o400)
+        with self.assertRaises(ValueError):runtime_files.verify_manifest(r['manifest']['runtime_root'],r['manifest'],source_commit='a'*40)
+
+    def test_external_symlink_and_writable_records_rejected(self):
+        _,_,r=self.build_completed();p=Path(r['envelope_path']);p.chmod(0o600)
+        with self.assertRaises(ValueError):runtime_files.verify_manifest(r['manifest']['runtime_root'],r['manifest'],source_commit='a'*40)
+        p.chmod(0o400);target=p.with_suffix('.saved');p.rename(target);p.symlink_to(target.name)
+        with self.assertRaises(OSError):runtime_files.verify_manifest(r['manifest']['runtime_root'],r['manifest'],source_commit='a'*40)
+
+    def test_partial_publication_preserved_and_no_retry(self):
+        spec,args=completed_spec(self);original=os.open
+        def fail(path,*a,**kw):
+            if path=='runtime-test.envelope.json':raise OSError('OFFLINE_PUBLICATION')
+            return original(path,*a,**kw)
+        with patch.object(os,'open',side_effect=fail):
+            with self.assertRaises(OSError):runtime.assemble(spec,content_hash(spec),**args)
+        self.assertTrue((Path(spec['output_parent'])/'runtime-test.manifest.json').exists())
+        with self.assertRaises(FileExistsError):runtime.assemble(spec,content_hash(spec),**args)
+
+    def test_unknown_or_missing_schema_cannot_select_completed_format(self):
+        spec,args=completed_spec(self)
+        for schema in (runtime_files.BUILD_SCHEMA,runtime.SCHEMA,'unknown',None):
+            bad=deepcopy(spec)
+            if schema is None:del bad['schema']
+            else:bad['schema']=schema
+            with self.assertRaises((ValueError,KeyError)):runtime.assemble(bad,content_hash(bad),**args)

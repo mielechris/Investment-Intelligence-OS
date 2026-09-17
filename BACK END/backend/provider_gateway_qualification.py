@@ -24,15 +24,19 @@ from alpha_session_execution import (digest, safe_root, relative, read_pinned,
 def verify_runtime(admission):
     require(type(admission) is Admission, 'ADMISSION_REQUIRED')
     m, _, r = admission.documents()
-    from alpha_runtime_files import DESCRIPTOR_SCHEMA, EXTENSION_FIELDS, extension, verify_runtime_tree
-    version2 = r.get('schema') == DESCRIPTOR_SCHEMA
+    from alpha_runtime_files import (DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA, EXTENSION_FIELDS,
+        extension, verify_runtime_tree, verify_completed_descriptor)
+    version3 = r.get('schema') == COMPLETED_DESCRIPTOR_SCHEMA
+    version2 = r.get('schema') in (DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA)
     require(set(r) == ({'scope', 'source_commit', 'root', 'files', 'interpreter', 'tls', 'source_files', 'network_addresses'} |
-        ({'schema'} | EXTENSION_FIELDS if version2 else set())), 'RUNTIME_SCHEMA')
+        ({'schema'} | EXTENSION_FIELDS if version2 else set()) | ({'completed_manifest'} if version3 else set())), 'RUNTIME_SCHEMA')
     if version2: extension(r)
     root = Path(r['root'])
     fd = safe_root(root, immutable=True)
     try:
-        if version2:
+        if version3:
+            identities = verify_completed_descriptor(r,source_commit=r['source_commit'])
+        elif version2:
             identities = verify_runtime_tree(str(root),r['files'],approved_root=str(root),**extension(r))
         else:
             names = [row['path'] for row in r['files']]
@@ -94,8 +98,12 @@ def observation_runtime_closure(admission, identities):
     from alpha_session_package import verify_observation_release
     m,a,r=admission.documents();cap=require_active_observation(m,a);d=cap.document()
     manifest=d['preflight']['runtime_manifest']
-    from alpha_runtime_files import MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA, extension
-    if manifest['schema'] == MANIFEST_SCHEMA:
+    from alpha_runtime_files import MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA, extension
+    version3=manifest['schema']==COMPLETED_MANIFEST_SCHEMA
+    if version3:
+        require(r.get('schema')==COMPLETED_DESCRIPTOR_SCHEMA and r['completed_manifest']==manifest and
+            extension(r)==extension(manifest),'OBSERVATION_RUNTIME_POLICY')
+    elif manifest['schema'] == MANIFEST_SCHEMA:
         require(r.get('schema') == DESCRIPTOR_SCHEMA and extension(r) == extension(manifest), 'OBSERVATION_RUNTIME_POLICY')
     else:
         require('schema' not in r, 'OBSERVATION_RUNTIME_POLICY')
@@ -105,7 +113,7 @@ def observation_runtime_closure(admission, identities):
     from provider_gateway_contract import canonical
     manifest_row=dict(path='runtime-manifest.json',size=len(canonical(manifest)),mode=0o400,
         sha256=hashlib.sha256(canonical(manifest)).hexdigest())
-    require(r['files']==manifest['file_inventory']+[manifest_row], 'OBSERVATION_RUNTIME_INVENTORY')
+    require(r['files']==manifest['file_inventory']+([] if version3 else [manifest_row]), 'OBSERVATION_RUNTIME_INVENTORY')
     verify_observation_release(d['release'],d['release_parent'],source_commit=d['source_commit'],
         approved_root=d['roots']['release'])
     release={row['path']:row for row in d['release']['files']}

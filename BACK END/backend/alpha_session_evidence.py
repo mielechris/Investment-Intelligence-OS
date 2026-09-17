@@ -151,13 +151,14 @@ def verify_candidate_evidence(candidate, candidate_hash, plan, account, runtime,
     verified = verify_bound_package(candidate,candidate_hash,plan,account,runtime,allowance,**package_inputs)
     from alpha_runtime_files import safe_runtime_document
     safe_runtime_document(runtime_manifest); pin(runtime_manifest,runtime['runtime_manifest_sha256'])
-    from alpha_runtime_files import MANIFEST_SCHEMA, EXTENSION_FIELDS, verify_manifest
-    version2 = runtime_manifest.get('schema') == MANIFEST_SCHEMA
+    from alpha_runtime_files import MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA, COMPLETION_FIELDS, EXTENSION_FIELDS, verify_manifest
+    version3 = runtime_manifest.get('schema') == COMPLETED_MANIFEST_SCHEMA
+    version2 = runtime_manifest.get('schema') in (MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA)
     require(type(runtime_manifest) is dict and set(runtime_manifest) == ({
         'schema','runtime_id','release_commit','runtime_root','interpreter','interpreter_sha256',
         'python_version','dependency_inventory','file_inventory','platform_dependencies','content_hash'} |
-        (EXTENSION_FIELDS if version2 else set())), 'EVIDENCE_RUNTIME_SCHEMA')
-    require(runtime_manifest.get('schema') in (RUNTIME_MANIFEST_SCHEMA, MANIFEST_SCHEMA) and
+        (EXTENSION_FIELDS if version2 else set()) | (COMPLETION_FIELDS if version3 else set())), 'EVIDENCE_RUNTIME_SCHEMA')
+    require(runtime_manifest.get('schema') in (RUNTIME_MANIFEST_SCHEMA, MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA) and
             runtime_manifest.get('content_hash') == digest(runtime_manifest) and
             runtime_manifest.get('release_commit') == verified['source_commit'] and
             runtime_manifest.get('python_version') == runtime['python_version'], 'EVIDENCE_RUNTIME_BINDING')

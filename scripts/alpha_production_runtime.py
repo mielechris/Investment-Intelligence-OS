@@ -108,16 +108,18 @@ def admit(spec, expected, *, source_commit, approved_input_root, approved_output
           approved_platform_paths, lock_bytes, expected_lock_hash):
     from alpha_runtime_files import safe_runtime_document
     safe_runtime_document(spec); pin(spec, expected)
-    from alpha_runtime_files import BUILD_SCHEMA, EXTENSION_FIELDS, extension, verify_runtime_tree, VENDOR
-    version2 = spec.get('schema') == BUILD_SCHEMA
+    from alpha_runtime_files import (BUILD_SCHEMA, COMPLETED_BUILD_SCHEMA, COMPLETION_FIELDS,
+        EXTENSION_FIELDS, extension, verify_runtime_tree, VENDOR, validate_completion, sealed_payload_parent)
+    version3 = spec.get('schema') == COMPLETED_BUILD_SCHEMA
+    version2 = spec.get('schema') in (BUILD_SCHEMA, COMPLETED_BUILD_SCHEMA)
     if version2:
         extension(spec)
         require(spec['provenance']['distribution'] == VENDOR, 'BUILD_DISTRIBUTION_LAYOUT')
     require(type(spec) is dict and set(spec) == ({'schema', 'source_commit', 'input_root', 'output_parent',
             'output_name', 'files', 'interpreter', 'tls_bundle', 'platform_dependencies',
             'provenance', 'lock_sha256', 'python_version', 'system', 'architecture'} |
-            (EXTENSION_FIELDS if version2 else set())), 'BUILD_SCHEMA')
-    require(spec['schema'] in (SCHEMA, BUILD_SCHEMA) and type(source_commit) is str and
+            (EXTENSION_FIELDS if version2 else set()) | (COMPLETION_FIELDS if version3 else set())), 'BUILD_SCHEMA')
+    require(spec['schema'] in (SCHEMA, BUILD_SCHEMA, COMPLETED_BUILD_SCHEMA) and type(source_commit) is str and
             re.fullmatch('[0-9a-f]{40}', source_commit) and spec['source_commit'] == source_commit, 'BUILD_SOURCE')
     require(spec['input_root'] == approved_input_root and spec['output_parent'] == approved_output_parent,
             'BUILD_ROOT_APPROVAL')
@@ -132,6 +134,12 @@ def admit(spec, expected, *, source_commit, approved_input_root, approved_output
     require(sha(expected_lock_hash) and spec['lock_sha256'] == expected_lock_hash and
             hashlib.sha256(lock_bytes).hexdigest() == expected_lock_hash, 'BUILD_LOCK_PIN')
     versions = lock_versions(lock_bytes)
+    if version3:
+        validate_completion(spec['completion'])
+        require(spec['completion']['dependency_lock_sha256']==expected_lock_hash and
+            spec['completion']['sealed_payload_sha256']==sealed_payload_parent(spec), 'BUILD_COMPLETED_PARENTS')
+        require([r['path'] for r in spec['files']]==sorted(r['path'] for r in spec['files']) and
+            {'Python','_CodeSignature/CodeResources'} <= {r['path'] for r in spec['files']},'BUILD_COMPLETED_SEAL')
     require(type(spec['provenance']) is dict and set(spec['provenance']) == PROVENANCE and
             all(sha(v) for v in spec['provenance'].values()), 'BUILD_PROVENANCE')
     require(type(spec['files']) is list, 'BUILD_FILES')
@@ -148,7 +156,7 @@ def admit(spec, expected, *, source_commit, approved_input_root, approved_output
     # All lexical checks precede filesystem access. The shared validators retain
     # their owner, hardlink, immutable-mode, inventory and race checks unchanged.
     if version2:
-        require(len(spec['files']) < 7000, 'BUILD_MANIFEST_FILE_CAPACITY')
+        require(len(spec['files']) + (2 if version3 else 1) <= 7000, 'BUILD_MANIFEST_FILE_CAPACITY')
         verify_runtime_tree(spec['input_root'],spec['files'],approved_root=approved_input_root,**extension(spec))
     else:
         verify_files(spec['input_root'], spec['files'], approved_root=approved_input_root)
@@ -230,9 +238,11 @@ def copy_row(source_fd, output_fd, row, *, metadata=None):
 
 def assemble(spec, expected, **approvals):
     destination, deps = admit(spec, expected, **approvals)
-    from alpha_runtime_files import (BUILD_SCHEMA, MANIFEST_SCHEMA, extension, inventory_runtime,
-        verify_runtime_tree, verify_manifest, copy_runtime_metadata)
-    if spec['schema'] == BUILD_SCHEMA:
+    from alpha_runtime_files import (BUILD_SCHEMA, MANIFEST_SCHEMA, COMPLETED_BUILD_SCHEMA, COMPLETED_MANIFEST_SCHEMA,
+        extension, inventory_runtime, verify_runtime_tree, verify_manifest, copy_runtime_metadata,
+        completed_paths, completed_envelope)
+    version3=spec['schema']==COMPLETED_BUILD_SCHEMA
+    if spec['schema'] in (BUILD_SCHEMA, COMPLETED_BUILD_SCHEMA):
         def subdirectory(fd, parts):
             child = os.dup(fd)
             try:
@@ -269,19 +279,48 @@ def assemble(spec, expected, **approvals):
             for row in spec['platform_dependencies']: check_pin(row)
             # Create the manifest inode before sealing. Its metadata can be pinned
             # without recursively including the manifest's own data hash.
-            manifest_fd = os.open('runtime-manifest.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400,dir_fd=output)
+            if not version3:
+                manifest_fd = os.open('runtime-manifest.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400,dir_fd=output)
             os.fchmod(output,0o500)
             observed = inventory_runtime(destination,spec['layout_policy'],spec['layout_parent'],approved_root=destination)
             rows = [r for r in observed['files'] if r['path'] != 'runtime-manifest.json']
             require(rows == sorted(spec['files'],key=lambda r:r['path']) and dependency_inventory(Path(destination)) == deps,
                 'BUILD_OUTPUT_INVENTORY')
             interpreter = next(r for r in rows if r['path'] == spec['interpreter'])
-            manifest = dict(schema=MANIFEST_SCHEMA,runtime_id='alpha-runtime-'+expected[:24],
+            manifest = dict(schema=COMPLETED_MANIFEST_SCHEMA if version3 else MANIFEST_SCHEMA,runtime_id='alpha-runtime-'+expected[:24],
                 release_commit=approvals['source_commit'],runtime_root=destination,interpreter=destination+'/'+spec['interpreter'],
                 interpreter_sha256=interpreter['sha256'],python_version=PYTHON_VERSION,dependency_inventory=deps,
                 file_inventory=rows,platform_dependencies=[{'path':r['path'],'sha256':r['sha256']} for r in spec['platform_dependencies']],
                 layout_policy=spec['layout_policy'],layout_parent=spec['layout_parent'],metadata=observed['metadata'])
+            if version3: manifest['completion']=spec['completion']
             manifest['content_hash'] = digest(manifest); data = canonical(manifest)
+            if version3:
+                # Input content is finalized and sealed BEFORE this copy. No
+                # signature mutation, provider activity or subprocess occurs here.
+                # Detached records are siblings, never resources of the bundle.
+                paths=completed_paths(destination)
+                records=((paths['manifest'],data),(paths['envelope'],canonical(completed_envelope(manifest))))
+                from alpha_runtime_files import MAX_TOTAL_BYTES, MAX_FILES
+                require(len(rows)+2<=MAX_FILES and sum(r['size'] for r in rows)+
+                    sum(len(raw) for _,raw in records)+len(canonical(manifest['metadata']))<=MAX_TOTAL_BYTES,
+                    'RUNTIME_COMPLETED_TOTAL_BOUND')
+                for path,raw in records:
+                    fd=os.open(Path(path).name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400,dir_fd=parent)
+                    try:
+                        view=memoryview(raw)
+                        while view:
+                            count=os.write(fd,view);require(count>0,'BUILD_WRITE');view=view[count:]
+                        os.fsync(fd)
+                    finally:os.close(fd)
+                os.fsync(parent)
+                require(identity(os.fstat(output))==identity(os.stat(spec['output_name'],dir_fd=parent,follow_symlinks=False)),
+                    'BUILD_OUTPUT_REPLACED')
+                verify_manifest(destination,manifest,source_commit=approvals['source_commit'])
+                return dict(schema='iios-completed-runtime-assembly-result-v3',input_parent=expected,manifest=manifest,
+                    manifest_sha256=hashlib.sha256(data).hexdigest(),envelope_sha256=hashlib.sha256(records[1][1]).hexdigest(),
+                    manifest_path=paths['manifest'],envelope_path=paths['envelope'],status='ASSEMBLED_BYTES_ONLY',
+                    authority=locked_authority(),production_qualified=False,execution_authorized=False,
+                    pending=['FINAL_LOCATION_OS_SIGNATURE_VERIFICATION','NATIVE_IMPORTS_PLATFORM_TLS','OS_CONFINEMENT','PRODUCTION_ADMISSION'])
             # Byte limits include the final serialized manifest and metadata.
             from alpha_runtime_files import _validate_rows, validate_layout_policy
             manifest_row = dict(path='runtime-manifest.json',size=len(data),mode=0o400,sha256=hashlib.sha256(data).hexdigest())

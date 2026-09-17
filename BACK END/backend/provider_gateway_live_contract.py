@@ -88,7 +88,11 @@ def admit(manifest, account, runtime, *, expected, now):
     """Expected hashes are supplied independently of all three documents."""
     require(set(expected) == {'manifest', 'account', 'runtime'}, 'PARENT_SET_INVALID')
     for name, doc in (('manifest', manifest), ('account', account), ('runtime', runtime)):
-        safe_document(doc)
+        if name == 'runtime':
+            from alpha_runtime_files import safe_runtime_document
+            safe_runtime_document(doc)
+        else:
+            safe_document(doc)
         pin(doc, expected[name])
     m, a, r = manifest, account, runtime
     require(set(m) == {'schema', 'mode', 'batch_id', 'provider', 'role', 'source_commit', 'account_parent', 'runtime_parent', 'root', 'symbols', 'feed', 'method', 'host', 'path', 'endpoint', 'parameters', 'valid_from', 'expires_at', 'maximum_requests', 'maximum_cost', 'cost_unit', 'timeout_seconds', 'maximum_response_bytes', 'maximum_age_seconds', 'authority', 'qualification_authorized'}, 'MANIFEST_SCHEMA')

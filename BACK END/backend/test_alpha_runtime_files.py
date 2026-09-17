@@ -481,3 +481,24 @@ class AbsentAclEvidenceTests(unittest.TestCase):
             with patch.object(rf.os,'fstat',side_effect=[st,changed_st]):
                 with self.assertRaisesRegex(ValueError,'ACL_CHANGED'):rf._confirm_absent_acl(99,ctypes,lib)
         self.assertEqual(lib.filesec_free.call_count,7)
+
+
+class CompletedPathTests(unittest.TestCase):
+    def test_paths_are_exact_siblings_and_reject_escapes_before_io(self):
+        root='/synthetic/runtime-test'
+        self.assertEqual(rf.completed_paths(root),dict(manifest=root+'.manifest.json',envelope=root+'.envelope.json'))
+        for value in ('relative/runtime-test','/synthetic/../runtime-test','/synthetic//runtime-test',
+                      '/synthetic/runtime-test/','/synthetic/Keychains/runtime-test','/synthetic/runtime-test\x00'):
+            with self.subTest(value=value),patch.object(os,'open',side_effect=AssertionError('IO')):
+                with self.assertRaises(ValueError):rf.completed_paths(value)
+
+    def test_external_record_parent_and_inode_race_are_rejected(self):
+        from types import SimpleNamespace
+        st=SimpleNamespace(st_mode=0o100400,st_uid=os.getuid(),st_nlink=1,st_size=1)
+        parent=SimpleNamespace(st_mode=0o40700,st_uid=os.getuid())
+        with patch.object(os,'open',return_value=42),patch.object(os,'close'),\
+             patch.object(os,'fstat',side_effect=[parent,parent,parent,st,st]),\
+             patch.object(os,'stat',return_value=st),patch.object(os,'read',side_effect=[b'x',b'']),\
+             patch.object(rf,'identity',side_effect=['parent','before','changed']):
+            with self.assertRaisesRegex(ValueError,'RUNTIME_EXTERNAL_RACE'):
+                rf._external_bytes('/synthetic/runtime-test.manifest.json',b'x')

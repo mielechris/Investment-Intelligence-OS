@@ -202,3 +202,20 @@ class FrameworkCandidateTests(TreeCase):
             m['layout_parent']='0'*64
             with self.assertRaises(ValueError):h.check()
         finally:h.tearDown()
+
+
+class CompletedCandidateTests(TreeCase):
+    def test_v3_actual_manifest_files_and_claims_remain_unqualified(self):
+        from test_alpha_production_runtime import completed_spec,runtime as assembler
+        spec,args=completed_spec(self);m=assembler.assemble(spec,content_hash(spec),**args)['manifest']
+        h=CandidateEvidenceTests();h.setUp()
+        try:
+            h.runtime_manifest=m;h.runtime_root=Path(m['runtime_root']);f=h.fixture
+            f.runtime.update(runtime_manifest_sha256=content_hash(m),interpreter_sha256=m['interpreter_sha256'])
+            f.repin();h.candidate=f.build()
+            result=h.check();self.assertEqual(result['status'],'FILES_AND_BINDINGS_VERIFIED_ONLY')
+            self.assertFalse(result['production_qualified']);self.assertFalse(result['execution_authorized'])
+            # Updating bytes requires new independently pinned evidence, not relabeling.
+            m['layout_parent']='0'*64
+            with self.assertRaises(ValueError):h.check()
+        finally:h.tearDown()

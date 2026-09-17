@@ -169,12 +169,14 @@ def validate_runtime_manifest(root: Path, manifest: dict[str, Any], *, expected_
     required = {"schema", "runtime_id", "release_commit", "runtime_root", "interpreter",
                 "interpreter_sha256", "python_version", "dependency_inventory",
                 "file_inventory", "platform_dependencies", "content_hash"}
-    from alpha_runtime_files import MANIFEST_SCHEMA, EXTENSION_FIELDS, verify_manifest
-    version2 = manifest.get("schema") == MANIFEST_SCHEMA
+    from alpha_runtime_files import MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA, COMPLETION_FIELDS, EXTENSION_FIELDS, verify_manifest
+    version3 = manifest.get("schema") == COMPLETED_MANIFEST_SCHEMA
+    version2 = manifest.get("schema") in (MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA)
     if version2:
         verify_manifest(str(root), manifest, source_commit=expected_release_commit)
         required |= EXTENSION_FIELDS
-    if set(manifest) != required or manifest.get("schema") not in (RUNTIME_MANIFEST_SCHEMA, MANIFEST_SCHEMA) or manifest.get("content_hash") != digest(manifest):
+        if version3: required |= COMPLETION_FIELDS
+    if set(manifest) != required or manifest.get("schema") not in (RUNTIME_MANIFEST_SCHEMA, MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA) or manifest.get("content_hash") != digest(manifest):
         raise RuntimeError("RUNTIME_MANIFEST_INVALID")
     if manifest.get("release_commit") != expected_release_commit or not HEX40.fullmatch(expected_release_commit):
         raise RuntimeError("RUNTIME_RELEASE_MISMATCH")

@@ -186,3 +186,22 @@ class AlphaQuoteContractTests(unittest.TestCase):
                 m['maximum_response_bytes'] = 1000001
             with self.assertRaises(ValueError):
                 admit(m, a, r, expected=repin(m, a, r), now=NOW)
+
+
+class RuntimeDocumentAdmissionTests(unittest.TestCase):
+    def test_only_runtime_uses_schema_aware_validation_with_independent_pin(self):
+        from unittest.mock import patch
+        import alpha_runtime_files as rf
+        m,a,r=fixture()
+        with patch.object(rf,'safe_runtime_document',wraps=rf.safe_runtime_document) as check:
+            admit(m,a,r,expected=pins(m,a,r),now=NOW)
+        check.assert_called_once_with(r)
+        expected=pins(m,a,r);expected['runtime']='0'*64
+        with self.assertRaises(ValueError):admit(m,a,r,expected=expected,now=NOW)
+
+    def test_provider_and_account_headers_credentials_remain_rejected(self):
+        for target in ('manifest','account'):
+            for key in ('headers','authorization','cookies','api_key','credentials'):
+                m,a,r=fixture();(m if target=='manifest' else a)[key]='REJECTION_FIXTURE'
+                with self.subTest(target=target,key=key),self.assertRaises(ValueError):
+                    admit(m,a,r,expected=pins(m,a,r),now=NOW)

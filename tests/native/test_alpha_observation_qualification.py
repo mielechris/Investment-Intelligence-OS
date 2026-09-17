@@ -298,3 +298,21 @@ class RuntimeHeadersRoleTests(unittest.TestCase):
             with self.assertRaises(ValueError):admit_roles(bad,content_hash(bad),approved_roots=roots,now=now)
         bad=deepcopy(d);bad['runtime']['metadata']['Headers']={'token':'not-a-real-secret'}
         with self.assertRaises(ValueError):admit_roles(bad,content_hash(bad),approved_roots=roots,now=now)
+
+
+class CompletedRoleTests(unittest.TestCase):
+    def test_completed_manifest_is_required_and_independently_reverified(self):
+        from test_alpha_runtime_files import structural_rows,policy_fields
+        from alpha_runtime_files import COMPLETED_DESCRIPTOR_SCHEMA,COMPLETED_MANIFEST_SCHEMA
+        rows,meta=structural_rows();d,roots,now,_=fixture()
+        d['schema']='iios-disposable-observation-roles-v2'
+        manifest=dict(schema=COMPLETED_MANIFEST_SCHEMA,file_inventory=rows,**policy_fields(meta))
+        d['runtime'].update(schema=COMPLETED_DESCRIPTOR_SCHEMA,files=rows,
+            completed_manifest=manifest,**policy_fields(meta));d['runtime_parent']=content_hash(d['runtime'])
+        with patch('alpha_runtime_files.verify_completed_descriptor',return_value={}) as verify:
+            cap=admit_roles(d,content_hash(d),approved_roots=roots,now=now)
+            verify.assert_called_once_with(d['runtime'],source_commit=d['source_commit'])
+            self.assertFalse(record(cap,{})['production_qualified'])
+        with patch('alpha_runtime_files.verify_completed_descriptor',side_effect=ValueError('DETACHED_PARENT')):
+            with self.assertRaisesRegex(ValueError,'DETACHED_PARENT'):
+                admit_roles(d,content_hash(d),approved_roots=roots,now=now)

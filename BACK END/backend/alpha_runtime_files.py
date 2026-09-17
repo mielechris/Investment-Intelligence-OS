@@ -17,6 +17,10 @@ from provider_gateway_contract import content_hash
 MANIFEST_SCHEMA = 'iios-immutable-python-runtime-v2'
 DESCRIPTOR_SCHEMA = 'iios-observation-runtime-files-v2'
 BUILD_SCHEMA = 'iios-production-runtime-build-input-v2'
+COMPLETED_MANIFEST_SCHEMA = 'iios-completed-python-runtime-v3'
+COMPLETED_BUILD_SCHEMA = 'iios-completed-runtime-build-input-v3'
+COMPLETED_DESCRIPTOR_SCHEMA = 'iios-completed-runtime-files-v3'
+COMPLETION_FIELDS = {'completion'}
 MAX_FILES = 7000
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -380,11 +384,11 @@ def safe_runtime_document(document):
     from provider_gateway_contract import safe_document
     require(type(document) is dict, 'RUNTIME_DOCUMENT_SCHEMA')
     schema = document.get('schema')
-    if schema not in (BUILD_SCHEMA, MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA):
+    if schema not in (BUILD_SCHEMA, MANIFEST_SCHEMA, DESCRIPTOR_SCHEMA, COMPLETED_BUILD_SCHEMA, COMPLETED_MANIFEST_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA):
         safe_document(document)
         return
     links = validate_layout_policy(document['layout_policy'], document['layout_parent'])
-    rows = document['file_inventory'] if schema == MANIFEST_SCHEMA else document['files']
+    rows = document['file_inventory'] if schema in (MANIFEST_SCHEMA, COMPLETED_MANIFEST_SCHEMA) else document['files']
     metadata = document['metadata']
     if schema == MANIFEST_SCHEMA:
         from deployment_contract import canonical
@@ -400,6 +404,10 @@ def safe_runtime_document(document):
             if part.lower() == 'headers':
                 require('/'.join(parts[:index+1]) in approved_headers, 'RUNTIME_HEADERS_LOCATION')
     view = dict(document)
+    if schema == COMPLETED_DESCRIPTOR_SCHEMA:
+        require(document['completed_manifest'].get('schema')==COMPLETED_MANIFEST_SCHEMA,'RUNTIME_COMPLETED_DESCRIPTOR')
+        safe_runtime_document(document['completed_manifest'])
+        del view['completed_manifest']
     # Only the exact root directory key collides with provider field names.
     # All other metadata keys retain the original sensitive-key checks.
     view['metadata'] = {k:v for k,v in metadata.items() if k != 'Headers'}
@@ -419,7 +427,7 @@ def safe_runtime_envelope(document):
     view = dict(document)
     if schema == 'iios-disposable-observation-roles-v2':
         runtime = document['runtime']
-        require(runtime.get('schema') == DESCRIPTOR_SCHEMA, 'RUNTIME_ENVELOPE_VERSION')
+        require(runtime.get('schema') in (DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA), 'RUNTIME_ENVELOPE_VERSION')
         safe_runtime_document(runtime)
         del view['runtime']
     elif schema == 'iios-observation-launch-v2':
@@ -467,6 +475,8 @@ def copy_runtime_metadata(source_fd, destination_fd, expected):
 def verify_manifest(root, manifest, *, source_commit):
     """Complete static v2 admission; never executes the interpreter."""
     from deployment_contract import digest, canonical, PYTHON_VERSION
+    if manifest.get('schema') == COMPLETED_MANIFEST_SCHEMA:
+        return verify_completed_manifest(root, manifest, source_commit=source_commit)
     required = {'schema','runtime_id','release_commit','runtime_root','interpreter',
         'interpreter_sha256','python_version','dependency_inventory','file_inventory',
         'platform_dependencies','content_hash'} | EXTENSION_FIELDS
@@ -484,3 +494,118 @@ def verify_manifest(root, manifest, *, source_commit):
     raw = canonical(manifest)
     return verify_runtime_tree(root, rows + [dict(path='runtime-manifest.json',mode=0o400,
         size=len(raw),sha256=hashlib.sha256(raw).hexdigest())], approved_root=root, **extension(manifest))
+
+
+def completed_paths(root):
+    """Exact sibling names, validated lexically before any filesystem access."""
+    _root(root, root)
+    path = PurePosixPath(root)
+    require(re.fullmatch('runtime-[a-z0-9-]{1,64}', path.name), 'RUNTIME_COMPLETED_NAME')
+    return {kind: str(path.parent / (path.name + suffix)) for kind, suffix in (
+        ('manifest', '.manifest.json'), ('envelope', '.envelope.json'))}
+
+
+def validate_completion(value):
+    """Structural pins, not a substitute for independent provenance review."""
+    from provider_gateway_contract import safe_document
+    safe_document(value)
+    require(type(value) is dict and set(value) == {'dependency_lock_sha256',
+        'bootstrap_acceptance_sha256','bootstrap_tree_sha256','vendor_distribution_sha256',
+        'vendor_signature_receipt_sha256','assembly_seal_receipt_sha256','assembly_seal_kind',
+        'host_contract','sealed_payload_sha256'}, 'RUNTIME_COMPLETION_SCHEMA')
+    for key in set(value) - {'host_contract','assembly_seal_kind'}:
+        require(type(value[key]) is str and re.fullmatch('[a-f0-9]{64}',value[key]), 'RUNTIME_COMPLETION_PIN')
+    require(value['vendor_distribution_sha256'] == VENDOR and
+        value['assembly_seal_kind'] == 'IIOS_ADHOC_RESOURCE_SEAL', 'RUNTIME_SIGNATURE_KIND')
+    host=value['host_contract']
+    require(type(host) is dict and set(host)=={'system','release','version','machine','uid','host_identity_sha256'} and
+        host['system']=='Darwin' and host['machine']=='arm64' and type(host['uid']) is int and host['uid']>0 and
+        type(host['host_identity_sha256']) is str and re.fullmatch('[a-f0-9]{64}',host['host_identity_sha256']),
+        'RUNTIME_HOST_CONTRACT')
+    for key in ('release','version'):
+        require(type(host[key]) is str and 0<len(host[key])<=256 and
+            all(32<=ord(c)<127 for c in host[key]), 'RUNTIME_HOST_CONTRACT')
+
+
+def sealed_payload_parent(document):
+    rows=document['file_inventory'] if 'file_inventory' in document else document['files']
+    return content_hash(dict(files=rows, **extension(document)))
+
+
+def completed_envelope(manifest):
+    """One-way graph: seal -> payload; manifest -> seal; envelope -> manifest.
+
+    No envelope digest is placed in the manifest or sealed runtime tree.
+    The caller's independent canonical manifest pin binds completion claims.
+    Native signature/provenance qualification remains a separate prerequisite.
+    """
+    from deployment_contract import canonical
+    validate_completion(manifest['completion'])
+    return dict(schema='iios-completed-runtime-envelope-v1',source_commit=manifest['release_commit'],
+        runtime_root=manifest['runtime_root'],manifest_sha256=hashlib.sha256(canonical(manifest)).hexdigest(),
+        completion=manifest['completion'],production_qualified=False)
+
+
+def _external_bytes(path, expected):
+    """No-follow, bounded, owner-only immutable sibling with race checks."""
+    _root(path,path);parts=path_parts(path,absolute=True)
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            nxt=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=nxt
+        parent=identity(os.fstat(fd))
+        require(os.fstat(fd).st_uid==os.getuid() and not os.fstat(fd).st_mode&0o077,'RUNTIME_EXTERNAL_PARENT')
+        stream=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+        try:
+            before=os.fstat(stream)
+            require(stat.S_ISREG(before.st_mode) and before.st_uid==os.getuid() and
+                before.st_nlink==1 and stat.S_IMODE(before.st_mode)==0o400 and
+                before.st_size==len(expected)<=MAX_METADATA_BYTES,'RUNTIME_EXTERNAL_IDENTITY')
+            data=bytearray()
+            while len(data)<len(expected):
+                chunk=os.read(stream,min(65536,len(expected)-len(data)))
+                require(bool(chunk),'RUNTIME_EXTERNAL_SHORT');data.extend(chunk)
+            require(not os.read(stream,1) and bytes(data)==expected,'RUNTIME_EXTERNAL_CONTENT')
+            require(identity(os.fstat(stream))==identity(before)==identity(os.stat(parts[-1],dir_fd=fd,follow_symlinks=False)) and
+                identity(os.fstat(fd))==parent,'RUNTIME_EXTERNAL_RACE')
+        finally:os.close(stream)
+    finally:os.close(fd)
+
+
+def verify_completed_manifest(root, manifest, *, source_commit):
+    from deployment_contract import canonical,digest,PYTHON_VERSION
+    required={'schema','runtime_id','release_commit','runtime_root','interpreter','interpreter_sha256',
+        'python_version','dependency_inventory','file_inventory','platform_dependencies','content_hash'}|EXTENSION_FIELDS|COMPLETION_FIELDS
+    require(type(manifest) is dict and set(manifest)==required and
+        manifest['schema']==COMPLETED_MANIFEST_SCHEMA and manifest['content_hash']==digest(manifest),
+        'RUNTIME_COMPLETED_SCHEMA')
+    require(type(source_commit) is str and re.fullmatch('[a-f0-9]{40}',source_commit) and
+        manifest['release_commit']==source_commit and manifest['runtime_root']==root and
+        manifest['python_version']==PYTHON_VERSION,'RUNTIME_MANIFEST_BINDING')
+    paths=completed_paths(root);safe_runtime_document(manifest);validate_completion(manifest['completion'])
+    rows=manifest['file_inventory'];names=[r['path'] for r in rows]
+    require(names==sorted(names) and len(names)==len(set(names)) and
+        not any(n in names for n in ('runtime-manifest.json',PurePosixPath(paths['manifest']).name,
+            PurePosixPath(paths['envelope']).name)), 'RUNTIME_COMPLETED_RECURSION_OR_ORDER')
+    require({'Python','_CodeSignature/CodeResources','bin/python3.14'}<=set(names), 'RUNTIME_SEAL_FILES')
+    require(manifest['completion']['sealed_payload_sha256']==sealed_payload_parent(manifest),'RUNTIME_SEALED_PAYLOAD')
+    executable=next(r for r in rows if r['path']=='bin/python3.14')
+    require(manifest['interpreter']==root+'/bin/python3.14' and executable['mode']==0o500 and
+        executable['sha256']==manifest['interpreter_sha256'],'RUNTIME_INTERPRETER_INVALID')
+    raw=canonical(manifest);envelope=canonical(completed_envelope(manifest))
+    # Preserve former aggregate capacity: external records still consume limits.
+    require(len(rows)+2<=MAX_FILES and sum(r['size'] for r in rows)+len(raw)+len(envelope)+
+        len(canonical(manifest['metadata']))<=MAX_TOTAL_BYTES,'RUNTIME_COMPLETED_TOTAL_BOUND')
+    identities=verify_runtime_tree(root,rows,approved_root=root,**extension(manifest))
+    _external_bytes(paths['manifest'],raw);_external_bytes(paths['envelope'],envelope)
+    return identities
+
+
+def verify_completed_descriptor(document, *, source_commit):
+    require(document.get('schema')==COMPLETED_DESCRIPTOR_SCHEMA,'RUNTIME_COMPLETED_DESCRIPTOR')
+    manifest=document['completed_manifest']
+    require(manifest['schema']==COMPLETED_MANIFEST_SCHEMA and manifest['runtime_root']==document['root'] and
+        manifest['file_inventory']==document['files'] and extension(manifest)==extension(document) and
+        manifest['interpreter']==document['root']+'/'+document['interpreter'],'RUNTIME_COMPLETED_DESCRIPTOR_BINDING')
+    return verify_completed_manifest(document['root'],manifest,source_commit=source_commit)
