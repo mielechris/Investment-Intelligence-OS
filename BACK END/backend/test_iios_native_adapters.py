@@ -43,7 +43,7 @@ class RuntimeAdapterTests(unittest.TestCase):
     def test_tls_report_scope_and_identity(self):
         policy=build_policy(**inputs());images=[{'path':r['path'],'uuid':r['uuid']} for r in policy['rows']]
         scan={'complete':True,'count':len(images),'images':images}
-        value={'scope':PRODUCTION,'policy_parent':digest(policy),'imports':policy['imports'],'scans':[scan,scan],'origins':[],
+        value={'scope':PRODUCTION,'policy_parent':digest(policy),'imports':policy['imports'],'scans':[scan,scan],'origins':[{'module':'ssl','file':'lib/_ssl.so'}],
                'cache_uuids':[policy['cache_uuid']]*2,'stage':'COMPLETE','ca_sha256':'9cc2a774b5198dcff14d9be1e66091f538975d867ce029a96bce15a55dfd730f','ca_count':121,'tls_context_only':True}
         self.assertEqual(runtime.decode_acceptance(canonical(value),policy)['scans'],2)
         for name,altered in [('scope','BOOTSTRAP_IMAGE_REFERENCE_V1'),('ca_count',120),('tls_context_only',False)]:

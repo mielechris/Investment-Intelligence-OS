@@ -16,7 +16,7 @@ def inputs():
             'images':[dict(path=r['path'],sha256=r['sha256'],uuid=str(i+1)*32,signature='VERIFIED',
                           load_dependencies=[['LC_LOAD_DYLIB','/usr/lib/libSystem.B.dylib']]) for i,r in enumerate(files)]}
     plan={'scope':'PRODUCTION_IMPORT_PLAN_V1','source_commit':'c'*40,'runtime_root':'/fixture/runtime','imports':['ssl'],
-          'import_images':{'ssl':['lib/_ssl.so']},'interpreter':'Python','host':{'build':'fixture','arch':'arm64'},
+          'import_origins':{'ssl':'lib/_ssl.so'},'import_images':{'ssl':['lib/_ssl.so']},'interpreter':'Python','host':{'build':'fixture','arch':'arm64'},
           'os_image_paths':['/usr/lib/libSystem.B.dylib','/usr/lib/libffi-trampolines.dylib'],'review_parent':'d'*64}
     osref={'schema':'SIGNED_OS_CACHE_REFERENCE_V1','source_build':'fixture','arch':'arm64','cache_uuid':'3'*32,
            'signed_files':[{'path':'/System/Library/dyld/cache','sha256':'e'*64,'apple_anchor_verified':True,'exit':0}],
@@ -127,6 +127,8 @@ class ScanTests(unittest.TestCase):
     def test_forbidden_loaded_image(self):self.report['scans'][0]['images'][0]['path']='/System/Library/Tcl.framework/Tcl';self.reject('PRODUCTION_FORBIDDEN_COMPONENT')
     def test_stability_order(self):self.report['scans'][1]['images'].reverse();self.reject('IMAGE_SCAN_STABILITY')
     def test_unknown_module_origin(self):self.report['origins'][0]['file']='other.so';self.reject('MODULE_ORIGIN_OUTSIDE_SEAL')
+    def test_missing_approved_module_origin(self):self.report['origins']=[];self.reject('APPROVED_IMPORT_ORIGIN')
+    def test_substituted_sealed_module_origin(self):self.report['origins'][0]['file']='Python';self.reject('APPROVED_IMPORT_ORIGIN')
     def test_cache_substitution(self):self.report['cache_uuids'][1]='f'*32;self.reject('RUNTIME_CACHE_UUID')
     def test_raw_report_overflow(self):
         with self.assertRaises(QualificationFailure) as c:decode_report(b' '* (MAX_REPORT_BYTES+1),self.policy,self.parent)

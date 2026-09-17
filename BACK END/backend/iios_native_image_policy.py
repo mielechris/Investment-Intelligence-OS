@@ -86,6 +86,9 @@ def build_policy(*,manifest,static,plan,os_reference,standalone,parents):
         path(name,False);hash_value(row['sha256']);need(type(row['size']) is int and row['size']>=0,'MANIFEST_FILE_SIZE')
     images={r['path']:r for r in static['images']};need(len(images)==len(static['images']),'STATIC_DUPLICATE_IMAGE')
     need(set(plan['import_images'])==set(imports),'IMPORT_IMAGE_COVERAGE')
+    need(type(plan.get('import_origins')) is dict and set(plan['import_origins'])==set(imports),'IMPORT_ORIGIN_COVERAGE')
+    for name,origin in plan['import_origins'].items():
+        need(origin is None or type(origin) is str and origin in files,'IMPORT_ORIGIN_MANIFEST')
     roots=[plan['interpreter']]+[p for name in imports for p in plan['import_images'][name]]
     need(len(roots)>=1 and all(p in images for p in roots),'APPROVED_PRIVATE_IMAGE_ROOTS')
     need(manifest['interpreter']==root+'/'+plan['interpreter'] and manifest['interpreter_sha256']==files[plan['interpreter']]['sha256'],'PRODUCTION_INTERPRETER_BINDING')
@@ -132,7 +135,7 @@ def build_policy(*,manifest,static,plan,os_reference,standalone,parents):
     rows=[dict(universe[name],id=i) for i,name in enumerate(sorted(universe))]
     mandatory=sorted(set(private)|required_os)
     return {'scope':PRODUCTION,'version':1,'source_commit':source,'runtime_root':root,'host':plan['host'],
-            'parents':parents,'imports':imports,'interpreter':root+'/'+plan['interpreter'],'rows':rows,
+            'parents':parents,'imports':imports,'import_origins':plan['import_origins'],'interpreter':root+'/'+plan['interpreter'],'rows':rows,
             'required_paths':mandatory,'image_maximum':len(rows),'minimum_count':len(mandatory),
             'cache_uuid':os_reference['cache_uuid'],'module_files':sorted(files),
             'mapped_memory_integrity':'UNVERIFIED','boot_attestation':'UNRESOLVED',
@@ -156,6 +159,9 @@ def verify_scans(policy,*,policy_parent,imports,scans,origins,cache_uuids):
     for row in origins:
         need(not forbidden(row['module']) and not forbidden(row['file']),'PRODUCTION_FORBIDDEN_MODULE')
         need(row['file'] in policy['module_files'],'MODULE_ORIGIN_OUTSIDE_SEAL')
+    observed_origins={r['module']:r['file'] for r in origins}
+    for name,origin in policy['import_origins'].items():
+        need((name not in observed_origins) if origin is None else observed_origins.get(name)==origin,'APPROVED_IMPORT_ORIGIN')
     need(cache_uuids==[policy['cache_uuid']]*2,'RUNTIME_CACHE_UUID')
     allowed={r['path']:r for r in policy['rows']}
     need(len(allowed)==len(policy['rows'])==policy['image_maximum'],'REFERENCE_IMAGE_COUNT')
