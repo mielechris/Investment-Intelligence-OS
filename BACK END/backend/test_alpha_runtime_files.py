@@ -513,7 +513,8 @@ class AssemblyVerifierImportBoundaryTests(unittest.TestCase):
         for node in ast.walk(tree):
             if isinstance(node,ast.Import):imports.extend(alias.name.split('.')[0] for alias in node.names)
             elif isinstance(node,ast.ImportFrom):imports.append((node.module or '').split('.')[0])
-        self.assertEqual(set(imports),{'ctypes','errno','hashlib','json','os','pathlib','re','stat','sys'})
+        self.assertEqual(set(imports),{'ctypes','errno','hashlib','json','os','pathlib',
+                                      'platform','plistlib','re','stat','sys'})
         self.assertFalse(set(imports)&{'alpha_session_contract','alpha_session_evidence',
             'deployment_contract','provider_gateway_contract','truth_spine_session'})
 
@@ -734,3 +735,148 @@ class ProductionSigningContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):rf.validate_production_signing_evidence(document,'0'*64)
         document['policy_parent']='0'*64
         with self.assertRaises(ValueError):rf.validate_production_signing_evidence(document,content_hash(document))
+
+
+class SystemToolPinAdmissionTests(unittest.TestCase):
+    def contract(self):
+        return rf.lipo_system_tool_contract()
+
+    def observation(self):
+        return {key:deepcopy(value) for key,value in self.contract().items()
+                if key not in ('schema','signature')}
+
+    def test_exact_lipo_contract_requires_three_complete_observations(self):
+        contract=self.contract();calls=[]
+        def observe():
+            calls.append(True);return self.observation()
+        result=rf.admit_lipo_system_tool(contract,content_hash(contract),observer=observe)
+        self.assertEqual(len(calls),3);self.assertEqual(result['observations'],3)
+        self.assertEqual(result['status'],'ADMITTED_EXACT_SYSTEM_TOOL')
+        self.assertEqual(result['signature_parent'],content_hash(contract['signature']))
+
+    def test_contract_rejects_every_identity_and_signature_mutation(self):
+        mutations=(
+            ('literal_path','/usr/bin/lipo-substitute'),('resolved_path','/usr/bin/otool'),
+            ('owner_uid',501),('owner_gid',20),('mode',0o775),('size',118927),
+            ('sha256','0'*64),('device',1),('inode',2),('flags',0),
+            ('hardlink_count',77),('hardlink_roots',['/usr/bin']),
+            ('hardlink_topology',self.contract()['hardlink_topology'][:-1]),
+        )
+        for key,value in mutations:
+            with self.subTest(key=key):
+                contract=self.contract();contract[key]=value
+                with self.assertRaisesRegex(ValueError,'SYSTEM_TOOL_CONTRACT'):
+                    rf.validate_system_tool_contract(contract,content_hash(contract))
+        for key,value in (('anchor','OTHER'),('designated_requirement','identifier "x"'),
+                          ('cdhashes',{'arm64e':'0'*40,'x86_64':'1'*40}),
+                          ('signature_size',1)):
+            with self.subTest(signature=key):
+                contract=self.contract();contract['signature'][key]=value
+                with self.assertRaisesRegex(ValueError,'SYSTEM_TOOL_CONTRACT'):
+                    rf.validate_system_tool_contract(contract,content_hash(contract))
+
+    def test_observation_rejects_substitution_symlink_owner_mode_hash_and_topology(self):
+        keys=('literal_path','resolved_path','file_type','owner_uid','mode','size','sha256',
+              'hardlink_count','hardlink_topology','hardlink_topology_sha256','host')
+        for key in keys:
+            with self.subTest(key=key):
+                changed=self.observation()
+                if key=='host':changed[key]['product_build']='25F81'
+                elif isinstance(changed[key],int):changed[key]+=1
+                elif isinstance(changed[key],list):changed[key]=changed[key][:-1]
+                else:changed[key]='MUTATED'
+                with self.assertRaisesRegex(ValueError,'SYSTEM_TOOL_IDENTITY'):
+                    rf.admit_lipo_system_tool(self.contract(),content_hash(self.contract()),
+                                               observer=lambda:deepcopy(changed))
+
+    def test_observations_must_remain_stable(self):
+        values=[self.observation(),self.observation(),self.observation()]
+        values[1]['ctime_ns']+=1
+        with self.assertRaisesRegex(ValueError,'SYSTEM_TOOL_IDENTITY'):
+            rf.admit_lipo_system_tool(self.contract(),content_hash(self.contract()),
+                                       observer=lambda:values.pop(0))
+
+    def test_lipo_exception_does_not_relax_any_other_pin(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'ordinary';path.write_bytes(b'ordinary');os.chmod(path,0o500)
+            alias=Path(root)/'alias';os.link(path,alias)
+            row={'path':str(path),'size':8,'sha256':hashlib.sha256(b'ordinary').hexdigest()}
+            with self.assertRaisesRegex(ValueError,'PIN_FILE_IDENTITY'):
+                rf._admit_generic_pin(row)
+            alias.unlink();path.unlink();target=Path(root)/'target';target.write_bytes(b'ordinary')
+            os.chmod(target,0o500);path.symlink_to(target)
+            with self.assertRaisesRegex(ValueError,'PIN_FILE_IDENTITY'):
+                rf._admit_generic_pin(row)
+
+    def test_wrong_lipo_pin_and_missing_duplicate_or_unrelated_system_tool_reject(self):
+        contract=self.contract();lipo={'path':'/usr/bin/lipo','size':contract['size'],
+            'sha256':contract['sha256']};ordinary={'path':'/tmp/ordinary','size':1,'sha256':'0'*64}
+        with patch.object(rf,'_admit_generic_pin') as generic:
+            result=rf.admit_pin_inventory([ordinary,lipo],contract,content_hash(contract),
+                system_observer=self.observation)
+        generic.assert_called_once_with(ordinary);self.assertEqual(result['pins'],2)
+        for rows in ([ordinary],[lipo,lipo],
+                     [ordinary,dict(lipo,sha256='0'*64)],
+                     [ordinary,{'path':'/usr/bin/otool','size':contract['size'],'sha256':contract['sha256']}],):
+            with self.subTest(rows=rows),patch.object(rf,'_admit_generic_pin'):
+                with self.assertRaises(ValueError):
+                    rf.admit_pin_inventory(rows,contract,content_hash(contract),
+                                           system_observer=self.observation)
+
+    def test_admission_audit_rejects_writes_processes_network_and_signals(self):
+        rf._admission_audit('open',('/tmp/read','r',os.O_RDONLY))
+        denied=(('open',('/tmp/write','w',os.O_WRONLY|os.O_CREAT)),
+                ('os.mkdir',('/tmp/x',0o700,-1)),('subprocess.Popen',('x',)),
+                ('socket.connect',(('127.0.0.1',1),)),('os.kill',(1,15)))
+        for event,args in denied:
+            with self.subTest(event=event):
+                with self.assertRaises(PermissionError):rf._admission_audit(event,args)
+
+    def test_admission_only_dispatch_uses_shared_verifier_without_side_effects(self):
+        from types import SimpleNamespace
+        contract=self.contract();events=[]
+        descriptor={'pins':[{'path':'/synthetic/pin','size':1,'sha256':'0'*64}]}
+        admitted={'schema':rf.PIN_ADMISSION_SCHEMA,'pins':451,
+                  'system_tool':{},'side_effects':False,
+                  'assembly_child_created':False,'status':'PASS_PIN_ADMISSION_ONLY'}
+        flags=SimpleNamespace(isolated=1,no_site=1,dont_write_bytecode=1)
+        def add_hook(value):events.append(('audit',value))
+        def generic(value):events.append(('file',value['path']))
+        def inventory(*values,**keywords):
+            events.append(('inventory',values[0]));return deepcopy(admitted)
+        exact_environment={'LC_ALL':'C','TZ':'UTC',
+                           '__CF_USER_TEXT_ENCODING':'0x1F5:0x0:0x0'}
+        with patch.dict(os.environ,exact_environment,clear=True),\
+             patch.object(rf.sys,'flags',flags),patch.object(rf.sys,'addaudithook',side_effect=add_hook),\
+             patch.object(rf.os,'lstat',return_value=SimpleNamespace(st_size=1)),\
+             patch.object(rf,'_admit_generic_pin',side_effect=generic),\
+             patch.object(rf,'admit_pin_inventory',side_effect=inventory),\
+             patch.object(rf.json,'load',side_effect=[descriptor,contract]),\
+             patch.object(builtins,'open',unittest.mock.mock_open()),\
+             patch.object(builtins,'print') as output,\
+             patch.object(rf.os,'mkdir',side_effect=AssertionError('SIDE_EFFECT')),\
+             patch.object(rf.os,'remove',side_effect=AssertionError('SIDE_EFFECT')),\
+             patch.object(rf.os,'symlink',side_effect=AssertionError('SIDE_EFFECT')),\
+             patch.object(rf.os,'kill',side_effect=AssertionError('SIDE_EFFECT')):
+            self.assertEqual(rf.admission_only_main(['--admit-pins-only','/synthetic/descriptor',
+                '1'*64,'/synthetic/contract','2'*64]),0)
+        self.assertEqual(events[0][0],'audit')
+        self.assertEqual([event[0] for event in events],['audit','file','file','inventory'])
+        self.assertEqual(events[-1][1],descriptor['pins'])
+        emitted=json.loads(output.call_args.args[0])
+        self.assertFalse(emitted['assembly_child_created'])
+        for key in ('runtime_executed','production_qualified','provider_access',
+                    'credential_access','broker_connected','paper_order_permission',
+                    'trade_execution_permission','live_execution'):
+            self.assertFalse(emitted[key])
+
+    def test_system_contract_binds_selected_host_and_independent_topology(self):
+        contract=self.contract()
+        self.assertEqual(contract['host']['product_build'],'25F80')
+        self.assertEqual(contract['host']['kernel_release'],'25.5.0')
+        self.assertEqual(contract['hardlink_count'],len(contract['hardlink_topology']))
+        self.assertEqual(contract['hardlink_count'],78)
+        self.assertEqual(contract['hardlink_topology_sha256'],hashlib.sha256(
+            ('\n'.join(contract['hardlink_topology'])+'\n').encode()).hexdigest())
+        self.assertEqual(contract['signature']['anchor'],'APPLE')
+        self.assertTrue(contract['signature']['designated_requirement'].endswith('anchor apple'))

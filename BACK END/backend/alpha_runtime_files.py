@@ -7,9 +7,12 @@ import errno
 import hashlib
 import json
 import os
+import platform
+import plistlib
 from pathlib import PurePosixPath
 import re
 import stat
+import sys
 
 MANIFEST_SCHEMA = 'iios-immutable-python-runtime-v2'
 DESCRIPTOR_SCHEMA = 'iios-observation-runtime-files-v2'
@@ -90,6 +93,30 @@ _PRODUCTION_STATIC_ARCHIVES = (
     'Frameworks/Tk.framework/Versions/9.0/libtkstub.a',
 )
 
+SYSTEM_TOOL_IDENTITY_SCHEMA = 'iios-selected-mac-system-tool-identity-v1'
+PIN_ADMISSION_SCHEMA = 'iios-private-assembly-pin-admission-v1'
+_SYSTEM_VERSION_PLIST = '/System/Library/CoreServices/SystemVersion.plist'
+_LIPO_PATH = '/usr/bin/lipo'
+_LIPO_TOPOLOGY = tuple('/usr/bin/' + name for name in (
+    'DeRez', 'GetFileInfo', 'ResMerger', 'Rez', 'SetFile', 'SplitForks', 'ar', 'as', 'asa',
+    'bison', 'bm4', 'c++', 'c++filt', 'c89', 'c99', 'cc', 'clang', 'clang++', 'clangd',
+    'cmpdylib', 'codesign_allocate', 'cpp', 'ctags', 'ctf_insert', 'dsymutil', 'dwarfdump',
+    'dyld_info', 'flex', 'flex++', 'g++', 'gatherheaderdoc', 'gcc', 'gcov', 'git',
+    'git-receive-pack', 'git-shell', 'git-upload-archive', 'git-upload-pack', 'gm4',
+    'gnumake', 'gperf', 'hdxml2manxml', 'headerdoc2html', 'indent', 'install_name_tool',
+    'ld', 'lex', 'libtool', 'lipo', 'lldb', 'llvm-g++', 'llvm-gcc', 'lorder', 'm4', 'make',
+    'mig', 'nm', 'nmedit', 'objdump', 'otool', 'pagestuff', 'pip3', 'python3', 'ranlib',
+    'resolveLinks', 'rpcgen', 'segedit', 'size', 'sourcekit-lsp', 'strings', 'strip', 'swift',
+    'swiftc', 'unifdef', 'unifdefall', 'vtool', 'xml2man', 'yacc'))
+_LARGE_ADMISSION_PINS = {
+    # Exact path parents are represented by their SHA-256 identities so private
+    # artifact roots never become source literals or diagnostic output.
+    'ece5309dd952c068e22251e0d95a27265319fa811f6ba967ede59ae06af5e9bb':
+        (12166617, 'd05ff664100d429335b93c91b8b34ddf9e94a112205e7fa06dede309e44a4e4c'),
+    '5698166225c57dfbe3994f61eb37c2b4b81937614f9427d9c768a344a74339c7':
+        (78557763, '70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419'),
+}
+
 
 # This module is the assembly/static-verification boundary.  Keep its complete
 # import graph in the standard library so the Python 3.9 build-control process
@@ -162,6 +189,303 @@ def path_parts(value, *, absolute=False):
 def identity(value):
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
             value.st_ctime_ns, value.st_mode, value.st_uid, value.st_nlink)
+
+
+def lipo_system_tool_contract():
+    """Exact selected-Mac identity; it grants no generic hardlink exception."""
+    topology = list(_LIPO_TOPOLOGY)
+    return {
+        'schema': SYSTEM_TOOL_IDENTITY_SCHEMA,
+        'literal_path': _LIPO_PATH,
+        'resolved_path': _LIPO_PATH,
+        'file_type': 'REGULAR_FILE',
+        'owner_uid': 0,
+        'owner_gid': 0,
+        'mode': 0o755,
+        'size': 118928,
+        'sha256': '179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818',
+        'device': 16777234,
+        'inode': 1152921500312571586,
+        'flags': 524320,
+        'mtime_ns': 1779353822000000000,
+        'ctime_ns': 1779353822000000000,
+        'hardlink_count': 78,
+        'hardlink_roots': ['/usr/bin', '/usr/sbin'],
+        'hardlink_topology': topology,
+        'hardlink_topology_sha256': hashlib.sha256(
+            ('\n'.join(topology) + '\n').encode('ascii')).hexdigest(),
+        'host': {
+            'system': 'Darwin',
+            'kernel_release': '25.5.0',
+            'machine': 'arm64',
+            'product_build': '25F80',
+            'system_version_plist_sha256':
+                'd90b1755e5dbb837d2ca1e11083c6e36e6219193a0fcf036d0f7cfe5366e031e',
+        },
+        'signature': {
+            'format': 'MACH_O_UNIVERSAL_X86_64_ARM64E',
+            'identifier': 'com.apple.dt.xcode_select.tool-shim-public',
+            'platform_identifier': 26,
+            'designated_requirement':
+                'identifier "com.apple.dt.xcode_select.tool-shim-public" and anchor apple',
+            'anchor': 'APPLE',
+            'signature_size': 4442,
+            'cdhashes': {
+                'arm64e': '857106d67588dc46d2a37578cd17ee3839639c0c',
+                'x86_64': '1197f9fac4289a81d8e786b033bf8237672cabbc',
+            },
+            'full_cdhashes': {
+                'arm64e': '857106d67588dc46d2a37578cd17ee3839639c0c6b3e5e887c580f37c6d96e39',
+                'x86_64': '1197f9fac4289a81d8e786b033bf8237672cabbc63da85b759bf2ef85ac232ad',
+            },
+            'evidence_scope': 'EMBEDDED_IDENTITY_AND_APPLE_ANCHOR_REQUIREMENT',
+        },
+    }
+
+
+def _read_system_version():
+    before = os.lstat(_SYSTEM_VERSION_PLIST)
+    require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and
+            stat.S_IMODE(before.st_mode) == 0o444 and before.st_nlink == 1 and
+            0 < before.st_size <= 65536, 'SYSTEM_TOOL_HOST_IDENTITY')
+    descriptor = os.open(_SYSTEM_VERSION_PLIST,
+                         os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        require(identity(os.fstat(descriptor)) == identity(before),
+                'SYSTEM_TOOL_HOST_RACE')
+        raw = bytearray()
+        while len(raw) < before.st_size:
+            block = os.read(descriptor, before.st_size - len(raw))
+            require(bool(block), 'SYSTEM_TOOL_HOST_SHORT')
+            raw.extend(block)
+        require(not os.read(descriptor, 1) and
+                identity(os.fstat(descriptor)) == identity(before) ==
+                identity(os.lstat(_SYSTEM_VERSION_PLIST)),
+                'SYSTEM_TOOL_HOST_RACE')
+    finally:
+        os.close(descriptor)
+    try:
+        value = plistlib.loads(bytes(raw))
+    except (ValueError, TypeError, plistlib.InvalidFileException):
+        raise ValueError('SYSTEM_TOOL_HOST_DOCUMENT') from None
+    require(type(value) is dict and type(value.get('ProductBuildVersion')) is str,
+            'SYSTEM_TOOL_HOST_DOCUMENT')
+    return value['ProductBuildVersion'], hashlib.sha256(raw).hexdigest()
+
+
+def _observe_lipo_system_tool():
+    before = os.lstat(_LIPO_PATH)
+    require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode),
+            'SYSTEM_TOOL_FILE_TYPE')
+    require(os.path.realpath(_LIPO_PATH) == _LIPO_PATH, 'SYSTEM_TOOL_RESOLVED_PATH')
+    descriptor = os.open(_LIPO_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        require(identity(os.fstat(descriptor)) == identity(before),
+                'SYSTEM_TOOL_RACE')
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(65536, remaining))
+            require(bool(block), 'SYSTEM_TOOL_SHORT')
+            digest.update(block)
+            remaining -= len(block)
+        require(not os.read(descriptor, 1) and
+                identity(os.fstat(descriptor)) == identity(before) ==
+                identity(os.lstat(_LIPO_PATH)), 'SYSTEM_TOOL_RACE')
+    finally:
+        os.close(descriptor)
+    aliases = []
+    for root in ('/usr/bin', '/usr/sbin'):
+        root_before = os.lstat(root)
+        require(stat.S_ISDIR(root_before.st_mode) and not stat.S_ISLNK(root_before.st_mode),
+                'SYSTEM_TOOL_TOPOLOGY_ROOT')
+        with os.scandir(root) as entries:
+            for entry in entries:
+                observed = entry.stat(follow_symlinks=False)
+                if (observed.st_dev, observed.st_ino) == (before.st_dev, before.st_ino):
+                    require(stat.S_ISREG(observed.st_mode) and not entry.is_symlink(),
+                            'SYSTEM_TOOL_TOPOLOGY_TYPE')
+                    aliases.append(entry.path)
+        require(identity(os.lstat(root)) == identity(root_before),
+                'SYSTEM_TOOL_TOPOLOGY_RACE')
+    aliases.sort()
+    build, plist_parent = _read_system_version()
+    return {
+        'literal_path': _LIPO_PATH,
+        'resolved_path': os.path.realpath(_LIPO_PATH),
+        'file_type': 'REGULAR_FILE',
+        'owner_uid': before.st_uid,
+        'owner_gid': before.st_gid,
+        'mode': stat.S_IMODE(before.st_mode),
+        'size': before.st_size,
+        'sha256': digest.hexdigest(),
+        'device': before.st_dev,
+        'inode': before.st_ino,
+        'flags': getattr(before, 'st_flags', 0),
+        'mtime_ns': before.st_mtime_ns,
+        'ctime_ns': before.st_ctime_ns,
+        'hardlink_count': before.st_nlink,
+        'hardlink_roots': ['/usr/bin', '/usr/sbin'],
+        'hardlink_topology': aliases,
+        'hardlink_topology_sha256': hashlib.sha256(
+            ('\n'.join(aliases) + '\n').encode('ascii')).hexdigest(),
+        'host': {
+            'system': platform.system(),
+            'kernel_release': platform.release(),
+            'machine': platform.machine(),
+            'product_build': build,
+            'system_version_plist_sha256': plist_parent,
+        },
+    }
+
+
+def validate_system_tool_contract(document, expected):
+    approved = lipo_system_tool_contract()
+    require(type(document) is dict and document == approved and
+            type(expected) is str and expected == content_hash(approved),
+            'SYSTEM_TOOL_CONTRACT')
+    signature = document['signature']
+    require(signature['anchor'] == 'APPLE' and
+            signature['designated_requirement'].endswith(' and anchor apple') and
+            signature['evidence_scope'] ==
+            'EMBEDDED_IDENTITY_AND_APPLE_ANCHOR_REQUIREMENT' and
+            set(signature['cdhashes']) == {'arm64e', 'x86_64'} and
+            set(signature['full_cdhashes']) == {'arm64e', 'x86_64'},
+            'SYSTEM_TOOL_SIGNATURE')
+    return approved
+
+
+def admit_lipo_system_tool(document, expected, observer=None):
+    """Three complete, independent observations surround admission."""
+    approved = validate_system_tool_contract(document, expected)
+    observe = _observe_lipo_system_tool if observer is None else observer
+    expected_identity = {key: value for key, value in approved.items()
+                         if key not in ('schema', 'signature')}
+    observations = []
+    for _ in range(3):
+        observed = observe()
+        require(type(observed) is dict and observed == expected_identity,
+                'SYSTEM_TOOL_IDENTITY')
+        observations.append(observed)
+    require(observations[0] == observations[1] == observations[2],
+            'SYSTEM_TOOL_UNSTABLE')
+    return {
+        'path': _LIPO_PATH,
+        'observations': 3,
+        'identity_parent': content_hash(expected_identity),
+        'contract_parent': expected,
+        'signature_parent': content_hash(approved['signature']),
+        'status': 'ADMITTED_EXACT_SYSTEM_TOOL',
+    }
+
+
+def _admit_generic_pin(row):
+    require(type(row) is dict and set(row) == {'path', 'size', 'sha256'} and
+            type(row['path']) is str and type(row['size']) is int and
+            type(row['sha256']) is str and re.fullmatch('[a-f0-9]{64}', row['sha256']),
+            'PIN_DOCUMENT')
+    path_parts(row['path'], absolute=True)
+    require(row['path'] != _LIPO_PATH, 'SYSTEM_TOOL_CONTRACT_REQUIRED')
+    maximum = 8_000_000
+    path_parent = hashlib.sha256(row['path'].encode('utf-8')).hexdigest()
+    if path_parent in _LARGE_ADMISSION_PINS:
+        require((row['size'], row['sha256']) == _LARGE_ADMISSION_PINS[path_parent],
+                'ACQUISITION_PARENT')
+        maximum = row['size']
+    before = os.lstat(row['path'])
+    require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and
+            before.st_nlink == 1 and before.st_uid in (0, os.getuid()) and
+            not before.st_mode & 0o022 and before.st_size == row['size'] and
+            0 <= before.st_size <= maximum, 'PIN_FILE_IDENTITY')
+    descriptor = os.open(row['path'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        require(identity(os.fstat(descriptor)) == identity(before), 'PIN_FILE_RACE')
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(65536, remaining))
+            require(bool(block), 'PIN_FILE_SHORT')
+            digest.update(block)
+            remaining -= len(block)
+        require(not os.read(descriptor, 1), 'PIN_FILE_GREW')
+        require(digest.hexdigest() == row['sha256'], 'PIN_FILE_HASH')
+        require(identity(os.fstat(descriptor)) == identity(before) ==
+                identity(os.lstat(row['path'])), 'PIN_FILE_RACE')
+    finally:
+        os.close(descriptor)
+
+
+def admit_pin_inventory(rows, system_contract, system_contract_parent,
+                        *, system_observer=None):
+    require(type(rows) is list and 0 < len(rows) <= 1000 and
+            len({row.get('path') for row in rows if type(row) is dict}) == len(rows),
+            'PIN_INVENTORY')
+    system_rows = [row for row in rows if type(row) is dict and
+                   row.get('path') == _LIPO_PATH]
+    require(len(system_rows) == 1, 'SYSTEM_TOOL_PIN_REQUIRED')
+    admitted = None
+    for row in rows:
+        if row['path'] == _LIPO_PATH:
+            require(row['size'] == system_contract['size'] and
+                    row['sha256'] == system_contract['sha256'],
+                    'SYSTEM_TOOL_PIN_MISMATCH')
+            admitted = admit_lipo_system_tool(system_contract,
+                                               system_contract_parent,
+                                               observer=system_observer)
+        else:
+            _admit_generic_pin(row)
+    require(admitted is not None, 'SYSTEM_TOOL_PIN_REQUIRED')
+    return {
+        'schema': PIN_ADMISSION_SCHEMA,
+        'pins': len(rows),
+        'system_tool': admitted,
+        'side_effects': False,
+        'assembly_child_created': False,
+        'status': 'PASS_PIN_ADMISSION_ONLY',
+    }
+
+
+def _admission_audit(event, arguments):
+    if (event == 'open' and len(arguments) >= 3 and type(arguments[2]) is int and
+            arguments[2] & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)):
+        raise PermissionError('PIN_ADMISSION_WRITE_DENIED')
+    if event.startswith(('socket.', 'subprocess.', 'os.exec', 'os.spawn')) or event in (
+            'os.system', 'os.kill', 'os.killpg', 'os.mkdir', 'os.remove', 'os.rmdir',
+            'os.rename', 'os.replace', 'os.link', 'os.symlink', 'os.chmod', 'os.chown',
+            'os.truncate', 'os.utime'):
+        raise PermissionError('PIN_ADMISSION_EFFECT_DENIED')
+
+
+def admission_only_main(arguments=None):
+    """Read-only launch-interpreter rehearsal; it cannot enter assembly."""
+    values = list(sys.argv[1:] if arguments is None else arguments)
+    require(len(values) == 5 and values[0] == '--admit-pins-only',
+            'PIN_ADMISSION_CLI')
+    require(dict(os.environ) == {
+        'LC_ALL': 'C', 'TZ': 'UTC', '__CF_USER_TEXT_ENCODING': '0x1F5:0x0:0x0'},
+        'PIN_ADMISSION_ENVIRONMENT')
+    require(sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode,
+            'PIN_ADMISSION_FLAGS')
+    descriptor_path, descriptor_parent, contract_path, contract_parent = values[1:]
+    descriptor_row = {'path': descriptor_path, 'size': os.lstat(descriptor_path).st_size,
+                      'sha256': descriptor_parent}
+    contract_row = {'path': contract_path, 'size': os.lstat(contract_path).st_size,
+                    'sha256': contract_parent}
+    sys.addaudithook(_admission_audit)
+    _admit_generic_pin(descriptor_row)
+    _admit_generic_pin(contract_row)
+    with open(descriptor_path, 'rb') as stream:
+        descriptor = json.load(stream)
+    with open(contract_path, 'rb') as stream:
+        contract = json.load(stream)
+    result = admit_pin_inventory(descriptor['pins'], contract,
+                                 content_hash(contract))
+    result.update(runtime_executed=False, production_qualified=False,
+                  provider_access=False, credential_access=False,
+                  broker_connected=False, paper_order_permission=False,
+                  trade_execution_permission=False, live_execution=False)
+    print(json.dumps(result, sort_keys=True, separators=(',', ':')))
+    return 0
 
 
 def open_root(root, approved_root):
@@ -918,3 +1242,7 @@ def verify_completed_descriptor(document, *, source_commit):
         manifest['file_inventory']==document['files'] and extension(manifest)==extension(document) and
         manifest['interpreter']==document['root']+'/'+document['interpreter'],'RUNTIME_COMPLETED_DESCRIPTOR_BINDING')
     return verify_completed_manifest(document['root'],manifest,source_commit=source_commit)
+
+
+if __name__ == '__main__':
+    raise SystemExit(admission_only_main())
