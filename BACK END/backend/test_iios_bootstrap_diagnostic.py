@@ -110,3 +110,23 @@ class ProfileBoundaryTests(unittest.TestCase):
         for rule in ('(deny network*)','(deny process-fork)','(deny process-exec)','(deny file-write*)','(deny file-read-data)'):
             self.assertIn(rule,profile)
         self.assertLess(profile.index('(deny file-read-data)'),profile.index('(allow file-read-data (literal "/"))'))
+
+
+class CacheHeaderTests(unittest.TestCase):
+    def fixture(self):
+        import hashlib
+        raw=bytearray(DiscoveryTests().header())
+        struct.pack_into('<Q',raw,72,16384)
+        raw=bytes(raw)
+        return raw,dict(address=4096,file_offset=16384,sha256=hashlib.sha256(raw).hexdigest(),cache_file='/synthetic/cache')
+    def test_cache_offset_requires_exact_independent_pin(self):
+        raw,pin=self.fixture()
+        with self.assertRaisesRegex(ValueError,'HEADER_MAPPING'):mapped_header(raw,4096,0)
+        self.assertEqual(mapped_header(raw,8192,4096,cache_pin=pin)['segments'][0]['file_offset'],16384)
+    def test_cache_pin_mutations_fail_closed(self):
+        raw,pin=self.fixture()
+        for key,value in [('address',4097),('file_offset',16385),('sha256','0'*64)]:
+            with self.assertRaises(ValueError):mapped_header(raw,8192,4096,cache_pin={**pin,key:value})
+    def test_private_zero_offset_remains_required(self):
+        raw=DiscoveryTests().header()
+        self.assertEqual(mapped_header(raw,4096,0)['segments'][0]['file_offset'],0)

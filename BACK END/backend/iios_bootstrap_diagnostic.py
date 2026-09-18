@@ -18,7 +18,7 @@ def need(value, code):
         raise ValueError(code)
 
 
-def mapped_header(raw, address, slide, allow_dyld=False):
+def mapped_header(raw, address, slide, allow_dyld=False, cache_pin=None):
     need(type(raw) is bytes and 32 <= len(raw) <= 65568, 'HEADER_BOUND')
     magic,cpu,sub,kind,count,total,flags,reserved = struct.unpack_from('<8I',raw)
     need(magic == 0xfeedfacf and cpu == 0x100000c and (kind in (2,6,8) or (allow_dyld and kind==7)), 'HEADER_ARCH_KIND')
@@ -42,7 +42,13 @@ def mapped_header(raw, address, slide, allow_dyld=False):
                 max_protection=maxprot,initial_protection=prot))
         cursor+=size
     need(cursor==len(raw) and identity is not None and identity!='0'*32,'UUID_MISSING')
-    need(any(s['address']==address and s['file_offset']==0 and s['file_size']>=len(raw)
+    expected_offset=0
+    if cache_pin is not None:
+        need(type(cache_pin) is dict and set(cache_pin)=={'address','file_offset','sha256','cache_file'},'CACHE_HEADER_PIN')
+        need(address-slide==cache_pin['address'] and hashlib.sha256(raw).hexdigest()==cache_pin['sha256'],'CACHE_HEADER_IDENTITY')
+        expected_offset=cache_pin['file_offset']
+        need(type(expected_offset) is int and expected_offset>0,'CACHE_HEADER_OFFSET')
+    need(any(s['address']==address and s['file_offset']==expected_offset and s['file_size']>=len(raw)
              for s in segments),'HEADER_MAPPING')
     return dict(file_type=kind,uuid=identity,header_sha256=hashlib.sha256(raw).hexdigest(),segments=segments)
 
@@ -62,6 +68,10 @@ def review_scans(first, second, catalog, cache_uuids, expected_cache, expected=N
         need(row['file_type'] in (2,6,8) or (row['file_type']==7 and path=='/usr/lib/dyld'),'IMAGE_KIND')
         need(row['uuid']==pin['uuid'] and row['kind']==pin['kind'],'SUBSTITUTED_IMAGE')
         need(row['backing']==pin['backing'],'BACKING_IDENTITY')
+        if pin['kind']=='APPLE_SIGNED_CACHE':
+            cp=pin.get('header_mapping');need(type(cp) is dict,'CACHE_HEADER_PIN')
+            need(row['header_sha256']==cp['sha256'] and row['address']-row['slide']==cp['address'],'CACHE_HEADER_IDENTITY')
+            need(any(s['address']==row['address'] and s['file_offset']==cp['file_offset'] for s in row['segments']),'CACHE_HEADER_MAPPING')
         need(type(address) is int and 0<address<2**64 and type(row['slide']) is int,'MAPPING')
         need(re.fullmatch('[0-9a-f]{64}',row['header_sha256']) is not None,'HEADER_HASH')
         need(type(row['segments']) is list and row['segments'],'SEGMENTS')
@@ -97,8 +107,13 @@ def run(binding):
             path=rawname.decode('utf-8');need(path.startswith('/') and '\0' not in path,'IMAGE_PATH')
             prefix=ctypes.string_at(address,32);ncmds,total=struct.unpack_from('<II',prefix,16)
             need(0<ncmds<=512 and 0<total<=65536,'HEADER_BOUND')
-            value=mapped_header(ctypes.string_at(address,32+total),address,delta,allow_dyld=path=='/usr/lib/dyld')
             pin=catalog.get(path,{'kind':'UNREVIEWED','backing':None})
+            raw=ctypes.string_at(address,32+total)
+            try:
+                value=mapped_header(raw,address,delta,allow_dyld=path=='/usr/lib/dyld',cache_pin=pin.get('header_mapping') if pin['kind']=='APPLE_SIGNED_CACHE' else None)
+            except ValueError as error:
+                sys.stderr.write(json.dumps(dict(error=str(error),index=index,path=path,address=address,slide=delta,header_sha256=hashlib.sha256(raw).hexdigest()))+'\n')
+                raise
             rows.append(dict(index=index,path=path,address=address,slide=delta,kind=pin['kind'],backing=pin['backing'],**value))
         need(count()==n,'SCAN_INCOMPLETE')
         return rows

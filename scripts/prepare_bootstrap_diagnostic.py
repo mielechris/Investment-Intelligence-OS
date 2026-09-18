@@ -41,6 +41,40 @@ for _ in range(3):
 for path,uuid in osref['image_uuids'].items():
  assert path not in catalog
  catalog[path]={'uuid':uuid,'kind':'APPLE_SIGNED_CACHE','backing':{'cache_uuid':osref['cache_uuid'],'cache_set_sha256':sha(cache_set)}}
+# Derive exact header pins from the independently hash-bound signed cache mappings.
+import mmap,struct
+from iios_bootstrap_diagnostic import mapped_header
+cache_handles=[];cache_maps=[]
+try:
+ for row in osref['signed_files']:
+  path=Path(row['path']);assert path.stat().st_size==row['size'] and sha(path)==row['sha256']
+  file=path.open('rb');data=mmap.mmap(file.fileno(),0,access=mmap.ACCESS_READ);cache_handles.append((file,data))
+  assert data[88:104].hex()==row['uuid']
+  offset,count=struct.unpack_from('<II',data,16);assert count<=64 and offset+count*32<=len(data)
+  for i in range(count):
+   address,size,fileoff,maxprot,prot=struct.unpack_from('<QQQII',data,offset+i*32)
+   assert 0<size and fileoff+size<=len(data)
+   cache_maps.append((address,size,fileoff,data,str(path)))
+ base=cache_handles[0][1];offset,count=struct.unpack_from('<QQ',base,136)
+ assert count==len(osref['image_uuids']) and offset+count*32<=len(base)
+ seen=set()
+ for i in range(count):
+  uuid,address,textsize,pathoff=struct.unpack_from('<16sQII',base,offset+i*32)
+  assert 0<pathoff<len(base);end=base.find(b'\0',pathoff,min(pathoff+4096,len(base)));assert end>pathoff
+  path=base[pathoff:end].decode('ascii');assert path not in seen and osref['image_uuids'][path]==uuid.hex();seen.add(path)
+  matches=[row for row in cache_maps if row[0]<=address<row[0]+row[1]];assert len(matches)==1
+  start,size,fileoff,data,cache_file=matches[0];position=fileoff+address-start
+  assert position+32<=fileoff+size
+  ncmds,total=struct.unpack_from('<II',data,position+16)
+  assert 0<ncmds<=512 and 0<total<=65536 and position+32+total<=fileoff+size
+  raw=bytes(data[position:position+32+total])
+  pin={'address':address,'file_offset':position,'sha256':hashlib.sha256(raw).hexdigest(),'cache_file':cache_file}
+  header=mapped_header(raw,address,0,allow_dyld=path=='/usr/lib/dyld',cache_pin=pin)
+  assert header['uuid']==uuid.hex()
+  catalog[path]['header_mapping']=pin
+ assert seen==set(osref['image_uuids'])
+finally:
+ for file,data in cache_handles:data.close();file.close()
 stand=Path('/usr/lib/libffi-trampolines.dylib');assert str(stand) not in catalog
 catalog[str(stand)]={'uuid':image_uuid(stand.read_bytes()),'kind':'APPLE_LIBFFI_TRAMPOLINE','backing':{'path':str(stand),'sha256':sha(stand),'size':stand.stat().st_size}}
 catalog_file=put('INDEPENDENT-CANDIDATE-CATALOG.json',{'schema':'IIOS_DISCOVERY_CANDIDATES_V1','catalog':catalog,'cache_set_sha256':sha(cache_set),'purpose':'PROSPECTIVE_DISCOVERY_ONLY_NOT_ACCEPTED_MEMBERSHIP','measured_count':None,'historical_reference_recovered':False})
