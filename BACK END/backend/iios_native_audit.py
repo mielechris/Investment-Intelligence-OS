@@ -103,6 +103,8 @@ class ReviewedSourceLoader(importlib.machinery.SourceFileLoader):
             error.detail['stage']=self.stage();raise
         return compile(raw,self.path,'exec',dont_inherit=True)
     def verify(self,module):
+        require(self.path==self.row['origin'] and self.parent==self.row['sha256'] and self.row['kind']=='SOURCE'
+                and self.path.endswith('.py') and PurePosixPath(self.path).is_relative_to(self.row['root']),self.stage(),'MODULE_PINNED_ORIGIN')
         spec=getattr(module,'__spec__',None);package=self.name if self.row['package'] else self.name.rpartition('.')[0]
         locations=[str(PurePosixPath(self.path).parent)] if self.row['package'] else None
         require(type(spec) is ReviewedModuleSpec and spec.name==self.name and spec.origin==self.path and spec.loader is self,

@@ -279,3 +279,10 @@ class ExactSourceModuleTests(unittest.TestCase):
         self.assertEqual(report,verify_export(root,a.digest(m)))
         (root/'ADMISSION-STAGE-RECEIPT.json').write_text('{}')
         with self.assertRaises(QualificationFailure):verify_export(root,a.digest(m))
+
+    def test_coherent_origin_substitution_still_rejected(self):
+        finder,name,path,parent=self.fixture();module=finder.load(name,str(path),parent)
+        other=self.root/'substitution.py';other.write_bytes(path.read_bytes())
+        module.__file__=str(other);module.__spec__.origin=str(other);module.__loader__.path=str(other)
+        with self.assertRaises(QualificationFailure) as error:module.__loader__.verify(module)
+        self.assertEqual(error.exception.detail['predicate'],'MODULE_PINNED_ORIGIN')
