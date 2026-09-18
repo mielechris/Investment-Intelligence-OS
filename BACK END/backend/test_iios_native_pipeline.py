@@ -114,7 +114,9 @@ class PipelineTests(unittest.TestCase):
             if filename=='iios_native_assembly.py':namespace['prepare']=assembly_prepare
             if filename=='iios_native_image_policy.py':namespace['pin_file']=lambda *a:None
             if filename=='iios_native_static.py':namespace['verify']=lambda *a,**kw:copy.deepcopy(fixture['static'])
-            if filename=='iios_native_lifecycle.py':namespace['prepare']=lifecycle_prepare
+            if filename=='iios_native_lifecycle.py':
+                namespace['prepare']=lifecycle_prepare
+                namespace['verify_inspector_tools']=lambda *a:True
         with ExitStack() as stack:
             for target,value in [('iios_native_dispatcher.require_execution_ready',None),('iios_native_dispatcher.admit_source',True),('iios_native_dispatcher.admit_terminal',True),('alpha_runtime_files.verify_manifest',True),('iios_native_image_policy.pin_file',True)]:
                 stack.enter_context(patch(target,return_value=value))

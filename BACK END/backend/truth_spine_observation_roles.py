@@ -56,8 +56,10 @@ def admit_roles(document, expected, *, approved_roots, now):
     require(type(d) is dict and set(d)==fields|({'conductor'} if conductor_version else set()),'DISPOSABLE_SCHEMA')
     if conductor_version:
         b=d['conductor']
-        require(type(b) is dict and set(b)=={'manifest','source','runtime_reference','runtime_acceptance','host','output_root','output_identity','execution_root','process_image','clock_basis','inspection_tools'},'DISPOSABLE_CONDUCTOR_SCHEMA')
+        require(type(b) is dict and set(b)=={'manifest','source','runtime_reference','runtime_acceptance','host','output_root','output_identity','execution_root','process_image','clock_basis','inspection_tools','inspection_policy'},'DISPOSABLE_CONDUCTOR_SCHEMA')
         require(b['source']==d['source_commit'] and all(type(b[k]) is str and re.fullmatch('[0-9a-f]{64}',b[k]) for k in ('manifest','runtime_reference','runtime_acceptance','host')),'DISPOSABLE_CONDUCTOR_PARENTS')
+        from iios_native_role_transport import POLICY
+        require(b['inspection_policy']==POLICY,'DISPOSABLE_INSPECTION_POLICY')
         require(type(b['inspection_tools']) is dict and set(b['inspection_tools'])=={'/bin/ps','/usr/sbin/lsof'} and all(type(v) is str and re.fullmatch('[0-9a-f]{64}',v) for v in b['inspection_tools'].values()),'DISPOSABLE_INSPECTION_TOOLS')
         require(b['clock_basis']=='DARWIN_CLOCK_MONOTONIC_RAW_NS','DISPOSABLE_CLOCK_BASIS')
         root=PurePosixPath(b['output_root'])

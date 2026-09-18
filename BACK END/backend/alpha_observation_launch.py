@@ -119,13 +119,16 @@ def observed(value):
     return row
 
 
-def listener_pids(port):
-    result=subprocess.run(['/usr/sbin/lsof','-nP','-iTCP:'+str(port),'-sTCP:LISTEN','-Fp'],
+def listener_pids(port,*,registered_pid=None):
+    if registered_pid is not None:require(type(registered_pid) is int and registered_pid>1,'LAUNCH_LISTENER_REGISTERED_PID')
+    argv=['/usr/sbin/lsof']+(['-a','-p',str(registered_pid)] if registered_pid is not None else [])+['-nP','-iTCP:'+str(port),'-sTCP:LISTEN','-Fp']
+    result=subprocess.run(argv,
         env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=2,check=False)
     require(len(result.stdout)<=4096 and not result.stderr and result.returncode in (0,1), 'LAUNCH_LISTENER_INSPECTION')
     require(all(re.fullmatch(rb'p[1-9][0-9]*',v) for v in result.stdout.splitlines()), 'LAUNCH_LISTENER_FORMAT')
     pids=[int(v[1:]) for v in result.stdout.splitlines()]
     require((result.returncode==1 and not pids) or (result.returncode==0 and bool(pids)), 'LAUNCH_LISTENER_STATUS')
+    if registered_pid is not None:require(all(p==registered_pid for p in pids),'LAUNCH_LISTENER_UNRELATED_PID')
     return pids
 
 

@@ -17,10 +17,10 @@ def bound_json(binding):
 RULES=(('version','1'),('deny','default'),('allow','file-read-metadata'),
     ('allow','file-read*',('subpath','@RUNTIME@'),('subpath','@RELEASE@'),('subpath','@CONTROL@'),('subpath','@OUTPUT@'),
      ('literal','@CONFIG@'),('literal','@DRIVER@'),('subpath','/System/Library'),('subpath','/usr/lib'),
-     ('literal','/bin/ps'),('literal','/usr/sbin/lsof'),('literal','/usr/bin/sandbox-exec'),
+     ('literal','/bin/ps'),('literal','/usr/sbin/lsof'),
      ('literal','/dev/null'),('literal','/dev/urandom'),('literal','/dev/random')),
     ('allow','file-write*',('subpath','@OUTPUT@')),
-    ('allow','process-exec',('literal','@INTERPRETER@'),('literal','@PROCESS_IMAGE@'),('literal','/bin/ps'),('literal','/usr/sbin/lsof'),('literal','/usr/bin/sandbox-exec')),
+    ('allow','process-exec',('literal','@INTERPRETER@'),('literal','@PROCESS_IMAGE@'),('literal','/bin/ps'),('literal','/usr/sbin/lsof')),
     ('allow','sysctl-read'),('allow','network-outbound',('remote','ip','@ENDPOINT@')),
     ('allow','network-inbound',('local','ip','@ENDPOINT@')),('allow','network-bind',('local','ip','@ENDPOINT@')))
 
@@ -49,16 +49,29 @@ def reviewed_profile(manifest,d,roots):
     need(review['scope']=='DISPOSABLE_NATIVE_QUALIFICATION_ONLY' and review['default_deny'] is True and
         review['network']==['127.0.0.1:38493'] and review['credentials'] is False and review['providers'] is False,
         'LIFECYCLE_PROFILE_SCOPE')
-    required=['/bin/ps','/usr/sbin/lsof','/usr/bin/sandbox-exec']
+    required=['/bin/ps','/usr/sbin/lsof']
+    need(all(p in manifest['tool_pins'] for p in required),'LIFECYCLE_PROFILE_TOOL_IDENTITY_MISSING')
     need(review['inspection_tools']=={p:manifest['tool_pins'][p] for p in required},'LIFECYCLE_PROFILE_INSPECTION_TOOLS')
+    from iios_native_role_transport import POLICY
+    need(review.get('inspector_policy')==POLICY,'LIFECYCLE_INSPECTOR_POLICY')
+    need(review.get('host')==manifest['terminal_binding']['host'] and review.get('os_build')==manifest['os_build'],'LIFECYCLE_PROFILE_OS_BINDING')
+    rendered=render_profile(raw,manifest,roots,review['substitutions'])
+    bound=d.get('profile_rendered',{})
+    need(bound.get('sha256')==sha(rendered),'LIFECYCLE_RENDERED_PROFILE_HASH')
+    pin_file(bound['path'],bound['sha256'])
+    need(Path(bound['path']).read_bytes()==rendered,'LIFECYCLE_RENDERED_PROFILE_BYTES')
+    return rendered,digest(review)
+
+
+def render_profile(raw,manifest,roots,expected_substitutions):
     image=Path(manifest['native']['runtime_acceptance']['image_relative'])
     need(not image.is_absolute() and '..' not in image.parts and str(image)==manifest['native']['runtime_acceptance']['image_relative'],'LIFECYCLE_PROFILE_IMAGE_PATH')
     substitutions={'@PROCESS_IMAGE@':str(Path(roots['runtime'])/image),'@RUNTIME@':roots['runtime'],'@RELEASE@':roots['release'],'@CONTROL@':roots['control'],
         '@OUTPUT@':roots['output'],'@CONFIG@':str(Path(roots['output']).parent/'qualification.json'),'@DRIVER@':str(Path(roots['output']).parent/'conductor-lifecycle.py'),'@INTERPRETER@':roots['runtime']+'/bin/python3.14','@ENDPOINT@':'127.0.0.1:38493'}
     text=raw.decode('ascii');need('(deny default)' in text,'LIFECYCLE_DEFAULT_DENY')
-    need(review['substitutions']==sorted(substitutions),'LIFECYCLE_PROFILE_SUBSTITUTIONS')
+    need(expected_substitutions==sorted(substitutions),'LIFECYCLE_PROFILE_SUBSTITUTIONS')
     for marker,value in substitutions.items():
         need(marker in text and all(c not in value for c in ('"','\\','\n','\r')),'LIFECYCLE_PROFILE_PATH')
         text=text.replace(marker,json.dumps(value))
     need('@' not in text,'LIFECYCLE_PROFILE_UNBOUND_MARKER')
-    return text.encode(),digest(review)
+    return text.encode()

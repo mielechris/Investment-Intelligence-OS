@@ -62,6 +62,11 @@ def require_execution_ready(manifest):
     execution=Path(manifest['output_parent'])/manifest['output_name']/'payload/assembly-output/execution-01'
     roots={k:str(execution/v) for k,v in {'runtime':'output/runtime-pilot','release':'release','control':'control','output':'disposable'}.items()}
     reviewed_profile(manifest,lifecycle,roots)
+    import plistlib
+    identity=manifest.get('os_identity',{})
+    require(identity.get('path')=='/System/Library/CoreServices/SystemVersion.plist',STAGES[0],'OS_BUILD_IDENTITY_PATH')
+    pin_file(identity['path'],identity['sha256'])
+    require(plistlib.loads(Path(identity['path']).read_bytes()).get('ProductBuildVersion')==manifest['os_build'],STAGES[0],'OS_BUILD_IDENTITY')
 
 
 def terminal_categories(term,ttys,forbidden_markers,host,expected_host):

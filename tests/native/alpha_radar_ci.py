@@ -394,13 +394,8 @@ def prepare(root, commit, *, full_session=False, tail_measurement=False, through
         put(source/name, data)
         source_inventory.append({'path':relative, 'size':len(data), 'sha256':digest(data)})
     fixture = runtime/'fixture'; fixture.mkdir(mode=0o700)
-    config = root/'certificate.cnf'
-    put(config, b'[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n'
-        b'[dn]\nCN=Alpha Radar SYNTHETIC TEST ONLY\n[ext]\nsubjectAltName=IP:127.0.0.1\n'
-        b'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\n'
-        b'extendedKeyUsage=serverAuth\n')
-    command(['/usr/bin/openssl','req','-x509','-newkey','rsa:2048','-nodes','-sha256','-days','1',
-             '-config',str(config),'-keyout',str(fixture/'private-key.pem'),'-out',str(fixture/'certificate.pem')])
+    from alpha_dummy_tls import create_dummy_tls
+    create_dummy_tls(root/'certificate.cnf',fixture,command=command,put=put)
     for path in fixture.iterdir(): path.chmod(0o400)
     document(fixture/'responses.json', {'scope':'SYNTHETIC_TEST_ONLY','faults':{}})
     # Preparation never binds a port. Availability is independently checked by

@@ -53,9 +53,22 @@ def prepare(context,parents,policy,deadline,budget):
     d=context.manifest['native']['lifecycle'];files={'release':copy_sources(context,d['release_sources'],Path(roots['release'])),'control':[]}
     profile,review_parent=reviewed_profile(context.manifest,d,roots)
     controls={'profile.sb':profile}
-    for name in ('loopback.crt','loopback.pem'):
-        b=d['dummy_tls'][name];pin_file(b['path'],b['sha256']);raw=Path(b['path']).read_bytes()
-        need(sha(raw)==b['sha256'],'LIFECYCLE_DUMMY_TLS_MUTATION');controls[name]=raw
+    from alpha_dummy_tls import create_dummy_tls
+    import ssl
+    tls_policy=d['dummy_tls_recipe']
+    need(tls_policy=={'scope':'SYNTHETIC_TEST_ONLY','generator':'/usr/bin/openssl','maximum_ns':30_000_000_000},'LIFECYCLE_DUMMY_TLS_RECIPE')
+    tls_root=execution/'dummy-tls';tls_root.mkdir(mode=0o700)
+    tls_end=min(deadline,budget.work_end,context.clock()+tls_policy['maximum_ns'])
+    def command(argv):
+        need(argv[0]=='/usr/bin/openssl','LIFECYCLE_DUMMY_TLS_TOOL')
+        for path in (tls_root/'private-key.pem',tls_root/'certificate.pem'):need(not path.exists() and not path.is_symlink(),'LIFECYCLE_DUMMY_TLS_ABSENCE')
+        rc,out,err=context.tool(argv,tls_end,context.manifest['tool_pins']);need(rc==0,'LIFECYCLE_DUMMY_TLS_GENERATION')
+        context.check('LIFECYCLE_DUMMY_TLS_DEADLINE')
+    certificate,key=create_dummy_tls(tls_root/'certificate.cnf',tls_root,command=command,put=publish)
+    for name,path in (('loopback.crt',certificate),('loopback.pem',key)):
+        st=path.lstat();need(stat.S_ISREG(st.st_mode) and st.st_uid==os.getuid() and st.st_nlink==1 and st.st_size<=16384,'LIFECYCLE_DUMMY_TLS_FILE')
+        path.chmod(0o400);controls[name]=path.read_bytes()
+    peer_hash=sha(ssl.PEM_cert_to_DER_cert(controls['loopback.crt'].decode('ascii')))
     for name,raw in sorted(controls.items()):
         publish(Path(roots['control'])/name,raw);files['control'].append({'path':name,'size':len(raw),'mode':0o400,'sha256':sha(raw)})
     now=context.clock();final=min(deadline,budget.work_end,now+780_000_000_000)
@@ -66,7 +79,8 @@ def prepare(context,parents,policy,deadline,budget):
     image_relative=context.manifest['native']['runtime_acceptance']['image_relative']
     image_row=next((r for r in policy['rows'] if r.get('file')==image_relative and r['kind']=='PRIVATE_SEALED'),None)
     need(image_row is not None,'LIFECYCLE_PROCESS_IMAGE_POLICY')
-    linkage={'inspection_tools':{p:context.manifest['tool_pins'][p] for p in ('/bin/ps','/usr/sbin/lsof')},'clock_basis':'DARWIN_CLOCK_MONOTONIC_RAW_NS','process_image':{'path':policy['runtime_root']+'/'+image_relative,'sha256':image_row['sha256']},'manifest':context.parent,'source':context.manifest['source']['commit'],
+    from iios_native_role_transport import POLICY
+    linkage={'inspection_policy':POLICY,'inspection_tools':{p:context.manifest['tool_pins'][p] for p in ('/bin/ps','/usr/sbin/lsof')},'clock_basis':'DARWIN_CLOCK_MONOTONIC_RAW_NS','process_image':{'path':policy['runtime_root']+'/'+image_relative,'sha256':image_row['sha256']},'manifest':context.parent,'source':context.manifest['source']['commit'],
         'runtime_reference':digest(parents[STAGES[6]]),'runtime_acceptance':digest(parents[STAGES[7]]),
         'host':digest(parents[STAGES[1]]),'output_root':str(context.root),'output_identity':output_identity,'execution_root':str(execution)}
     previous=None;seeds=[]
@@ -75,7 +89,7 @@ def prepare(context,parents,policy,deadline,budget):
         'source_commit':context.manifest['source']['commit'],'roots':roots,'runtime':runtime,'runtime_parent':content_hash(runtime),
         'input_files':files,'release_parent':content_hash(files['release']),'control_parent':content_hash(files['control']),
         'seed_parents':seeds,'valid_from':stamp.isoformat(),'expires_at':(stamp+timedelta(seconds=(final-now)/1e9)).isoformat(),
-        'launch':{'host':'127.0.0.1','port':38493,'peer_hash':d['peer_hash'],'sandbox_hash':context.manifest['tool_pins']['/usr/bin/sandbox-exec'],
+        'launch':{'host':'127.0.0.1','port':38493,'peer_hash':peer_hash,'sandbox_hash':context.manifest['tool_pins']['/usr/bin/sandbox-exec'],
             'host_identity':d['host_identity'],'start_ns':now,'startup_ns':startup,'stop_ns':stop,'final_ns':final},
         'authority':locked_authority(),'conductor':linkage}
     cap=admit_roles(doc,content_hash(doc),approved_roots=roots,now=stamp)
@@ -151,6 +165,18 @@ def decode_functional(raw,parent):
     verify_functional(value,parent);return value
 
 
+def verify_inspector_tools(context,deadline):
+    from iios_native_role_transport import TOOLS
+    for path in TOOLS:
+        expected=context.manifest['tool_pins'].get(path)
+        need(expected is not None,'LIFECYCLE_INSPECTOR_TOOL_PIN')
+        pin_file(path,expected)
+        rc,out,err=context.tool(['/usr/bin/codesign','--verify','--strict','-R=anchor apple',path],deadline,context.manifest['tool_pins'])
+        need(rc==0,'LIFECYCLE_INSPECTOR_APPLE_SIGNATURE')
+        pin_file(path,expected)
+    return True
+
+
 def run_stage(context,row,deadline,budget):
     parents={s:context.require_completed(s) for s in (STAGES[1],STAGES[2],STAGES[3],STAGES[4],STAGES[5],STAGES[6],STAGES[7])}
     reference=parents[STAGES[6]];acceptance=parents[STAGES[7]]
@@ -159,6 +185,7 @@ def run_stage(context,row,deadline,budget):
     policy_path=context.root/'PRODUCTION-RUNTIME-IMAGE-POLICY.json'
     need(reference['detail']['policy_path']==str(policy_path),'LIFECYCLE_EXTERNAL_REFERENCE_PATH')
     policy=json.loads(policy_path.read_bytes());need(digest(policy)==reference['detail']['policy_parent'],'LIFECYCLE_REFERENCE_HASH')
+    verify_inspector_tools(context,deadline)
     cap,config,config_path,profile,profile_review=prepare(context,parents,policy,deadline,budget)
     from provider_gateway_contract import content_hash
     doc=cap.document();d=context.manifest['native']['runtime_acceptance']

@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from iios_native_conductor import QualificationFailure,canonical
-from iios_native_profile import template_bytes,reviewed_profile
+from iios_native_profile import template_bytes,reviewed_profile,render_profile
 from iios_native_lifecycle import decode_functional
 
 class ProfileTests(unittest.TestCase):
@@ -14,13 +14,16 @@ class ProfileTests(unittest.TestCase):
         raw=template_bytes() if template is None else template
         def bind(name,data):
             path=root/name;path.write_bytes(data);return {'path':str(path),'sha256':hashlib.sha256(data).hexdigest()}
-        tools=dict.fromkeys(('/bin/ps','/usr/sbin/lsof','/usr/bin/sandbox-exec'),'a'*64)
-        review={'template_sha256':hashlib.sha256(raw).hexdigest(),'scope':'DISPOSABLE_NATIVE_QUALIFICATION_ONLY',
+        tools=dict.fromkeys(('/bin/ps','/usr/sbin/lsof'),'a'*64)
+        from iios_native_role_transport import POLICY
+        host={'system':'Darwin','release':'25.5.0','machine':'arm64','uid':501}
+        review={'host':host,'os_build':'25F80','inspector_policy':POLICY,'template_sha256':hashlib.sha256(raw).hexdigest(),'scope':'DISPOSABLE_NATIVE_QUALIFICATION_ONLY',
             'default_deny':True,'network':['127.0.0.1:38493'],'credentials':False,'providers':False,'inspection_tools':tools,
             'substitutions':sorted(('@PROCESS_IMAGE@','@RUNTIME@','@RELEASE@','@CONTROL@','@OUTPUT@','@CONFIG@','@DRIVER@','@INTERPRETER@','@ENDPOINT@'))}
-        m={'tool_pins':tools,'native':{'runtime_acceptance':{'image_relative':'Python.framework/Python'}}}
+        m={'terminal_binding':{'host':host},'os_build':'25F80','tool_pins':tools,'native':{'runtime_acceptance':{'image_relative':'Python.framework/Python'}}}
         d={'profile_template':bind('profile',raw),'profile_review':bind('review',canonical(review))}
         roots={k:str(root/k) for k in ('runtime','release','control','output')}
+        d['profile_rendered']=bind('rendered',render_profile(raw,m,roots,review['substitutions']))
         return m,d,roots
     def test_exact_profile_only_substitutes_pinned_roots(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -33,10 +36,20 @@ class ProfileTests(unittest.TestCase):
                 m,d,roots=self.fixture(Path(directory),template_bytes()+suffix)
                 with self.assertRaises(QualificationFailure) as c:reviewed_profile(m,d,roots)
                 self.assertEqual(c.exception.detail['predicate'],'LIFECYCLE_PROFILE_OPERATION_ALLOWLIST')
+    def test_old_profile_cannot_satisfy_new_scope(self):
+        old=template_bytes().replace(b' (literal "/bin/ps")',b'').replace(b' (literal "/usr/sbin/lsof")',b'')
+        with tempfile.TemporaryDirectory() as directory:
+            m,d,roots=self.fixture(Path(directory),old)
+            with self.assertRaises(QualificationFailure) as c:reviewed_profile(m,d,roots)
+            self.assertEqual(c.exception.detail['predicate'],'LIFECYCLE_PROFILE_OPERATION_ALLOWLIST')
+        self.assertNotIn(b'/usr/bin/sandbox-exec',template_bytes())
     def test_changed_tool_image_escape_and_template_mutation_fail(self):
-        for mutation in ('tool','image','template'):
+        for mutation in ('tool','image','template','os_build','host','rendered'):
             with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory:
                 m,d,roots=self.fixture(Path(directory))
+                if mutation=='rendered':Path(d['profile_rendered']['path']).write_bytes(b'changed')
+                if mutation=='os_build':m['os_build']='ALTERED'
+                if mutation=='host':m['terminal_binding']={'host':{'system':'OTHER'}}
                 if mutation=='tool':m['tool_pins']['/bin/ps']='b'*64
                 if mutation=='image':m['native']['runtime_acceptance']['image_relative']='../outside'
                 if mutation=='template':Path(d['profile_template']['path']).write_bytes(b'changed')
@@ -70,3 +83,25 @@ class LifecycleReportTests(unittest.TestCase):
     def test_overflow_duplicate_nonfinite_rejected(self):
         for raw in (b'x'*(4*1024*1024+1),b'{"a":1,"a":2}',b'{"a":NaN}'):
             with self.assertRaises(QualificationFailure):decode_functional(raw,'a'*64)
+
+
+class InspectorSignatureTests(unittest.TestCase):
+    def test_exact_apple_anchor_tool_commands_and_failure(self):
+        from unittest.mock import Mock,patch
+        from iios_native_lifecycle import verify_inspector_tools
+        from iios_native_role_transport import TOOLS
+        context=Mock();context.manifest={'tool_pins':dict.fromkeys((*TOOLS,'/usr/bin/codesign'),'a'*64)}
+        context.tool.return_value=(0,b'',b'')
+        with patch('iios_native_lifecycle.pin_file'):
+            self.assertTrue(verify_inspector_tools(context,100))
+            self.assertEqual([call.args[0] for call in context.tool.call_args_list],[['/usr/bin/codesign','--verify','--strict','-R=anchor apple',p] for p in TOOLS])
+            context.tool.return_value=(1,b'',b'not retained')
+            with self.assertRaises(QualificationFailure) as c:verify_inspector_tools(context,100)
+            self.assertEqual(c.exception.detail['predicate'],'LIFECYCLE_INSPECTOR_APPLE_SIGNATURE')
+    def test_audit_and_os_denial_categories_remain_distinct(self):
+        from iios_native_conductor import failure
+        audit=QualificationFailure('DISPOSABLE_CONFINEMENT_AND_LIFECYCLE','ROLE_INSPECTION_REGISTERED_PID','REGISTERED','OTHER',exception='PermissionError',errno_category='AUDIT_POLICY')
+        os_denial=PermissionError(13,'not retained')
+        self.assertEqual(failure(audit,'CONDUCTOR','ERROR')['errno_category'],'AUDIT_POLICY')
+        self.assertEqual(failure(os_denial,'DISPOSABLE_CONFINEMENT_AND_LIFECYCLE','INSPECTOR_DENIED')['errno_category'],'EACCES')
+        self.assertNotEqual(failure(audit,'CONDUCTOR','ERROR')['predicate'],failure(os_denial,'CONDUCTOR','ERROR')['predicate'])

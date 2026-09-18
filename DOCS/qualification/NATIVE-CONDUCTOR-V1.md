@@ -57,7 +57,7 @@ launcher and uses the original Darwin monotonic clock domain without resetting i
 The same exact profile covers the role runner and dummy denial trials. The shared
 profile admission rejects broadened rules even when a changed profile is rehashed.
 Only a separately pinned review can bind the template and exact inspection tools.
-The profile revision adds exact ps/lsof/sandbox-exec and process-image paths; it must
+The profile revision adds exact ps/lsof and process-image paths; it must
 not be described as previously native-qualified. Filesystem, dummy credential-marker,
 dummy executable and fixed loopback comparisons require both an allowed baseline and
 OS-attributed denial from the existing bounded collector. Errno alone never qualifies.
@@ -117,3 +117,21 @@ Both dynamic scans must be complete, contain required images, match the exact
 policy identities, contain no duplicate paths, and match in order and content.
 The accepted image-address stability check also remains in the generated child.
 Mapped-memory integrity remains UNVERIFIED; boot attestation remains UNRESOLVED.
+
+## Minimal inspector profile revision
+
+Only ps and lsof are additional executable grants. The parent receives the exact
+sandbox once; v3 role children execute the pinned interpreter directly and inherit
+that sandbox. Application admission accepts only five fixed inspector/listener
+command templates, the exact safe environment, a one-second cap and 65,536 bytes
+per stream. Every PID must be self or retained from an actual owning handle.
+Listener queries intersect the fixed port with one registered PID; broad lsof
+listing is rejected. PID reuse remains subject to full independent owner identity
+comparisons. Missing hashes, extra tools, shell options and altered argv fail.
+
+Profile template and rendered bytes, source review, OS build/identity, host, tool
+hashes and command policy are bound together. The controller verifies each tool's
+Apple anchor before lifecycle effects; no source test claims that native check ran.
+Old profiles are preserved and cannot satisfy the new scope. Sandbox-attributed
+denial still requires the existing OS collector; an audit denial or EACCES alone
+never substitutes for OS confinement evidence.

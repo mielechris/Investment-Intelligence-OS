@@ -240,10 +240,15 @@ class ObservationLifecycle:
             port=self.launch['port'] if role=='backend' else None
             if port is not None:args+=['--port',str(port)]
             launch=self.children.prepare_launch(role,args,executable_hashes=pins,port=port,final_executable=final_executable)
-            child=subprocess.Popen(['/usr/bin/sandbox-exec','-f',self.document['roots']['control']+'/profile.sb',*launch.argv],
+            inherited=self.document.get('schema')=='iios-disposable-observation-roles-v3'
+            command=list(launch.argv) if inherited else ['/usr/bin/sandbox-exec','-f',self.document['roots']['control']+'/profile.sb',*launch.argv]
+            child=subprocess.Popen(command,
                 cwd=self.document['roots']['release'],env={'LANG':'C','LC_ALL':'C','TZ':'UTC'},
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
             self.children.retain_observation_child(role,child,launch)
+            if inherited:
+                from iios_native_role_transport import register_child
+                register_child(child)
             child.stdin.close()
             for name in ('stdout','stderr'):os.set_blocking(getattr(child,name).fileno(),False)
             self.streams[role]={name:(getattr(child,name),0) for name in ('stdout','stderr')}
