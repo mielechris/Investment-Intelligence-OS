@@ -122,20 +122,41 @@ class Budget:
 
 
 def pin_file(path, expected):
-    """Stable no-follow regular file with a pinned SHA-256, without mutation."""
-    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    """Pin regular bytes through retained no-follow directory handles.
+
+    Preparation and native admission use the same policy: aliases are not inputs.
+    Every ancestor is opened without following links, then checked again against
+    its retained parent. A same-bytes replacement is still an identity failure.
+    """
+    path=Path(path)
+    require(path.is_absolute() and '..' not in path.parts,STAGES[0],'INPUT_ABSOLUTE_PATH')
+    handles=[];chain=[];fd=None
+    identity=lambda s:(s.st_dev,s.st_ino,s.st_uid,s.st_mode)
+    key=lambda s:identity(s)+(s.st_size,s.st_mtime_ns,s.st_ctime_ns)
     try:
+        parent=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);handles.append(parent)
+        for part in path.parts[1:-1]:
+            before=os.stat(part,dir_fd=parent,follow_symlinks=False)
+            require(stat.S_ISDIR(before.st_mode),STAGES[0],'INPUT_ANCESTOR_DIRECTORY')
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            handles.append(child)
+            require(identity(before)==identity(os.fstat(child)),STAGES[0],'INPUT_ANCESTOR_MUTATION')
+            chain.append((parent,part,child,identity(before)));parent=child
+        fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
         before=os.fstat(fd);require(stat.S_ISREG(before.st_mode),STAGES[0],'INPUT_REGULAR_FILE')
         h=hashlib.sha256()
         while True:
             b=os.read(fd,65536)
             if not b:break
             h.update(b)
-        key=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_mode,s.st_uid)
-        require(key(before)==key(os.fstat(fd))==key(os.stat(path,follow_symlinks=False)),STAGES[0],'INPUT_MUTATION')
+        require(key(before)==key(os.fstat(fd))==key(os.stat(path.name,dir_fd=parent,follow_symlinks=False)),STAGES[0],'INPUT_MUTATION')
+        for owner,name,child,original in reversed(chain):
+            require(original==identity(os.fstat(child))==identity(os.stat(name,dir_fd=owner,follow_symlinks=False)),STAGES[0],'INPUT_ANCESTOR_MUTATION')
         require(h.hexdigest()==expected,STAGES[0],'INPUT_HASH')
         return {'sha256':expected,'size':before.st_size}
-    finally:os.close(fd)
+    finally:
+        if fd is not None:os.close(fd)
+        for handle in reversed(handles):os.close(handle)
 
 
 class Journal:

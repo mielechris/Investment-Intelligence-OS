@@ -167,3 +167,38 @@ class OutputRaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp).resolve();target=base/'parent';target.mkdir(mode=0o700);alias=base/'alias';alias.symlink_to(target)
             with self.assertRaises(OSError):owned_directory(str(alias))
+
+
+class NoAliasInputTests(unittest.TestCase):
+    def test_versioned_regular_input_admitted_aliases_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();version=root/'SDK26';version.mkdir();p=version/'header';p.write_bytes(b'pin')
+            h=hashlib.sha256(b'pin').hexdigest()
+            self.assertEqual(pin_file(p,h)['size'],3)
+            for name,target in [('relative','SDK26'),('absolute',str(version))]:
+                alias=root/name;alias.symlink_to(target)
+                with self.subTest(name=name),self.assertRaises(QualificationFailure) as ctx:pin_file(alias/'header',h)
+                self.assertEqual(ctx.exception.detail['predicate'],'INPUT_ANCESTOR_DIRECTORY')
+    def test_ancestor_replacement_during_read_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();version=root/'SDK26';version.mkdir();p=version/'header';p.write_bytes(b'pin')
+            read=os.read;swapped=False
+            def race(fd,size):
+                nonlocal swapped
+                data=read(fd,size)
+                if not swapped:
+                    swapped=True;version.rename(root/'old');version.mkdir();(version/'header').write_bytes(b'pin')
+                return data
+            with patch('iios_native_conductor.os.read',side_effect=race),self.assertRaises(QualificationFailure) as ctx:pin_file(p,hashlib.sha256(b'pin').hexdigest())
+            self.assertEqual(ctx.exception.detail['predicate'],'INPUT_ANCESTOR_MUTATION')
+    def test_changed_bytes_and_unapproved_leaf_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();p=root/'header';p.write_bytes(b'altered');h=hashlib.sha256(b'pin').hexdigest()
+            with self.assertRaises(QualificationFailure) as ctx:pin_file(p,h)
+            self.assertEqual(ctx.exception.detail['predicate'],'INPUT_HASH')
+            alias=root/'alias';alias.symlink_to(p)
+            with self.assertRaises(OSError):pin_file(alias,h)
+    def test_relative_and_traversal_inputs_rejected(self):
+        for p in ['relative','/private/tmp/../tmp/input']:
+            with self.subTest(path=p),self.assertRaises(QualificationFailure) as ctx:pin_file(p,'0'*64)
+            self.assertEqual(ctx.exception.detail['predicate'],'INPUT_ABSOLUTE_PATH')

@@ -135,3 +135,22 @@ Apple anchor before lifecycle effects; no source test claims that native check r
 Old profiles are preserved and cannot satisfy the new scope. Sandbox-attributed
 denial still requires the existing OS collector; an audit denial or EACCES alone
 never substitutes for OS confinement evidence.
+
+## Canonical preparation inputs
+
+Input pinning opens every ancestor through retained no-follow directory handles,
+checks owner/mode/device/inode before and after reading, and verifies file bytes
+and stable file metadata. Preparation and native admission share this function.
+Symlink ancestors, traversal and same-byte directory replacement fail closed.
+The audit policy still rejects all symlinks; no alias grant is introduced.
+
+The SDK header is a preparation provenance input, not a native adapter pathname.
+Package preparation must bind its reviewed versioned SDK path directly rather
+than the mutable MacOSX.sdk selector. Existing historical records remain intact;
+this is a fresh inventory binding, not a rewrite of old evidence.
+
+An entrypoint failure before fresh_root() prints sanitized RED diagnostics but
+has no native journal/export receipt. Do not fabricate those records or interpret
+native_execution_entered as evidence of a launched workload. A reconstruction
+must distinguish reported stdout, independently verified inputs/current absence,
+and source-order inference from a persisted native observation.
