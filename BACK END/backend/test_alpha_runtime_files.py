@@ -515,7 +515,7 @@ class AssemblyVerifierImportBoundaryTests(unittest.TestCase):
             if isinstance(node,ast.Import):imports.extend(alias.name.split('.')[0] for alias in node.names)
             elif isinstance(node,ast.ImportFrom):imports.append((node.module or '').split('.')[0])
         self.assertEqual(set(imports),{'ctypes','errno','hashlib','json','os','pathlib',
-                                      'platform','plistlib','re','stat','sys'})
+                                      'platform','plistlib','pwd','re','stat','sys'})
         self.assertFalse(set(imports)&{'alpha_session_contract','alpha_session_evidence',
             'deployment_contract','provider_gateway_contract','truth_spine_session'})
 
@@ -1160,3 +1160,27 @@ class AssemblyOutputParentTests(unittest.TestCase):
             os.chmod(self.parent,0o755)
             with self.assertRaisesRegex(ValueError,'ASSEMBLY_OUTPUT_PARENT_CHANGED'):
                 rf.admit_assembly_prelaunch([],{},'a',{},'b',self.document,self.digest)
+
+
+class DurableQualificationPathTests(unittest.TestCase):
+    def test_only_current_account_qualification_descendants_admitted(self):
+        account=Mock(pw_dir='/Users/recovery-test')
+        base='/Users/recovery-test/Library/Application Support/IIOS/qualification'
+        with patch.object(rf.pwd,'getpwuid',return_value=account):
+            rf._root(base+'/version-01/bootstrap',base+'/version-01/bootstrap')
+            from alpha_observation_launch import lexical
+            self.assertEqual(str(lexical(base+'/version-01/bootstrap')),base+'/version-01/bootstrap')
+            for path in (base,base+'/version-01',base.replace('recovery-test','other')+'/v/bootstrap',
+                         base.replace('IIOS','Other')+'/v/bootstrap',base+'/v/Keychains',
+                         base+'/v/Application Support/tree',base+'/v/.ssh/tree'):
+                with self.subTest(path=path):
+                    with self.assertRaisesRegex(ValueError,'RUNTIME_ROOT_PATH'):rf._root(path,path)
+                    with self.assertRaisesRegex(ValueError,'LAUNCH_PATH'):lexical(path)
+
+    def test_durable_permission_gate_rejects_shared_ancestor(self):
+        account=Mock(pw_dir='/Users/recovery-test')
+        root='/Users/recovery-test/Library/Application Support/IIOS/qualification/v/bootstrap'
+        bad=Mock(st_uid=os.getuid(),st_mode=stat.S_IFDIR|0o755)
+        with patch.object(rf.pwd,'getpwuid',return_value=account),patch.object(rf.os,'open',return_value=77),\
+             patch.object(rf.os,'close'),patch.object(rf.os,'fstat',return_value=bad):
+            with self.assertRaisesRegex(ValueError,'QUALIFICATION_DIRECTORY_MODE'):rf.open_root(root,root)

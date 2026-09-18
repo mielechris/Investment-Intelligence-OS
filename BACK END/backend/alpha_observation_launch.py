@@ -31,8 +31,8 @@ STREAM_LIMIT = 4096
 
 def lexical(path):
     parts = path_parts(path, absolute=True)
-    require(not any(p.lower() in {'keychains', 'ledger', 'ledgers', 'l7', 'l8', '.ssh', '.aws',
-        '.env', 'application support'} or p.startswith('~') for p in parts), 'LAUNCH_PATH')
+    from alpha_runtime_files import runtime_path_allowed
+    require(runtime_path_allowed(parts), 'LAUNCH_PATH')
     return PurePosixPath(path)
 
 

@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import plistlib
+import pwd
 from pathlib import PurePosixPath
 import re
 import stat
@@ -760,13 +761,18 @@ def admission_only_main(arguments=None):
 def open_root(root, approved_root):
     require(type(root) is str and root == approved_root, 'EVIDENCE_ROOT_NOT_APPROVED')
     parts = path_parts(root, absolute=True)
+    qualification = qualification_prefix(parts)
     descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for part in parts:
+        for index, part in enumerate(parts):
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                             dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
+            if qualification and index >= len(qualification)-1:
+                ancestor = os.fstat(descriptor)
+                require(ancestor.st_uid == os.getuid() and stat.S_IMODE(ancestor.st_mode) in (0o700,0o500),
+                        'QUALIFICATION_DIRECTORY_MODE')
         observed = os.fstat(descriptor)
         require(observed.st_uid == os.getuid() and not observed.st_mode & 0o222,
                 'EVIDENCE_ROOT_MODE')
@@ -967,12 +973,28 @@ def extension(document):
     return {k: document[k] for k in EXTENSION_FIELDS}
 
 
+def qualification_prefix(parts):
+    """Only the current OS account's explicit IIOS qualification subtree."""
+    if 'Application Support' not in parts:
+        return ()
+    home = tuple(PurePosixPath(pwd.getpwuid(os.getuid()).pw_dir).parts[1:])
+    prefix = home + ('Library', 'Application Support', 'IIOS', 'qualification')
+    return prefix if tuple(parts[:len(prefix)]) == prefix and len(parts) >= len(prefix) + 2 else ()
+
+
+def runtime_path_allowed(parts):
+    prefix = qualification_prefix(parts)
+    return not any(p.lower() in {'keychains', 'ledger', 'ledgers', 'l7', 'l8', '.ssh',
+        '.aws', '.env'} or p.startswith('~') or
+        (p.lower() == 'application support' and not (prefix and i == len(prefix)-3))
+        for i, p in enumerate(parts))
+
+
 def _root(root, approved):
     require(type(root) is str and root == approved, 'RUNTIME_ROOT_APPROVAL')
     require('//' not in root, 'RUNTIME_ROOT_PATH')
     parts = path_parts(root, absolute=True)
-    require(not any(p.lower() in {'keychains', 'ledger', 'ledgers', 'l7', 'l8', '.ssh',
-        '.aws', '.env', 'application support'} or p.startswith('~') for p in parts), 'RUNTIME_ROOT_PATH')
+    require(runtime_path_allowed(parts), 'RUNTIME_ROOT_PATH')
 
 
 def _terminal(path, links):
