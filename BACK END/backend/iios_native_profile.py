@@ -62,4 +62,3 @@ def reviewed_profile(manifest,d,roots):
         text=text.replace(marker,json.dumps(value))
     need('@' not in text,'LIFECYCLE_PROFILE_UNBOUND_MARKER')
     return text.encode(),digest(review)
-
