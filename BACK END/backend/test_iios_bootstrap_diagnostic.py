@@ -1,0 +1,96 @@
+"""Offline mutations of complete ordered discovery scans and Mach-O mappings."""
+import copy
+import struct
+import unittest
+from iios_bootstrap_diagnostic import mapped_header, review_scans
+
+class DiscoveryTests(unittest.TestCase):
+    def fixture(self):
+        row=dict(index=0,path='/synthetic/image',uuid='a'*32,address=4096,slide=0,
+                 file_type=2,kind='PRIVATE_SEALED',backing={'sha256':'b'*64,'size':128},
+                 header_sha256='c'*64,segments=[{'address':4096}])
+        catalog={row['path']:{k:row[k] for k in ('uuid','kind','backing')}}
+        return [row],catalog
+    def test_measured_count_is_not_historical_count(self):
+        rows,catalog=self.fixture()
+        self.assertEqual(review_scans(rows,copy.deepcopy(rows),catalog,['d'*32]*2,'d'*32),1)
+    def test_missing_additional_substituted_and_reordered_scan_rejected(self):
+        rows,catalog=self.fixture();second=copy.deepcopy(rows[0]);second.update(index=1,path='/synthetic/second',address=8192)
+        rows.append(second);catalog[second['path']]=catalog[rows[0]['path']]
+        for mutation in (rows[:1],rows+[second],list(reversed(rows))):
+            with self.assertRaises(ValueError):review_scans(rows,mutation,catalog,['d'*32]*2,'d'*32)
+        changed=copy.deepcopy(rows);changed[0]['uuid']='e'*32
+        with self.assertRaises(ValueError):review_scans(rows,changed,catalog,['d'*32]*2,'d'*32)
+    def test_independent_catalog_substitution_and_unknown_identity_rejected(self):
+        rows,catalog=self.fixture()
+        for field,value in [('path','/synthetic/unknown'),('uuid','e'*32),('kind','APPLE_SIGNED_CACHE'),('backing',{})]:
+            changed=copy.deepcopy(rows);changed[0][field]=value
+            with self.assertRaises(ValueError):review_scans(changed,changed,catalog,['d'*32]*2,'d'*32)
+    def test_duplicate_path_and_mapping_rejected(self):
+        rows,catalog=self.fixture();duplicate=copy.deepcopy(rows[0]);duplicate['index']=1;rows.append(duplicate)
+        with self.assertRaisesRegex(ValueError,'DUPLICATE'):review_scans(rows,rows,catalog,['d'*32]*2,'d'*32)
+        rows[1]['path']='/synthetic/alias';catalog[rows[1]['path']]=catalog[rows[0]['path']]
+        with self.assertRaisesRegex(ValueError,'DUPLICATE'):review_scans(rows,rows,catalog,['d'*32]*2,'d'*32)
+    def test_final_reference_cannot_admit_extra_missing_or_reordered(self):
+        rows,catalog=self.fixture();expected=[tuple(rows[0][k] for k in ('path','uuid','kind','backing'))]
+        self.assertEqual(review_scans(rows,rows,catalog,['d'*32]*2,'d'*32,expected),1)
+        for wrong in ([],expected+expected,list(reversed(expected+[("different",)*4]))):
+            with self.assertRaises(ValueError):review_scans(rows,rows,catalog,['d'*32]*2,'d'*32,wrong)
+    def test_cache_changed_and_count_bounds(self):
+        rows,catalog=self.fixture()
+        for caches in (['d'*32,'e'*32],['d'*32]):
+            with self.assertRaises(ValueError):review_scans(rows,rows,catalog,caches,'d'*32)
+        with self.assertRaises(ValueError):review_scans([],[],{},['d'*32]*2,'d'*32)
+    def header(self):
+        seg=struct.pack('<II16sQQQQiiII',0x19,72,b'__TEXT',4096,4096,0,4096,5,5,0,0)
+        uid=struct.pack('<II16s',0x1b,24,bytes.fromhex('a'*32))
+        return struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2,96,0,0)+seg+uid
+    def test_complete_header_mapping(self):
+        value=mapped_header(self.header(),8192,4096)
+        self.assertEqual(value['uuid'],'a'*32);self.assertEqual(value['segments'][0]['address'],8192)
+    def test_truncation_arch_uuid_and_mapping_reject(self):
+        raw=self.header()
+        for bad in (raw[:31],raw[:-1],b'bad!'+raw[4:],raw[:-16]+bytes(16)):
+            with self.assertRaises(ValueError):mapped_header(bad,4096,0)
+        with self.assertRaises(ValueError):mapped_header(raw,8192,0)
+
+    def test_dyld_file_type_requires_explicit_os_role(self):
+        raw=bytearray(self.header());struct.pack_into('<I',raw,12,7)
+        with self.assertRaises(ValueError):mapped_header(bytes(raw),4096,0)
+        self.assertEqual(mapped_header(bytes(raw),4096,0,allow_dyld=True)['file_type'],7)
+    def test_dyld_kind_cannot_substitute_for_private_executable(self):
+        rows,catalog=self.fixture();rows[0]['file_type']=7
+        with self.assertRaisesRegex(ValueError,'IMAGE_KIND'):review_scans(rows,rows,catalog,['d'*32]*2,'d'*32)
+
+
+class AuditPreludeTests(unittest.TestCase):
+    def fixture(self):
+        import ast,os
+        from pathlib import Path
+        script=Path(__file__).resolve().parents[2]/'scripts/prepare_bootstrap_diagnostic.py'
+        tree=ast.parse(script.read_bytes())
+        assignment=next(n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='prelude' for t in n.targets))
+        text=assignment.value.func.value.value
+        generated=ast.parse(text.replace('BINDING_LITERAL','{}'))
+        functions=[n for n in generated.body if isinstance(n,ast.FunctionDef)]
+        scope={'os':os,'_READS':frozenset(['/synthetic/sealed.py']),'_DISCOVERY':{'/synthetic/stdlib':('a.py','b.py')}}
+        exec(compile(ast.Module(body=functions,type_ignores=[]),'reviewed-audit-prelude','exec'),scope)
+        return scope
+    def test_network_process_signal_and_enumeration_denied(self):
+        audit=self.fixture()['_audit']
+        for event,args in [('socket.connect',()),('socket.__new__',()),('subprocess.Popen',()),('os.fork',()),('os.kill',()),('os.listdir',()),('os.scandir',())]:
+            with self.assertRaises(PermissionError):audit(event,args)
+    def test_only_exact_pinned_read_and_no_writes(self):
+        import os
+        audit=self.fixture()['_audit'];audit('open',('/synthetic/sealed.py','r',0))
+        for args in [('/synthetic/other.py','r',0),('/synthetic/sealed.py','w',os.O_WRONLY),(99,'r',0),('/synthetic/sealed.py','r',os.O_APPEND)]:
+            with self.assertRaises(PermissionError):audit('open',args)
+    def test_only_dyld_symbols_and_bounded_memory_reads(self):
+        audit=self.fixture()['_audit'];audit('ctypes.dlopen',(None,));audit('ctypes.dlsym',(None,'_dyld_image_count'));audit('ctypes.string_at',(4096,32))
+        for event,args in [('ctypes.dlopen',('/synthetic/library',)),('ctypes.dlsym',(None,'connect')),('ctypes.string_at',(0,32)),('ctypes.string_at',(4096,65569))]:
+            with self.assertRaises(PermissionError):audit(event,args)
+    def test_import_discovery_uses_only_sealed_directory_members(self):
+        from types import SimpleNamespace
+        cache=self.fixture()['_sealed_cache'];finder=SimpleNamespace(path='/synthetic/stdlib');cache(finder)
+        self.assertEqual(finder._path_cache,{'a.py','b.py'})
+        with self.assertRaises(PermissionError):cache(SimpleNamespace(path='/synthetic/unpinned'))
