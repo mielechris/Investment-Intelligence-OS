@@ -70,7 +70,8 @@ def module_registry(hashes, roots):
 def controller_module_roots(manifest):
     source=manifest['source']['root']
     roots=[{'path':source+'/BACK END/backend','scope':'CONTROLLER_SOURCE'},
-           {'path':source+'/scripts','scope':'CONTROLLER_SOURCE'}]
+           {'path':source+'/scripts','scope':'CONTROLLER_SOURCE'},
+           {'path':source+'/tests/native','scope':'CONTROLLER_SOURCE'}]
     bootstrap=manifest.get('native',{}).get('static_descriptor',{}).get('bootstrap_root')
     if bootstrap:
         library=bootstrap+'/lib/python3.14'

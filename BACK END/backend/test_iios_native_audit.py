@@ -286,3 +286,13 @@ class ExactSourceModuleTests(unittest.TestCase):
         module.__file__=str(other);module.__spec__.origin=str(other);module.__loader__.path=str(other)
         with self.assertRaises(QualificationFailure) as error:module.__loader__.verify(module)
         self.assertEqual(error.exception.detail['predicate'],'MODULE_PINNED_ORIGIN')
+
+    def test_deferred_confinement_module_uses_existing_reviewed_root(self):
+        import hashlib
+        source=Path(__file__).parents[2];path=source/'tests/native/alpha_observation_qualification.py'
+        parent=hashlib.sha256(path.read_bytes()).hexdigest()
+        roots=a.controller_module_roots({'source':{'root':str(source)}})
+        finder=a.ReviewedSourceFinder({str(path):parent},roots=roots)
+        spec=finder.find_spec('alpha_observation_qualification')
+        self.assertEqual(spec.origin,str(path));self.assertEqual(spec.loader.row['scope'],'CONTROLLER_SOURCE')
+        self.assertIsNotNone(spec.loader.get_code('alpha_observation_qualification'))
