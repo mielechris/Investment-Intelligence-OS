@@ -149,8 +149,34 @@ Package preparation must bind its reviewed versioned SDK path directly rather
 than the mutable MacOSX.sdk selector. Existing historical records remain intact;
 this is a fresh inventory binding, not a rewrite of old evidence.
 
-An entrypoint failure before fresh_root() prints sanitized RED diagnostics but
+The legacy entrypoint failure before fresh_root() printed sanitized RED diagnostics but
 has no native journal/export receipt. Do not fabricate those records or interpret
 native_execution_entered as evidence of a launched workload. A reconstruction
 must distinguish reported stdout, independently verified inputs/current absence,
 and source-order inference from a persisted native observation.
+
+## Source-only lazy imports
+
+The audit installation receipt binds REVIEWED_SOURCE_ONLY_V1 and all exact module
+origin/source hashes. Before dispatcher loading, a closed import finder admits
+only built-in/frozen modules, exact pinned source origins, and exact pinned native
+extensions. Source loaders compile stable no-follow admitted bytes directly with
+a 16 MiB bound. They never probe or write .pyc caches; sourceless bytecode and
+custom loaders fail closed. The audit retains its blanket bytecode rejection.
+The meta-path installation and dont_write_bytecode setting are reverified at
+stage/command boundaries. No first observation establishes source trust.
+
+A rejected cache lookup retains a bounded reviewed source origin, its parent
+hash and expected cache pathname; unknown paths are redacted. The existing final
+checkpoint/export chain retains those diagnostics. Cleanup callback facts are
+now retained in the report, including absent workload children and unresolved
+constructor uncertainty. Hash-verified local export is not a new OS or signature
+attestation. If storage/export itself fails, the result remains failed and must
+not be described as an authenticated export.
+
+After admitted authorization and audit installation, early failures now receive
+a bound report/inventory/export in an exclusively created unused root. An existing
+root is never reused or overwritten, and no stage receipt or cleanup verification
+is invented. Authorization/preparation failures before that boundary stay read-only.
+Export/storage failures retain both the original and export failure in terminal
+output and never claim successful persistence.

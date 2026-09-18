@@ -211,7 +211,10 @@ class NativeContext:
             item=failures[0]
             error=QualificationFailure(item['stage'],item['predicate'],item['expected'],item['observed'],exception=item['exception_subtype'],errno_category=item['errno_category'])
             error.secondary_cleanup=failures[1:];raise error
-        return {'verified':outstanding==0,'outstanding':outstanding}
+        return {'verified':outstanding==0,'outstanding':outstanding,'workload_children':len(self.children),
+                'workload_cleanup':'UNVERIFIED' if outstanding else ('NOT_APPLICABLE_NO_CHILD_CREATED' if not self.children else 'VERIFIED_TERMINATION'),
+                'query_handles':len(self.query_handles),'query_handles_reaped':all(p.returncode is not None for p in self.query_handles),
+                'signals_sent':False}
 
 
 def run(manifest,parent,*,resume_binding=None,audit=None,initial_start=None):

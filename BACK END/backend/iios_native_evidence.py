@@ -96,3 +96,24 @@ def verify_export(root,manifest):
     require(seal['verified_at_ns']<seal['deadline_ns'],STAGES[-1],'EXPORT_DEADLINE')
     verify_inventory(root,index['files'],exclude=('INVENTORY.json','EXPORT.json'))
     return json.loads((root/'REPORT.json').read_bytes())
+
+
+def export_admission_failure(manifest,parent,detail,initial_start,clock):
+    """Bound early audit failures when no execution root exists; never overwrite.
+
+    Called only after explicit manifest admission and native-audit installation.
+    No stage, process inspection, child, signal or cleanup action is executed.
+    Storage failure remains a separate failure, never a fabricated export pass.
+    """
+    require(digest(manifest)==parent,STAGES[0],'FAILURE_EXPORT_MANIFEST')
+    deadline=initial_start+manifest['limits']['total_ns']
+    require(clock()<deadline,STAGES[-1],'EXPORT_DEADLINE')
+    root=fresh_root(manifest['output_parent'],manifest['output_name'],manifest['output_parent_identity'])
+    report={'schema':'iios-native-qualification-conductor-v1','manifest':parent,'nonce':manifest['nonce'],
+        'status':'RED','completed_stages':[],'primary_failure':dict(detail),'secondary_failures':[],
+        'cleanup_failures':[],'cleanup_receipt':None,'cleanup_classification':'NOT_ESTABLISHED',
+        'read_only_retry_failures':[],'history':manifest['history'],'authority':manifest['authority'],
+        'provider_pilot_authorized':False,'full_market_day_authorized':False,
+        'record_kind':'EARLY_ADMISSION_FAILURE_NO_STAGE_RECEIPT'}
+    export(root,report,deadline,clock)
+    return report

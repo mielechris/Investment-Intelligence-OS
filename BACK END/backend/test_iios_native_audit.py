@@ -15,7 +15,10 @@ def manifest():
 
 
 class NativeAuditTests(unittest.TestCase):
-    def setUp(self):self.guard=a.NativeAudit(manifest(),'a'*64)
+    def setUp(self):
+        self.guard=a.NativeAudit(manifest(),'a'*64);self.original_finders=list(a.sys.meta_path);self.original_no_bytecode=a.sys.dont_write_bytecode
+    def tearDown(self):
+        a.sys.meta_path=self.original_finders;a.sys.dont_write_bytecode=self.original_no_bytecode
     def reject(self,event,args,predicate):
         with self.assertRaises(QualificationFailure) as c:self.guard(event,args)
         self.assertEqual(c.exception.detail['predicate'],predicate)
@@ -97,7 +100,8 @@ class NativeAuditTests(unittest.TestCase):
         with patch('iios_native_dispatcher.clock',return_value=1),patch('iios_native_dispatcher.subprocess.Popen',side_effect=PermissionError(13,'not retained')):
             with self.assertRaises(PermissionError):context.spawn(['/bound/tool'],env={})
             result=context.cleanup(200)
-        self.assertEqual(result,{'verified':False,'outstanding':1})
+        self.assertEqual({k:result[k] for k in ('verified','outstanding')},{'verified':False,'outstanding':1})
+        self.assertEqual(result['workload_cleanup'],'UNVERIFIED')
     def test_lazy_compile_bytes_and_bytecode_bypass_rejected(self):
         self.reject('compile',(b'changed','/bound/source/module.py'),'AUDIT_COMPILED_SOURCE_MUTATION')
         self.reject('compile',(b'changed','/bound/source/unknown.py'),'AUDIT_UNBOUND_SOURCE_COMPILE')
@@ -105,3 +109,88 @@ class NativeAuditTests(unittest.TestCase):
     def test_unknown_effect_rejected(self):self.reject('os.unknown_mutation',(),'AUDIT_STAGE_OPERATION')
 
 if __name__=='__main__':unittest.main()
+
+class ReviewedSourceLoadingTests(unittest.TestCase):
+    def test_source_categories_never_probe_or_write_cache(self):
+        import tempfile,hashlib,sys
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve()
+            for category in ('repository','packaged','stdlib','third_party'):
+                directory=root/category;directory.mkdir();source=directory/'reviewed_fixture.py';source.write_bytes(b'VALUE = 42\n')
+                finder=a.ReviewedSourceFinder({str(source):hashlib.sha256(source.read_bytes()).hexdigest()})
+                with patch.object(sys,'path',[str(directory)]):spec=finder.find_spec('reviewed_fixture')
+                with patch.object(a.importlib.machinery.SourceFileLoader,'get_data',side_effect=AssertionError('CACHE_OR_UNBOUND_READ')):
+                    code=spec.loader.get_code('reviewed_fixture')
+                namespace={};exec(code,namespace);self.assertEqual(namespace['VALUE'],42)
+                self.assertFalse((directory/'__pycache__').exists())
+                with self.assertRaises(QualificationFailure):spec.loader.set_data('ignored',b'ignored')
+    def test_altered_and_out_of_root_source_rejected(self):
+        import tempfile,hashlib,sys
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp).resolve()/'reviewed_fixture.py';source.write_bytes(b'VALUE=1')
+            finder=a.ReviewedSourceFinder({str(source):hashlib.sha256(source.read_bytes()).hexdigest()})
+            with patch.object(sys,'path',[str(source.parent)]):spec=finder.find_spec('reviewed_fixture')
+            source.write_bytes(b'VALUE=2')
+            with self.assertRaises(QualificationFailure):spec.loader.get_code('reviewed_fixture')
+            with patch.object(sys,'path',[str(source.parent)]),self.assertRaises(QualificationFailure):a.ReviewedSourceFinder({}).find_spec('reviewed_fixture')
+    def test_all_bytecode_formats_and_sourceless_origins_rejected(self):
+        import importlib.machinery,hashlib
+        for category in ('repository_cache','packaged','stdlib','third_party','stale','altered','cross_version','sourceless'):
+            path='/bound/'+category+'.pyc';loader=importlib.machinery.SourcelessFileLoader(category,path)
+            spec=importlib.machinery.ModuleSpec(category,loader,origin=path)
+            with self.subTest(category=category),patch.object(importlib.machinery.PathFinder,'find_spec',return_value=spec),self.assertRaises(QualificationFailure) as ctx:
+                a.ReviewedSourceFinder({path:hashlib.sha256(category.encode()).hexdigest()}).find_spec(category)
+            self.assertEqual(ctx.exception.detail['predicate'],'MODULE_BYTECODE_OR_CUSTOM_LOADER_FORBIDDEN')
+    def test_diagnostic_binds_only_reviewed_source_origin(self):
+        import importlib.util
+        guard=a.NativeAudit(manifest(),'a'*64);path=importlib.util.cache_from_source('/bound/source/module.py')
+        with self.assertRaises(QualificationFailure) as ctx:guard('open',(path,'r',0))
+        self.assertEqual(ctx.exception.detail['bytecode_attempt']['source'],'/bound/source/module.py')
+        with self.assertRaises(QualificationFailure) as ctx:guard('open',('/unrelated/private_name.pyc','r',0))
+        self.assertEqual(ctx.exception.detail['bytecode_attempt']['path'],'UNADMITTED_PATH')
+    def test_audit_failures_are_exported_with_verifiable_chain(self):
+        import tempfile,json
+        import test_iios_native_conductor as fixtures
+        from iios_native_conductor import Conductor,digest
+        from iios_native_evidence import export,verify_export
+        for category in ('repository','packaged','stdlib','third_party','stale','substituted'):
+            with self.subTest(category=category),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();m=fixtures.manifest();parent=digest(m)
+                def denied(*args):
+                    guard=a.NativeAudit(manifest(),'a'*64);guard.stage=STAGES[2]
+                    guard('open',('/bound/'+category+'.pyc','r',0))
+                def passed(row,*args):return {'stage':row['id'],'status':'GREEN','manifest':parent,'history':m['history'],'authority':m['authority'],'predicates':dict.fromkeys(row['predicates'],True),'artifacts':[]}
+                adapters=dict.fromkeys(STAGES,passed);adapters[STAGES[2]]=denied
+                clock=lambda:100
+                engine=Conductor(m,parent,root,adapters,clock=clock,wall=lambda:1,verify_receipt=lambda r:None,
+                    cleanup=lambda d:{'verified':True,'outstanding':0,'workload_children':0},export=lambda r,d:export(root,r,d,clock))
+                result=engine.run();verified=verify_export(root,parent)
+                self.assertEqual(result,verified);self.assertEqual(result['primary_failure']['predicate'],'AUDIT_UNREVIEWED_BYTECODE')
+                self.assertEqual(result['cleanup_receipt']['workload_children'],0)
+    def test_installed_loader_policy_cannot_be_removed_or_mutated(self):
+        import os,sys
+        guard=a.NativeAudit(manifest(),'a'*64)
+        with patch.object(sys,'meta_path',list(sys.meta_path)),patch.object(sys,'dont_write_bytecode',True),patch.object(sys,'addaudithook'),patch.object(sys,'audit',side_effect=lambda event,*args:guard(event,args)),patch.object(os,'open',os.open),patch.object(os,'close',os.close),patch.object(os,'dup',os.dup):
+            receipt=guard.install();self.assertIn('source_loader_parent',receipt);guard.verify()
+            sys.meta_path.append(object())
+            with self.assertRaises(QualificationFailure):guard.verify()
+            sys.meta_path=list(guard.finders);sys.dont_write_bytecode=False
+            with self.assertRaises(QualificationFailure):guard.verify()
+            sys.dont_write_bytecode=True;guard.finder.hashes['/unbound']='a'*64
+            with self.assertRaises(QualificationFailure):guard.verify()
+    def test_early_audit_failure_exports_without_native_effects_or_overwrite(self):
+        import tempfile,os
+        from iios_native_evidence import export_admission_failure,verify_export
+        from iios_native_conductor import digest
+        import test_iios_native_conductor as fixtures
+        with tempfile.TemporaryDirectory() as tmp:
+            parent=Path(tmp).resolve();st=parent.stat();m=fixtures.manifest()
+            m.update(output_parent=str(parent),output_name='qualification-failure',output_parent_identity=[st.st_dev,st.st_ino,st.st_uid,0o700])
+            detail=QualificationFailure(STAGES[0],'AUDIT_UNREVIEWED_BYTECODE','ADMITTED','UNDECLARED',exception='PermissionError',errno_category='AUDIT_POLICY').detail
+            result=export_admission_failure(m,digest(m),detail,100,lambda:101)
+            self.assertEqual(result,verify_export(parent/m['output_name'],digest(m)))
+            before={p.name:p.read_bytes() for p in (parent/m['output_name']).iterdir()}
+            with self.assertRaises(FileExistsError):export_admission_failure(m,digest(m),detail,100,lambda:101)
+            self.assertEqual(before,{p.name:p.read_bytes() for p in (parent/m['output_name']).iterdir()})
+            self.assertEqual(result['cleanup_classification'],'NOT_ESTABLISHED')

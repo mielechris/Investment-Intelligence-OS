@@ -121,7 +121,7 @@ class Budget:
         require(self.start<=now<end,stage,'OUTER_'+phase.upper()+'_DEADLINE','BEFORE_DEADLINE','EXPIRED_OR_CLOCK_REVERSED')
 
 
-def pin_file(path, expected):
+def pin_file(path, expected, *, source_bytes=False):
     """Pin regular bytes through retained no-follow directory handles.
 
     Preparation and native admission use the same policy: aliases are not inputs.
@@ -144,16 +144,18 @@ def pin_file(path, expected):
             chain.append((parent,part,child,identity(before)));parent=child
         fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
         before=os.fstat(fd);require(stat.S_ISREG(before.st_mode),STAGES[0],'INPUT_REGULAR_FILE')
-        h=hashlib.sha256()
+        h=hashlib.sha256();chunks=[];size=0
         while True:
             b=os.read(fd,65536)
             if not b:break
             h.update(b)
+            if source_bytes:
+                size+=len(b);require(size<=16*1024*1024,STAGES[0],'SOURCE_BYTES_BOUND');chunks.append(b)
         require(key(before)==key(os.fstat(fd))==key(os.stat(path.name,dir_fd=parent,follow_symlinks=False)),STAGES[0],'INPUT_MUTATION')
         for owner,name,child,original in reversed(chain):
             require(original==identity(os.fstat(child))==identity(os.stat(name,dir_fd=owner,follow_symlinks=False)),STAGES[0],'INPUT_ANCESTOR_MUTATION')
         require(h.hexdigest()==expected,STAGES[0],'INPUT_HASH')
-        return {'sha256':expected,'size':before.st_size}
+        return dict(sha256=expected,size=before.st_size,**({'bytes':b''.join(chunks)} if source_bytes else {}))
     finally:
         if fd is not None:os.close(fd)
         for handle in reversed(handles):os.close(handle)
@@ -257,7 +259,7 @@ class Conductor:
             return self._run(resume=resume,resume_tip=resume_tip)
         finally:os.close(fd)
     def _run(self,*,resume=False,resume_tip=None):
-        stage='CONDUCTOR';budget=None;cleaned=False
+        stage='CONDUCTOR';budget=None;cleaned=False;cleanup_receipt=None
         try:
             if resume:
                 records=self.journal.load();require(bool(records) and records[0]['kind']=='BEGIN','CONDUCTOR','RESUME_HEADER')
@@ -280,6 +282,7 @@ class Conductor:
                         result=self.cleanup(budget.cleanup_end)
                         budget.check(self.clock(),'CLEANUP','cleanup')
                         require(result.get('verified') is True and result.get('outstanding')==0,'CLEANUP','CLEANUP_VERIFIED')
+                        cleanup_receipt=dict(result)
                     except BaseException as error:
                         self.record_cleanup_failure(error)
                         raise CleanupBoundaryStop()
@@ -317,11 +320,12 @@ class Conductor:
                 cleanup=self.cleanup(budget.cleanup_end)
                 budget.check(self.clock(),'CLEANUP','cleanup')
                 require(cleanup.get('verified') is True and cleanup.get('outstanding')==0,'CLEANUP','CLEANUP_VERIFIED')
+                cleanup_receipt=dict(cleanup)
             except BaseException as error:self.record_cleanup_failure(error)
         report={'schema':SCHEMA,'manifest':self.parent,'nonce':self.m['nonce'],
                 'status':'GREEN' if len(self.completed)==len(STAGES) and self.primary is None and not self.cleanup_failures else 'RED',
                 'completed_stages':list(self.completed),'primary_failure':self.primary,'secondary_failures':self.secondary,
-                'cleanup_failures':self.cleanup_failures,'read_only_retry_failures':self.events,'history':self.history,
+                'cleanup_failures':self.cleanup_failures,'cleanup_receipt':cleanup_receipt,'read_only_retry_failures':self.events,'history':self.history,
                 'authority':self.m['authority'],'provider_pilot_authorized':False,'full_market_day_authorized':False}
         if self.cleanup_failures:report['status']='YELLOW' if self.primary is None else 'RED'
         # Final journal and report are provisional until the independently verified export seal exists.

@@ -10,7 +10,9 @@ import hashlib
 from pathlib import PurePosixPath
 import sys
 import stat
-from iios_native_conductor import STAGES, digest, require, QualificationFailure
+import importlib.machinery
+import importlib.util
+from iios_native_conductor import STAGES, digest, require, QualificationFailure, pin_file
 from iios_native_terminal import FORBIDDEN_COMPONENTS
 
 SCHEMA='IIOS_NATIVE_AUDIT_V1'
@@ -39,6 +41,35 @@ FORBIDDEN=frozenset(('os.kill','os.killpg','os.system','os.posix_spawn','os.fork
     'os.remove','os.rmdir','os.rename','os.link','os.symlink','sys.settrace','sys.setprofile'))
 
 
+class ReviewedSourceLoader(importlib.machinery.SourceFileLoader):
+    """Compile admitted source bytes only; never ask importlib to probe a cache."""
+    def __init__(self,name,path,parent,stage=lambda:STAGES[0]):super().__init__(name,path);self.parent=parent;self.stage=stage
+    def get_code(self,fullname):
+        require(fullname==self.name,self.stage(),'SOURCE_MODULE_NAME')
+        try:raw=pin_file(self.path,self.parent,source_bytes=True)['bytes']
+        except QualificationFailure as error:
+            error.detail['stage']=self.stage();raise
+        return compile(raw,self.path,'exec',dont_inherit=True)
+    def set_data(self,*args,**kwargs):
+        raise QualificationFailure(self.stage(),'BYTECODE_WRITE_FORBIDDEN','SOURCE_ONLY','WRITE_ATTEMPT')
+
+
+class ReviewedSourceFinder:
+    def __init__(self,hashes,stage=lambda:STAGES[0]):self.hashes=dict(hashes);self.stage=stage
+    def find_spec(self,fullname,path=None,target=None):
+        spec=importlib.machinery.PathFinder.find_spec(fullname,path,target)
+        require(spec is not None and type(spec.origin) is str,self.stage(),'MODULE_ORIGIN_REQUIRED')
+        origin=spec.origin
+        require(origin in self.hashes,self.stage(),'MODULE_ORIGIN_PIN')
+        if type(spec.loader) is importlib.machinery.SourceFileLoader:
+            require(origin.endswith('.py'),self.stage(),'MODULE_SOURCE_REQUIRED')
+            spec.loader=ReviewedSourceLoader(fullname,origin,self.hashes[origin],self.stage)
+        else:
+            require(type(spec.loader) is importlib.machinery.ExtensionFileLoader,self.stage(),'MODULE_BYTECODE_OR_CUSTOM_LOADER_FORBIDDEN')
+            pin_file(origin,self.hashes[origin])
+        return spec
+
+
 class NativeAudit:
     def __init__(self,manifest,parent):
         self.parent=parent;self.manifest=manifest;self.stage=STAGES[0]
@@ -55,7 +86,7 @@ class NativeAudit:
         self.binding_parent=digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes})
         self.fds={};self.fd_identity={};self.active=[];self.command=None;self.inspecting=False;self.metadata_read=False
         self.launching=False;self.installed=False;self.challenge=None;self.acknowledged=False;self.receipt=None
-        self.originals={};self.sealed=();self.last_denial=None
+        self.originals={};self.sealed=();self.last_denial=None;self.finder=None;self.finders=None
     def reject(self,predicate,observed='UNDECLARED'):
         error=QualificationFailure(self.stage,predicate,'ADMITTED',observed,
             exception='PermissionError',errno_category='AUDIT_POLICY')
@@ -117,7 +148,17 @@ class NativeAudit:
             if self.command is None or observed!=self.command:self.reject('AUDIT_COMMAND_BINDING')
             self.command=None
         elif event=='open':
-            if isinstance(args[0],(str,bytes)) and os.fsdecode(args[0]).endswith(('.pyc','.pyo')):self.reject('AUDIT_UNREVIEWED_BYTECODE')
+            if isinstance(args[0],(str,bytes)) and os.fsdecode(args[0]).endswith(('.pyc','.pyo')):
+                attempted=os.fsdecode(args[0]);source=None
+                for candidate in self.hashes:
+                    if candidate.endswith('.py') and importlib.util.cache_from_source(candidate)==attempted:
+                        source=candidate;break
+                try:self.reject('AUDIT_UNREVIEWED_BYTECODE')
+                except QualificationFailure as error:
+                    error.detail['bytecode_attempt']={'path':attempted if source else 'UNADMITTED_PATH',
+                        'source':source or 'UNADMITTED_SOURCE','source_sha256':self.hashes[source] if source else 'UNBOUND',
+                        'operation':'OPEN','loader':'SOURCE_FILE_LOADER_CACHE_LOOKUP' if source else 'UNBOUND_BYTECODE_LOOKUP'}
+                    self.last_denial=dict(error.detail);raise
             if args[0]=='/dev/null' and self.launching and stat.S_ISCHR(os.lstat('/dev/null').st_mode):return
             if isinstance(args[0],int) and args[0] not in self.fds:
                 if self.launching and stat.S_ISFIFO(os.fstat(args[0]).st_mode):return
@@ -155,12 +196,18 @@ class NativeAudit:
         self.challenge=digest({'manifest':self.parent,'schema':SCHEMA})
         sys.addaudithook(self);sys.audit('iios.native.audit.challenge',self.challenge)
         require(self.acknowledged,STAGES[0],'AUDIT_INSTALLATION_ACKNOWLEDGED')
+        self.finder=ReviewedSourceFinder(self.hashes,lambda:self.stage)
+        self.finders=(importlib.machinery.BuiltinImporter,importlib.machinery.FrozenImporter,self.finder)
+        sys.meta_path=list(self.finders);sys.dont_write_bytecode=True
         self.installed=True
         self.receipt={'schema':SCHEMA,'manifest':self.parent,'installed_before_dispatcher_import':True,
+            'source_loader_parent':digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes}),
             'operations_parent':digest({k:sorted(v) for k,v in OPERATIONS.items()}),'path_policy_parent':self.binding_parent,'signals_permitted':False}
         return dict(self.receipt)
     def verify(self):
         require(self.installed and self.receipt is not None,self.stage,'AUDIT_INSTALLATION_REQUIRED')
+        require(tuple(sys.meta_path)==self.finders and sys.dont_write_bytecode is True,self.stage,'SOURCE_LOADER_INSTALLATION')
+        require(self.finder.hashes==self.hashes and self.receipt['source_loader_parent']==digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes}),self.stage,'SOURCE_LOADER_BINDINGS')
         require(self.receipt['manifest']==self.parent,self.stage,'AUDIT_RECEIPT_PARENT')
         require(self.receipt['operations_parent']==digest({k:sorted(v) for k,v in OPERATIONS.items()}),self.stage,'AUDIT_OPERATION_POLICY_MUTATION')
         require(self.binding_parent==digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes}),self.stage,'AUDIT_PATH_POLICY_MUTATION')
