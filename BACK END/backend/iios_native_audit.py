@@ -7,6 +7,7 @@ Exact command grants are single-use and revoked on every exception path.
 from contextlib import contextmanager
 import os
 import hashlib
+import json
 from pathlib import PurePosixPath
 import sys
 import stat
@@ -204,7 +205,11 @@ class NativeAudit:
         self.hashes.update(manifest['tool_pins']);self.hashes.update({manifest['ci']['path']:manifest['ci']['sha256'],manifest['dispatcher']['path']:manifest['dispatcher']['sha256']})
         self.paths=frozenset(self.paths)
         self.directories=frozenset(str(p) for value in self.paths|{self.root} for p in PurePosixPath(value).parents)
-        self.binding_parent=digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes})
+        self.metadata_directories={}
+        if manifest.get('execution_inventory'):
+            binding=manifest['execution_inventory'];index=json.loads(pin_file(binding['path'],binding['sha256'],source_bytes=True)['bytes'])
+            self.metadata_directories={p:index['sealed_directories'][p] for p in manifest.get('closed_extra_directories',[])}
+        self.binding_parent=digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes,'metadata_directories':self.metadata_directories})
         self.fds={};self.fd_identity={};self.active=[];self.command=None;self.inspecting=False;self.metadata_read=False
         self.launching=False;self.installed=False;self.challenge=None;self.acknowledged=False;self.receipt=None
         self.originals={};self.sealed=();self.last_denial=None;self.finder=None;self.finders=None
@@ -249,8 +254,11 @@ class NativeAudit:
                 # read-only stages. Their exclusive creation is enforced by Journal.
                 p=PurePosixPath(path)
                 if str(p.parent)!=self.root or not p.name.startswith('checkpoint-'):self.reject('AUDIT_STAGE_WRITE')
-        elif not (self.inside(path) or path in self.paths or (directory and path in self.directories)):
+        elif not (self.inside(path) or path in self.paths or (directory and (path in self.directories or path in self.metadata_directories))):
             self.reject('AUDIT_READ_PIN')
+        if not write and path in self.metadata_directories:
+            st=os.lstat(path)
+            if [st.st_dev,st.st_ino,st.st_uid,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns]!=self.metadata_directories[path]:self.reject('AUDIT_DIRECTORY_IDENTITY')
         # Do not let an admitted lexical name substitute an outside inode.
         # Existing symlinks are never a blanket grant, including within output.
         for part in reversed((PurePosixPath(path),*PurePosixPath(path).parents)):
@@ -274,7 +282,7 @@ class NativeAudit:
             value=self.audit_args[0]
             if type(value) is int:value=self.fds.get(value)
             if isinstance(value,PurePosixPath):value=str(value)
-            if type(value) is str and len(value)<=512 and (value in self.paths or value in self.directories or self.inside(value)):path=value
+            if type(value) is str and len(value)<=512 and (value in self.paths or value in self.directories or value in self.metadata_directories or self.inside(value)):path=value
             else:path='UNADMITTED_PATH'
         frame=self.source_caller();caller={'path':'UNRETAINED_CALLER','function':'UNKNOWN','line':0,'source_sha256':'UNBOUND'}
         if frame is not None:
@@ -340,6 +348,8 @@ class NativeAudit:
             mode,flags=args[1:];write=bool((flags or 0)&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC|os.O_APPEND)) or isinstance(mode,str) and any(x in mode for x in 'wax+')
             self.path(value,write,directory=bool((flags or 0)&os.O_DIRECTORY))
         elif event in ('os.listdir','os.scandir','os.listxattr','os.getxattr'):
+            path=self.lexical(args[0])
+            if event in ('os.listdir','os.scandir') and not self.inside(path) and (self.stage==STAGES[0] or path in self.metadata_directories):self.reject('AUDIT_INPUT_ENUMERATION_FORBIDDEN')
             self.path(args[0],directory=True)
         elif event in WRITE:
             index=2 if event in ('os.mkdir','os.chmod') else None
@@ -384,7 +394,7 @@ class NativeAudit:
         require(self.receipt['argc_view_policy_parent']==digest(self.argc_policy()),self.stage,'AUDIT_ARGC_POLICY_PARENT')
         require(self.receipt['manifest']==self.parent,self.stage,'AUDIT_RECEIPT_PARENT')
         require(self.receipt['operations_parent']==digest({k:sorted(v) for k,v in OPERATIONS.items()}),self.stage,'AUDIT_OPERATION_POLICY_MUTATION')
-        require(self.binding_parent==digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes}),self.stage,'AUDIT_PATH_POLICY_MUTATION')
+        require(self.binding_parent==digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes,'metadata_directories':self.metadata_directories}),self.stage,'AUDIT_PATH_POLICY_MUTATION')
         self.acknowledged=False;sys.audit('iios.native.audit.challenge',self.challenge)
         require(self.acknowledged,self.stage,'AUDIT_HOOK_REQUIRED')
         return digest(self.receipt)

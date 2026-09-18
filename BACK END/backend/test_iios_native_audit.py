@@ -358,3 +358,19 @@ class ClosedDirectoryTelemetryTests(unittest.TestCase):
         self.assertEqual(record['path'],'/bound/source');self.assertEqual(record['event'],'os.scandir')
         self.assertEqual(e.exception.detail['errno_category'],'AUDIT_POLICY')
         with self.assertRaises(QualificationFailure):guard('os.scandir',('/unadmitted',))
+
+    def test_pinned_empty_directory_metadata_never_grants_enumeration(self):
+        import tempfile,os
+        with tempfile.TemporaryDirectory() as tmp:
+            import json,hashlib
+            p=Path(tmp).resolve();index=p/'closed.json';index.write_bytes(b'');st=p.lstat()
+            raw=json.dumps({'sealed_directories':{str(p):[st.st_dev,st.st_ino,st.st_uid,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns]}}).encode();index.write_bytes(raw)
+            m=manifest();m['closed_extra_directories']=[str(p)];m['execution_inventory']={'path':str(index),'sha256':hashlib.sha256(raw).hexdigest()}
+            guard=a.NativeAudit(m,'a'*64)
+            self.assertEqual(guard.path(str(p),directory=True),str(p))
+            for event in ('os.listdir','os.scandir'):
+                with self.assertRaises(QualificationFailure) as e:guard(event,(str(p),))
+                self.assertEqual(e.exception.detail['predicate'],'AUDIT_INPUT_ENUMERATION_FORBIDDEN')
+            (p/'unexpected').write_bytes(b'fixture')
+            with self.assertRaises(QualificationFailure) as e:guard.path(str(p),directory=True)
+            self.assertEqual(e.exception.detail['predicate'],'AUDIT_DIRECTORY_IDENTITY')
