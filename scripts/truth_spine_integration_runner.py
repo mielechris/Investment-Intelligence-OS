@@ -210,6 +210,10 @@ class OwnedChildren:
                       'argv_tail': list(o.argv[1:]), 'executable_hash': o.executable_hash,
                       'argv0_pinned': str(Path(o.argv[0]).resolve()) in hashes, 'executable_pinned': exe in hashes}
             self.require_fields(role, expected, actual)
+            if self.observation is not None and self.observation.document().get('schema')=='iios-disposable-observation-roles-v3':
+                final=self.observation.document()['conductor']['process_image']
+                self.require_fields(role,{'argv0':final['path'],'command':final['path']+' '+' '.join(launch.argv[1:]),'executable':final['path'],'executable_hash':final['sha256']},
+                    {'argv0':o.argv[0],'command':o.command,'executable':o.executable,'executable_hash':o.executable_hash})
             return o, n
         except (RunnerFailure, KeyboardInterrupt):
             raise
@@ -240,6 +244,9 @@ class OwnedChildren:
         row = {'category': category, 'role': role}
         if error is not None:
             row['exception_type'] = type(error).__name__
+            if self.observation is not None and self.observation.document().get('schema')=='iios-disposable-observation-roles-v3':
+                from iios_native_conductor import failure,STAGES
+                row['failure_detail']=failure(error,STAGES[8],category)
         self.errors.append(row)
 
     def retain_observation_child(self, role, child, launch):
@@ -372,9 +379,14 @@ class OwnedChildren:
             if child.poll() is not None:
                 if entry['fingerprint'] is None:
                     raise RunnerFailure('PROCESS_IDENTITY_MISMATCH')
+                if self.observation is not None and self.observation.document().get('schema')=='iios-disposable-observation-roles-v3':
+                    child.wait(timeout=remaining())
+                    if self.inspector(child.pid) is not None:raise RunnerFailure('CONDUCTOR_ROLE_ABSENCE_REQUIRED')
                 outcome = 'ALREADY_EXITED_VERIFIED_CHILD'
             else:
                 self.verify(entry)
+                if self.observation is not None and self.observation.document().get('schema')=='iios-disposable-observation-roles-v3':
+                    raise RunnerFailure('CONDUCTOR_COOPERATIVE_EXIT_REQUIRED')
                 action = 'TERMINATE'
                 self.attempts.append({'role': role, 'action': action})
                 remaining()

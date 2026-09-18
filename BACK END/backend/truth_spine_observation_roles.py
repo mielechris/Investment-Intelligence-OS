@@ -28,8 +28,16 @@ class DisposableRoles:
         value=admit_roles(self.document(), self.identity, approved_roots=json.loads(self._roots), now=now)
         from alpha_session_evidence import verify_files
         d=value.document()
+        if d['schema']=='iios-disposable-observation-roles-v3':
+            import os,stat
+            from iios_native_evidence import owned_directory
+            fd=owned_directory(d['conductor']['output_root'])
+            try:
+                st=os.fstat(fd)
+                require([st.st_dev,st.st_ino,st.st_uid,stat.S_IMODE(st.st_mode)]==d['conductor']['output_identity'],'DISPOSABLE_CONDUCTOR_ROOT_REPLACED')
+            finally:os.close(fd)
         for key,rows in [('runtime',d['runtime']['files']),('release',d['input_files']['release']),('control',d['input_files']['control'])]:
-            if key == 'runtime' and d['schema'] == 'iios-disposable-observation-roles-v2':
+            if key == 'runtime' and d['schema'] in ('iios-disposable-observation-roles-v2','iios-disposable-observation-roles-v3'):
                 from alpha_runtime_files import verify_runtime_tree, extension
                 verify_runtime_tree(d['roots'][key],rows,approved_root=d['roots'][key],**extension(d['runtime']))
             else:
@@ -42,9 +50,21 @@ def admit_roles(document, expected, *, approved_roots, now):
     from alpha_runtime_files import safe_runtime_envelope
     safe_runtime_envelope(document);pin(document,expected)
     d=document
-    require(type(d) is dict and set(d)=={'schema','scope','source_commit','roots','release_parent',
-        'runtime_parent','runtime','launch','input_files','control_parent','seed_parents','valid_from','expires_at','authority'},'DISPOSABLE_SCHEMA')
-    require(d['schema'] in (SCHEMA,'iios-disposable-observation-roles-v2') and d['scope']==SCOPE and re.fullmatch('[0-9a-f]{40}',d['source_commit']),
+    conductor_version=d.get('schema')=='iios-disposable-observation-roles-v3'
+    fields={'schema','scope','source_commit','roots','release_parent',
+        'runtime_parent','runtime','launch','input_files','control_parent','seed_parents','valid_from','expires_at','authority'}
+    require(type(d) is dict and set(d)==fields|({'conductor'} if conductor_version else set()),'DISPOSABLE_SCHEMA')
+    if conductor_version:
+        b=d['conductor']
+        require(type(b) is dict and set(b)=={'manifest','source','runtime_reference','runtime_acceptance','host','output_root','output_identity','execution_root','process_image','clock_basis','inspection_tools'},'DISPOSABLE_CONDUCTOR_SCHEMA')
+        require(b['source']==d['source_commit'] and all(type(b[k]) is str and re.fullmatch('[0-9a-f]{64}',b[k]) for k in ('manifest','runtime_reference','runtime_acceptance','host')),'DISPOSABLE_CONDUCTOR_PARENTS')
+        require(type(b['inspection_tools']) is dict and set(b['inspection_tools'])=={'/bin/ps','/usr/sbin/lsof'} and all(type(v) is str and re.fullmatch('[0-9a-f]{64}',v) for v in b['inspection_tools'].values()),'DISPOSABLE_INSPECTION_TOOLS')
+        require(b['clock_basis']=='DARWIN_CLOCK_MONOTONIC_RAW_NS','DISPOSABLE_CLOCK_BASIS')
+        root=PurePosixPath(b['output_root'])
+        require(root.is_absolute() and root.name.startswith('qualification-') and '..' not in root.parts and
+            b['execution_root']==str(root/'payload/assembly-output/execution-01'),'DISPOSABLE_CONDUCTOR_ROOT')
+        require(type(b['output_identity']) is list and len(b['output_identity'])==4 and all(type(x) is int for x in b['output_identity']) and b['output_identity'][3]==0o700,'DISPOSABLE_CONDUCTOR_IDENTITY')
+    require(d['schema'] in (SCHEMA,'iios-disposable-observation-roles-v2','iios-disposable-observation-roles-v3') and d['scope']==SCOPE and re.fullmatch('[0-9a-f]{40}',d['source_commit']),
         'DISPOSABLE_SCOPE')
     require(type(approved_roots) is dict and set(approved_roots)=={'runtime','release','control','output'} and
         d['roots']==approved_roots,'DISPOSABLE_ROOTS')
@@ -59,7 +79,7 @@ def admit_roles(document, expected, *, approved_roots, now):
         else:
             require(p.name=={'release':'release','control':'control','output':'disposable'}[kind],'DISPOSABLE_DESTINATION')
             execution=p.parent
-        require(execution.name=='execution-01' and execution.parent.name.startswith('iios-provider-connection-source-tests-'),
+        require((str(execution)==d['conductor']['execution_root'] if conductor_version else execution.name=='execution-01' and execution.parent.name.startswith('iios-provider-connection-source-tests-')),
             'DISPOSABLE_ARTIFACT_PARENT')
         execution_roots.append(execution)
         require(str(p)==raw and '..' not in p.parts and not any(x.startswith('~') or
@@ -81,7 +101,7 @@ def admit_roles(document, expected, *, approved_roots, now):
         {r['path'] for r in d['input_files']['release']},'DISPOSABLE_ENTRYPOINTS')
     from alpha_runtime_files import (DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA, EXTENSION_FIELDS,
         extension, _validate_rows, verify_completed_descriptor)
-    version2 = d['schema'] == 'iios-disposable-observation-roles-v2'
+    version2 = d['schema'] in ('iios-disposable-observation-roles-v2','iios-disposable-observation-roles-v3')
     rt=d['runtime']
     version3=rt.get('schema')==COMPLETED_DESCRIPTOR_SCHEMA
     if version2:
@@ -107,6 +127,9 @@ def admit_roles(document, expected, *, approved_roots, now):
             seen.add(row['path'])
         return seen
     require(rt['interpreter'] in inventory(rt['files']),'DISPOSABLE_INTERPRETER')
+    if conductor_version:
+        image=d['conductor']['process_image']
+        require(type(image) is dict and set(image)=={'path','sha256'} and image in [{'path':str(PurePosixPath(rt['root'])/r['path']),'sha256':r['sha256']} for r in rt['files']],'DISPOSABLE_PROCESS_IMAGE_PIN')
     if version3:
         require(version2,'DISPOSABLE_RUNTIME_VERSION')
         verify_completed_descriptor(rt,source_commit=d['source_commit'])
@@ -194,3 +217,18 @@ def invocation_pins(capability):
     require(disposable(capability),'DISPOSABLE_CAPABILITY_REQUIRED')
     return ['--config-sha256',content_hash(configuration(capability)),'--approved-roots-json',
         json.dumps(capability.document()['roots'],sort_keys=True,separators=(',',':'))]
+
+
+def bind_conductor_clock(capability):
+    """Use the already authorized outer clock in this disposable process only.
+
+    No deadline is recomputed. Every existing Truth Spine absolute nanosecond
+    check reads the same Darwin clock as the conductor. Legacy scopes retain
+    their original clock unchanged.
+    """
+    require(disposable(capability),'DISPOSABLE_CAPABILITY_REQUIRED')
+    if capability.document()['schema']!='iios-disposable-observation-roles-v3':return
+    require(capability.document()['conductor']['clock_basis']=='DARWIN_CLOCK_MONOTONIC_RAW_NS','DISPOSABLE_CLOCK_BASIS')
+    import time
+    clock=time.clock_gettime_ns
+    time.monotonic_ns=lambda:clock(6)

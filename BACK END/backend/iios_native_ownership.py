@@ -96,3 +96,16 @@ class LaunchBinding:
 
     def reverify(self,before):
         require(self.verify()==before,'SOURCE_AND_CI_ADMISSION','POST_VERIFICATION_MUTATION')
+
+
+def verify_execution(result,stage):
+    """Require the complete owner result at every adapter receipt boundary."""
+    require(type(result) is dict,stage,'OWNERSHIP_RESULT_SCHEMA')
+    observations=result.get('ownership');cleanup=result.get('cleanup')
+    require(type(observations) is list and len(observations)==3,stage,'OWNERSHIP_COMPLETE_OBSERVATIONS')
+    for sample,row in enumerate(observations,1):
+        require(type(row) is dict and set(row)=={'sample','matches'} and type(row['sample']) is int and row['sample']==sample and
+            type(row['matches']) is dict and set(row['matches'])==set(PREDICATES) and all(v is True for v in row['matches'].values()),stage,'OWNERSHIP_COMPLETE_PREDICATES')
+    require(type(cleanup) is dict and all(type(cleanup.get(k)) is int for k in ('outstanding','exit_code','signals')) and all(cleanup.get(k) is True for k in ('verified','reaped','independently_absent')) and cleanup=={'verified':True,'outstanding':0,'exit_code':0,
+        'reaped':True,'independently_absent':True,'signals':0},stage,'OWNERSHIP_COMPLETE_CLEANUP')
+    return True

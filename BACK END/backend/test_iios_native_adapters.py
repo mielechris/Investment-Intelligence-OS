@@ -82,7 +82,7 @@ class AssemblyAdapterTests(unittest.TestCase):
 
 class TransportTests(unittest.TestCase):
     def test_no_spawn_on_changed_binding(self):
-        c=NativeContext({},'a'*64,'/fixture');c.stage=STAGES[7]
+        c=NativeContext({'environment':{'LC_ALL':'C','TZ':'UTC','__CF_USER_TEXT_ENCODING':'0x1F5:0x0:0x0'}},'a'*64,'/fixture');c.stage=STAGES[7]
         binding=Mock();binding.verify.side_effect=ValueError('INPUT_HASH')
         with patch('iios_native_dispatcher.subprocess.Popen') as popen,self.assertRaises(ValueError):c.execute_owned(binding,1,2)
         popen.assert_not_called()
@@ -118,6 +118,8 @@ class NativeResumeAdmissionTests(unittest.TestCase):
     def test_resume_rechecks_terminal_before_any_adapter(self):
         from test_iios_native_conductor import CoreTests
         from iios_native_dispatcher import run
+        from unittest.mock import MagicMock
+        audit=MagicMock()
         fixture=CoreTests();fixture.setUp()
         try:
             m=fixture.m;m.update(output_parent=str(fixture.root.parent),output_name=fixture.root.name,
@@ -126,12 +128,12 @@ class NativeResumeAdmissionTests(unittest.TestCase):
             binding={'root':str(fixture.root),'root_identity':[st.st_dev,st.st_ino,st.st_uid,st.st_mode],'tip':tip}
             # Historical prefix was created with a substituted boot identity.
             with patch('iios_native_dispatcher.require_execution_ready'),patch('iios_native_dispatcher.admit_source'),patch('iios_native_dispatcher.clock',return_value=10),patch('iios_native_dispatcher.time.time',return_value=100),patch.object(NativeContext,'tool',return_value=(0,b'11111111-1111-1111-1111-111111111111\n',b'')),patch('iios_native_dispatcher.fresh_root') as fresh,patch('iios_native_dispatcher.admit_terminal') as terminal:
-                with self.assertRaises(QualificationFailure) as caught:run(m,digest(m),resume_binding=binding)
+                with self.assertRaises(QualificationFailure) as caught:run(m,digest(m),resume_binding=binding,audit=audit)
                 self.assertEqual(caught.exception.detail['predicate'],'RESUME_CLOCK_IDENTITY')
                 fresh.assert_not_called();terminal.assert_not_called()
             before={p.name:p.read_bytes() for p in fixture.root.iterdir()}
             with patch('iios_native_dispatcher.require_execution_ready'),patch('iios_native_dispatcher.admit_source'),patch('iios_native_dispatcher.clock',return_value=10),patch('iios_native_dispatcher.time.time',return_value=100),patch('iios_native_conductor.Conductor.preflight_resume'),patch('iios_native_dispatcher.os.getppid',return_value=999),patch('iios_native_dispatcher.os.isatty',return_value=True),patch('iios_native_dispatcher.admit_terminal',side_effect=QualificationFailure(STAGES[1],'TERMINAL_APPLICATION','APPLE_TERMINAL','VSCODE')),patch('iios_native_dispatcher.reconcile_pid') as reconcile,patch('iios_native_conductor.Conductor.run') as execute:
-                with self.assertRaises(QualificationFailure) as caught:run(m,digest(m),resume_binding=binding)
+                with self.assertRaises(QualificationFailure) as caught:run(m,digest(m),resume_binding=binding,audit=audit)
                 self.assertEqual(caught.exception.detail['predicate'],'TERMINAL_APPLICATION');reconcile.assert_not_called();execute.assert_not_called()
             self.assertEqual(before,{p.name:p.read_bytes() for p in fixture.root.iterdir()})
         finally:fixture.tearDown()

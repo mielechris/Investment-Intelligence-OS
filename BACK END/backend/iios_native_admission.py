@@ -6,10 +6,8 @@ import time
 from pathlib import Path
 from iios_native_conductor import STAGES,QualificationFailure,require,pin_file,digest,AUTHORITIES,failure
 
-# Source-controlled gate: a manifest cannot authorize an unfinished dispatcher.
-NATIVE_DISPATCHER_READY = False
-
-REQUIRED_NATIVE = (STAGES[4],STAGES[5],STAGES[6],STAGES[7],STAGES[8])
+ADAPTERS=dict(zip(STAGES[4:9],('iios_native_assembly.py','iios_native_static.py','iios_native_image_policy.py','iios_native_runtime_adapter.py','iios_native_lifecycle.py')))
+REQUIRED_NATIVE = tuple(ADAPTERS)
 
 
 def admit_source(manifest):
@@ -41,9 +39,12 @@ def review_bindings(manifest):
         elif not binding['ownership_contract'] or not binding['review_parent'] or not binding['expected_outputs']:
             blockers.append({'stage':row['id'],'predicate':'NATIVE_ADAPTER_REVIEW','expected':'COMPLETE','observed':'INCOMPLETE','exception_subtype':'NONE','errno_category':'NONE'})
         else:
-            pin_file(binding['adapter_path'],binding['adapter_sha256'])
-    if not NATIVE_DISPATCHER_READY:
-        blockers.append({'stage':STAGES[0],'predicate':'NATIVE_DISPATCHER_INTEGRATION_REQUIRED','expected':'COMPLETE_REVIEWED_IMPLEMENTATION','observed':'INCOMPLETE','exception_subtype':'NONE','errno_category':'NONE'})
+            relative='BACK END/backend/'+ADAPTERS[row['id']]
+            inventory={r['relative']:r['sha256'] for r in manifest['source']['inventory']}
+            expected=str(Path(manifest['source']['root'])/relative)
+            if binding['adapter_path']!=expected or inventory.get(relative)!=binding['adapter_sha256']:
+                blockers.append({'stage':row['id'],'predicate':'SOURCE_CONTROLLED_ADAPTER_REQUIRED','expected':'EXACT_STAGE_IMPLEMENTATION','observed':'SUBSTITUTED_OR_MISSING','exception_subtype':'NONE','errno_category':'NONE'})
+            else:pin_file(binding['adapter_path'],binding['adapter_sha256'])
     return blockers
 
 
@@ -53,6 +54,14 @@ def require_execution_ready(manifest):
         item=blockers[0]
         raise QualificationFailure(item['stage'],item['predicate'],item['expected'],item['observed'])
     require(manifest.get('native_execution_ready') is True,STAGES[0],'NATIVE_EXECUTION_READY','REVIEWED','BLOCKED')
+    require(manifest.get('environment')=={'LC_ALL':'C','TZ':'UTC','__CF_USER_TEXT_ENCODING':'0x1F5:0x0:0x0'},STAGES[0],'OWNED_EXACT_ENVIRONMENT')
+    lifecycle=manifest.get('native',{}).get('lifecycle',{})
+    require('profile_review' in lifecycle and 'profile_template' in lifecycle,STAGES[0],'LIFECYCLE_PROFILE_REVIEW_REQUIRED','PINNED_REVIEW','MISSING')
+    require(lifecycle.get('environment')=={'LANG':'C','LC_ALL':'C','TZ':'UTC'},STAGES[0],'LIFECYCLE_EXACT_ENVIRONMENT')
+    from iios_native_profile import reviewed_profile
+    execution=Path(manifest['output_parent'])/manifest['output_name']/'payload/assembly-output/execution-01'
+    roots={k:str(execution/v) for k,v in {'runtime':'output/runtime-pilot','release':'release','control':'control','output':'disposable'}.items()}
+    reviewed_profile(manifest,lifecycle,roots)
 
 
 def terminal_categories(term,ttys,forbidden_markers,host,expected_host):

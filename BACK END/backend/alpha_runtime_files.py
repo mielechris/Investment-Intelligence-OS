@@ -1010,7 +1010,7 @@ def _metadata_digest(values):
     return out
 
 
-def _darwin():
+def _darwin(*,write=False):
     # Lazy and effect-bound: no dylib access at module import or pure admission.
     import ctypes
     import sys
@@ -1021,9 +1021,10 @@ def _darwin():
     lib.fgetxattr.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
                              ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
     lib.fgetxattr.restype = ctypes.c_ssize_t
-    lib.fsetxattr.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
-                             ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
-    lib.fsetxattr.restype = ctypes.c_int
+    if write:
+        lib.fsetxattr.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
+                                 ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+        lib.fsetxattr.restype = ctypes.c_int
     return ctypes, lib
 
 
@@ -1081,7 +1082,7 @@ class RuntimeMetadataCopyError(ValueError):
 
 def _write_xattr(fd, name, value):
     require(name in _XATTRS - {'com.apple.provenance'}, 'RUNTIME_XATTR_WRITE')
-    c, lib = _darwin(); buf = c.create_string_buffer(value)
+    c, lib = _darwin(write=True); buf = c.create_string_buffer(value)
     c.set_errno(0)
     result = lib.fsetxattr(fd, name.encode('ascii'), buf, len(value), 0, 0)
     error_number = c.get_errno()
@@ -1331,7 +1332,7 @@ def safe_runtime_envelope(document):
     require(type(document) is dict, 'RUNTIME_ENVELOPE_SCHEMA')
     schema = document.get('schema')
     view = dict(document)
-    if schema == 'iios-disposable-observation-roles-v2':
+    if schema in ('iios-disposable-observation-roles-v2','iios-disposable-observation-roles-v3'):
         runtime = document['runtime']
         require(runtime.get('schema') in (DESCRIPTOR_SCHEMA, COMPLETED_DESCRIPTOR_SCHEMA), 'RUNTIME_ENVELOPE_VERSION')
         safe_runtime_document(runtime)

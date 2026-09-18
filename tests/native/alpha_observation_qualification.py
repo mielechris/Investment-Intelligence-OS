@@ -3,6 +3,16 @@
 No credential selector, provider route, live grant or account claim is accepted.
 The exact immutable descriptor and roots are independently passed to this tool.
 """
+import sys
+_native_preparing=__name__=='__main__'
+def _native_entry_guard(event,args):
+    if event in ('os.kill','os.killpg','os.system','os.posix_spawn','os.fork','os.forkpty','os.exec'):
+        raise PermissionError('DISPOSABLE_UNDECLARED_EFFECT')
+    if _native_preparing and (event.startswith(('socket.','subprocess.')) or event in ('os.mkdir','os.remove','os.rename','os.link','os.symlink','os.chmod','os.chown')):
+        raise PermissionError('DISPOSABLE_PREPARATION_EFFECT')
+    if _native_preparing and event=='open' and ((isinstance(args[1],str) and any(c in args[1] for c in 'wax+')) or isinstance(args[2],int) and args[2]&(1|2|8|512|1024|2048)):
+        raise PermissionError('DISPOSABLE_PREPARATION_WRITE')
+if __name__=='__main__':sys.addaudithook(_native_entry_guard)
 import argparse
 from datetime import datetime,timezone
 import hashlib
@@ -121,7 +131,7 @@ def controlled_denial(allowed,denied,spec,expected,*,owner,owner_parent,comparis
     return dict(schema='iios-controlled-denial-result-v1',scope='DISPOSABLE_DENIAL_ONLY',
         comparison_parent=comparison_parent,query_parent=expected,collector_parent=content_hash(result),
         attribution='CONTROLLED_CORRELATED_DENIAL' if matched else 'UNATTRIBUTED',
-        category=result['category'],confinement_qualified=False,production_qualified=False,authority=locked_authority())
+        category=result['category'],failure_detail=result.get('failure_detail'),confinement_qualified=False,production_qualified=False,authority=locked_authority())
 
 
 def fixed_exception(exc):
@@ -151,11 +161,17 @@ def run_parent(config,cap):
         # No gateway call or fabricated provider completion exists in this path.
     except Exception as exc:
         primary={'stage':stage,'category':fixed_exception(exc)}
+        if d['schema']=='iios-disposable-observation-roles-v3':
+            from iios_native_conductor import failure,STAGES
+            primary=failure(exc,STAGES[8],stage)
     finally:
         try:
             if owner is not None:cleanup=owner.cleanup()
         except Exception as exc:
             cleanup=record(cap,{'verified':False,'cooperative':False,'category':fixed_exception(exc)})
+            if d['schema']=='iios-disposable-observation-roles-v3':
+                from iios_native_conductor import failure,STAGES
+                cleanup['failure_detail']=failure(exc,STAGES[8],'LIFECYCLE_CLEANUP')
         result=record(cap,dict(status='FUNCTIONAL_PASS' if primary is None and cleanup and cleanup.get('verified') is True and cleanup.get('cooperative') is True else 'FAILED_CLOSED',schema='iios-disposable-functional-result-v1',admission_parent=cap.identity,
             primary_failure=primary,cleanup=cleanup,provider_requests=0,seed_records=seeded,http=http,
             confinement='UNQUALIFIED_UNTIL_CONTROLLED_COMPARISONS',authority=locked_authority()))
@@ -165,6 +181,7 @@ def run_parent(config,cap):
 
 
 def main():
+    global _native_preparing
     p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True)
     p.add_argument('--config-sha256');p.add_argument('--approved-roots-json')
     p.add_argument('--role',choices=('scheduler','publisher','backend'));p.add_argument('--port',type=int)
@@ -173,14 +190,24 @@ def main():
     require(args.config_sha256 is not None and args.approved_roots_json is not None,'DISPOSABLE_INVOCATION_PINS')
     roots=json_document(args.approved_roots_json.encode())
     c,cap=load_config(args.config,args.config_sha256,roots,now=datetime.now(timezone.utc))
+    from truth_spine_observation_roles import bind_conductor_clock
+    bind_conductor_clock(cap)
+    transport=None
+    if cap.document()['schema']=='iios-disposable-observation-roles-v3':
+        from iios_native_role_transport import install
+        transport=install(cap)
+    _native_preparing=False
     if args.role:
         require(args.observation_admission==cap.identity and args.instance_id and args.runner_id and args.created_at,
             'DISPOSABLE_CHILD_PARENTS')
         from truth_spine_full_day_service import run_bound_observation_role
-        return run_bound_observation_role(args,c,cap)
+        result=run_bound_observation_role(args,c,cap)
+        if transport is not None:transport.verify_cleanup()
+        return result
     require(args.observation_admission is None and args.port is None and not any(
         (args.instance_id,args.runner_id,args.created_at)),'DISPOSABLE_PARENT_ARGUMENTS')
-    return run_parent(c,cap)
+    result=run_parent(c,cap)
+    return transport.finish(result) if transport is not None else result
 
 
 if __name__=='__main__':

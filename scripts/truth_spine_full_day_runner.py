@@ -228,6 +228,9 @@ class ObservationLifecycle:
         # Mandatory fresh output/config created by run_observation only.
         require(set(os.listdir(self.fd))=={'topology.json','requests','runner.lock'}, 'OBSERVATION_OUTPUT_REUSE')
         pins={str(python):next(r['sha256'] for r in runtime['files'] if r['path']==runtime['interpreter'])}
+        final_executable=str(python)
+        if self.document.get('schema')=='iios-disposable-observation-roles-v3':
+            image=self.document['conductor']['process_image'];pins[image['path']]=image['sha256'];final_executable=image['path']
         for role in ('scheduler','publisher','backend'):
             self.check(self.launch['startup_ns'])
             args=[str(python),'-B','-m',self.children.service_module,'--config',str(self.root/'topology.json'),
@@ -236,7 +239,7 @@ class ObservationLifecycle:
             if disposable(self.capability):args+=invocation_pins(self.capability)
             port=self.launch['port'] if role=='backend' else None
             if port is not None:args+=['--port',str(port)]
-            launch=self.children.prepare_launch(role,args,executable_hashes=pins,port=port,final_executable=str(python))
+            launch=self.children.prepare_launch(role,args,executable_hashes=pins,port=port,final_executable=final_executable)
             child=subprocess.Popen(['/usr/bin/sandbox-exec','-f',self.document['roots']['control']+'/profile.sb',*launch.argv],
                 cwd=self.document['roots']['release'],env={'LANG':'C','LC_ALL':'C','TZ':'UTC'},
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
@@ -335,8 +338,8 @@ class ObservationLifecycle:
             try:
                 entry=self.children.active['backend'];self.children.verify(entry)
                 require(listener_pids(self.launch['port'])==[entry['child'].pid],'OBSERVATION_LISTENER_OWNER')
-            except Exception:
-                cooperative=False;self.children.error('OBSERVATION_LISTENER_OWNER','backend')
+            except Exception as error:
+                cooperative=False;self.children.error('OBSERVATION_LISTENER_OWNER','backend',error)
             if self.fd is not None:
                 publish(self.fd,'observation-stop.json',record(self.capability,{'admission_parent':self.capability.identity,
                     'authority':locked_authority()}))
@@ -353,10 +356,10 @@ class ObservationLifecycle:
                         'cooperative':True,'authority':locked_authority()}) and entry['child'].poll()==0,
                         'OBSERVATION_COOPERATIVE_EXIT')
                     exit_parents[role]=e['startup_parent']
-                except Exception:
-                    cooperative=False;self.children.error('OBSERVATION_COOPERATIVE_CLEANUP_FAILED',role)
-        except Exception:
-            cooperative=False;self.children.error('OBSERVATION_STOP_PUBLICATION_FAILED')
+                except Exception as error:
+                    cooperative=False;self.children.error('OBSERVATION_COOPERATIVE_CLEANUP_FAILED',role,error)
+        except Exception as error:
+            cooperative=False;self.children.error('OBSERVATION_STOP_PUBLICATION_FAILED',error=error)
         finally:
             # Existing owner re-verifies before each fallback signal; forced exit
             # can never be classified as cooperative success.
@@ -373,6 +376,7 @@ class ObservationLifecycle:
             self.result=record(self.capability,{'verified':bool(report.get('clean_shutdown')) and all(clear) and len(exit_parents)==3,
                 'cooperative':cooperative and len(exit_parents)==3,'roles':['scheduler','publisher','backend'],
                 'listener_owner_reconciled':not self.children.active and all(clear),'port_clear':clear})
+            if self.capability.document().get('schema')=='iios-disposable-observation-roles-v3':self.result['failures']=report.get('cleanup_errors',[])
             if self.lease is not None:self.lease.close()
             if self.fd is not None:os.close(self.fd);self.fd=None
         return self.result

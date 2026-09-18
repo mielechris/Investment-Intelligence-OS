@@ -286,7 +286,10 @@ class Conductor:
                             self.events.append(detail);self.journal.append('READ_ONLY_RETRY',stage,detail);continue
                         raise
         except CleanupBoundaryStop:pass
-        except BaseException as error:self.primary=failure(error,stage,'CONDUCTOR_EXCEPTION')
+        except BaseException as error:
+            self.primary=failure(error,stage,'CONDUCTOR_EXCEPTION')
+            for item in getattr(error,'secondary_cleanup',()):
+                self.cleanup_failures.append(QualificationFailure(item['stage'],item['predicate'],item['expected'],item['observed'],exception=item['exception_subtype'],errno_category=item['errno_category']).detail)
         if budget is not None and not cleaned:
             try:
                 budget.check(self.clock(),'CLEANUP','cleanup')

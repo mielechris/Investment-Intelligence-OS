@@ -87,6 +87,8 @@ def run_stage(context,row,deadline,budget):
                           (launch['launcher'],)+args,(launch['image'],)+args,4)
     result=context.execute_owned(binding,min(deadline,context.clock()+30_000_000_000),deadline,
                                  on_tick=lambda owner:sealer(owner.child,owner.registered,deadline))
+    from iios_native_ownership import verify_execution
+    verify_execution(result,STAGE)
     need(sealer.done and result['cleanup']['verified'] is True,'ASSEMBLY_SEAL_AND_CLEANUP')
     record=execution/'ASSEMBLY-RESULT.json';raw=record.read_bytes();assembled=json.loads(raw)
     need(assembled['status']=='ASSEMBLED_BYTES_ONLY' and assembled['scope']=='PRIVATE_ASSEMBLY_BYTES_ONLY','ASSEMBLY_RESULT_SCOPE')

@@ -133,8 +133,10 @@ def collect(spec, expected, *, owner, expected_owner):
             'collector_pid':child.pid,'collector_exit_verified':status is not None,
             'attribution':'CORRELATED_REPORT_ONLY','confinement_qualified':False,
             'production_qualified':False,'authority':locked_authority()}
-    except Exception:
-        return {'schema':'iios-os-denial-observation-v1','scope':'DISPOSABLE_DENIAL_ONLY',
+    except Exception as error:
+        from iios_native_conductor import failure,STAGES
+        detail=failure(error,STAGES[8],'DENIAL_COLLECTION_FAILED')
+        return {'failure_detail':detail,'schema':'iios-os-denial-observation-v1','scope':'DISPOSABLE_DENIAL_ONLY',
             'parent':expected,'owner_parent':expected_owner,'category':'COLLECTION_FAILED','matches':0,
             'collector_exit':child.poll(),'collector_pid':child.pid,'collector_exit_verified':False,
             'attribution':'UNATTRIBUTED','confinement_qualified':False,'production_qualified':False,

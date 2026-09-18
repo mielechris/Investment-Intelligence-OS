@@ -66,4 +66,5 @@ def run_stage(context,row,deadline,budget):
     d=context.manifest['native']['static_descriptor']
     result=verify(d,deadline,execution=parent['detail']['execution'],tool=context.tool,clock=context.clock)
     require(result['status']=='PASS_STATIC_FINAL_LOCATION_ONLY',STAGES[5],'STATIC_RESULT')
+    if context.audit is not None:context.audit.sealed=(str(context.root/'payload/assembly-output/execution-01/output/runtime-pilot'),)
     return context.receipt(row,extra={'static':result,'assembly_receipt_parent':digest(parent)})

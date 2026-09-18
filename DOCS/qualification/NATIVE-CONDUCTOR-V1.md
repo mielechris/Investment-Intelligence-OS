@@ -1,145 +1,97 @@
-# IIOS Native Qualification Conductor v1: architecture and readiness
+# IIOS Native Qualification Conductor v1
 
-Status: source core and offline contracts implemented; native integration incomplete.
-This is not a qualified end-to-end Mac conductor. A passing preparation CI result
-covers source tests only. The manifest compiler refuses execution when any of the
-four native adapter bindings is missing. Do not replace those bindings with old
-commands: consumed execution roots, fixed budgets, and legacy failure reductions
-make them incompatible.
+Source integration and substituted-effects tests do not establish native qualification.
+The manual entrypoint never grants provider or production authority. Every external
+input, profile review, host identity and source/CI receipt must be pinned before a
+launch package can be admitted. Missing inputs fail closed; there is no legacy
+command fallback or incomplete-adapter success route.
 
-## Ordered state machine
+## State and adapter map
 
-| State | Operation | Effect/retry policy |
+| Order | State | Implementation |
 | --- | --- | --- |
-| SOURCE_AND_CI_ADMISSION | Manifest, source inventory, exact-commit preparation receipt, input and history pins | Read-only; reviewed predicate retries only |
-| HOST_AND_TERMINAL_ADMISSION | Exact host, Apple Terminal markers and three TTYs | Read-only; reviewed predicate retries only |
-| HISTORICAL_PROCESS_RECONCILIATION | Three observations of registered PIDs; no historical ownership claim | Read-only; reviewed predicate retries only |
-| FRESH_OUTPUT_ROOT_QUALIFICATION | Exclusive owner-controlled 0700 payload under the bound parent | Effectful; never retry |
-| PRIVATE_RUNTIME_ASSEMBLY | Independently reviewed assembly adapter; bottom-up signing | Effectful; never retry |
-| STATIC_SIGNATURE_AND_INVENTORY | Complete independent static verification | Read-only; reviewed predicate retries only |
-| FINAL_RUNTIME_ACCEPTANCE | Bounded non-provider runtime acceptance | Effectful; never retry |
-| DISPOSABLE_CONFINEMENT_AND_LIFECYCLE | Disposable confined lifecycle and independently verified cleanup | Effectful; never retry |
-| EVIDENCE_EXPORT_AND_VERIFICATION | Complete inventory, report and export seal | Effectful; never retry |
+| 1 | SOURCE_AND_CI_ADMISSION | admission.admit_source; exact inventory and CI parents |
+| 2 | HOST_AND_TERMINAL_ADMISSION | terminal.admit_terminal; TTY, ancestry, host and self-ownership |
+| 3 | HISTORICAL_PROCESS_RECONCILIATION | dispatcher; PID 35731 only, three absent observations |
+| 4 | FRESH_OUTPUT_ROOT_QUALIFICATION | dispatcher; exclusive 0700 root and inode binding |
+| 5 | PRIVATE_RUNTIME_ASSEMBLY | assembly.run_stage; existing corrected assembly and bottom-up sealer |
+| 6 | STATIC_SIGNATURE_AND_INVENTORY | static.run_stage; complete final-location verifier |
+| 7 | STATIC_RUNTIME_REFERENCE | image_policy.run_stage; independent external production reference |
+| 8 | FINAL_RUNTIME_ACCEPTANCE | runtime_adapter.run_stage; owned final-runtime diagnostic |
+| 9 | DISPOSABLE_CONFINEMENT_AND_LIFECYCLE | lifecycle.run_stage; existing Truth Spine role runner and controlled denial collector |
+| 10 | EVIDENCE_EXPORT_AND_VERIFICATION | evidence exporter; complete inventory and independent verification |
 
-The final four native operations require migrated source adapters. Their binding
-schema includes the adapter hash, command, input parents, expected outputs,
-ownership contract, outer-budget contract, failure protocol and review parent.
-No legacy-command fallback or skipped-state GREEN is permitted. Adapter source
-is loaded only when its admitted stage is reached.
+Names in the implementation column have the `iios_native_` prefix except the reused
+Truth Spine and denial collectors. Each adapter requires exact GREEN predecessor
+receipts and the audit installation parent. Runtime acceptance cannot accept static
+verification or a bootstrap image receipt in place of production evidence.
 
-## Budget and continuation
+## Audit and ownership
 
-One monotonic budget has work, cleanup and export boundaries. Every stage receives
-the earlier of its stage cap and the remaining outer boundary. Cleanup precedes
-the export reserve. A stage cannot reset the outer clock. GREEN advances to the
-next state without another approval. At most two retries are permitted for a
-read-only state, and only for explicitly pinned reviewed predicates. Effectful
-failures are consumed. An adapter must bound every blocking operation itself;
-core deadline checks cannot preempt a stuck adapter without signals.
+The entrypoint installs its preparation no-effects hook before repository imports,
+verifies source bytes, then installs NativeAudit before dispatcher import or handler
+resolution. The audit has explicit stage operations, exact read inputs and fresh-root
+writes, tracked file descriptors, one-use command grants, read-only inspection symbol
+scopes and fixed sanitized denials. Lazy source compilation rechecks hashes. Unknown
+bytecode, credential paths, network effects and signals are rejected. After static
+verification the controller cannot write the sealed runtime. This Python guard is
+not an OS sandbox attestation; sandbox enforcement requires native evidence.
 
-The core checks expiry at admission and each stage. Scope, source, CI, tools,
-host, inputs, commands and outputs belong in one canonical SHA-256-pinned
-manifest. A new manifest requires separate manual authorization. A checksum is
-an integrity pin, not a claim of publisher signature.
+The launcher, actual process image and script have separate path/hash bindings.
+PID, PPID, process start time, executable hash/path, exact argv/command, cwd and
+stability remain mandatory for all three observations. Cooperative exit zero,
+reaping and independent absence are required. The conductor sends zero signals. V3 role inspection uses a bounded signal-free
+transport around the existing inspector and listener parser; timed-out handles
+remain unresolved instead of being killed.
+Constructor uncertainty and partial cleanup cannot become GREEN. Historical
+cleanup classifications, especially attempt 10 UNVERIFIED, are immutable.
 
-## Ownership and history
+## Disposable lifecycle
 
-The launcher, framework process image and entrypoint script have independent
-path/hash pins. Launch command, observed argv and script index are separately
-bound. Reverification detects changed bytes or filesystem identities. Ownership
-compares OS executable path/hash to the process-image pin, independently of the
-launcher. PID, PPID, start-time presence and stability, executable path/hash,
-exact argv/command, cwd and three complete observations remain mandatory.
-Cleanup requires cooperative exit zero, reaped handle and independent absence.
-Signals default to none; the low-level signaling API requires explicit authority
-and fresh complete identity verification. A missing process does not reclassify
-historical cleanup. Every historical classification is copied unchanged into
-receipts and the final report.
+The adapter reuses admit_roles/configuration, ObservationLifecycle, startup receipts,
+ACK/TLS/health, cooperative stop, listener reconciliation and Children ownership.
+The v3 descriptor adds conductor, source, host, output identity, production reference
+and acceptance parents. It binds the framework process image independently of the
+launcher and uses the original Darwin monotonic clock domain without resetting it.
 
-## Checkpoints and evidence
+The same exact profile covers the role runner and dummy denial trials. The shared
+profile admission rejects broadened rules even when a changed profile is rehashed.
+Only a separately pinned review can bind the template and exact inspection tools.
+The profile revision adds exact ps/lsof/sandbox-exec and process-image paths; it must
+not be described as previously native-qualified. Filesystem, dummy credential-marker,
+dummy executable and fixed loopback comparisons require both an allowed baseline and
+OS-attributed denial from the existing bounded collector. Errno alone never qualifies.
+No actual credential, provider, gateway, broker or protected ledger is accessed.
 
-START is durable before invoking a stage. GREEN is durable only after verifying
-all predicates, receipt parents and output hashes. Checkpoints form a hash chain
-bound to the manifest and nonce. Resume requires an independently pinned chain
-tip, the same clock identity and unexpired original budget. An in-flight START,
-a final record, stale tip, changed input or changed output rejects resume.
-Completed effectful stages are never replayed. An exclusive root lock prevents
-concurrent controllers. Native dispatcher resume is not exposed until adapter
-resource reconstruction and host boot identity are integrated.
+## Deadlines, failure and resume
 
-Failure records retain fixed stage/predicate, sanitized expected/observed
-categories, exception subtype and errno category. Lower-level typed predicates
-are retained. Primary, additional cleanup and export failures remain separate.
-No raw process output or environment values belong in these records. Evidence
-uses exclusive files; the report is provisional until its complete inventory and
-export seal independently verify. Failed or interrupted roots are never reused.
+One original monotonic start covers preparation and all stages. Stage caps use the
+remaining work boundary; cleanup and export have independent reserves and cannot
+borrow or reset time. GREEN automatically advances. Effectful failures are consumed;
+only explicitly reviewed read-only predicates can retry within their original cap.
+Primary, secondary and cleanup failures retain lower-level stage/predicate, sanitized
+expected/observed category, exception subtype and errno category.
 
-## Remaining integration gates
+START is durable before an effect. GREEN checkpoints bind the manifest, nonce,
+previous receipt, output hashes and audit parent. Native resume requires an externally
+pinned chain tip, original budget and boot-session identity; it repeats source/CI,
+Terminal and registered-PID admission. Interrupted or failed effectful stages cannot
+resume. A failed assembly requires a fresh root and renewed bundle. No failed artifact
+is overwritten or reused.
 
-1. Migrate assembly and signing to fresh root recipes and inherited deadlines;
-   retain the explicit bundle/dylib correction and its adversarial tests.
-2. Migrate static verification to the signed artifact provenance chain; original
-   unsigned wheel hashes must remain separate from authorized signed hashes.
-3. Bind final runtime acceptance and disposable confinement/lifecycle adapters,
-   including denial evidence and signal-free cooperative shutdown.
-4. Integrate exact interpreter, environment, Terminal ancestry, controller
-   self-ownership, source/CI authenticity, audit restrictions and tool allowlists
-   in the native dispatcher. Environment/TTY markers alone are insufficient to
-   claim the previously proven full Terminal-context admission.
-5. Integrate resume resource reconstruction, boot identity and interrupted-root
-   reconciliation. The core resume contract is tested; the native CLI remains
-   new-run-only.
-6. Prepare a complete pinned manifest with reviewed adapters and output recipes.
-   Only then offer an execution authorization envelope and executable command.
+## Offline validation and authority
 
-These are implementation blockers, not requests to weaken predicates or broaden
-permissions. The entrypoint's review mode returns consolidated YELLOW while any
-binding is missing. Do not label that review as completed qualification.
+The complete pipeline regression invokes actual stage adapters, policy construction,
+receipt checks, checkpointing and export verification with native external effects
+substituted. It covers every stage failure and verifies final native-shaped evidence.
+Separate regressions cover ownership, PID reuse/denial, scope substitution, deadlines,
+resume corruption, audit order/bypasses, profile mutation, partial cleanup, tampering
+and report overflow. Assembly preparation, OS signatures and role processes remain
+native facts; mocked effects are never exported as qualification evidence.
 
-## Authority separation
-
-Provider access, credentials, brokers, paper orders, trade execution and live
-execution remain false. Non-provider acceptance is not production qualification.
-Provider pilot and full-market-day execution require separate authorization and
-separate manifests. Dictionary flags alone do not enforce confinement: the
-native adapter migration must preserve the existing audited sandbox and denial
-evidence. Codex and Computer Use must not launch Apple Terminal. A future complete
-package is launched manually once and produces one report.
-
-## Offline validation
-
-The source suite uses mocked inspectors and child handles, synthetic clocks and
-isolated files. It exercises all ten transitions and stop paths, reviewed retry
-limits, early exit, identity changes, inspection denial, interrupted stages,
-expired authority, stale and altered checkpoints, cleanup uncertainty, evidence
-tampering, launcher/image/script substitution and exact Terminal categories.
-The existing guarded complete preparation suite blocks native subprocesses,
-signals, sockets and dynamic OS inspection. No native qualification is executed
-by these tests.
-
-## Integration follow-up
-
-The static verification function is migrated into `iios_native_static.verify`;
-its `run_stage` adapter requires a durable assembly GREEN receipt and the exact
-fresh execution path before invoking the verifier. Signed wheel-image identity
-now follows the existing signing evidence pre/post hashes; the existing signature,
-load-command, manifest and unchanged-bootstrap checks remain mandatory.
-
-`iios_native_terminal.admit_terminal` preserves the accepted exact shell/Terminal
-ancestry allowlist, bounded six-level walk, TTY, marker, host and selector checks.
-Its pure audit policy distinguishes audit-policy denial from OS errno. The policy
-is not installed by the current dispatcher: complete read/FD/command admission
-and child restrictions remain integration work, and execution stays blocked.
-
-Rejected resume preflight now leaves the historical root unchanged. Completed
-receipts are revalidated for status, predicates, authority, parents and output
-hashes. Fresh-root creation rechecks parent and child identities after mkdir.
-
-Assembly, final-runtime acceptance and complete confinement/lifecycle native
-adapters are still missing. The bootstrap acceptance cannot be relabeled as final
-runtime acceptance, nor can functional lifecycle or a single correlated denial
-be promoted to complete confinement qualification. There is no launch-ready
-package at this checkpoint; source-controlled execution readiness remains false.
+Provider, credential, broker, paper-order, trading and live-execution authorities
+remain false. production_qualified remains false. Provider pilot and full-market-day
+execution require separate authorization. Codex does not launch the manual command.
 
 ## Bootstrap and production image scopes
 
@@ -165,24 +117,3 @@ Both dynamic scans must be complete, contain required images, match the exact
 policy identities, contain no duplicate paths, and match in order and content.
 The accepted image-address stability check also remains in the generated child.
 Mapped-memory integrity remains UNVERIFIED; boot attestation remains UNRESOLVED.
-
-## Adapter integration status
-
-Assembly reuses the migrated copy/staging/seal-delta/assemble functions. Its
-configuration binds fresh paths and the original outer budget; it does not set
-an alarm or reset a deadline. The migrated bottom-up signer retains the corrected
-bundle/dylib checks and independent child ownership checks.
-
-Runtime acceptance generates a separate production child from the pinned
-accepted bootstrap child, retaining startup flags, prefixes, sealed discovery,
-ACK, exact imports, TLS/CA checks and dyld APIs. The production image protocol
-replaces the bootstrap-only count/encoding. Parent transport uses three complete
-ownership observations, cooperative exit, reaping and independent absence.
-
-The native resume entry accepts a pinned root identity and journal tip, checks
-the existing deadline and boot-session identity, and delegates checkpoint/replay
-validation to the same core. Source/CI admission is repeated before dispatch.
-
-The full native audit installation and confinement/lifecycle integration are not
-complete. The source-controlled readiness gate remains false. No launch-ready
-package or native qualification claim is made by this source checkpoint.

@@ -126,6 +126,8 @@ def run_stage(context,row,deadline,budget):
     with destination.open('xb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
     startup=min(deadline,context.clock()+60_000_000_000)
     execution=context.run_owned_runtime(destination,sha(raw),policy,startup,deadline)
+    from iios_native_ownership import verify_execution
+    verify_execution(execution,STAGE)
     verified=decode_acceptance(execution['report'],policy)
     verify_manifest(policy['runtime_root'],manifest,source_commit=context.manifest['source']['commit'])
     require(execution['cleanup']['verified'] is True and execution['cleanup']['signals']==0,STAGE,'RUNTIME_VERIFIED_CLEANUP')

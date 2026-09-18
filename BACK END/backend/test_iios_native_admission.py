@@ -76,7 +76,8 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(ctx.exception.detail['predicate'],'INPUT_HASH')
     def test_detailed_inspection_denial(self):
         from iios_native_dispatcher import NativeContext
-        context=NativeContext({},'a'*64,self.root);context.deadline=100
+        from unittest.mock import MagicMock
+        context=NativeContext({},'a'*64,self.root,audit=MagicMock());context.deadline=100
         def denied(pid,diagnostic):
             diagnostic({'query':'PS_START','failure':'INSPECTION_EXCEPTION'})
             raise PermissionError(errno.EACCES,'sensitive text')
