@@ -1164,13 +1164,13 @@ class AssemblyOutputParentTests(unittest.TestCase):
 
 class DurableQualificationPathTests(unittest.TestCase):
     def test_only_current_account_qualification_descendants_admitted(self):
-        account=Mock(pw_dir='/Users/recovery-test')
-        base='/Users/recovery-test/Library/Application Support/IIOS/qualification'
+        account=Mock(pw_dir='/synthetic-account')
+        base='/synthetic-account/Library/Application Support/IIOS/qualification'
         with patch.object(rf.pwd,'getpwuid',return_value=account):
             rf._root(base+'/version-01/bootstrap',base+'/version-01/bootstrap')
             from alpha_observation_launch import lexical
             self.assertEqual(str(lexical(base+'/version-01/bootstrap')),base+'/version-01/bootstrap')
-            for path in (base,base+'/version-01',base.replace('recovery-test','other')+'/v/bootstrap',
+            for path in (base,base+'/version-01',base.replace('synthetic-account','other')+'/v/bootstrap',
                          base.replace('IIOS','Other')+'/v/bootstrap',base+'/v/Keychains',
                          base+'/v/Application Support/tree',base+'/v/.ssh/tree'):
                 with self.subTest(path=path):
@@ -1178,8 +1178,8 @@ class DurableQualificationPathTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'LAUNCH_PATH'):lexical(path)
 
     def test_durable_permission_gate_rejects_shared_ancestor(self):
-        account=Mock(pw_dir='/Users/recovery-test')
-        root='/Users/recovery-test/Library/Application Support/IIOS/qualification/v/bootstrap'
+        account=Mock(pw_dir='/synthetic-account')
+        root='/synthetic-account/Library/Application Support/IIOS/qualification/v/bootstrap'
         bad=Mock(st_uid=os.getuid(),st_mode=stat.S_IFDIR|0o755)
         with patch.object(rf.pwd,'getpwuid',return_value=account),patch.object(rf.os,'open',return_value=77),\
              patch.object(rf.os,'close'),patch.object(rf.os,'fstat',return_value=bad):
