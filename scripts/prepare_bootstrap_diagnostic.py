@@ -85,6 +85,8 @@ profile='''(version 1)
 (deny file-write*)
 (deny file-read-data)
 (allow file-read-metadata)
+; dyld startup requires opening the root directory itself, never its subtree.
+(allow file-read-data (literal "/"))
 (allow file-read-data (subpath BOOTSTRAP_PATH) (literal CHILD_PATH) (subpath "/System/Library") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/System/Volumes/Preboot/Cryptexes/OS/System/Library") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))
 '''.replace('BOOTSTRAP_PATH',json.dumps(str(B))).replace('CHILD_PATH',json.dumps(str(child))).replace('INTERPRETER',json.dumps(str(B/'bin/python3.14')))
 for path in (str(Path.home()/'.ssh'),str(Path.home()/'.aws'),str(Path.home()/'Library/Keychains'),'/Library/Keychains','/System/Library/Keychains'):

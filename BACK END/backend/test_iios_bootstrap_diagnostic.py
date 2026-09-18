@@ -94,3 +94,19 @@ class AuditPreludeTests(unittest.TestCase):
         cache=self.fixture()['_sealed_cache'];finder=SimpleNamespace(path='/synthetic/stdlib');cache(finder)
         self.assertEqual(finder._path_cache,{'a.py','b.py'})
         with self.assertRaises(PermissionError):cache(SimpleNamespace(path='/synthetic/unpinned'))
+
+
+class ProfileBoundaryTests(unittest.TestCase):
+    def test_root_exception_is_literal_and_restrictions_remain(self):
+        import ast
+        from pathlib import Path
+        tree=ast.parse((Path(__file__).resolve().parents[2]/'scripts/prepare_bootstrap_diagnostic.py').read_bytes())
+        assignment=next(n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='profile' for t in n.targets))
+        node=assignment.value
+        while isinstance(node,ast.Call):node=node.func.value
+        profile=node.value
+        self.assertIn('(allow file-read-data (literal "/"))',profile)
+        self.assertNotIn('(subpath "/")',profile)
+        for rule in ('(deny network*)','(deny process-fork)','(deny process-exec)','(deny file-write*)','(deny file-read-data)'):
+            self.assertIn(rule,profile)
+        self.assertLess(profile.index('(deny file-read-data)'),profile.index('(allow file-read-data (literal "/"))'))

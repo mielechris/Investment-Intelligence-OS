@@ -100,6 +100,7 @@ static int bounded(char *const argv[],const char *outpath,const char *errpath,do
  }
  /* Drain bytes left after the exit; children cannot spawn descendants in workload mode. */
  for(int i=0;i<2;i++){unsigned char buf[16384];ssize_t n;while((n=read(fds[i],buf,sizeof buf))>0){bytes[i]+=(size_t)n;if(bytes[i]>maximum){overflow=1;break;}NEED(write(dest[i],buf,(size_t)n)==n,"OUTPUT_WRITE");}close(fds[i]);fsync(dest[i]);fchmod(dest[i],0400);close(dest[i]);}
+ if(journal>=0){dprintf(journal,"OWNED_CHILD_WAIT_STATUS raw=%d exited=%d exit=%d signaled=%d signal=%d\n",status,WIFEXITED(status)?1:0,WIFEXITED(status)?WEXITSTATUS(status):-1,WIFSIGNALED(status)?1:0,WIFSIGNALED(status)?WTERMSIG(status):0);fsync(journal);}
  note(timed?"OWNED_CHILD_REAPED_TIMEOUT":overflow?"OWNED_CHILD_REAPED_OUTPUT_BOUND":"OWNED_CHILD_REAPED");
  return !timed&&!overflow&&WIFEXITED(status)&&WEXITSTATUS(status)==0;
 }

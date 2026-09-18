@@ -27,5 +27,8 @@ int main(int argc,char **argv){
  char **cases[]={ok,bad,slow,large};int expected[]={1,0,0,0};
  for(int i=0;i<4;i++){snprintf(out,sizeof out,"%s/case-%d.out",argv[1],i);snprintf(err,sizeof err,"%s/case-%d.err",argv[1],i);double start=now();int got=bounded(cases[i],out,err,i==2?0.1:5,1024);if(got!=expected[i]||now()-start>6)return 82;}
  int status;errno=0;if(waitpid(-1,&status,WNOHANG)!=-1||errno!=ECHILD)return 83;
+ FILE *reader=fopen(log,"r");if(!reader)return 85;char line[512];int exits_zero=0,exits_one=0,killed=0;
+ while(fgets(line,sizeof line,reader)){if(strstr(line,"exited=1 exit=0 signaled=0 signal=0"))exits_zero++;if(strstr(line,"exited=1 exit=1 signaled=0 signal=0"))exits_one++;if(strstr(line,"exited=0 exit=-1 signaled=1 signal=9"))killed++;}
+ fclose(reader);if(exits_zero!=1||exits_one!=1||killed!=2)return 86;
  note("ALL_FOUR_FIXTURES_PASS_NO_UNREAPED_CHILDREN");close(journal);return 0;
 }
