@@ -107,9 +107,13 @@ class PipelineTests(unittest.TestCase):
             return original_receipt(context,row,*args,**kw)
         # Loading the exact adapter file still occurs. Only its effectful helper
         # globals are replaced at that boundary, preserving run_stage itself.
-        original_exec=exec
-        def load(code,namespace):
-            original_exec(code,namespace)
+        def load(name,path,parent):
+            import sys
+            from iios_native_audit import ReviewedSourceFinder
+            with patch.dict(sys.modules):
+                sys.modules.pop(name,None)
+                module=ReviewedSourceFinder({path:parent}).load(name,path,parent)
+            namespace=module.__dict__
             filename=Path(namespace['__file__']).name
             if filename=='iios_native_assembly.py':namespace['prepare']=assembly_prepare
             if filename=='iios_native_image_policy.py':namespace['pin_file']=lambda *a:None
@@ -117,10 +121,11 @@ class PipelineTests(unittest.TestCase):
             if filename=='iios_native_lifecycle.py':
                 namespace['prepare']=lifecycle_prepare
                 namespace['verify_inspector_tools']=lambda *a:True
+            return module
         with ExitStack() as stack:
             for target,value in [('iios_native_dispatcher.require_execution_ready',None),('iios_native_dispatcher.admit_source',True),('iios_native_dispatcher.admit_terminal',True),('alpha_runtime_files.verify_manifest',True),('iios_native_image_policy.pin_file',True)]:
                 stack.enter_context(patch(target,return_value=value))
-            stack.enter_context(patch('iios_native_dispatcher.exec',side_effect=load,create=True))
+            audit.finder.load.side_effect=load
             stack.enter_context(patch('iios_native_dispatcher.clock',return_value=10))
             stack.enter_context(patch('iios_native_dispatcher.time.time',return_value=100))
             stack.enter_context(patch.object(NativeContext,'inspect',return_value=None))

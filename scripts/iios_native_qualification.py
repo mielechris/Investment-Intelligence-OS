@@ -101,7 +101,7 @@ def main(argv=None):
     global _preparation_mode
     p=argparse.ArgumentParser();p.add_argument('--manifest',required=True,type=Path);p.add_argument('--manifest-sha256',required=True)
     p.add_argument('--resume-binding',type=Path);p.add_argument('--resume-binding-sha256');p.add_argument('--review',action='store_true');p.add_argument('--authorize-manifest');args=p.parse_args(argv)
-    execution_entered=False;core=None;export_admission_failure=None
+    execution_entered=False;dispatcher_entered=False;core=None;export_admission_failure=None
     try:
         initial_start=None if args.review else time.clock_gettime_ns(6)
         manifest,report=review(args.manifest,args.manifest_sha256,None if args.review else initial_start+30_000_000_000)
@@ -122,10 +122,10 @@ def main(argv=None):
         from iios_native_audit import NativeAudit
         audit=NativeAudit(manifest,args.manifest_sha256);audit.install()
         _preparation_mode=False;execution_entered=True
-        namespace={'__name__':'iios_pinned_native_dispatcher','__file__':dispatch['path']}
-        exec(compile(Path(dispatch['path']).read_bytes(),dispatch['path'],'exec'),namespace)
+        module=audit.finder.load('iios_native_dispatcher',dispatch['path'],dispatch['sha256'])
         core.require(time.clock_gettime_ns(6)<initial_start+30_000_000_000,core.STAGES[0],'PRELAUNCH_DEADLINE')
-        result=namespace['run'](manifest,args.manifest_sha256,resume_binding=resume,audit=audit,initial_start=initial_start)
+        dispatcher_entered=True
+        result=module.run(manifest,args.manifest_sha256,resume_binding=resume,audit=audit,initial_start=initial_start)
         print(json.dumps(result,sort_keys=True));return 0 if result['status']=='GREEN' else 2 if result['status']=='YELLOW' else 1
     except Exception as error:
         if core is not None:detail=core.failure(error,core.STAGES[0],'ENTRYPOINT_EXCEPTION')
@@ -140,7 +140,7 @@ def main(argv=None):
         if execution_entered and export_admission_failure is not None:
             try:
                 audit.enter(core.STAGES[0])
-                result=export_admission_failure(manifest,args.manifest_sha256,detail,initial_start,lambda:time.clock_gettime_ns(6))
+                result=export_admission_failure(manifest,args.manifest_sha256,detail,initial_start,lambda:time.clock_gettime_ns(6),before_dispatcher=not dispatcher_entered,audit_receipt=audit.receipt)
                 print(json.dumps(result,sort_keys=True));return 1
             except Exception as export_error:secondary.append(core.failure(export_error,'EVIDENCE_EXPORT_AND_VERIFICATION','EARLY_FAILURE_EXPORT_EXCEPTION'))
         print(json.dumps({'status':'RED','primary_failure':detail,'secondary_failures':secondary,'native_execution_entered':execution_entered},sort_keys=True));return 1

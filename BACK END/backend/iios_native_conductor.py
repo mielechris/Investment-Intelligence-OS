@@ -155,7 +155,7 @@ def pin_file(path, expected, *, source_bytes=False):
         for owner,name,child,original in reversed(chain):
             require(original==identity(os.fstat(child))==identity(os.stat(name,dir_fd=owner,follow_symlinks=False)),STAGES[0],'INPUT_ANCESTOR_MUTATION')
         require(h.hexdigest()==expected,STAGES[0],'INPUT_HASH')
-        return dict(sha256=expected,size=before.st_size,**({'bytes':b''.join(chunks)} if source_bytes else {}))
+        return dict(sha256=expected,size=before.st_size,**({'bytes':b''.join(chunks),'identity':key(before),'ancestors':tuple(x[3] for x in chain)} if source_bytes else {}))
     finally:
         if fd is not None:os.close(fd)
         for handle in reversed(handles):os.close(handle)

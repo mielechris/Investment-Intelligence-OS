@@ -283,13 +283,12 @@ def run(manifest,parent,*,resume_binding=None,audit=None,initial_start=None):
             context.require_completed(STAGES[STAGES.index(row['id'])-1])
             binding=row['native_binding']
             pin_file(binding['adapter_path'],binding['adapter_sha256'])
-            namespace={'__name__':'iios_reviewed_native_adapter','__file__':binding['adapter_path']}
-            exec(compile(Path(binding['adapter_path']).read_bytes(),binding['adapter_path'],'exec'),namespace)
+            module=audit.finder.load(Path(binding['adapter_path']).stem,binding['adapter_path'],binding['adapter_sha256'])
             context.check('ADAPTER_LOAD_DEADLINE')
             from iios_native_audit import METADATA_STAGES
             if row['id'] in METADATA_STAGES:
-                with audit.metadata():return namespace['run_stage'](context,row,deadline,budget)
-            return namespace['run_stage'](context,row,deadline,budget)
+                with audit.metadata():return module.run_stage(context,row,deadline,budget)
+            return module.run_stage(context,row,deadline,budget)
         adapters[row['id']]=call
     def audited_export(report,deadline):
         audit.enter('EXPORT')

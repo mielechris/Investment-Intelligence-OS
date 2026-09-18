@@ -95,10 +95,19 @@ def verify_export(root,manifest):
     pin_file(root/'INVENTORY.json',seal['inventory_sha256']);pin_file(root/'REPORT.json',seal['report_sha256'])
     require(seal['verified_at_ns']<seal['deadline_ns'],STAGES[-1],'EXPORT_DEADLINE')
     verify_inventory(root,index['files'],exclude=('INVENTORY.json','EXPORT.json'))
-    return json.loads((root/'REPORT.json').read_bytes())
+    report=json.loads((root/'REPORT.json').read_bytes())
+    binding=report.get('admission_stage_receipt')
+    if binding is not None:
+        require(binding['path']=='ADMISSION-STAGE-RECEIPT.json',STAGES[-1],'FAILURE_RECEIPT_PATH')
+        pin_file(root/binding['path'],binding['sha256'])
+        receipt=json.loads((root/binding['path']).read_bytes())
+        require(receipt['manifest']==manifest and receipt['nonce']==report['nonce'] and receipt['status']==report['status']=='RED'
+                and receipt['failure']==report['primary_failure'] and receipt['workload_cleanup']==report['workload_cleanup']
+                and receipt['helper_cleanup']==report['helper_cleanup'],STAGES[-1],'FAILURE_RECEIPT_BINDING')
+    return report
 
 
-def export_admission_failure(manifest,parent,detail,initial_start,clock):
+def export_admission_failure(manifest,parent,detail,initial_start,clock,*,before_dispatcher=False,audit_receipt=None):
     """Bound early audit failures when no execution root exists; never overwrite.
 
     Called only after explicit manifest admission and native-audit installation.
@@ -109,11 +118,19 @@ def export_admission_failure(manifest,parent,detail,initial_start,clock):
     deadline=initial_start+manifest['limits']['total_ns']
     require(clock()<deadline,STAGES[-1],'EXPORT_DEADLINE')
     root=fresh_root(manifest['output_parent'],manifest['output_name'],manifest['output_parent_identity'])
+    receipt={'schema':'IIOS_EARLY_ADMISSION_STAGE_RECEIPT_V1','stage':detail['stage'],'status':'RED',
+        'manifest':parent,'nonce':manifest['nonce'],'source':digest(manifest['source']),
+        'audit_parent':digest(audit_receipt) if audit_receipt is not None else None,'failure':dict(detail),
+        'workload_cleanup':'NOT_APPLICABLE_NO_CHILD_CREATED' if before_dispatcher else 'NOT_ESTABLISHED',
+        'helper_cleanup':'NOT_ESTABLISHED','before_dispatcher':before_dispatcher}
+    put(root,'ADMISSION-STAGE-RECEIPT.json',receipt)
     report={'schema':'iios-native-qualification-conductor-v1','manifest':parent,'nonce':manifest['nonce'],
+        'admission_stage_receipt':{'path':'ADMISSION-STAGE-RECEIPT.json','sha256':digest(receipt)},
+        'workload_cleanup':receipt['workload_cleanup'],'helper_cleanup':receipt['helper_cleanup'],
         'status':'RED','completed_stages':[],'primary_failure':dict(detail),'secondary_failures':[],
         'cleanup_failures':[],'cleanup_receipt':None,'cleanup_classification':'NOT_ESTABLISHED',
         'read_only_retry_failures':[],'history':manifest['history'],'authority':manifest['authority'],
         'provider_pilot_authorized':False,'full_market_day_authorized':False,
-        'record_kind':'EARLY_ADMISSION_FAILURE_NO_STAGE_RECEIPT'}
+        'record_kind':'EARLY_ADMISSION_FAILURE_WITH_STAGE_RECEIPT'}
     export(root,report,deadline,clock)
     return report

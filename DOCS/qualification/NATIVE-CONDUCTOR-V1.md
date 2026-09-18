@@ -180,3 +180,30 @@ root is never reused or overwritten, and no stage receipt or cleanup verificatio
 is invented. Authorization/preparation failures before that boundary stay read-only.
 Export/storage failures retain both the original and export failure in terminal
 output and never claim successful persistence.
+
+### Closed reviewed source modules and early failures
+
+The controller computes its module registry exclusively from manifest-pinned
+source and bootstrap paths under its fixed controller roots. PathFinder,
+filesystem search, namespace-package discovery, bytecode and custom loaders
+cannot satisfy this registry. The dispatcher and adapters use the same loader.
+Regular source bytes are read through retained no-follow directory handles,
+hashed before compilation, and checked for file/ancestor identity stability
+before and after execution. ModuleSpec origin, file, loader, package, search
+locations, cache-disabled state and source-parent digest must agree. Duplicate,
+reloaded, cross-scope and unreviewed existing modules fail closed. This controller
+registry does not replace the separate production-runtime image reference.
+
+The only declared optional absent modules are the Windows probes `_wmi` from
+the pinned bootstrap `platform` caller and `msvcrt` from the pinned bootstrap
+`subprocess` caller. They raise ModuleNotFoundError without any discovery.
+Unknown callers and other unregistered module names remain admission failures.
+
+An early failure after manifest/audit admission exports a RED admission-stage
+receipt bound to the manifest, nonce, source, audit receipt and exact sanitized
+failure. The report binds that receipt and the complete export inventories it.
+A proven pre-dispatcher failure records workload cleanup as
+NOT_APPLICABLE_NO_CHILD_CREATED while helper cleanup remains NOT_ESTABLISHED.
+Historical cleanup classifications never change. Storage/export failure remains
+a separate failure; missing evidence is never represented as an authenticated
+receipt. These are local hash bindings, not independent digital signatures.

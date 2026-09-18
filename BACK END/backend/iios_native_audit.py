@@ -41,33 +41,150 @@ FORBIDDEN=frozenset(('os.kill','os.killpg','os.system','os.posix_spawn','os.fork
     'os.remove','os.rmdir','os.rename','os.link','os.symlink','sys.settrace','sys.setprofile'))
 
 
+def module_registry(hashes, roots):
+    """Deterministic registry from admitted paths; no filesystem/import discovery."""
+    rows={}
+    for root in roots:
+        base=PurePosixPath(root['path'])
+        require(base.is_absolute() and '..' not in base.parts,STAGES[0],'MODULE_ROOT')
+        for origin,parent in sorted(hashes.items()):
+            path=PurePosixPath(origin)
+            if not path.is_relative_to(base):continue
+            relative=path.relative_to(base);parts=list(relative.parts)
+            if '__pycache__' in parts:continue
+            package=parts[-1]=='__init__.py'
+            if origin.endswith('.py'):
+                parts=parts[:-1] if package else parts[:-1]+[parts[-1][:-3]];kind='SOURCE'
+            else:
+                suffix=next((v for v in importlib.machinery.EXTENSION_SUFFIXES if origin.endswith(v)),None)
+                if suffix is None:continue
+                parts=parts[:-1]+[parts[-1][:-len(suffix)]];kind='EXTENSION'
+            if not parts or not all(v.isidentifier() for v in parts):continue
+            name='.'.join(parts)
+            row=dict(origin=origin,sha256=parent,root=str(base),scope=root['scope'],kind=kind,package=package)
+            require(name not in rows or rows[name]==row,STAGES[0],'MODULE_DUPLICATE_OR_SCOPE')
+            rows[name]=row
+    return rows
+
+
+def controller_module_roots(manifest):
+    source=manifest['source']['root']
+    roots=[{'path':source+'/BACK END/backend','scope':'CONTROLLER_SOURCE'},
+           {'path':source+'/scripts','scope':'CONTROLLER_SOURCE'}]
+    bootstrap=manifest.get('native',{}).get('static_descriptor',{}).get('bootstrap_root')
+    if bootstrap:
+        library=bootstrap+'/lib/python3.14'
+        roots.extend({'path':library+suffix,'scope':'BOOTSTRAP_CONTROLLER'} for suffix in ('','/lib-dynload','/site-packages'))
+    return roots
+
+
+class ReviewedModuleSpec(importlib.machinery.ModuleSpec):
+    @property
+    def cached(self):return None
+    @cached.setter
+    def cached(self,value):
+        require(value is None,STAGES[0],'MODULE_CACHE_DISABLED')
+
+
 class ReviewedSourceLoader(importlib.machinery.SourceFileLoader):
-    """Compile admitted source bytes only; never ask importlib to probe a cache."""
-    def __init__(self,name,path,parent,stage=lambda:STAGES[0]):super().__init__(name,path);self.parent=parent;self.stage=stage
+    """Execute stable pinned source, with independently checked module metadata."""
+    def __init__(self,name,path,parent,stage=lambda:STAGES[0],row=None):
+        super().__init__(name,path);self.parent=parent;self.stage=stage
+        self.row=row or dict(origin=path,sha256=parent,root=str(PurePosixPath(path).parent),scope='REVIEWED_SOURCE',kind='SOURCE',package=False)
+        self.binding=digest(self.row);self.observation=None;self.module=None
     def get_code(self,fullname):
         require(fullname==self.name,self.stage(),'SOURCE_MODULE_NAME')
-        try:raw=pin_file(self.path,self.parent,source_bytes=True)['bytes']
+        try:
+            record=pin_file(self.path,self.parent,source_bytes=True)
+            observed=(record['identity'],record['ancestors'])
+            require(self.observation is None or self.observation==observed,self.stage(),'MODULE_SOURCE_REPLACED')
+            self.observation=observed;raw=record['bytes']
         except QualificationFailure as error:
             error.detail['stage']=self.stage();raise
         return compile(raw,self.path,'exec',dont_inherit=True)
+    def verify(self,module):
+        spec=getattr(module,'__spec__',None);package=self.name if self.row['package'] else self.name.rpartition('.')[0]
+        locations=[str(PurePosixPath(self.path).parent)] if self.row['package'] else None
+        require(type(spec) is ReviewedModuleSpec and spec.name==self.name and spec.origin==self.path and spec.loader is self,
+                self.stage(),'MODULE_SPEC_BINDING')
+        require(getattr(module,'__name__',None)==self.name and getattr(module,'__file__',None)==self.path and getattr(module,'__loader__',None) is self and getattr(module,'__package__',None)==package,
+                self.stage(),'MODULE_METADATA_BINDING')
+        require(spec.submodule_search_locations==locations and (getattr(module,'__path__',None)==locations if self.row['package'] else not hasattr(module,'__path__')),self.stage(),'MODULE_PACKAGE_BINDING')
+        require(spec.cached is None and getattr(module,'__cached__',None) is None and sys.dont_write_bytecode,self.stage(),'MODULE_CACHE_DISABLED')
+        require(getattr(module,'__reviewed_source_parent__',None)==self.binding and digest(self.row)==self.binding,self.stage(),'MODULE_SOURCE_PARENT')
+        require(sys.modules.get(self.name) is module and (self.module is None or self.module is module) and all(name==self.name or value is not module for name,value in tuple(sys.modules.items())),self.stage(),'MODULE_DUPLICATE_IDENTITY')
+        record=pin_file(self.path,self.parent,source_bytes=True)
+        observed=(record['identity'],record['ancestors'])
+        if self.observation is not None:require(observed==self.observation,self.stage(),'MODULE_SOURCE_REPLACED')
+        else:self.observation=observed
+        return self.binding
+    def exec_module(self,module):
+        require(self.module is None,self.stage(),'MODULE_REEXECUTION_FORBIDDEN')
+        module.__file__=self.path;module.__loader__=self;module.__cached__=None
+        module.__package__=self.name if self.row['package'] else self.name.rpartition('.')[0]
+        module.__reviewed_source_parent__=self.binding
+        self.verify(module);code=self.get_code(self.name);self.verify(module)
+        try:exec(code,module.__dict__)
+        except QualificationFailure as error:
+            error.detail.setdefault('module_binding',dict(name=self.name,origin=self.path,source_parent=self.binding));raise
+        self.verify(module);self.module=module
     def set_data(self,*args,**kwargs):
         raise QualificationFailure(self.stage(),'BYTECODE_WRITE_FORBIDDEN','SOURCE_ONLY','WRITE_ATTEMPT')
 
 
 class ReviewedSourceFinder:
-    def __init__(self,hashes,stage=lambda:STAGES[0]):self.hashes=dict(hashes);self.stage=stage
+    def __init__(self,hashes,stage=lambda:STAGES[0],roots=None):
+        self.hashes=dict(hashes);self.stage=stage
+        self.roots=roots if roots is not None else [{'path':str(PurePosixPath(p).parent),'scope':'REVIEWED_SOURCE'} for p in sorted(hashes)]
+        self.registry=module_registry(self.hashes,self.roots);self.registry_parent=digest(self.registry)
+    def optional_absence(self,fullname):
+        caller={'_wmi':'platform','msvcrt':'subprocess'}.get(fullname)
+        if caller is None:return False
+        row=self.registry.get(caller)
+        if row is None or row['scope']!='BOOTSTRAP_CONTROLLER':return False
+        frame=sys._getframe(1)
+        for _ in range(12):
+            if frame is None:break
+            values=frame.f_globals
+            if values.get('__name__')==caller:
+                loader=values.get('__loader__')
+                require(type(loader) is ReviewedSourceLoader and loader.binding==digest(row) and frame.f_code.co_filename==row['origin'],self.stage(),'OPTIONAL_MODULE_CALLER')
+                loader.verify(sys.modules[caller]);return True
+            frame=frame.f_back
+        return False
     def find_spec(self,fullname,path=None,target=None):
-        spec=importlib.machinery.PathFinder.find_spec(fullname,path,target)
-        require(spec is not None and type(spec.origin) is str,self.stage(),'MODULE_ORIGIN_REQUIRED')
-        origin=spec.origin
-        require(origin in self.hashes,self.stage(),'MODULE_ORIGIN_PIN')
-        if type(spec.loader) is importlib.machinery.SourceFileLoader:
-            require(origin.endswith('.py'),self.stage(),'MODULE_SOURCE_REQUIRED')
-            spec.loader=ReviewedSourceLoader(fullname,origin,self.hashes[origin],self.stage)
+        require(digest(self.registry)==self.registry_parent,self.stage(),'MODULE_REGISTRY_MUTATION')
+        row=self.registry.get(fullname)
+        if row is None:
+            if self.optional_absence(fullname):raise ModuleNotFoundError(name=fullname)
+            error=QualificationFailure(self.stage(),'MODULE_ORIGIN_REQUIRED','PINNED_SOURCE_OR_EXTENSION','UNREGISTERED_MODULE')
+            error.detail['module_binding']={'name':fullname if len(fullname)<=160 and all(p.isidentifier() for p in fullname.split('.')) else 'INVALID_NAME','registry_parent':self.registry_parent};raise error
+        require(target is None,self.stage(),'MODULE_RELOAD_FORBIDDEN')
+        if '.' in fullname:
+            parent=self.registry.get(fullname.rpartition('.')[0]);expected=[str(PurePosixPath(parent['origin']).parent)] if parent and parent['package'] else None
+            require(expected is not None and list(path or [])==expected,self.stage(),'MODULE_SEARCH_PARENT')
+        else:require(path is None,self.stage(),'MODULE_SEARCH_PARENT')
+        origin=row['origin'];require(self.hashes.get(origin)==row['sha256'],self.stage(),'MODULE_ORIGIN_PIN')
+        if row['kind']=='SOURCE':loader=ReviewedSourceLoader(fullname,origin,row['sha256'],self.stage,row)
         else:
-            require(type(spec.loader) is importlib.machinery.ExtensionFileLoader,self.stage(),'MODULE_BYTECODE_OR_CUSTOM_LOADER_FORBIDDEN')
-            pin_file(origin,self.hashes[origin])
+            pin_file(origin,row['sha256']);loader=importlib.machinery.ExtensionFileLoader(fullname,origin)
+        spec=ReviewedModuleSpec(fullname,loader,origin=origin,is_package=row['package']);spec.has_location=True
+        if row['package']:spec.submodule_search_locations=[str(PurePosixPath(origin).parent)]
         return spec
+    def load(self,name,origin,parent):
+        row=self.registry.get(name)
+        require(row is not None and row['kind']=='SOURCE' and row['origin']==origin and row['sha256']==parent,self.stage(),'MODULE_EXPLICIT_BINDING')
+        if name in sys.modules:
+            module=sys.modules[name];loader=getattr(module,'__loader__',None)
+            require(type(loader) is ReviewedSourceLoader and loader.binding==digest(row),self.stage(),'MODULE_EXISTING_UNREVIEWED')
+            loader.verify(module);return module
+        spec=self.find_spec(name);module=importlib.util.module_from_spec(spec);sys.modules[name]=module
+        try:spec.loader.exec_module(module)
+        except BaseException as error:
+            if sys.modules.get(name) is module:del sys.modules[name]
+            if isinstance(error,QualificationFailure):error.detail.setdefault('module_binding',dict(name=name,origin=origin,source_parent=digest(row)))
+            raise
+        return module
 
 
 class NativeAudit:
@@ -196,18 +313,18 @@ class NativeAudit:
         self.challenge=digest({'manifest':self.parent,'schema':SCHEMA})
         sys.addaudithook(self);sys.audit('iios.native.audit.challenge',self.challenge)
         require(self.acknowledged,STAGES[0],'AUDIT_INSTALLATION_ACKNOWLEDGED')
-        self.finder=ReviewedSourceFinder(self.hashes,lambda:self.stage)
+        self.finder=ReviewedSourceFinder(self.hashes,lambda:self.stage,controller_module_roots(self.manifest))
         self.finders=(importlib.machinery.BuiltinImporter,importlib.machinery.FrozenImporter,self.finder)
         sys.meta_path=list(self.finders);sys.dont_write_bytecode=True
         self.installed=True
         self.receipt={'schema':SCHEMA,'manifest':self.parent,'installed_before_dispatcher_import':True,
-            'source_loader_parent':digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes}),
+            'source_loader_parent':digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes,'registry':self.finder.registry_parent}),
             'operations_parent':digest({k:sorted(v) for k,v in OPERATIONS.items()}),'path_policy_parent':self.binding_parent,'signals_permitted':False}
         return dict(self.receipt)
     def verify(self):
         require(self.installed and self.receipt is not None,self.stage,'AUDIT_INSTALLATION_REQUIRED')
         require(tuple(sys.meta_path)==self.finders and sys.dont_write_bytecode is True,self.stage,'SOURCE_LOADER_INSTALLATION')
-        require(self.finder.hashes==self.hashes and self.receipt['source_loader_parent']==digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes}),self.stage,'SOURCE_LOADER_BINDINGS')
+        require(digest(self.finder.registry)==self.finder.registry_parent and self.finder.registry==module_registry(self.hashes,controller_module_roots(self.manifest)) and self.finder.hashes==self.hashes and self.receipt['source_loader_parent']==digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes,'registry':self.finder.registry_parent}),self.stage,'SOURCE_LOADER_BINDINGS')
         require(self.receipt['manifest']==self.parent,self.stage,'AUDIT_RECEIPT_PARENT')
         require(self.receipt['operations_parent']==digest({k:sorted(v) for k,v in OPERATIONS.items()}),self.stage,'AUDIT_OPERATION_POLICY_MUTATION')
         require(self.binding_parent==digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes}),self.stage,'AUDIT_PATH_POLICY_MUTATION')

@@ -82,7 +82,7 @@ class NativeAuditTests(unittest.TestCase):
         tree=ast.parse(source);main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
         calls=[n for n in ast.walk(main) if isinstance(n,ast.Call)]
         install=next(n.lineno for n in calls if isinstance(n.func,ast.Attribute) and n.func.attr=='install')
-        execute=next(n.lineno for n in calls if isinstance(n.func,ast.Name) and n.func.id=='exec')
+        execute=next(n.lineno for n in calls if isinstance(n.func,ast.Attribute) and n.func.attr=='load')
         self.assertLess(install,execute)
     def test_metadata_read_never_grants_attribute_writes(self):
         self.guard.stage=STAGES[5]
@@ -141,7 +141,7 @@ class ReviewedSourceLoadingTests(unittest.TestCase):
             spec=importlib.machinery.ModuleSpec(category,loader,origin=path)
             with self.subTest(category=category),patch.object(importlib.machinery.PathFinder,'find_spec',return_value=spec),self.assertRaises(QualificationFailure) as ctx:
                 a.ReviewedSourceFinder({path:hashlib.sha256(category.encode()).hexdigest()}).find_spec(category)
-            self.assertEqual(ctx.exception.detail['predicate'],'MODULE_BYTECODE_OR_CUSTOM_LOADER_FORBIDDEN')
+            self.assertEqual(ctx.exception.detail['predicate'],'MODULE_ORIGIN_REQUIRED')
     def test_diagnostic_binds_only_reviewed_source_origin(self):
         import importlib.util
         guard=a.NativeAudit(manifest(),'a'*64);path=importlib.util.cache_from_source('/bound/source/module.py')
@@ -186,7 +186,7 @@ class ReviewedSourceLoadingTests(unittest.TestCase):
         import test_iios_native_conductor as fixtures
         with tempfile.TemporaryDirectory() as tmp:
             parent=Path(tmp).resolve();st=parent.stat();m=fixtures.manifest()
-            m.update(output_parent=str(parent),output_name='qualification-failure',output_parent_identity=[st.st_dev,st.st_ino,st.st_uid,0o700])
+            m.update(source={'commit':'a'*40},output_parent=str(parent),output_name='qualification-failure',output_parent_identity=[st.st_dev,st.st_ino,st.st_uid,0o700])
             detail=QualificationFailure(STAGES[0],'AUDIT_UNREVIEWED_BYTECODE','ADMITTED','UNDECLARED',exception='PermissionError',errno_category='AUDIT_POLICY').detail
             result=export_admission_failure(m,digest(m),detail,100,lambda:101)
             self.assertEqual(result,verify_export(parent/m['output_name'],digest(m)))
@@ -194,3 +194,88 @@ class ReviewedSourceLoadingTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):export_admission_failure(m,digest(m),detail,100,lambda:101)
             self.assertEqual(before,{p.name:p.read_bytes() for p in (parent/m['output_name']).iterdir()})
             self.assertEqual(result['cleanup_classification'],'NOT_ESTABLISHED')
+
+class ExactSourceModuleTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile,sys
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name).resolve()
+        self.patch=patch.dict(sys.modules);self.patch.start();self.addCleanup(self.patch.stop)
+        self.bytecode=patch.object(sys,'dont_write_bytecode',True);self.bytecode.start();self.addCleanup(self.bytecode.stop)
+    def fixture(self,text='VALUE=42\n',name='reviewed_exact_fixture',scope='REVIEWED_SOURCE'):
+        import hashlib
+        source=self.root/(name+'.py');source.write_text(text);parent=hashlib.sha256(source.read_bytes()).hexdigest()
+        finder=a.ReviewedSourceFinder({str(source):parent},roots=[{'path':str(self.root),'scope':scope}])
+        return finder,name,source,parent
+    def test_complete_metadata_and_closed_discovery(self):
+        finder,name,path,parent=self.fixture()
+        with patch.object(a.importlib.machinery.PathFinder,'find_spec',side_effect=AssertionError('DISCOVERY_FORBIDDEN')):
+            module=finder.load(name,str(path),parent)
+        self.assertEqual(module.VALUE,42);self.assertEqual(module.__spec__.origin,str(path));self.assertEqual(module.__file__,str(path))
+        self.assertIs(module.__loader__,module.__spec__.loader);self.assertEqual(module.__package__,'')
+        self.assertIsNone(module.__cached__);self.assertIsNone(module.__spec__.cached)
+        self.assertEqual(module.__reviewed_source_parent__,a.digest(finder.registry[name]));self.assertFalse((self.root/'__pycache__').exists())
+    def test_metadata_mutation_in_source_rejected(self):
+        for text in ("__file__='altered'", "__package__='altered'", "__loader__=None", "__spec__.origin='altered'", "__cached__='altered'", "__reviewed_source_parent__='altered'", "del __spec__", "del __file__", "del __loader__", "del __package__"):
+            with self.subTest(text=text):
+                finder,name,path,parent=self.fixture(text)
+                with self.assertRaises(QualificationFailure):finder.load(name,str(path),parent)
+                self.assertNotIn(name,a.sys.modules)
+    def test_duplicate_existing_and_cross_scope(self):
+        import types
+        finder,name,path,parent=self.fixture();a.sys.modules[name]=types.ModuleType(name)
+        with self.assertRaises(QualificationFailure):finder.load(name,str(path),parent)
+        a.sys.modules.pop(name);module=finder.load(name,str(path),parent)
+        other=a.ReviewedSourceFinder({str(path):parent},roots=[{'path':str(self.root),'scope':'OTHER_SCOPE'}])
+        with self.assertRaises(QualificationFailure):other.load(name,str(path),parent)
+        with self.assertRaises(QualificationFailure):finder.load(name,str(path),'b'*64)
+    def test_duplicate_origins_and_out_of_root(self):
+        finder,name,path,parent=self.fixture();other=self.root/'other';other.mkdir();sub=other/path.name;sub.write_bytes(path.read_bytes())
+        with self.assertRaises(QualificationFailure):a.ReviewedSourceFinder({str(path):parent,str(sub):parent},roots=[{'path':str(self.root),'scope':'A'},{'path':str(other),'scope':'B'}])
+        finder=a.ReviewedSourceFinder({str(path):parent},roots=[{'path':'/fixture/elsewhere','scope':'A'}])
+        with self.assertRaises(QualificationFailure):finder.load(name,str(path),parent)
+    def test_symlink_traversal_and_changed_bytes(self):
+        finder,name,path,parent=self.fixture();alias=self.root/'alias.py';alias.symlink_to(path)
+        linked=a.ReviewedSourceFinder({str(alias):parent})
+        with self.assertRaises((QualificationFailure,OSError)):linked.load('alias',str(alias),parent)
+        with self.assertRaises(QualificationFailure):a.ReviewedSourceFinder({str(path):parent},roots=[{'path':str(self.root)+'/../escape','scope':'A'}])
+        path.write_text('VALUE=43\n')
+        with self.assertRaises(QualificationFailure):finder.load(name,str(path),parent)
+    def test_same_bytes_replacement_and_post_execution_mutation(self):
+        finder,name,path,parent=self.fixture();real=a.pin_file;calls=[]
+        def replace(*args,**kwargs):
+            record=real(*args,**kwargs);calls.append(1)
+            if len(calls)==2:
+                swap=self.root/'swap';swap.write_bytes(path.read_bytes());swap.replace(path)
+            return record
+        with patch.object(a,'pin_file',side_effect=replace),self.assertRaises(QualificationFailure):finder.load(name,str(path),parent)
+    def test_optional_absence_only_exact_bootstrap_caller(self):
+        finder,name,path,parent=self.fixture('try:\n import _wmi\nexcept ImportError:\n VALUE=42\n','platform','BOOTSTRAP_CONTROLLER')
+        a.sys.modules.pop(name,None)
+        with patch.object(a.sys,'meta_path',[a.importlib.machinery.BuiltinImporter,a.importlib.machinery.FrozenImporter,finder]):
+            module=finder.load(name,str(path),parent)
+        self.assertEqual(module.VALUE,42)
+        with self.assertRaises(QualificationFailure):finder.find_spec('_wmi')
+        with self.assertRaises(QualificationFailure):finder.find_spec('unapproved_missing')
+    def test_package_search_parent_and_relative_source_import(self):
+        import hashlib
+        directory=self.root/'reviewed_pkg';directory.mkdir();init=directory/'__init__.py';child=directory/'child.py'
+        init.write_text('from .child import VALUE\n');child.write_text('VALUE=42\n')
+        hashes={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in (init,child)}
+        finder=a.ReviewedSourceFinder(hashes,roots=[{'path':str(self.root),'scope':'A'}])
+        with patch.object(a.sys,'meta_path',[finder]):module=finder.load('reviewed_pkg',str(init),hashes[str(init)])
+        self.assertEqual(module.VALUE,42);self.assertEqual(module.__path__,[str(directory)])
+        with self.assertRaises(QualificationFailure):finder.find_spec('reviewed_pkg.child',['/fixture/substituted'])
+    def test_early_receipt_authenticates_failure_and_separates_cleanup(self):
+        import json
+        from iios_native_evidence import export_admission_failure,verify_export
+        import test_iios_native_conductor as fixtures
+        m=fixtures.manifest();st=self.root.stat();m.update(source={'commit':'a'*40},output_parent=str(self.root),output_name='qualification-early',output_parent_identity=[st.st_dev,st.st_ino,st.st_uid,0o700])
+        detail=QualificationFailure(STAGES[0],'MODULE_ORIGIN_REQUIRED','PINNED','MISSING').detail
+        report=export_admission_failure(m,a.digest(m),detail,100,lambda:101,before_dispatcher=True,audit_receipt={'installed':True})
+        self.assertEqual(report['workload_cleanup'],'NOT_APPLICABLE_NO_CHILD_CREATED');self.assertEqual(report['helper_cleanup'],'NOT_ESTABLISHED')
+        self.assertEqual(report['cleanup_classification'],'NOT_ESTABLISHED')
+        root=self.root/m['output_name'];receipt=json.loads((root/'ADMISSION-STAGE-RECEIPT.json').read_bytes())
+        self.assertEqual(a.digest(receipt),report['admission_stage_receipt']['sha256']);self.assertEqual(receipt['failure'],detail)
+        self.assertEqual(report,verify_export(root,a.digest(m)))
+        (root/'ADMISSION-STAGE-RECEIPT.json').write_text('{}')
+        with self.assertRaises(QualificationFailure):verify_export(root,a.digest(m))
