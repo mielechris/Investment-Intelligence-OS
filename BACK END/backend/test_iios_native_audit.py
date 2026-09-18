@@ -296,3 +296,54 @@ class ExactSourceModuleTests(unittest.TestCase):
         spec=finder.find_spec('alpha_observation_qualification')
         self.assertEqual(spec.origin,str(path));self.assertEqual(spec.loader.row['scope'],'CONTROLLER_SOURCE')
         self.assertIsNotNone(spec.loader.get_code('alpha_observation_qualification'))
+
+class ArgcViewPolicyTests(unittest.TestCase):
+    def guard(self):
+        import hashlib
+        source=Path(__file__).parents[2];relative='BACK END/backend/truth_spine_process_identity.py'
+        m=manifest();m['source']={'root':str(source),'inventory':[{'relative':relative,'sha256':hashlib.sha256((source/relative).read_bytes()).hexdigest()}]}
+        guard=a.NativeAudit(m,'a'*64);guard.stage=STAGES[4];guard.inspecting=True;return guard
+    def test_real_inspector_buffer_events_with_substituted_sysctl(self):
+        import ctypes,sys,struct
+        import truth_spine_process_identity as identity
+        from types import SimpleNamespace
+        guard=self.guard();active=[True];seen=[]
+        def hook(event,args):
+            if active[0] and event.startswith('ctypes.'):
+                seen.append(event);guard(event,args)
+        sys.addaudithook(hook)
+        def sysctl(mib,count,buffer,size,*rest):
+            raw=struct.pack('i',1)+b'/fixture/python\0\0/fixture/python\0'
+            buffer.raw=raw+b'\0'*(len(buffer)-len(raw));size._obj.value=len(raw);return 0
+        try:
+            with patch.object(identity.ctypes,'CDLL',return_value=SimpleNamespace(sysctl=sysctl)):
+                self.assertEqual(identity.kernel_argv(12345),('/fixture/python',))
+        finally:active[0]=False
+        self.assertEqual(seen[-2:],['ctypes.cdata/buffer','ctypes.cdata']);self.assertIsNone(guard.argc_grant)
+    def test_direct_replayed_changed_address_and_wrong_scope_fail(self):
+        guard=self.guard()
+        for mode in ('direct','replay','address','scope','stage','caller'):
+            with self.subTest(mode=mode),patch.object(guard,'argc_caller',return_value=mode!='caller'):
+                guard.inspecting=mode!='scope';guard.stage=STAGES[6] if mode=='stage' else STAGES[4]
+                guard.argc_grant=101 if mode not in ('direct','replay') else None
+                with self.assertRaises(QualificationFailure):guard('ctypes.cdata',(102 if mode=='address' else 101,))
+                self.assertIsNone(guard.argc_grant)
+    def test_wrong_bounds_and_intervening_event_fail(self):
+        guard=self.guard()
+        with patch.object(guard,'argc_caller',return_value=True):
+            for args in ((101,16,0),(101,1024*1024,4),(True,1024*1024,0)):
+                with self.assertRaises(QualificationFailure):guard('ctypes.cdata/buffer',args)
+            guard('ctypes.cdata/buffer',(101,1024*1024,0));guard('compile',(b'pass','<fixture>'))
+            with self.assertRaises(QualificationFailure):guard('ctypes.cdata',(101,))
+    def test_denial_is_bounded_without_address_or_buffer_content(self):
+        import json
+        guard=self.guard()
+        with self.assertRaises(QualificationFailure) as error:guard('ctypes.cdata',(987654321,))
+        detail=error.exception.detail;record=detail['audit_denial']
+        self.assertEqual(record['event'],'ctypes.cdata');self.assertEqual(record['path'],'NOT_APPLICABLE_MEMORY_OPERATION')
+        self.assertEqual(detail['errno_category'],'AUDIT_POLICY');self.assertNotIn('987654321',json.dumps(detail))
+        self.assertLess(len(json.dumps(detail)),2000)
+    def test_existing_unknown_effect_stays_denied(self):
+        guard=self.guard()
+        for event in ('ctypes.string_at','ctypes.memoryview_at','os.unknown_mutation'):
+            with self.assertRaises(QualificationFailure):guard(event,())

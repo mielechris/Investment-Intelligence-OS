@@ -207,3 +207,20 @@ NOT_APPLICABLE_NO_CHILD_CREATED while helper cleanup remains NOT_ESTABLISHED.
 Historical cleanup classifications never change. Storage/export failure remains
 a separate failure; missing evidence is never represented as an authenticated
 receipt. These are local hash bindings, not independent digital signatures.
+
+### Pinned inspector argc memory view
+
+The existing kernel argv inspector uses `ctypes.c_int.from_buffer` to read argc
+from its one-megabyte sysctl buffer. CPython emits `ctypes.cdata/buffer` followed
+by `ctypes.cdata`. The latter is admitted only as an immediate, single-use event
+for the same address, after the exact buffer-size/zero-offset event, from the
+independently compiled pinned `kernel_argv` code while inspection scope is active.
+No arbitrary pointer read, string_at, memoryview_at or additional library/symbol
+is admitted. Addresses, buffer bytes and environment tails are never retained.
+The policy parent is part of the audit installation receipt.
+
+Audit denials retain a bounded event, operation, admitted path or fixed path
+category, pinned caller location and source hash, plus the existing exception
+and errno categories. A memory-view denial has no filesystem target and no
+OS errno; it is explicitly an audit-policy denial. Native records that omitted
+these fields cannot be retroactively upgraded to direct observations.

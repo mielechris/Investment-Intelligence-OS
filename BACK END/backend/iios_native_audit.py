@@ -10,6 +10,7 @@ import hashlib
 from pathlib import PurePosixPath
 import sys
 import stat
+import types
 import importlib.machinery
 import importlib.util
 from iios_native_conductor import STAGES, digest, require, QualificationFailure, pin_file
@@ -207,9 +208,19 @@ class NativeAudit:
         self.fds={};self.fd_identity={};self.active=[];self.command=None;self.inspecting=False;self.metadata_read=False
         self.launching=False;self.installed=False;self.challenge=None;self.acknowledged=False;self.receipt=None
         self.originals={};self.sealed=();self.last_denial=None;self.finder=None;self.finders=None
+        self.audit_event=None;self.audit_args=();self.argc_grant=None;self.argc_code=None
+        self.inspector_path=manifest['source']['root']+'/BACK END/backend/truth_spine_process_identity.py'
+        if self.inspector_path in self.hashes:
+            raw=pin_file(self.inspector_path,self.hashes[self.inspector_path],source_bytes=True)['bytes']
+            compiled=compile(raw,self.inspector_path,'exec',dont_inherit=True)
+            self.argc_code=next((c for c in compiled.co_consts if isinstance(c,types.CodeType) and c.co_name=='kernel_argv'),None)
+    def argc_policy(self):
+        return {'schema':'PINNED_INSPECTOR_ARGC_VIEW_V1','caller':self.inspector_path,'source_sha256':self.hashes.get(self.inspector_path),'function':'kernel_argv',
+                'events':['ctypes.cdata/buffer','ctypes.cdata'],'buffer_bytes':1024*1024,'offset':0,'single_use':True,'inspection_scope_required':True}
     def reject(self,predicate,observed='UNDECLARED'):
         error=QualificationFailure(self.stage,predicate,'ADMITTED',observed,
             exception='PermissionError',errno_category='AUDIT_POLICY')
+        error.detail['audit_denial']=self.denial_evidence()
         self.last_denial=dict(error.detail);raise error
     def inside(self,path):return path==self.root or path.startswith(self.root+'/')
     def lexical(self,value,dir_fd=None):
@@ -247,7 +258,48 @@ class NativeAudit:
             except FileNotFoundError:continue
             if stat.S_ISLNK(st.st_mode):self.reject('AUDIT_PATH_SYMLINK')
         return path
+    def source_caller(self):
+        frame=sys._getframe(1)
+        for _ in range(20):
+            if frame is None:break
+            if frame.f_code.co_filename!=__file__ and frame.f_code.co_filename in self.hashes:return frame
+            frame=frame.f_back
+        return None
+    def denial_evidence(self):
+        event=self.audit_event or 'NO_AUDIT_EVENT'
+        if len(event)>95 or not all(c.isascii() and (c.isalnum() or c in '._') for c in event):event='UNRETAINED_EVENT'
+        path='NOT_APPLICABLE'
+        if event.startswith('ctypes.'):path='NOT_APPLICABLE_MEMORY_OPERATION'
+        elif event in ('open','os.mkdir','os.chmod','os.listdir','os.scandir') and self.audit_args:
+            value=self.audit_args[0]
+            if type(value) is int:value=self.fds.get(value)
+            if type(value) is str and len(value)<=512 and (value in self.paths or self.inside(value)):path=value
+            else:path='UNADMITTED_PATH'
+        frame=self.source_caller();caller={'path':'UNRETAINED_CALLER','function':'UNKNOWN','line':0,'source_sha256':'UNBOUND'}
+        if frame is not None:
+            name=frame.f_code.co_name
+            caller={'path':frame.f_code.co_filename,'function':name if name.isidentifier() and len(name)<=95 else 'UNRETAINED_FUNCTION',
+                    'line':frame.f_lineno,'source_sha256':self.hashes[frame.f_code.co_filename]}
+        return {'event':event,'operation':'ARGC_MEMORY_VIEW' if event=='ctypes.cdata' else event,
+                'path':path,'caller':caller,'os_errno':'NOT_APPLICABLE_POLICY_DENIAL'}
+    def argc_caller(self):
+        frame=self.source_caller()
+        return frame is not None and self.argc_code is not None and frame.f_code==self.argc_code and frame.f_code.co_filename==self.inspector_path
     def __call__(self,event,args):
+        previous=(self.audit_event,self.audit_args);self.audit_event=event;self.audit_args=args
+        grant=self.argc_grant;self.argc_grant=None
+        try:
+            if event=='ctypes.cdata':
+                if not (self.inspecting and 'ctypes.cdata/buffer' in OPERATIONS[self.stage] and grant is not None
+                        and args==(grant,) and self.argc_caller()):self.reject('AUDIT_ARGC_VIEW_BINDING')
+                return
+            self.dispatch(event,args)
+            if event=='ctypes.cdata/buffer' and self.inspecting and self.argc_caller():
+                if not (len(args)==3 and type(args[0]) is int and args[0]>0 and args[1:]==(1024*1024,0)):
+                    self.reject('AUDIT_ARGC_BUFFER_BOUND')
+                self.argc_grant=args[0]
+        finally:self.audit_event,self.audit_args=previous
+    def dispatch(self,event,args):
         if event=='iios.native.audit.challenge':
             if args!=(self.challenge,):self.reject('AUDIT_INSTALLATION_CHALLENGE')
             self.acknowledged=True;return
@@ -322,12 +374,13 @@ class NativeAudit:
         self.installed=True
         self.receipt={'schema':SCHEMA,'manifest':self.parent,'installed_before_dispatcher_import':True,
             'source_loader_parent':digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes,'registry':self.finder.registry_parent}),
-            'operations_parent':digest({k:sorted(v) for k,v in OPERATIONS.items()}),'path_policy_parent':self.binding_parent,'signals_permitted':False}
+            'argc_view_policy_parent':digest(self.argc_policy()),'operations_parent':digest({k:sorted(v) for k,v in OPERATIONS.items()}),'path_policy_parent':self.binding_parent,'signals_permitted':False}
         return dict(self.receipt)
     def verify(self):
         require(self.installed and self.receipt is not None,self.stage,'AUDIT_INSTALLATION_REQUIRED')
         require(tuple(sys.meta_path)==self.finders and sys.dont_write_bytecode is True,self.stage,'SOURCE_LOADER_INSTALLATION')
         require(digest(self.finder.registry)==self.finder.registry_parent and self.finder.registry==module_registry(self.hashes,controller_module_roots(self.manifest)) and self.finder.hashes==self.hashes and self.receipt['source_loader_parent']==digest({'policy':'REVIEWED_SOURCE_ONLY_V1','origins':self.hashes,'registry':self.finder.registry_parent}),self.stage,'SOURCE_LOADER_BINDINGS')
+        require(self.receipt['argc_view_policy_parent']==digest(self.argc_policy()),self.stage,'AUDIT_ARGC_POLICY_PARENT')
         require(self.receipt['manifest']==self.parent,self.stage,'AUDIT_RECEIPT_PARENT')
         require(self.receipt['operations_parent']==digest({k:sorted(v) for k,v in OPERATIONS.items()}),self.stage,'AUDIT_OPERATION_POLICY_MUTATION')
         require(self.binding_parent==digest({'root':self.root,'paths':sorted(self.paths),'directories':sorted(self.directories),'hashes':self.hashes}),self.stage,'AUDIT_PATH_POLICY_MUTATION')
@@ -351,7 +404,7 @@ class NativeAudit:
         self.verify();require(not self.inspecting,self.stage,'AUDIT_NESTED_INSPECTION')
         self.inspecting=True
         try:yield
-        finally:self.inspecting=False
+        finally:self.inspecting=False;self.argc_grant=None
 
     @contextmanager
     def metadata(self):
