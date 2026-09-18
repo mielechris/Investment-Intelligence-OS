@@ -199,6 +199,6 @@ class NoAliasInputTests(unittest.TestCase):
             alias=root/'alias';alias.symlink_to(p)
             with self.assertRaises(OSError):pin_file(alias,h)
     def test_relative_and_traversal_inputs_rejected(self):
-        for p in ['relative','/private/tmp/../tmp/input']:
+        for p in ['relative','/fixture/root/../input']:
             with self.subTest(path=p),self.assertRaises(QualificationFailure) as ctx:pin_file(p,'0'*64)
             self.assertEqual(ctx.exception.detail['predicate'],'INPUT_ABSOLUTE_PATH')
