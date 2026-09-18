@@ -224,3 +224,20 @@ category, pinned caller location and source hash, plus the existing exception
 and errno categories. A memory-view denial has no filesystem target and no
 OS errno; it is explicitly an audit-policy denial. Native records that omitted
 these fields cannot be retroactively upgraded to direct observations.
+
+
+### Unrecorded assembly-child reconciliation
+
+The consumed report, export, inventory and BEGIN checkpoint are independently
+pinned and verified through the existing exporter and journal verifier. Historical
+cleanup remains NOT_ESTABLISHED. An unrecorded PID cannot be reconstructed from
+an unrelated PID, process name or child-supplied assertion. No process listing is
+allowed. Three fresh, bounded, matching host boot-session observations may prove
+the original boot session ended; this establishes current absence of its processes,
+not historical successful cleanup. These are explicitly host observations, not
+PID inspections. Same-session execution stops at UNRESOLVED_CHILD_PID_REQUIRED.
+Denial, incomplete observations, malformed UUIDs and instability also stop with
+sanitized observations in the failure receipt. The existing three observations
+of registered PID 35731 remain mandatory and separate. Only a GREEN reconciliation
+receipt permits fresh payload qualification and every later existing adapter.
+No retry, signal, deadline reset, new sandbox grant or trading authority is added.

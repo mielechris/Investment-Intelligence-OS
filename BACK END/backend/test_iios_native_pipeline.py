@@ -45,6 +45,7 @@ class PipelineTests(unittest.TestCase):
         fixture['static']['manifest_sha256']=hashlib.sha256(canonical(f)).hexdigest()
         fixture['parents']={k:digest(v) for k,v in fixture.items() if k!='parents'}
         self.policy=build_policy(**fixture)
+        # The unresolved-child function is tested independently against sealed evidence.
         def put(name,value):
             raw=canonical(value) if not isinstance(value,bytes) else value
             path=base/name;path.write_bytes(raw);return {'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
@@ -123,6 +124,7 @@ class PipelineTests(unittest.TestCase):
                 namespace['verify_inspector_tools']=lambda *a:True
             return module
         with ExitStack() as stack:
+            stack.enter_context(patch('iios_native_ownership.unresolved_binding',return_value=({'fixture':True},'00000000-0000-0000-0000-000000000000')))
             for target,value in [('iios_native_dispatcher.require_execution_ready',None),('iios_native_dispatcher.admit_source',True),('iios_native_dispatcher.admit_terminal',True),('alpha_runtime_files.verify_manifest',True),('iios_native_image_policy.pin_file',True)]:
                 stack.enter_context(patch(target,return_value=value))
             audit.finder.load.side_effect=load

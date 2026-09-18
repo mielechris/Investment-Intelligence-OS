@@ -54,6 +54,8 @@ def require_execution_ready(manifest):
         item=blockers[0]
         raise QualificationFailure(item['stage'],item['predicate'],item['expected'],item['observed'])
     require(manifest.get('native_execution_ready') is True,STAGES[0],'NATIVE_EXECUTION_READY','REVIEWED','BLOCKED')
+    from iios_native_ownership import unresolved_binding
+    unresolved_binding(manifest)
     require(manifest.get('environment')=={'LC_ALL':'C','TZ':'UTC','__CF_USER_TEXT_ENCODING':'0x1F5:0x0:0x0'},STAGES[0],'OWNED_EXACT_ENVIRONMENT')
     lifecycle=manifest.get('native',{}).get('lifecycle',{})
     require('profile_review' in lifecycle and 'profile_template' in lifecycle,STAGES[0],'LIFECYCLE_PROFILE_REVIEW_REQUIRED','PINNED_REVIEW','MISSING')
@@ -76,3 +78,30 @@ def terminal_categories(term,ttys,forbidden_markers,host,expected_host):
     require(not forbidden_markers,stage,'TERMINAL_FORBIDDEN_MARKERS','ABSENT','PRESENT')
     require(host==expected_host,stage,'HOST_BINDING','EXACT','MISMATCH')
     return True
+
+
+def render_terminal_launcher(argv,cwd,checks):
+    """Source-controlled launcher bytes; generation never executes the command."""
+    import shlex
+    require(type(argv) is list and len(argv)==10 and argv[1:3]==['-I','-B'] and argv[4]=='--manifest'
+            and argv[6]=='--manifest-sha256' and argv[8]=='--authorize-manifest' and argv[7]==argv[9],STAGES[0],'LAUNCHER_COMMAND_SHAPE')
+    require(type(cwd) is str and Path(cwd).is_absolute(),STAGES[0],'LAUNCHER_CWD')
+    require(all(type(v) is str and '\n' not in v and '\0' not in v for v in argv),STAGES[0],'LAUNCHER_ARGV')
+    require({argv[0],argv[3],argv[5]} <= {r['path'] for r in checks},STAGES[0],'LAUNCHER_CHECKS')
+    shell="""#!/bin/zsh -f
+set -eu
+[[ $# -eq 0 ]] || { print -r -- 'RED LAUNCH_ARGUMENTS'; exit 1; }
+[[ ${TERM_PROGRAM-} == Apple_Terminal && -t 0 && -t 1 && -t 2 ]] || { print -r -- 'RED TERMINAL_ADMISSION'; exit 1; }
+[[ -z ${VSCODE_PID+x}${VSCODE_IPC_HOOK_CLI+x}${CODEX_THREAD_ID+x}${CODEX_SANDBOX_NETWORK_DISABLED+x} ]] || { print -r -- 'RED TERMINAL_CONTEXT'; exit 1; }
+verify_pin() {
+  [[ -f "$1" && ! -L "$1" ]] || { print -r -- 'RED LAUNCH_INPUT_TYPE'; exit 1; }
+  local observed
+  observed=$(/usr/bin/shasum -a 256 -- "$1") || { print -r -- 'RED LAUNCH_HASH_READ'; exit 1; }
+  [[ ${observed%% *} == "$2" ]] || { print -r -- 'RED LAUNCH_HASH_MISMATCH'; exit 1; }
+}
+"""
+    for row in checks:
+        require(type(row['path']) is str and Path(row['path']).is_absolute() and
+                type(row['sha256']) is str and len(row['sha256'])==64 and all(c in '0123456789abcdef' for c in row['sha256']),STAGES[0],'LAUNCHER_PIN')
+        shell+='verify_pin '+shlex.quote(row['path'])+' '+shlex.quote(row['sha256'])+'\n'
+    return (shell+'cd -- '+shlex.quote(cwd)+'\nexec '+shlex.join(argv)+'\n').encode()

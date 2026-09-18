@@ -1,6 +1,8 @@
 """Conductor ownership: three independent observations; no child-supplied identity."""
 from dataclasses import dataclass
 import os
+import json
+import re
 from pathlib import Path
 from iios_native_conductor import QualificationFailure, require, failure, pin_file
 
@@ -54,11 +56,24 @@ class OwnedProcess:
 def reconcile_pid(pid,inspect,*,stage,deadline,clock,observations=3):
     require(observations==3,stage,'THREE_EXISTENCE_OBSERVATIONS')
     rows=[]
-    for sample in range(3):
-        require(clock()<deadline,stage,'RECONCILIATION_DEADLINE')
-        row=inspect(pid);rows.append({'sample':sample+1,'existence':'ABSENT' if row is None else 'PRESENT'})
-    require(all(row['existence']=='ABSENT' for row in rows),stage,'HISTORICAL_PID_CURRENTLY_ABSENT','ABSENT_ALL_THREE','PRESENT_OR_CHANGED')
-    return {'status':'CURRENT_REGISTERED_PID_ABSENT','observations':rows,'historical_ownership':False,'cleanup_upgraded':False}
+    try:
+        for sample in range(3):
+            require(clock()<deadline,stage,'RECONCILIATION_DEADLINE')
+            row=inspect(pid)
+            observation={'sample':sample+1,'existence':'ABSENT' if row is None else 'PRESENT'}
+            if row is not None:
+                observation['current_identity_categories']={name:'PRESENT' if getattr(row,name,None) else 'MISSING'
+                    for name in ('parent_pid','start_time','executable','executable_hash','argv','command','cwd')}
+            rows.append(observation)
+            require(clock()<deadline,stage,'RECONCILIATION_DEADLINE')
+        require(all(row['existence']=='ABSENT' for row in rows),stage,'HISTORICAL_PID_CURRENTLY_ABSENT','ABSENT_ALL_THREE','PRESENT_OR_CHANGED')
+        return {'status':'CURRENT_REGISTERED_PID_ABSENT','observations':rows,'historical_ownership':False,'cleanup_upgraded':False}
+    except Exception as error:
+        detail=failure(error,stage,'CURRENT_PROCESS_OBSERVATION')
+        rejected=QualificationFailure(detail['stage'],detail['predicate'],detail['expected'],detail['observed'],
+                                      exception=detail['exception_subtype'],errno_category=detail['errno_category'])
+        rejected.detail.update(detail);rejected.detail['current_process_observations']=rows
+        rejected.detail['historical_ownership']=False;raise rejected from None
 
 
 @dataclass(frozen=True)
@@ -109,3 +124,66 @@ def verify_execution(result,stage):
     require(type(cleanup) is dict and all(type(cleanup.get(k)) is int for k in ('outstanding','exit_code','signals')) and all(cleanup.get(k) is True for k in ('verified','reaped','independently_absent')) and cleanup=={'verified':True,'outstanding':0,'exit_code':0,
         'reaped':True,'independently_absent':True,'signals':0},stage,'OWNERSHIP_COMPLETE_CLEANUP')
     return True
+
+
+BOOT_UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
+
+
+def unresolved_binding(manifest):
+    """Verify consumed evidence; neither missing PID nor old cleanup is inferred."""
+    from iios_native_conductor import Journal
+    from iios_native_evidence import verify_export
+    stage='HISTORICAL_PROCESS_RECONCILIATION'
+    binding=manifest.get('unresolved_child')
+    require(type(binding) is dict and set(binding)=={'report','begin','export','inventory','history_key','pid'},stage,'UNRESOLVED_CHILD_BINDING')
+    require(binding['pid'] is None and manifest['history'].get(binding['history_key'])=='NOT_ESTABLISHED',stage,'HISTORICAL_CLEANUP_IMMUTABLE')
+    root=Path(binding['report']['path']).parent
+    admitted={r['path']:r['sha256'] for r in manifest['historical_records']}
+    for key,name in (('report','REPORT.json'),('begin','checkpoint-0000.json'),('export','EXPORT.json'),('inventory','INVENTORY.json')):
+        row=binding[key]
+        require(row['path']==str(root/name) and admitted.get(row['path'])==row['sha256'],stage,'UNRESOLVED_EVIDENCE_PARENT')
+        pin_file(row['path'],row['sha256'])
+    report=json.loads((root/'REPORT.json').read_bytes())
+    require(verify_export(root,report['manifest'])==report,stage,'UNRESOLVED_EXPORT')
+    records=Journal(root,report['manifest']).load()
+    require(records and records[0]['kind']=='BEGIN' and records[-1]['kind']=='FINAL' and records[-1]['payload']==report,stage,'UNRESOLVED_JOURNAL')
+    require(report['status']=='RED' and report['cleanup_receipt'] is None and
+            any(r['predicate']=='REGISTERED_OWNERSHIP' for r in report['cleanup_failures']),stage,'UNRESOLVED_CLEANUP_EVIDENCE')
+    boot=records[0]['payload'].get('clock_identity')
+    require(type(boot) is str and BOOT_UUID.fullmatch(boot) is not None,stage,'HISTORICAL_BOOT_IDENTITY')
+    return binding,boot
+
+
+def reconcile_unresolved(manifest,observe_boot,*,deadline,clock):
+    """Unknown PID: only proven boot turnover establishes present absence.
+
+    No process search, PID inference, signal, cleanup or historical reclassification.
+    Three fresh host observations are NOT represented as three PID inspections.
+    Same-session execution fails closed because the historical PID was not saved.
+    """
+    from iios_native_conductor import digest
+    stage='HISTORICAL_PROCESS_RECONCILIATION';rows=[]
+    try:
+        binding,old_boot=unresolved_binding(manifest)
+        first=None
+        for sample in range(1,4):
+            require(clock()<deadline,stage,'UNRESOLVED_RECONCILIATION_DEADLINE')
+            current=observe_boot()
+            require(clock()<deadline,stage,'UNRESOLVED_RECONCILIATION_DEADLINE')
+            require(type(current) is str and BOOT_UUID.fullmatch(current) is not None,stage,'CURRENT_BOOT_IDENTITY')
+            rows.append({'sample':sample,'operation':'PINNED_SYSCTL_BOOTSESSIONUUID','expected':'DIFFERENT_FROM_HISTORICAL',
+                         'observed':'SAME_BOOT_SESSION' if current==old_boot else 'DIFFERENT_BOOT_SESSION',
+                         'stable':first is None or current==first})
+            if first is None:first=current
+            require(current==first,stage,'CURRENT_BOOT_STABILITY')
+        require(first!=old_boot,stage,'UNRESOLVED_CHILD_PID_REQUIRED','PRIOR_BOOT_ENDED','SAME_BOOT_PID_UNKNOWN')
+        return {'schema':'UNRESOLVED_CHILD_CURRENT_CONDITIONS_V1','status':'CURRENT_HISTORICAL_CHILD_ABSENT_PRIOR_BOOT_ENDED',
+                'evidence_parent':digest(binding),'observations':rows,'observation_kind':'HOST_BOOT_SESSION_NOT_PID_QUERY',
+                'current_boot_parent':digest(first),'historical_boot_parent':digest(old_boot),'historical_cleanup':'NOT_ESTABLISHED',
+                'historical_cleanup_upgraded':False,'signals':0,'retries':0}
+    except Exception as error:
+        detail=failure(error,stage,'UNRESOLVED_CHILD_OBSERVATION')
+        rejected=QualificationFailure(detail['stage'],detail['predicate'],detail['expected'],detail['observed'],
+                                      exception=detail['exception_subtype'],errno_category=detail['errno_category'])
+        rejected.detail.update(detail);rejected.detail['reconciliation_observations']=rows
+        rejected.detail['historical_cleanup']='NOT_ESTABLISHED';raise rejected from None

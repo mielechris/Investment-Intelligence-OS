@@ -4,6 +4,7 @@ There are deliberately no fallbacks to consumed legacy commands. Only a complete
 manifest whose adapter bindings are admitted can reach this module's run().
 """
 import errno
+from dataclasses import asdict
 import importlib.util
 import json
 import os
@@ -17,8 +18,8 @@ import time
 import types
 from iios_native_conductor import Conductor,STAGES,require,QualificationFailure,digest,pin_file
 from iios_native_admission import admit_source,require_execution_ready,terminal_categories,REQUIRED_NATIVE
-from iios_native_evidence import fresh_root,owned_directory,export
-from iios_native_ownership import reconcile_pid
+from iios_native_evidence import fresh_root,owned_directory,export,put
+from iios_native_ownership import reconcile_pid,reconcile_unresolved
 from iios_native_terminal import admit_terminal
 
 
@@ -158,6 +159,12 @@ class NativeContext:
         owner=OwnedProcess(proc,self.inspect,parent=os.getpid(),argv=binding.observed_argv,cwd=self.manifest['cwd'],
                            executable=binding.image,executable_hash=binding.image_hash,stage=self.stage,clock=self.clock,deadline=deadline)
         self.children.append(owner)
+        # Persist OS-returned identity before the first fallible observation.
+        # This records a launch, never a claim of verified ownership or cleanup.
+        put(self.root,'OWNED-CHILD-%04d-LAUNCH.json'%len(self.children),{
+            'schema':'OWNING_HANDLE_LAUNCH_V1','manifest':self.parent,'stage':self.stage,
+            'pid':proc.pid,'parent_pid':owner.parent,'binding_parent':digest(asdict(binding)),
+            'ownership_verified':False,'cleanup':'NOT_ESTABLISHED','signals':0})
         data=bytearray();errors=bytearray();streams=[proc.stdout,proc.stderr];acked=False
         for stream in streams:os.set_blocking(stream.fileno(),False)
         try:
@@ -247,11 +254,13 @@ def run(manifest,parent,*,resume_binding=None,audit=None,initial_start=None):
         old_budget=Budget(**records[0]['payload']['budget']);old_budget.check(clock(),'CONDUCTOR')
         context.deadline=min(context.deadline,old_budget.work_end)
     boot_observation=[]
-    def boot_identity():
-        if boot_observation:return boot_observation[0]
+    def fresh_boot_identity():
         rc,out,err=context.tool(['/usr/sbin/sysctl','-n','kern.bootsessionuuid'],context.deadline,manifest['tool_pins'])
         require(rc==0 and not err and re.fullmatch(rb'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\n?',out) is not None,'CONDUCTOR','BOOT_SESSION_IDENTITY')
-        boot_observation.append(out.decode().strip().lower());return boot_observation[0]
+        return out.decode().strip().lower()
+    def boot_identity():
+        if not boot_observation:boot_observation.append(fresh_boot_identity())
+        return boot_observation[0]
     def builtin(row,deadline,budget):
         context.stage=row['id'];context.deadline=deadline;context.audit.enter(row['id']);stage=row['id'];extra={}
         require(digest(manifest)==parent,stage,'MANIFEST_MUTATION')
@@ -263,7 +272,8 @@ def run(manifest,parent,*,resume_binding=None,audit=None,initial_start=None):
             admit_terminal(manifest['terminal_binding'],environment=dict(os.environ),ttys=[os.isatty(fd) for fd in (0,1,2)],host=host,parent_pid=os.getppid(),query=context.query,clock=clock,deadline=deadline)
         elif stage==STAGES[2]:
             require(manifest['historical_pids']==[35731],stage,'REGISTERED_PID_BINDING')
-            extra={'observations':[reconcile_pid(pid,context.inspect,stage=stage,deadline=deadline,clock=clock) for pid in manifest['historical_pids']]}
+            current=reconcile_unresolved(manifest,fresh_boot_identity,deadline=deadline,clock=clock)
+            extra={'unresolved_child':current,'observations':[reconcile_pid(pid,context.inspect,stage=stage,deadline=deadline,clock=clock) for pid in manifest['historical_pids']]}
         elif stage==STAGES[3]:
             fd=owned_directory(root)
             try:os.mkdir('payload',0o700,dir_fd=fd)
@@ -306,5 +316,6 @@ def run(manifest,parent,*,resume_binding=None,audit=None,initial_start=None):
         admit_terminal(manifest['terminal_binding'],environment=dict(os.environ),ttys=[os.isatty(fd) for fd in (0,1,2)],host=host,parent_pid=os.getppid(),query=context.query,clock=clock,deadline=context.deadline)
         context.stage=STAGES[2];audit.enter(STAGES[2])
         require(manifest['historical_pids']==[35731],STAGES[2],'RESUME_REGISTERED_PID_BINDING')
+        reconcile_unresolved(manifest,fresh_boot_identity,deadline=context.deadline,clock=clock)
         reconcile_pid(35731,context.inspect,stage=STAGES[2],deadline=context.deadline,clock=clock)
     return conductor.run(resume=resume_binding is not None,resume_tip=resume_binding['tip'] if resume_binding is not None else None)
