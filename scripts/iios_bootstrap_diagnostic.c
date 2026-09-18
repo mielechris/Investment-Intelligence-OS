@@ -69,13 +69,17 @@ static void private_ancestors(const char *path){
   if(!strcmp(part,QUALIFICATION)||(!strncmp(part,QUALIFICATION,strlen(QUALIFICATION))&&part[strlen(QUALIFICATION)]=='/'))NEED(st.st_uid==getuid()&&((st.st_mode&0777)==0700||(st.st_mode&0777)==0500),"QUALIFICATION_MODE");
   *cursor=saved;if(!saved)break;}}
 }
+static pid_t ancestor_parent(pid_t pid){
+ /* Full BSD info is denied for root-owned login; short BSD info supplies the exact required identity. */
+ struct proc_bsdshortinfo info={0};NEED(proc_pidinfo(pid,PROC_PIDT_SHORTBSDINFO,0,&info,sizeof info)==sizeof info&&info.pbsi_pid==(uint32_t)pid,"ANCESTOR_IDENTITY");NEED(info.pbsi_ppid>1&&info.pbsi_ppid!=(uint32_t)pid,"ANCESTOR_CYCLE");return (pid_t)info.pbsi_ppid;
+}
 static void terminal(void){
  NEED(isatty(0)&&isatty(1)&&isatty(2),"TERMINAL_TTY");const char *v=getenv("TERM_PROGRAM");NEED(v&&!strcmp(v,"Apple_Terminal"),"TERMINAL_APPLICATION");
  const char *bad[]={"CODEX_THREAD_ID","CODEX_SANDBOX_NETWORK_DISABLED","VSCODE_PID","VSCODE_IPC_HOOK_CLI"};for(int i=0;i<4;i++)NEED(!getenv(bad[i]),"TERMINAL_CONTEXT");
  pid_t pid=getppid();int seen=0;
  for(int i=0;i<6&&pid>1;i++){char path[PROC_PIDPATHINFO_MAXSIZE];NEED(proc_pidpath(pid,path,sizeof path)>0,"ANCESTOR_PATH");if(!strcmp(path,TERMINAL_EXE)){seen=1;break;}
   NEED(!strcmp(path,"/bin/zsh")||!strcmp(path,"/bin/bash")||!strcmp(path,"/usr/bin/login"),"ANCESTOR_EXECUTABLE");
-  struct proc_bsdinfo info;NEED(proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&info,sizeof info)==sizeof info,"ANCESTOR_IDENTITY");NEED(info.pbi_ppid>1&&info.pbi_ppid!=(uint32_t)pid,"ANCESTOR_CYCLE");pid=(pid_t)info.pbi_ppid;
+  pid=ancestor_parent(pid);
  }NEED(seen,"TERMINAL_ANCESTOR");
 }
 /* The direct child cannot have its PID reused while it remains unreaped. */
