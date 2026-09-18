@@ -132,7 +132,7 @@ BOOT_UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 def unresolved_binding(manifest):
     """Verify consumed evidence; neither missing PID nor old cleanup is inferred."""
     from iios_native_conductor import Journal
-    from iios_native_evidence import verify_export
+    from iios_native_evidence import verify_closed_inventory,verify_closed_export
     stage='HISTORICAL_PROCESS_RECONCILIATION'
     binding=manifest.get('unresolved_child')
     require(type(binding) is dict and set(binding)=={'report','begin','export','inventory','history_key','pid'},stage,'UNRESOLVED_CHILD_BINDING')
@@ -144,8 +144,10 @@ def unresolved_binding(manifest):
         require(row['path']==str(root/name) and admitted.get(row['path'])==row['sha256'],stage,'UNRESOLVED_EVIDENCE_PARENT')
         pin_file(row['path'],row['sha256'])
     report=json.loads((root/'REPORT.json').read_bytes())
-    require(verify_export(root,report['manifest'])==report,stage,'UNRESOLVED_EXPORT')
-    records=Journal(root,report['manifest']).load()
+    closed=verify_closed_inventory(manifest,verify_files=False)
+    verified,paths=verify_closed_export(root,report['manifest'],closed)
+    require(verified==report,stage,'UNRESOLVED_EXPORT')
+    records=Journal(root,report['manifest']).load(paths=paths)
     require(records and records[0]['kind']=='BEGIN' and records[-1]['kind']=='FINAL' and records[-1]['payload']==report,stage,'UNRESOLVED_JOURNAL')
     require(report['status']=='RED' and report['cleanup_receipt'] is None and
             any(r['predicate']=='REGISTERED_OWNERSHIP' for r in report['cleanup_failures']),stage,'UNRESOLVED_CLEANUP_EVIDENCE')

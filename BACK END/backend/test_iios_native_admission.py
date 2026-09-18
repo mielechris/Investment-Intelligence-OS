@@ -67,6 +67,9 @@ class AdmissionTests(unittest.TestCase):
         path,h=self.put('ci.json',json.dumps({'source':'a'*40,'status':'GREEN','artifact_hashes_verified':True,'native_execution':False}).encode())
         name,parent=self.put('source.py',b'fixture')
         m={'source':{'commit':'a'*40,'root':str(self.root),'inventory':[{'relative':'source.py','sha256':parent}]},'ci':{'commit':'a'*40,'path':path,'sha256':h},'inputs':[],'historical_records':[]}
+        from iios_native_evidence import build_closed_inventory
+        index=self.root/'index.json';index.write_bytes(b'');m['closed_input_roots']=[str(self.root)];m['execution_inventory']={'path':str(index),'sha256':'a'*64}
+        raw=canonical(build_closed_inventory(m));index.write_bytes(raw);m['execution_inventory']['sha256']=hashlib.sha256(raw).hexdigest()
         self.assertTrue(admit_source(m));m['source']['commit']='b'*40
         with self.assertRaises(QualificationFailure) as ctx:admit_source(m)
         self.assertEqual(ctx.exception.detail['predicate'],'CI_EXACT_COMMIT')
@@ -250,7 +253,14 @@ class UnresolvedChildTests(unittest.TestCase):
             def pin(name):return {'path':str(root/name),'sha256':hashlib.sha256((root/name).read_bytes()).hexdigest()}
             binding=dict(report=pin('REPORT.json'),begin=pin('checkpoint-0000.json'),export=pin('EXPORT.json'),inventory=pin('INVENTORY.json'),history_key='consumed',pid=None)
             m={'unresolved_child':binding,'history':{'consumed':'NOT_ESTABLISHED'},'historical_records':[binding[k] for k in ('report','begin','export','inventory')]}
-            self.assertEqual(unresolved_binding(m)[1],'11111111-1111-1111-1111-111111111111')
+            m.update(source={'root':str(root),'commit':'a'*40,'inventory':[]},inputs=[],closed_input_roots=[str(root)])
+            from iios_native_evidence import build_closed_inventory
+            m['historical_records']=[pin(p.name) for p in root.iterdir()]
+            index_path=root/'closed-index.json';index_path.write_bytes(b'')
+            m['execution_inventory']={'path':str(index_path),'sha256':'a'*64}
+            raw=__import__('iios_native_conductor').canonical(build_closed_inventory(m));index_path.write_bytes(raw);m['execution_inventory']['sha256']=hashlib.sha256(raw).hexdigest()
+            with patch.object(os,'scandir',side_effect=AssertionError('NO_ENUMERATION')),patch.object(os,'listdir',side_effect=AssertionError('NO_ENUMERATION')),patch.object(Path,'glob',side_effect=AssertionError('NO_ENUMERATION')),patch.object(Path,'rglob',side_effect=AssertionError('NO_ENUMERATION')):
+                self.assertEqual(unresolved_binding(m)[1],'11111111-1111-1111-1111-111111111111')
             m['history']['consumed']='VERIFIED_TERMINATION'
             with self.assertRaises(QualificationFailure):unresolved_binding(m)
             m['history']['consumed']='NOT_ESTABLISHED';(root/'checkpoint-0000.json').write_text('{}')
@@ -292,3 +302,69 @@ class UnresolvedChildTests(unittest.TestCase):
         self.assertFalse(e.exception.detail['historical_ownership']);self.assertNotIn('/fixture',str(e.exception.detail))
         with self.assertRaises(QualificationFailure) as e:reconcile_pid(35731,lambda pid:(_ for _ in ()).throw(PermissionError(13,'unretained')),stage='HISTORICAL_PROCESS_RECONCILIATION',deadline=100,clock=lambda:10)
         self.assertEqual(e.exception.detail['errno_category'],'EACCES');self.assertEqual(e.exception.detail['current_process_observations'],[])
+
+class ClosedInventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name).resolve()
+        self.data=self.root/'data';self.data.mkdir();self.a=self.data/'a.py';self.b=self.data/'b.py';self.a.write_bytes(b'A');self.b.write_bytes(b'B')
+        self.m={'source':{'root':str(self.data),'commit':'a'*40,'inventory':[{'relative':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in (self.a,self.b)]},'inputs':[],'historical_records':[],'closed_input_roots':[str(self.data)],'execution_inventory':{'path':str(self.root/'index.json'),'sha256':'a'*64}}
+        from iios_native_evidence import build_closed_inventory
+        self.index=build_closed_inventory(self.m);self.write_index()
+    def write_index(self):
+        raw=canonical(self.index);Path(self.m['execution_inventory']['path']).write_bytes(raw);self.m['execution_inventory']['sha256']=hashlib.sha256(raw).hexdigest()
+    def verify(self):
+        from iios_native_evidence import verify_closed_inventory
+        return verify_closed_inventory(self.m)
+    def test_direct_checks_never_enumerate(self):
+        with patch.object(os,'scandir',side_effect=AssertionError('ENUMERATION')),patch.object(os,'listdir',side_effect=AssertionError('ENUMERATION')),patch.object(Path,'glob',side_effect=AssertionError('ENUMERATION')),patch.object(Path,'rglob',side_effect=AssertionError('ENUMERATION')):
+            self.assertEqual(self.verify(),self.index)
+    def test_missing_additional_duplicate_reordered_and_outside_rows(self):
+        for mode in ('missing','additional','duplicate','reordered','outside'):
+            original=copy.deepcopy(self.index)
+            with self.subTest(mode=mode):
+                if mode=='missing':self.index['files'].pop()
+                elif mode=='additional':self.index['files'].append(dict(self.index['files'][0],path=str(self.data/'extra')))
+                elif mode=='duplicate':self.index['files'].append(self.index['files'][0])
+                elif mode=='reordered':self.index['files'].reverse()
+                else:self.index['files'][0]['path']='/unadmitted/escape'
+                self.write_index()
+                with self.assertRaises(QualificationFailure) as e:self.verify()
+                self.assertEqual(e.exception.detail['predicate'],'CLOSED_INPUT_SEQUENCE')
+            self.index=original;self.write_index()
+    def test_metadata_owner_size_mode_and_containment_pins(self):
+        for key,offset in (('identity',2),('identity',3),('identity',0),('identity',1),('identity',5)):
+            old=copy.deepcopy(self.index);self.index['files'][0][key][offset]+=1;self.write_index()
+            with self.assertRaises(QualificationFailure) as e:self.verify()
+            self.assertIn('closed_input',e.exception.detail);self.assertLess(len(json.dumps(e.exception.detail)),1800)
+            self.index=old
+        self.index['files'][0]['size']+=1;self.write_index()
+        with self.assertRaises(QualificationFailure):self.verify()
+    def test_same_bytes_replacement_missing_and_new_entries_fail(self):
+        self.a.unlink();self.a.write_bytes(b'A')
+        with self.assertRaises(QualificationFailure):self.verify()
+    def test_additional_physical_entry_in_sealed_root_fails(self):
+        (self.data/'additional').write_bytes(b'X')
+        with self.assertRaises(QualificationFailure) as e:self.verify()
+        self.assertEqual(e.exception.detail['predicate'],'CLOSED_DIRECTORY_MUTATION')
+    def test_altered_file_and_symlink_fail(self):
+        self.a.write_bytes(b'X')
+        with self.assertRaises(QualificationFailure):self.verify()
+        self.a.unlink();self.a.symlink_to(self.b)
+        with self.assertRaises(QualificationFailure):self.verify()
+    def test_post_verification_directory_race_fails(self):
+        from iios_native_evidence import pin_file as original
+        def mutate(*args,**kwargs):
+            result=original(*args,**kwargs)
+            if str(args[0])==str(self.b):(self.data/'race').write_bytes(b'X')
+            return result
+        with patch('iios_native_evidence.pin_file',side_effect=mutate),self.assertRaises(QualificationFailure) as e:self.verify()
+        self.assertEqual(e.exception.detail['predicate'],'CLOSED_DIRECTORY_MUTATION')
+    def test_directory_symlink_and_source_traversal_fail(self):
+        self.m['source']['inventory'][0]['relative']='../escape'
+        from iios_native_evidence import closed_paths,directory_identity
+        with self.assertRaises(QualificationFailure):closed_paths(self.m)
+        link=self.root/'alias';link.symlink_to(self.data,target_is_directory=True)
+        with self.assertRaises(QualificationFailure):directory_identity(str(link))
+    def test_missing_input_is_not_absence_success(self):
+        self.a.unlink()
+        with self.assertRaises(QualificationFailure):self.verify()

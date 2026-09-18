@@ -273,7 +273,8 @@ class NativeAudit:
         elif event in ('open','os.mkdir','os.chmod','os.listdir','os.scandir') and self.audit_args:
             value=self.audit_args[0]
             if type(value) is int:value=self.fds.get(value)
-            if type(value) is str and len(value)<=512 and (value in self.paths or self.inside(value)):path=value
+            if isinstance(value,PurePosixPath):value=str(value)
+            if type(value) is str and len(value)<=512 and (value in self.paths or value in self.directories or self.inside(value)):path=value
             else:path='UNADMITTED_PATH'
         frame=self.source_caller();caller={'path':'UNRETAINED_CALLER','function':'UNKNOWN','line':0,'source_sha256':'UNBOUND'}
         if frame is not None:

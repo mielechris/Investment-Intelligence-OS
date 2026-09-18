@@ -121,7 +121,7 @@ class Budget:
         require(self.start<=now<end,stage,'OUTER_'+phase.upper()+'_DEADLINE','BEFORE_DEADLINE','EXPIRED_OR_CLOCK_REVERSED')
 
 
-def pin_file(path, expected, *, source_bytes=False):
+def pin_file(path, expected, *, source_bytes=False, metadata=False):
     """Pin regular bytes through retained no-follow directory handles.
 
     Preparation and native admission use the same policy: aliases are not inputs.
@@ -155,7 +155,7 @@ def pin_file(path, expected, *, source_bytes=False):
         for owner,name,child,original in reversed(chain):
             require(original==identity(os.fstat(child))==identity(os.stat(name,dir_fd=owner,follow_symlinks=False)),STAGES[0],'INPUT_ANCESTOR_MUTATION')
         require(h.hexdigest()==expected,STAGES[0],'INPUT_HASH')
-        return dict(sha256=expected,size=before.st_size,**({'bytes':b''.join(chunks),'identity':key(before),'ancestors':tuple(x[3] for x in chain)} if source_bytes else {}))
+        return dict(sha256=expected,size=before.st_size,**({'bytes':b''.join(chunks)} if source_bytes else {}),**({'identity':key(before),'ancestors':tuple(x[3] for x in chain)} if source_bytes or metadata else {}))
     finally:
         if fd is not None:os.close(fd)
         for handle in reversed(handles):os.close(handle)
@@ -165,8 +165,10 @@ class Journal:
     """Append-only hash chain; no truncated or uncommitted stage may be replayed."""
     def __init__(self,root,manifest_hash):
         self.root=Path(root);self.manifest_hash=manifest_hash;self.records=[]
-    def load(self):
-        files=sorted(self.root.glob('checkpoint-*.json'));previous=self.manifest_hash
+    def load(self,paths=None):
+        files=sorted(self.root.glob('checkpoint-*.json')) if paths is None else list(paths)
+        require(all(path.parent==self.root for path in files),'CONDUCTOR','CHECKPOINT_CONTAINMENT')
+        previous=self.manifest_hash
         for index,path in enumerate(files):
             require(path.name==f'checkpoint-{index:04d}.json','CONDUCTOR','CHECKPOINT_SEQUENCE')
             require(not path.is_symlink(),'CONDUCTOR','CHECKPOINT_SYMLINK')

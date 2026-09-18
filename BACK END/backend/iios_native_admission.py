@@ -15,11 +15,8 @@ def admit_source(manifest):
     pin_file(manifest['ci']['path'],manifest['ci']['sha256'])
     ci=json.loads(Path(manifest['ci']['path']).read_bytes())
     require(ci['source']==source['commit'] and ci['status']=='GREEN' and ci['artifact_hashes_verified'] is True and ci['native_execution'] is False,STAGES[0],'CI_GREEN_PREPARATION')
-    for row in source['inventory']:
-        require(not Path(row['relative']).is_absolute() and '..' not in Path(row['relative']).parts,STAGES[0],'SOURCE_INVENTORY_PATH')
-        pin_file(Path(source['root'])/row['relative'],row['sha256'])
-    for row in manifest['inputs']:pin_file(row['path'],row['sha256'])
-    for row in manifest['historical_records']:pin_file(row['path'],row['sha256'])
+    from iios_native_evidence import verify_closed_inventory
+    verify_closed_inventory(manifest)
     return True
 
 

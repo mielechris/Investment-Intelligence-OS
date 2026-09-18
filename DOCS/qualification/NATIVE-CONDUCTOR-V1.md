@@ -241,3 +241,26 @@ sanitized observations in the failure receipt. The existing three observations
 of registered PID 35731 remain mandatory and separate. Only a GREEN reconciliation
 receipt permits fresh payload qualification and every later existing adapter.
 No retry, signal, deadline reset, new sandbox grant or trading authority is added.
+
+
+### Closed admission inventories
+
+Admission reads the exact ordered input table, bound by the descriptor hash.
+Paths, hashes, byte sizes, owner/mode, device/inode and modification/change times
+are pinned before execution. Retained no-follow directory handles verify every
+ancestor identity and reject symlinks, traversal, replacement and read races.
+Missing, additional, duplicated, reordered and cross-root input entries fail.
+Immutable source/bootstrap and historical-evidence directories have separately
+pinned metadata, checked before and after verification; new directory entries in
+that sealed scope fail without enumeration. Shared ancestors and the preparation
+record directory are containment identities, not claims of complete directory
+contents. Unlisted files there are never admitted as inputs.
+
+Historical export verification uses the same closed table and declared export
+rows, including exact size/hash comparisons. Checkpoints are loaded from explicit
+ordered names in those rows. Neither path invokes glob, rglob, scandir or listdir.
+Current-run evidence export retains its existing exclusive output-root inventory
+logic; no audit operation or directory-enumeration grant is expanded. Failures
+retain bounded known path/index/operation/inventory-parent telemetry and exact
+predicate/exception/errno categories. Earlier omitted paths remain unestablished
+native observations. Historical cleanup classifications are immutable.

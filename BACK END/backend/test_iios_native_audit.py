@@ -347,3 +347,14 @@ class ArgcViewPolicyTests(unittest.TestCase):
         guard=self.guard()
         for event in ('ctypes.string_at','ctypes.memoryview_at','os.unknown_mutation'):
             with self.assertRaises(QualificationFailure):guard(event,())
+
+
+class ClosedDirectoryTelemetryTests(unittest.TestCase):
+    def test_denial_names_pinned_directory_without_granting_enumeration(self):
+        guard=a.NativeAudit(manifest(),'a'*64)
+        with patch.object(guard,'dispatch',side_effect=lambda event,args:guard.reject('AUDIT_READ_PIN')):
+            with self.assertRaises(QualificationFailure) as e:guard('os.scandir',(Path('/bound/source'),))
+        record=e.exception.detail['audit_denial']
+        self.assertEqual(record['path'],'/bound/source');self.assertEqual(record['event'],'os.scandir')
+        self.assertEqual(e.exception.detail['errno_category'],'AUDIT_POLICY')
+        with self.assertRaises(QualificationFailure):guard('os.scandir',('/unadmitted',))
