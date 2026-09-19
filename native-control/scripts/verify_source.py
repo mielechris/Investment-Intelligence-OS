@@ -61,7 +61,11 @@ def inventory(root):
                                (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
                                'SOURCE_EXTRA_TYPE')
         if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
-    require(sorted(actual)==[row['path'] for row in rows],'SOURCE_EXTRA_FILE')
+    tracked=[row['path'] for row in rows]
+    require(len({name.casefold() for name in tracked})==len(tracked) and
+            len(actual)==len(tracked) and
+            {name.casefold() for name in actual}=={name.casefold() for name in tracked},
+            'SOURCE_EXTRA_FILE')
     return rows
 
 def verify(binding_path,source,receipt):
