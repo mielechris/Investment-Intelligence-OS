@@ -1,0 +1,56 @@
+name: IIOS Native Qualification v2
+on:
+  workflow_dispatch:
+    inputs:
+      resume:
+        description: Explicitly resume after reviewing the previous RED checkpoint
+        type: boolean
+        default: false
+      rebuild_runtime:
+        description: Preserve and rebuild the project venv once
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: iios-selected-mac-native-qualification
+  cancel-in-progress: false
+jobs:
+  preparation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Trusted dispatch ref
+        env:
+          TRUSTED_REF: ${{ vars.IIOS_NATIVE_TRUSTED_REF }}
+        run: test -n "$TRUSTED_REF" && test "$GITHUB_REF" = "$TRUSTED_REF"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.14'
+      - name: Offline preparation only
+        run: python -B -m unittest discover -s tests/native_v2 -v
+  selected-mac:
+    needs: preparation
+    environment: iios-native-qualification
+    runs-on: [self-hosted, macOS, ARM64, iios-selected-mac]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: true
+      - name: Selected-Mac native qualification
+        shell: bash
+        env:
+          EXPLICIT_RESUME: ${{ inputs.resume }}
+          REBUILD_RUNTIME: ${{ inputs.rebuild_runtime }}
+        run: |
+          set -euo pipefail
+          umask 077
+          args=(--profile observation)
+          if [[ "$EXPLICIT_RESUME" == true ]]; then args+=(--resume); fi
+          if [[ "$REBUILD_RUNTIME" == true ]]; then args+=(--rebuild-runtime); fi
+          ./scripts/iios-native-qualify "${args[@]}"

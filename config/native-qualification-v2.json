@@ -1,0 +1,13 @@
+{
+  "schema": 2,
+  "profile": "observation",
+  "python_version": "3.14.7",
+  "vendor_python": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14",
+  "workflow": "iios-native-qualification-v2.yml",
+  "maximum_seconds": 900,
+  "historical": {
+    "boot": "9d8610bb-5e12-466e-928e-e6cbc65df829",
+    "cleanup": "NOT_ESTABLISHED",
+    "verified_reboot_review_sha256": "4572fd4303cd26831ee893203de520f6b4e4cd88f6c945e2a92f7a6f79cfd508"
+  }
+}
