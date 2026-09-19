@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'BACK END/backend'))
-from iios_qualification_v2 import native,runtime
+from iios_qualification_v2 import native,runtime,preflight_evidence
 from iios_qualification_v2.state import AUTHORITY,Store
 from iios_qualification_v2.cli import execute
 
@@ -24,11 +24,14 @@ class LocalAppTests(unittest.TestCase):
         bundle=home/'Applications/IIOS Native Qualification.app';exe=bundle/'Contents/MacOS/IIOSNativeQualification'
         exe.parent.mkdir(parents=True);exe.write_bytes(b'app');exe.chmod(0o700)
         for path in (bundle,bundle/'Contents',bundle/'Contents/MacOS'):path.chmod(0o700)
+        manifest=home/'Library/IIOS/qualification/local-app-aaaaaaa-01/APP-MANIFEST.json';manifest.parent.mkdir(parents=True);manifest.write_bytes(b'm');manifest.chmod(0o400)
+        for path in (home/'Library',home/'Library/IIOS',home/'Library/IIOS/qualification',manifest.parent):path.chmod(0o700)
         return {'schema':4,'launch_mode':'local_app','repository':'mielechris/Investment-Intelligence-OS',
                 'commit':'a'*40,'branch':'feature/iios-native-qualification-v2','inventory_sha256':'b'*64,
                 'app_bundle':str(bundle),'app_executable':str(exe),'app_executable_sha256':'c'*64,
                 'app_identifier':'com.miele.iios-native-qualification','app_cdhash':'d'*40,
-                'signing_method':'adhoc','hardware_uuid':'00000000-0000-0000-0000-000000000000','uid':os.getuid()}
+                'signing_method':'adhoc','app_manifest':str(manifest),'app_manifest_sha256':'c'*64,
+                'hardware_uuid':'00000000-0000-0000-0000-000000000000','uid':os.getuid()}
     def test_local_host_binds_signed_direct_parent_and_hardware(self):
         host=self.host(self.root);exe=host['app_executable']
         verify=SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
@@ -65,7 +68,7 @@ class LocalAppTests(unittest.TestCase):
     def test_native_ui_has_fixed_command_and_only_confirmation_choices(self):
         text=(ROOT/'native-app/IIOSNativeQualification.m.in').read_text()
         for value in ('@"Run Qualification"','@"Cancel"','@"--profile",@"observation"','provider_requests','Open Evidence',
-                      '[value[@"inventory_sha256"] isEqual:SourceInventory]'):
+                      '[value[@"inventory_sha256"] isEqual:SourceInventory]','EVIDENCE_EXPORT_UNAVAILABLE','preflight_evidence'):
             self.assertIn(value,text)
         for forbidden in ('NSSearchField','NSOpenPanel','shell -c','/bin/zsh','system('):
             self.assertNotIn(forbidden,text)
@@ -76,5 +79,27 @@ class LocalAppTests(unittest.TestCase):
         self.assertIn('SELECTED_HOST_EXCLUSIVE',text)
         self.assertIn("bound=binding();qualification=contained",text)
         self.assertNotIn('/usr/bin/security',text);self.assertNotIn('find-identity',text)
+
+    def test_every_admitted_preflight_failure_exports_a_sealed_sanitized_receipt(self):
+        root=self.root/'preflight';root.mkdir();root.chmod(0o700)
+        with patch.object(preflight_evidence,'contained',return_value=root):
+            writer=preflight_evidence.Writer(self.root,{'root':'unused'},started=1)
+            for predicate in ('DIRTY_SOURCE','LOCAL_APP_EXECUTABLE_HASH','LOCAL_SOURCE_BINDING_MISMATCH','LOCAL_HOST_SCHEMA',
+                              'LOCAL_SOURCE_BRANCH','LOCAL_APP_MANIFEST_HASH','LOCAL_APP_OWNER_MODE','LOCAL_APP_PARENT'):
+                result=writer.write(error=ValueError(predicate),stage='ADMISSION',parents={'source':{'commit':'a'*40}},
+                                    expected={'category':'EXPECTED'},observed={'category':'OBSERVED'})
+                receipt=Path(result['export'])/'receipt.json';row=json.loads(receipt.read_text())
+                self.assertEqual(row['predicate'],predicate);self.assertEqual(row['provider_requests'],0)
+                self.assertEqual(row['authority'],AUTHORITY);self.assertEqual(Path(result['export']).stat().st_mode&0o777,0o500)
+
+    def test_unsafe_preflight_root_and_write_failure_never_claim_a_receipt(self):
+        with patch.object(preflight_evidence,'contained',side_effect=ValueError('DURABLE_ALIAS')):
+            with self.assertRaisesRegex(preflight_evidence.EvidenceUnavailable,'EVIDENCE_EXPORT_UNAVAILABLE'):
+                preflight_evidence.Writer(self.root,{'root':'unused'})
+        root=self.root/'preflight';root.mkdir();root.chmod(0o700)
+        with patch.object(preflight_evidence,'contained',return_value=root),patch.object(preflight_evidence,'publish',side_effect=OSError(28,'full')):
+            writer=preflight_evidence.Writer(self.root,{'root':'unused'})
+            with self.assertRaisesRegex(preflight_evidence.EvidenceUnavailable,'EVIDENCE_EXPORT_UNAVAILABLE'):
+                writer.write(error=ValueError('WRITE_FAILURE'),stage='ADMISSION',parents={},expected={},observed={})
 
 if __name__=='__main__':unittest.main()

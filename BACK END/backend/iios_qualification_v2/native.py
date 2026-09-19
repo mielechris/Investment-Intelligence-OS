@@ -61,20 +61,23 @@ def local_selected_host(host):
     """Admit only the fixed, signed foreground app that directly owns this process."""
     required={'schema','launch_mode','repository','commit','branch','inventory_sha256','app_bundle',
               'app_executable','app_executable_sha256','app_identifier','app_cdhash','signing_method',
-              'hardware_uuid','uid'}
+              'app_manifest','app_manifest_sha256','hardware_uuid','uid'}
     require(set(host)==required and host['schema']==4 and host['launch_mode']=='local_app',
             'LOCAL_HOST_SCHEMA')
     home=Path.home();bundle=home/'Applications/IIOS Native Qualification.app'
     executable=bundle/'Contents/MacOS/IIOSNativeQualification'
+    manifest=Path(host.get('app_manifest',''))
     require(host['repository']=='mielechris/Investment-Intelligence-OS' and
             host['branch']=='feature/iios-native-qualification-v2' and
             host['app_bundle']==str(bundle) and host['app_executable']==str(executable) and
             host['app_identifier']=='com.miele.iios-native-qualification' and
+            manifest.is_absolute() and manifest.name=='APP-MANIFEST.json' and manifest.parent.parent==Path.home()/'Library/IIOS/qualification' and
             host['signing_method']=='adhoc','LOCAL_HOST_SCOPE')
     require(type(host['uid']) is int and host['uid']==os.getuid() and
             re.fullmatch(r'[0-9a-f]{40}',host['commit']) and
             re.fullmatch(r'[0-9a-f]{64}',host['inventory_sha256']) and
             re.fullmatch(r'[0-9a-f]{64}',host['app_executable_sha256']) and
+            re.fullmatch(r'[0-9a-f]{64}',host['app_manifest_sha256']) and
             re.fullmatch(r'[0-9A-Fa-f]{40}',host['app_cdhash']) and
             re.fullmatch(r'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}',host['hardware_uuid']),
             'LOCAL_HOST_VALUE')
@@ -82,6 +85,8 @@ def local_selected_host(host):
         st=item.lstat();require(not stat.S_ISLNK(st.st_mode) and st.st_uid==os.getuid() and
                                stat.S_IMODE(st.st_mode)==mode,'LOCAL_APP_OWNER_MODE')
     require(file_hash(executable)==host['app_executable_sha256'],'LOCAL_APP_EXECUTABLE_HASH')
+    st=manifest.lstat();require(stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode) and st.st_uid==os.getuid() and
+                                stat.S_IMODE(st.st_mode)==0o400 and file_hash(manifest)==host['app_manifest_sha256'],'LOCAL_APP_MANIFEST_HASH')
     result=subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict','--all-architectures',str(bundle)],
                           env=ENV,stdin=subprocess.DEVNULL,capture_output=True,timeout=10,close_fds=True)
     require(result.returncode==0 and len(result.stdout)+len(result.stderr)<=65536,'LOCAL_APP_SIGNATURE')
@@ -103,7 +108,8 @@ def local_selected_host(host):
     require(len(matches)==1 and matches[0].lower()==host['hardware_uuid'].lower(),'SELECTED_HARDWARE')
     issuer=dict(launch_mode='local_app',application=host['app_identifier'],signing_method='adhoc',
                 selected_host_verified=True,hardware_verified=True,parent_verified=True,
-                hardware_uuid=matches[0].lower())
+                hardware_uuid=matches[0].lower(),app_executable_sha256=host['app_executable_sha256'],
+                app_manifest_sha256=host['app_manifest_sha256'])
     expected=dict(repository=host['repository'],commit=host['commit'],branch=host['branch'],
                   inventory_sha256=host['inventory_sha256'])
     return issuer,expected

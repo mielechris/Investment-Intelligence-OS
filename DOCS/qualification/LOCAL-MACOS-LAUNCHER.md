@@ -8,4 +8,6 @@ The confirmation has only **Cancel** and **Run Qualification**. It displays repo
 
 The app streams stage transitions, displays final GREEN or RED and enables **Open Evidence** after completion. The existing engine owns the nonblocking single-run lock, explicit resume checkpoint, bounded stages, cleanup, sanitized evidence and fail-closed authority contracts.
 
+Before the v2 journal is created, the launcher also verifies that `~/Library/IIOS/evidence/preflight` is an owner-only contained directory. Any admitted source, host, app, parent-process, branch, inventory or dirty-worktree failure atomically writes one sealed receipt there. If that root cannot be safely admitted or written, the app stops before native stages and displays the bounded, copyable `EVIDENCE_EXPORT_UNAVAILABLE` diagnostic without claiming a receipt.
+
 The bundle is built under an exclusive qualification version root, moved to `~/Applications/IIOS Native Qualification.app`, signed ad-hoc with hardened-runtime flags and verified using `codesign --verify --deep --strict --all-architectures`. Ad-hoc signing is used because the build is forbidden from reading Keychain identities. No system component, service, listener or daemon is installed.

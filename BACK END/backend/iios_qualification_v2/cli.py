@@ -12,6 +12,7 @@ from iios_qualification_v2.state import AUTHORITY, STAGES, Store, decode, direct
 from iios_qualification_v2 import runtime
 from iios_qualification_v2 import native
 from iios_qualification_v2 import roots as durable
+from iios_qualification_v2.preflight_evidence import EvidenceUnavailable, Writer, parents_from_host
 
 
 def execute(store, stages, *, source, boot, resume, issuer, evidence, status=None):
@@ -90,20 +91,33 @@ def main(argv=None):
             dest.chmod(0o400);runtime.verify_wheel(dest,row)
         print('PREPARATION_ONLY: exact offline wheels staged; no runtime execution')
         return 0
-    runtime.ENV['TMPDIR']=str(directory(roots['qualification']/'scratch'))
-    issuer, expected_source=native.selected_host(roots['qualification']/'selected-host.json')
-    binding=(runtime.source_binding_local(source,expected_source) if issuer.get('launch_mode')=='local_app'
-             else runtime.source_binding(source,expected_source))
-    if args.app_preflight:
-        current=native.boot();store=Store(durable.contained(roots['qualification']/'native-v2',bound),root_binding=bound)
-        with store.locked():records=store.load()
-        print(canonical(dict(schema=1,status='PREFLIGHT_GREEN',repository=binding['repository'],
-              commit=binding['commit'],branch=binding.get('branch'),inventory_sha256=binding['inventory_sha256'],
-              selected_mac=issuer.get('hardware_uuid'),
-              profile=args.profile,evidence_destination=str(roots['evidence']),provider_requests=0,
-              authority=AUTHORITY,resume_required=bool(records),current_boot=current,
-              historical_cleanup='NOT_ESTABLISHED')).decode(),end='')
-        return 0
+    writer=None;engine_started=False;host_path=roots['qualification']/'selected-host.json'
+    try:
+        writer=Writer(roots['evidence'],bound)
+        runtime.ENV['TMPDIR']=str(directory(roots['qualification']/'scratch'))
+        issuer, expected_source=native.selected_host(host_path)
+        binding=(runtime.source_binding_local(source,expected_source) if issuer.get('launch_mode')=='local_app'
+                 else runtime.source_binding(source,expected_source))
+        if args.app_preflight:
+            current=native.boot();store=Store(durable.contained(roots['qualification']/'native-v2',bound),root_binding=bound)
+            with store.locked():records=store.load()
+            print(canonical(dict(schema=1,status='PREFLIGHT_GREEN',repository=binding['repository'],
+                  commit=binding['commit'],branch=binding.get('branch'),inventory_sha256=binding['inventory_sha256'],
+                  selected_mac=issuer.get('hardware_uuid'),profile=args.profile,evidence_destination=str(roots['evidence']),
+                  preflight_evidence=True,provider_requests=0,authority=AUTHORITY,resume_required=bool(records),
+                  current_boot=current,historical_cleanup='NOT_ESTABLISHED')).decode(),end='')
+            return 0
+        engine_started=True
+    except BaseException as error:
+        if isinstance(error,EvidenceUnavailable) or writer is None:
+            print(canonical(dict(status='RED',stage='ADMISSION',predicate='EVIDENCE_EXPORT_UNAVAILABLE',
+                  diagnostic='EVIDENCE_EXPORT_UNAVAILABLE',authority=AUTHORITY,provider_requests=0,native_qualified=False)).decode(),end='')
+            return 1
+        receipt=writer.write(error=error,stage='ADMISSION',parents=parents_from_host(host_path),
+                             expected=dict(category='LOCAL_APP_PREFLIGHT'),observed=dict(category=type(error).__name__))
+        print(canonical(dict(status='RED',stage='ADMISSION',predicate=str(error)[:160],authority=AUTHORITY,
+              provider_requests=0,native_qualified=False,preflight_evidence=receipt)).decode(),end='')
+        return 1
     import signal
     def cancelled(signum,frame):raise RuntimeError('CONTROLLER_CANCELLED')
     signal.signal(signal.SIGTERM,cancelled)
@@ -164,5 +178,6 @@ def main(argv=None):
 if __name__=='__main__':
     try:raise SystemExit(main())
     except Exception as error:
-        print(canonical(dict(status='RED',stage='ADMISSION',category=type(error).__name__,predicate=str(error)[:240],authority=AUTHORITY,native_qualified=False)).decode(),end='')
+        print(canonical(dict(status='RED',stage='ADMISSION',predicate='EVIDENCE_EXPORT_UNAVAILABLE',
+              diagnostic='EVIDENCE_EXPORT_UNAVAILABLE',authority=AUTHORITY,provider_requests=0,native_qualified=False)).decode(),end='')
         raise SystemExit(1)

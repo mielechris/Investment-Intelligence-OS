@@ -60,13 +60,6 @@ def main():
     run(['/usr/bin/codesign','--verify','--deep','--strict','--all-architectures',str(output)])
     hardware=run(['/usr/sbin/ioreg','-rd1','-c','IOPlatformExpertDevice'],text=True).stdout
     matches=re.findall(r'"IOPlatformUUID"\s*=\s*"([A-Fa-f0-9-]+)"',hardware);require(len(matches)==1,'APP_HARDWARE')
-    contract={'schema':4,'launch_mode':'local_app','repository':REPOSITORY,'commit':identity['commit'],'branch':BRANCH,
-              'inventory_sha256':identity['inventory_sha256'],'app_bundle':str(output),
-              'app_executable':str(output/'Contents/MacOS/IIOSNativeQualification'),
-              'app_executable_sha256':sha(output/'Contents/MacOS/IIOSNativeQualification'),
-              'app_identifier':IDENTIFIER,'app_cdhash':hashes[0].lower(),'signing_method':'adhoc',
-              'hardware_uuid':matches[0].lower(),'uid':os.getuid()}
-    exclusive(host,canonical(contract),0o600)
     files={}
     for path in sorted(output.rglob('*')):
         if path.is_file():files[str(path.relative_to(output))]={'bytes':path.stat().st_size,'sha256':sha(path),'mode':stat.S_IMODE(path.stat().st_mode)}
@@ -75,8 +68,17 @@ def main():
               'source_inventory_sha256':identity['inventory_sha256'],'branch':BRANCH,'bundle':str(output),
               'signing_method':'adhoc','identifier':IDENTIFIER,'cdhash':hashes[0].lower(),'files':files,
               'bundle_inventory_sha256':inventory_sha256,
-              'selected_host_sha256':sha(host),'provider_requests':0,'authority':AUTHORITY,
+              'provider_requests':0,'authority':AUTHORITY,
               'native_qualification_executed':False,'historical_cleanup':'NOT_ESTABLISHED'}
-    exclusive(version/'APP-MANIFEST.json',canonical(manifest),0o400);implementation.chmod(0o400);version.chmod(0o500)
+    app_manifest=version/'APP-MANIFEST.json'
+    exclusive(app_manifest,canonical(manifest),0o400)
+    contract={'schema':4,'launch_mode':'local_app','repository':REPOSITORY,'commit':identity['commit'],'branch':BRANCH,
+              'inventory_sha256':identity['inventory_sha256'],'app_bundle':str(output),
+              'app_executable':str(output/'Contents/MacOS/IIOSNativeQualification'),
+              'app_executable_sha256':sha(output/'Contents/MacOS/IIOSNativeQualification'),
+              'app_identifier':IDENTIFIER,'app_cdhash':hashes[0].lower(),'signing_method':'adhoc',
+              'app_manifest':str(app_manifest),'app_manifest_sha256':sha(app_manifest),
+              'hardware_uuid':matches[0].lower(),'uid':os.getuid()}
+    exclusive(host,canonical(contract),0o600);implementation.chmod(0o400);version.chmod(0o500)
     print(canonical(manifest).decode(),end='')
 if __name__=='__main__':main()
