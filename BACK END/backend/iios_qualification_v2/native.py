@@ -27,6 +27,7 @@ def selected_host(path):
     require(platform.system()=='Darwin' and platform.machine()=='arm64','SELECTED_MAC_ONLY')
     st=path.lstat();require(stat.S_ISREG(st.st_mode) and st.st_uid==os.getuid() and stat.S_IMODE(st.st_mode)==0o600,'HOST_SELECTION_MODE')
     host=decode(path.read_bytes())
+    if host.get('schema')==4:return local_selected_host(host)
     required={'schema','control_repository','control_repository_id','control_owner_id','control_ref',
               'workflow','source','runner_name','hardware_uuid','uid'}
     require(set(host)==required and host['schema']==3,'HOST_SELECTION_SCHEMA')
@@ -54,6 +55,58 @@ def selected_host(path):
     return (dict(control_repository=host['control_repository'],control_ref=host['control_ref'],
                  workflow=host['workflow'],manual_dispatch=True,environment='iios-native-qualification',
                  selected_host_verified=True,hardware_verified=True,runner_verified=True), host['source'])
+
+
+def local_selected_host(host):
+    """Admit only the fixed, signed foreground app that directly owns this process."""
+    required={'schema','launch_mode','repository','commit','branch','inventory_sha256','app_bundle',
+              'app_executable','app_executable_sha256','app_identifier','app_cdhash','signing_method',
+              'hardware_uuid','uid'}
+    require(set(host)==required and host['schema']==4 and host['launch_mode']=='local_app',
+            'LOCAL_HOST_SCHEMA')
+    home=Path.home();bundle=home/'Applications/IIOS Native Qualification.app'
+    executable=bundle/'Contents/MacOS/IIOSNativeQualification'
+    require(host['repository']=='mielechris/Investment-Intelligence-OS' and
+            host['branch']=='feature/iios-native-qualification-v2' and
+            host['app_bundle']==str(bundle) and host['app_executable']==str(executable) and
+            host['app_identifier']=='com.miele.iios-native-qualification' and
+            host['signing_method']=='adhoc','LOCAL_HOST_SCOPE')
+    require(type(host['uid']) is int and host['uid']==os.getuid() and
+            re.fullmatch(r'[0-9a-f]{40}',host['commit']) and
+            re.fullmatch(r'[0-9a-f]{64}',host['inventory_sha256']) and
+            re.fullmatch(r'[0-9a-f]{64}',host['app_executable_sha256']) and
+            re.fullmatch(r'[0-9A-Fa-f]{40}',host['app_cdhash']) and
+            re.fullmatch(r'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}',host['hardware_uuid']),
+            'LOCAL_HOST_VALUE')
+    for item,mode in ((bundle,0o700),(bundle/'Contents',0o700),(bundle/'Contents/MacOS',0o700),(executable,0o700)):
+        st=item.lstat();require(not stat.S_ISLNK(st.st_mode) and st.st_uid==os.getuid() and
+                               stat.S_IMODE(st.st_mode)==mode,'LOCAL_APP_OWNER_MODE')
+    require(file_hash(executable)==host['app_executable_sha256'],'LOCAL_APP_EXECUTABLE_HASH')
+    result=subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict','--all-architectures',str(bundle)],
+                          env=ENV,stdin=subprocess.DEVNULL,capture_output=True,timeout=10,close_fds=True)
+    require(result.returncode==0 and len(result.stdout)+len(result.stderr)<=65536,'LOCAL_APP_SIGNATURE')
+    result=subprocess.run(['/usr/bin/codesign','-d','--verbose=4',str(bundle)],env=ENV,
+                          stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=10,close_fds=True)
+    require(result.returncode==0 and len(result.stdout)+len(result.stderr)<=65536,'LOCAL_APP_SIGNATURE_INFO')
+    description=result.stdout+result.stderr
+    identifiers=re.findall(r'^Identifier=(.+)$',description,re.M);hashes=re.findall(r'^CDHash=([0-9A-Fa-f]+)$',description,re.M)
+    require(identifiers==[host['app_identifier']] and len(hashes)==1 and
+            hashes[0].lower()==host['app_cdhash'].lower() and
+            ('Signature=adhoc' in description or 'flags=0x2(adhoc' in description),
+            'LOCAL_APP_SIGNATURE_BINDING')
+    from truth_spine_process_identity import inspect_macos
+    parent=inspect_macos(os.getppid())
+    require(parent is not None and parent.executable==str(executable) and
+            parent.executable_hash==host['app_executable_sha256'],'LOCAL_APP_PARENT')
+    raw=command(['/usr/sbin/ioreg','-rd1','-c','IOPlatformExpertDevice'])
+    matches=re.findall(r'"IOPlatformUUID"\s*=\s*"([A-Fa-f0-9-]+)"',raw)
+    require(len(matches)==1 and matches[0].lower()==host['hardware_uuid'].lower(),'SELECTED_HARDWARE')
+    issuer=dict(launch_mode='local_app',application=host['app_identifier'],signing_method='adhoc',
+                selected_host_verified=True,hardware_verified=True,parent_verified=True,
+                hardware_uuid=matches[0].lower())
+    expected=dict(repository=host['repository'],commit=host['commit'],branch=host['branch'],
+                  inventory_sha256=host['inventory_sha256'])
+    return issuer,expected
 
 
 def profile(source, runtime, work, python, port, denied=None):

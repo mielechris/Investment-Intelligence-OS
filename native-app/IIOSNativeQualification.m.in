@@ -1,0 +1,83 @@
+#import <Cocoa/Cocoa.h>
+
+static NSString *const Repository = @"mielechris/Investment-Intelligence-OS";
+static NSString *const SourceCommit = @"@@SOURCE_COMMIT@@";
+static NSString *const SourceBranch = @"feature/iios-native-qualification-v2";
+static NSString *const SourceInventory = @"@@SOURCE_INVENTORY@@";
+static NSString *const SourceRoot = @"@@SOURCE_ROOT@@";
+static NSString *const UserHome = @"@@USER_HOME@@";
+static NSString *const EvidenceRoot = @"@@USER_HOME@@/Library/IIOS/evidence";
+
+@interface AppDelegate : NSObject <NSApplicationDelegate>
+@property NSWindow *window;
+@property NSTextView *logView;
+@property NSTextField *resultLabel;
+@property NSButton *openButton;
+@property NSString *evidencePath;
+@property NSDictionary *preflight;
+@end
+
+@implementation AppDelegate
+- (NSTask *)fixedProcess:(NSArray<NSString *> *)arguments output:(NSPipe *)out error:(NSPipe *)err {
+    NSTask *task=[NSTask new];task.executableURL=[NSURL fileURLWithPath:[SourceRoot stringByAppendingPathComponent:@"scripts/iios-native-qualify"]];
+    task.currentDirectoryURL=[NSURL fileURLWithPath:SourceRoot];task.arguments=arguments;
+    task.environment=@{@"PATH":@"/usr/bin:/bin:/usr/sbin",@"LC_ALL":@"C",@"TZ":@"UTC",@"HOME":UserHome,@"PYTHONDONTWRITEBYTECODE":@"1"};
+    task.standardInput=[NSFileHandle fileHandleWithNullDevice];task.standardOutput=out;task.standardError=err;return task;
+}
+- (NSDictionary *)invokePreflight:(NSError **)error {
+    NSPipe *out=[NSPipe pipe],*err=[NSPipe pipe];NSTask *task=[self fixedProcess:@[@"--profile",@"observation",@"--app-preflight"] output:out error:err];
+    if (![task launchAndReturnError:error]) return nil;[task waitUntilExit];NSData *data=[[out fileHandleForReading] readDataToEndOfFile];
+    if (task.terminationStatus!=0) { if(error)*error=[NSError errorWithDomain:@"IIOS" code:task.terminationStatus userInfo:@{NSLocalizedDescriptionKey:@"Preflight rejected the application or source binding."}];return nil; }
+    id value=[NSJSONSerialization JSONObjectWithData:data options:0 error:error];return [value isKindOfClass:[NSDictionary class]]?value:nil;
+}
+- (BOOL)falseAuthorities:(NSDictionary *)value {
+    NSDictionary *a=value[@"authority"];
+    return [a isKindOfClass:[NSDictionary class]] && ![a[@"broker_connection"] boolValue] && ![a[@"paper_order_permission"] boolValue] && ![a[@"trade_execution"] boolValue] && ![a[@"live_execution"] boolValue];
+}
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];[NSApp activateIgnoringOtherApps:YES];self.evidencePath=EvidenceRoot;
+    NSError *error=nil;NSDictionary *value=[self invokePreflight:&error];
+    BOOL valid=value && [value[@"status"] isEqual:@"PREFLIGHT_GREEN"] && [value[@"repository"] isEqual:Repository] && [value[@"commit"] isEqual:SourceCommit] && [value[@"branch"] isEqual:SourceBranch] && [value[@"inventory_sha256"] isEqual:SourceInventory] && [value[@"evidence_destination"] isEqual:EvidenceRoot] && [value[@"provider_requests"] integerValue]==0 && [value[@"historical_cleanup"] isEqual:@"NOT_ESTABLISHED"] && [self falseAuthorities:value];
+    if(!valid){[self showFailure:@"Admission RED" detail:error.localizedDescription?:@"Preflight returned an unexpected contract."];return;}
+    self.preflight=value;[self confirm:value];
+}
+- (void)confirm:(NSDictionary *)value {
+    NSString *resume=[value[@"resume_required"] boolValue]?@"true (explicit resume after confirmation)":@"false";
+    NSString *text=[NSString stringWithFormat:@"Repository: %@\nCommit: %@\nBranch: %@\nSource inventory: %@\nSelected Mac identity: %@\nQualification profile: %@\nEvidence destination: %@\nResume: %@\nProvider requests: 0\nBroker connection: false\nPaper-order permission: false\nTrade execution: false\nLive execution: false\nHistorical cleanup: NOT_ESTABLISHED",value[@"repository"],value[@"commit"],value[@"branch"],SourceInventory,value[@"selected_mac"],value[@"profile"],value[@"evidence_destination"],resume];
+    NSAlert *alert=[NSAlert new];alert.messageText=@"Run IIOS Native Qualification?";alert.informativeText=text;alert.alertStyle=NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"Run Qualification"];[alert addButtonWithTitle:@"Cancel"];
+    if([alert runModal]==NSAlertFirstButtonReturn)[self runQualification:value];else[NSApp terminate:nil];
+}
+- (void)makeWindow {
+    NSRect frame=NSMakeRect(0,0,720,460);self.window=[[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable backing:NSBackingStoreBuffered defer:NO];self.window.title=@"IIOS Native Qualification";[self.window center];self.window.releasedWhenClosed=NO;
+    self.resultLabel=[NSTextField labelWithString:@"Qualification running…"];self.resultLabel.frame=NSMakeRect(20,414,680,24);self.resultLabel.font=[NSFont boldSystemFontOfSize:16];
+    NSScrollView *scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(20,65,680,340)];scroll.hasVerticalScroller=YES;self.logView=[[NSTextView alloc] initWithFrame:scroll.bounds];self.logView.editable=NO;self.logView.font=[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];scroll.documentView=self.logView;
+    self.openButton=[[NSButton alloc] initWithFrame:NSMakeRect(570,18,130,32)];self.openButton.title=@"Open Evidence";self.openButton.target=self;self.openButton.action=@selector(openEvidence:);self.openButton.enabled=NO;
+    [self.window.contentView addSubview:self.resultLabel];[self.window.contentView addSubview:scroll];[self.window.contentView addSubview:self.openButton];[self.window makeKeyAndOrderFront:nil];
+}
+- (void)appendStatus:(NSData *)data {
+    if(!data.length)return;NSString *text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];if(!text)return;
+    dispatch_async(dispatch_get_main_queue(),^{ [self.logView.textStorage appendAttributedString:[[NSAttributedString alloc] initWithString:text]];[self.logView scrollToEndOfDocument:nil]; });
+}
+- (void)runQualification:(NSDictionary *)value {
+    [self makeWindow];NSMutableArray *args=[NSMutableArray arrayWithArray:@[@"--profile",@"observation"]];if([value[@"resume_required"] boolValue])[args addObject:@"--resume"];
+    NSPipe *out=[NSPipe pipe],*err=[NSPipe pipe];NSTask *task=[self fixedProcess:args output:out error:err];
+    err.fileHandleForReading.readabilityHandler=^(NSFileHandle *handle){[self appendStatus:handle.availableData];};
+    task.terminationHandler=^(NSTask *completed){err.fileHandleForReading.readabilityHandler=nil;NSData *data=[out.fileHandleForReading readDataToEndOfFile];dispatch_async(dispatch_get_main_queue(),^{[self finish:data code:completed.terminationStatus];});};
+    NSError *error=nil;if(![task launchAndReturnError:&error])[self finish:[NSData data] code:1];
+}
+- (void)finish:(NSData *)data code:(int)code {
+    NSString *status=@"RED";NSDictionary *value=data.length?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+    if([value isKindOfClass:[NSDictionary class]] && [value[@"status"] isKindOfClass:[NSString class]])status=value[@"status"];
+    NSString *path=value[@"export"];if([path isKindOfClass:[NSString class]] && [path hasPrefix:[EvidenceRoot stringByAppendingString:@"/"]])self.evidencePath=path;
+    if(code!=0)status=@"RED";self.resultLabel.stringValue=[@"Qualification " stringByAppendingString:status];self.resultLabel.textColor=[status isEqual:@"GREEN"]?NSColor.systemGreenColor:NSColor.systemRedColor;self.openButton.enabled=YES;
+    [self appendStatus:[[NSString stringWithFormat:@"\nFinal result: %@\n",status] dataUsingEncoding:NSUTF8StringEncoding]];
+}
+- (void)openEvidence:(id)sender {
+    NSString *path=[self.evidencePath stringByStandardizingPath];if(![path isEqual:EvidenceRoot] && ![path hasPrefix:[EvidenceRoot stringByAppendingString:@"/"]])return;
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
+}
+- (void)showFailure:(NSString *)title detail:(NSString *)detail {NSAlert *alert=[NSAlert new];alert.messageText=title;alert.informativeText=detail;alert.alertStyle=NSAlertStyleCritical;[alert addButtonWithTitle:@"Close"];[alert runModal];[NSApp terminate:nil];}
+@end
+
+int main(int argc,const char *argv[]){@autoreleasepool{NSApplication *app=[NSApplication sharedApplication];AppDelegate *delegate=[AppDelegate new];app.delegate=delegate;[app run];}return 0;}

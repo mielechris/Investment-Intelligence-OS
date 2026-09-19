@@ -14,21 +14,24 @@ from iios_qualification_v2 import native
 from iios_qualification_v2 import roots as durable
 
 
-def execute(store, stages, *, source, boot, resume, issuer, evidence):
+def execute(store, stages, *, source, boot, resume, issuer, evidence, status=None):
     """No retry loop. A caller supplies one ordered set of native stage implementations."""
     require(tuple(stages)==STAGES[:-1], 'STAGE_SET')
     store.begin(source,boot,resume=resume)
     completed=[];failure=None;cleanup=None
     try:
         for name, operation in stages.items():
+            if status:status(name,'STARTED')
             store.append('STAGE_STARTED',dict(stage=name,source=source,boot=boot))
             value=operation()
             store.append('STAGE_PASSED',dict(stage=name,source=source,boot=boot,receipt=value))
+            if status:status(name,'PASSED')
             completed.append(name)
             if name=='cleanup':cleanup=value
     except BaseException as error:
         failure=dict(stage=name,category=type(error).__name__,predicate=str(error)[:240])
         store.append('STAGE_FAILED',failure)
+        if status:status(name,'FAILED')
         if name!='cleanup':
             try:
                 cleanup=stages['cleanup']()
@@ -60,6 +63,7 @@ def main(argv=None):
     parser.add_argument('--check',action='store_true',help='Static source/lock preparation only; cannot issue native evidence')
     parser.add_argument('--stage-artifacts',type=Path,help='Copy exact already-acquired wheels from a durable qualification directory; no downloads')
     parser.add_argument('--rebuild-runtime',action='store_true',help='Preserve an incomplete venv under a retired name, then rebuild once')
+    parser.add_argument('--app-preflight',action='store_true',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     os.umask(0o077)
     source=Path(__file__).resolve().parents[3]
@@ -88,7 +92,18 @@ def main(argv=None):
         return 0
     runtime.ENV['TMPDIR']=str(directory(roots['qualification']/'scratch'))
     issuer, expected_source=native.selected_host(roots['qualification']/'selected-host.json')
-    binding=runtime.source_binding(source,expected_source)
+    binding=(runtime.source_binding_local(source,expected_source) if issuer.get('launch_mode')=='local_app'
+             else runtime.source_binding(source,expected_source))
+    if args.app_preflight:
+        current=native.boot();store=Store(durable.contained(roots['qualification']/'native-v2',bound),root_binding=bound)
+        with store.locked():records=store.load()
+        print(canonical(dict(schema=1,status='PREFLIGHT_GREEN',repository=binding['repository'],
+              commit=binding['commit'],branch=binding.get('branch'),inventory_sha256=binding['inventory_sha256'],
+              selected_mac=issuer.get('hardware_uuid'),
+              profile=args.profile,evidence_destination=str(roots['evidence']),provider_requests=0,
+              authority=AUTHORITY,resume_required=bool(records),current_boot=current,
+              historical_cleanup='NOT_ESTABLISHED')).decode(),end='')
+        return 0
     import signal
     def cancelled(signum,frame):raise RuntimeError('CONTROLLER_CANCELLED')
     signal.signal(signal.SIGTERM,cancelled)
@@ -137,7 +152,11 @@ def main(argv=None):
                     ownership=checked(lambda:holder['native'].ownership()),confinement=checked(lambda:holder['native'].confinement()),
                     startup_ack=checked(lambda:holder['native'].startup()),loopback_tls=checked(lambda:holder['native'].tls()),
                     truth_spine=checked(lambda:holder['native'].truth_spine()),cleanup=cleanup)
-        result=execute(store,stages,source=binding['commit'],boot=current,resume=args.resume,issuer=issuer,evidence=roots['evidence'])
+        def app_status(stage,value):
+            if issuer.get('launch_mode')=='local_app':
+                print(canonical(dict(stage=stage,state=value)).decode(),end='',file=sys.stderr,flush=True)
+        result=execute(store,stages,source=binding['commit'],boot=current,resume=args.resume,issuer=issuer,
+                       evidence=roots['evidence'],status=app_status)
         print(canonical(result).decode(),end='')
         return 0 if result['status']=='GREEN' else 1
 

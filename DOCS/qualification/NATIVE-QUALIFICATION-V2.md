@@ -1,10 +1,10 @@
 # IIOS Native Qualification v2
 
-Status: source/offline implementation. Runner registration and selected-Mac execution are separate activation gates. Offline tests do not establish native GREEN.
+Status: source/offline implementation with a prepared local macOS launcher. Building the app and selected-Mac execution are separate activation gates. Offline tests do not establish native GREEN. The prepared private-control repository and self-hosted-runner design are retained as inactive future work.
 
 ## Stable command and durable roots
 
-`./scripts/iios-native-qualify --profile observation` is the single qualification entrypoint, restricted to a manually dispatched enrolled self-hosted selected-Mac job. There is no Terminal ancestry requirement, expiring package, copied launch hash or temporary qualification root.
+`./scripts/iios-native-qualify --profile observation` remains the single qualification engine. The active execution design admits it only through the fixed, signed foreground app at `~/Applications/IIOS Native Qualification.app`. There is no Terminal ancestry requirement, expiring package, copied launch hash or temporary qualification root.
 
 - `~/Library/IIOS/runtime`: verified offline wheelhouse and project venv, keyed by vendor/lock identity. The vendor framework stays at `/Library/Frameworks/Python.framework/Versions/3.14`.
 - `~/Library/IIOS/qualification`: runner and workspace, host enrollment, permanent `native-v2` journal, working data/checkpoints and scratch files.
@@ -18,7 +18,7 @@ The existing 40-package version lock is unchanged. The additional artifact lock 
 
 Version 2 JSON checkpoints are append-only, hash-chained and fsynced under an exclusive lock. `state.json` is an atomic convenience projection; the journal remains authoritative. Failures and source revisions are never overwritten. There is no retry loop.
 
-An existing invocation requires explicit `--resume`, exposed as the workflow Resume input. A committed source fix can resume without regenerating a launcher. All native prerequisites are revalidated on every explicit invocation; old approvals are never reused as fresh approvals across source/boot changes. A verified venv can be reused after full revalidation. `--rebuild-runtime` preserves a partial/drifted environment under a retired name before one deliberate rebuild; nothing is deleted.
+An existing invocation requires explicit `--resume`. The app discloses that state before confirmation and adds the fixed resume flag only after **Run Qualification** is clicked. A committed source fix can resume without regenerating per-attempt packages. All native prerequisites are revalidated on every explicit invocation; old approvals are never reused as fresh approvals across source/boot changes. A verified venv can be reused after full revalidation. `--rebuild-runtime` preserves a partial/drifted environment under a retired name before one deliberate rebuild; nothing is deleted.
 
 Launch intent is journaled before spawning, followed by PID and three independent identity observations before ACK. Each child has a separate 180-second self-alarm. Normal cleanup is cooperative and requires wait/reap plus three absence observations. Signals are restricted to held direct-child handles after current identity checks. Recovered PIDs are never signaled. Same-boot unresolved launch intent without a PID blocks resume. Known same-boot PIDs must be independently absent. Prior-boot PIDs are never inspected because they may have been reused.
 
@@ -39,7 +39,11 @@ Historical `cleanup=NOT_ESTABLISHED` is permanent. Configuration pins the indepe
 
 All four trading authorities remain false: `broker_connection`, `paper_order_permission`, `trade_execution`, `live_execution`. Provider calls/credentials, account APIs, brokers, orders, production ledgers and system installation are outside the command.
 
-## One-time runner activation (not executed by this source batch)
+## Inactive private-control and runner design
+
+The previously prepared `IIOS-Native-Control` candidate, workflow templates, runner archive and tests are preserved unchanged as inactive future work. No repository is created, no token is requested, and no runner is installed, registered or started. The instructions below are archival and are not part of the active local-app procedure.
+
+### Archived one-time runner activation (not executed)
 
 Registration requires GitHub account access and a short-lived token, outside qualification. Never store that token in source or evidence.
 
@@ -55,7 +59,7 @@ Create owner-only `qualification/selected-host.json` (0600) with administrator-v
 
 Read the actual UID/hardware UUID on the selected Mac; do not assume the example UID. The command checks these against the machine, repository, workflow ref, runner name and exact commit. Enrollment is a trusted host-administrator control, not cryptographic GitHub job attestation. It is never synthesized from job variables.
 
-Stage retained wheels once, confirm the vendor runtime already exists, then manually dispatch **IIOS Native Qualification v2**. Review RED and cleanup before choosing Resume after a source fix. No automatic job retry is configured.
+If this inactive design is reviewed and activated in the future, stage retained wheels once, confirm the vendor runtime already exists, then manually dispatch **IIOS Native Qualification v2**. Review RED and cleanup before choosing Resume after a source fix. No automatic job retry is configured.
 
 ## Migration and risks
 
@@ -73,4 +77,4 @@ Only the v2 source worktree was moved. Historical receipts, failed tests, root p
 
 `python -B scripts/iios-native-prepare.py` runs the complete 1,057-test guarded legacy selection plus the original 38 v2 tests and additional root-contract tests. V2 test roots and every exported report live beneath the bound qualification root. The unchanged legacy `retained_root` fixture helper requires `/private/tmp`; only its disposable legacy fixtures use that location. They are not v2 authoritative inputs, checkpoints, runtimes or evidence roots. Six initial errors were all `EXPLICIT_TEST_ROOT_REQUIRED` from this exact predicate; retaining the legacy fixture convention fixes them without changing any legacy guard. Hosted preparation uses GitHub-hosted macOS to retain that existing convention. The guard denies sockets, subprocesses, signals, dynamic native loading, credential paths and writes outside exclusive test directories. Hosted CI initializes a fresh root explicitly; a second run cannot silently adopt it.
 
-Branch pushes run preparation only. Manual dispatch defaults `native=false`. The selected-Mac job requires an explicit native input and protected environment. Preparation artifacts bind the exact commit, source inventory, module closure and hash manifest; they never issue native qualification evidence.
+Branch pushes run preparation only. The source repository workflow has no selected-Mac job. Preparation artifacts bind the exact commit, source inventory, module closure and hash manifest; they never issue native qualification evidence. Native execution requires a separately reviewed local app whose selected-host contract pins that same commit and inventory.

@@ -1,6 +1,6 @@
 # Native Qualification v2 private control integration
 
-Status: prepared for review. The private repository does not exist, the runner is not installed or registered, no token was requested, and native qualification was not executed.
+Status: inactive future work, preserved for review. The private repository does not exist, the runner is not installed or registered, no token was requested, and native qualification was not executed. The reviewed local macOS launcher is the active execution design.
 
 ## Trust boundaries
 

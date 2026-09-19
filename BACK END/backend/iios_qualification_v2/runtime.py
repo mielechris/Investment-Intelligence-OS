@@ -134,6 +134,26 @@ def source_binding(root, expected):
     return dict(identity,repository=expected['repository'],sealed=True)
 
 
+def source_binding_local(root, expected):
+    """Verify the fixed local branch without allowing the launcher to select a path or ref."""
+    root=Path(root).resolve()
+    require(set(expected)=={'repository','commit','branch','inventory_sha256'},'LOCAL_SOURCE_BINDING_SCHEMA')
+    require(expected['repository']=='mielechris/Investment-Intelligence-OS' and
+            expected['branch']=='feature/iios-native-qualification-v2','LOCAL_SOURCE_SCOPE')
+    require(re.fullmatch(r'[0-9a-f]{40}',expected['commit']) is not None and
+            re.fullmatch(r'[0-9a-f]{64}',expected['inventory_sha256']) is not None,
+            'LOCAL_SOURCE_DIGEST')
+    identity=source_identity(root)
+    require(identity['commit']==expected['commit'] and
+            identity['inventory_sha256']==expected['inventory_sha256'],'LOCAL_SOURCE_BINDING_MISMATCH')
+    require(command(['/usr/bin/git','branch','--show-current'],cwd=root).strip()==expected['branch'],
+            'LOCAL_SOURCE_BRANCH')
+    origin=command(['/usr/bin/git','remote','get-url','origin'],cwd=root).strip()
+    require(origin in ('https://github.com/'+expected['repository'],
+                       'https://github.com/'+expected['repository']+'.git'),'LOCAL_SOURCE_ORIGIN')
+    return dict(identity,repository=expected['repository'],branch=expected['branch'],sealed=False)
+
+
 def unchanged(root, source):
     current=source_identity(root,sealed=source.get('sealed',False))
     require(all(current[name]==source[name] for name in ('commit','inventory','inventory_sha256')),
