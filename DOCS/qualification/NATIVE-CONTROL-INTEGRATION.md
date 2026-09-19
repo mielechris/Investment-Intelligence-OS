@@ -35,6 +35,8 @@ Internal owner-only checkpoints may contain process inspection details needed fo
 
 The repository must be private. Protect `main` against force push and deletion and require reviewed pull requests. Configure environment `iios-native-qualification` with a required reviewer, deployment branch `main`, no secrets and self-review prevention where a second administrator exists. Set Actions workflow permissions read-only. If runner groups are available, expose the `iios-native-control` group only to this repository. No public repository, fork or pull-request workflow may target the selected runner.
 
+GitHub currently makes required-reviewer protection unavailable to private repositories on GitHub Free, Pro and Team. The integration therefore stops before runner registration unless the repository plan exposes **Required reviewers** for this private environment. Merely creating the environment does not satisfy the manual-approval contract.
+
 The exact runner labels are `self-hosted`, `macOS`, `ARM64`, `iios-selected-mac`. The enrolled host file is 0600 and conforms to `config/selected-host.schema.json`; it pins the private repository name/ID, owner ID, protected ref, workflow, public source repository/commit/inventory, runner name, hardware UUID and UID. Hardware and runner identity are verified locally but omitted from exported evidence.
 
 Installation and removal procedures live in the generated control repository README. Historical `cleanup=NOT_ESTABLISHED` is permanent. Provider requests remain zero and broker connection, paper-order permission, trade execution and live execution remain false.

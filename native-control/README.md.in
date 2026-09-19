@@ -16,6 +16,7 @@ The selected-Mac job cannot start until the hosted admission job accepts the exa
 2. Copy this candidate exactly, verify `CONTROL-FILES.json`, commit it to `main`, and prohibit tags as workflow inputs.
 3. Protect `main`: require pull requests, at least one approving review, dismissal of stale approvals, conversation resolution, signed commits if available, no force pushes and no deletion. Limit bypass to the owner.
 4. Create environment `iios-native-qualification`. Add the owner as required reviewer, prevent self-review when a second administrator exists, restrict deployment to `main`, and add no secrets.
+   GitHub currently limits required reviewers for private repositories to plans that support that protection (GitHub Enterprise). Stop before runner registration if **Required reviewers** is unavailable; the environment name by itself does not establish manual approval.
 5. Keep Actions permissions read-only. Permit only actions pinned in the workflow. Do not enable workflows from forks.
 6. If organization runner groups are available, create an `iios-native-control` group accessible only to this private repository.
 

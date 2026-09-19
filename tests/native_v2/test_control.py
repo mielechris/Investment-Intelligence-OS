@@ -66,5 +66,7 @@ class ControlTests(unittest.TestCase):
         for value in ('environment: iios-native-qualification','runs-on: [self-hosted, macOS, ARM64, iios-selected-mac]',
                       'test "$NATIVE" = true','persist-credentials: false','@@SOURCE_COMMIT@@','verify_source.py'):
             self.assertIn(value,text)
+        readme=(ROOT/'native-control/README.md.in').read_text()
+        self.assertIn('Stop before runner registration',readme);self.assertIn('Required reviewers',readme)
 
 if __name__=='__main__':unittest.main()
