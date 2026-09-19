@@ -6,9 +6,9 @@ Status: source/offline implementation. Runner registration and selected-Mac exec
 
 `./scripts/iios-native-qualify --profile observation` is the single qualification entrypoint, restricted to a manually dispatched enrolled self-hosted selected-Mac job. There is no Terminal ancestry requirement, expiring package, copied launch hash or temporary qualification root.
 
-- `~/Library/Application Support/IIOS/runtime`: verified offline wheelhouse and project venv, keyed by vendor/lock identity. The vendor framework stays at `/Library/Frameworks/Python.framework/Versions/3.14`.
-- `~/Library/Application Support/IIOS/qualification`: runner and workspace, host enrollment, permanent `native-v2` journal, working data/checkpoints and scratch files.
-- `~/Library/Application Support/IIOS/evidence`: exclusive content-addressed exports. Files are 0400 and sealed export directories 0500; outer/work directories are 0700. Hashes and seals detect mutation; they are not WORM protection against an administrator.
+- `~/Library/IIOS/runtime`: verified offline wheelhouse and project venv, keyed by vendor/lock identity. The vendor framework stays at `/Library/Frameworks/Python.framework/Versions/3.14`.
+- `~/Library/IIOS/qualification`: runner and workspace, host enrollment, permanent `native-v2` journal, working data/checkpoints and scratch files.
+- `~/Library/IIOS/evidence`: exclusive content-addressed exports. Files are 0400 and sealed export directories 0500; outer/work directories are 0700. Hashes and seals detect mutation; they are not WORM protection against an administrator.
 
 The existing 40-package version lock is unchanged. The additional artifact lock pins exact wheels, sizes and hashes. The installer uses only the local wheelhouse, with no index, dependency resolution, source builds, user pip configuration or cache. Wheel RECORDs, installed RECORDs, complete venv membership, module origins and native dependencies are verified. Vendor ensurepip supplies installation tooling; it is separate from the project lock. Provider packages are not imported for qualification. No global pip install, framework relocation or system installation is performed.
 
@@ -65,10 +65,12 @@ Removed risks: temporary-root loss, framework relocation/signing churn, Terminal
 
 References: [GitHub runner setup and public-repository warning](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners), [GitHub environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments), [Python venv](https://docs.python.org/3/library/venv.html).
 
-## Source/offline validation status
+## Root migration and validation
 
-The v2 suite passes 38 tests with socket, process launch and signal effects denied, including pure seeded-role lineage and tamper rejection. All 40 retained wheels pass exact hash/size, RECORD and archive checks. YAML parsing, shell syntax and Python AST checks pass.
+The exact root is derived from the current UID account home plus `Library/IIOS`, never `$HOME` or an arbitrary override. Explicit `--initialize-roots` creates only a nonexistent root and its three children. An existing root is never adopted, chmodded or deleted. Root and children require current UID, 0700, no symlinks and matching enrolled filesystem identities; descendants are constrained to the bound root. Checkpoint BEGIN records, summaries and evidence manifests retain the binding. Sealed evidence directories remain 0500 and files 0400 inside the 0700 evidence root.
 
-The legacy 1,057-test guarded selection run under durable Application Support roots is RED: 902 passed, 7 failed and 148 errored. A focused reproduction confirms `truth_spine_observation_roles.admit_roles` rejects `Application Support` with `DISPOSABLE_PATH`. Other failed cases have not all been individually diagnosed. This legacy admission policy is deliberately unchanged; v2 does not claim legacy-suite compatibility or all-suite GREEN. No tests were moved back to temporary roots to manufacture a pass.
+Only the v2 source worktree was moved. Historical receipts, failed tests, root paths and `cleanup=NOT_ESTABLISHED` remain exactly as recorded at their historical locations. They are not resumed as new-root checkpoints or rewritten. New v2 preparation evidence records the new root binding independently. No legacy path-safety source is changed.
 
-Runner registration, exact-commit GitHub CI, vendor/venv build execution, OS confinement, ownership and native acceptance remain pending. The new manually dispatched workflow is source-only until repository/runner controls are configured and publication is separately authorized.
+`python -B scripts/iios-native-prepare.py` runs the complete 1,057-test guarded legacy selection plus the original 38 v2 tests and additional root-contract tests. V2 test roots and every exported report live beneath the bound qualification root. The unchanged legacy `retained_root` fixture helper requires `/private/tmp`; only its disposable legacy fixtures use that location. They are not v2 authoritative inputs, checkpoints, runtimes or evidence roots. Six initial errors were all `EXPLICIT_TEST_ROOT_REQUIRED` from this exact predicate; retaining the legacy fixture convention fixes them without changing any legacy guard. Hosted preparation uses GitHub-hosted macOS to retain that existing convention. The guard denies sockets, subprocesses, signals, dynamic native loading, credential paths and writes outside exclusive test directories. Hosted CI initializes a fresh root explicitly; a second run cannot silently adopt it.
+
+Branch pushes run preparation only. Manual dispatch defaults `native=false`. The selected-Mac job requires an explicit native input and protected environment. Preparation artifacts bind the exact commit, source inventory, module closure and hash manifest; they never issue native qualification evidence.

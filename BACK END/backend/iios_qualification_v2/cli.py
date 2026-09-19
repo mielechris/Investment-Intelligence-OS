@@ -11,6 +11,7 @@ if __package__ in (None,''):
 from iios_qualification_v2.state import AUTHORITY, STAGES, Store, decode, directory, digest, export, file_hash, historical_exception, require, canonical
 from iios_qualification_v2 import runtime
 from iios_qualification_v2 import native
+from iios_qualification_v2 import roots as durable
 
 
 def execute(store, stages, *, source, boot, resume, issuer, evidence):
@@ -39,7 +40,7 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence):
     summary=dict(schema='iios-native-qualification-v2',profile='observation',status=status,
                  source=source,boot=boot,issuer=issuer,completed=completed,failure=failure,cleanup=cleanup,
                  authority=AUTHORITY,provider_requests=0,scope='SYNTHETIC_THREE_ROLE_QUALIFICATION_ONLY',
-                 production_qualified=False,historical_cleanup='NOT_ESTABLISHED')
+                 root_binding=store.root_binding,production_qualified=False,historical_cleanup='NOT_ESTABLISHED')
     store.append('EXPORT_PENDING',summary)
     try:
         destination=export(store,evidence,summary)
@@ -54,6 +55,7 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence):
 def main(argv=None):
     parser=argparse.ArgumentParser(description='Durable IIOS selected-Mac qualification; no automatic retries.')
     parser.add_argument('--profile',choices=['observation'],required=True)
+    parser.add_argument('--initialize-roots',action='store_true',help='Explicitly create the exact owner-only durable root; reject existing directories')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--check',action='store_true',help='Static source/lock preparation only; cannot issue native evidence')
     parser.add_argument('--stage-artifacts',type=Path,help='Copy exact already-acquired wheels from a durable qualification directory; no downloads')
@@ -67,9 +69,11 @@ def main(argv=None):
     if args.check:
         print(canonical(dict(status='PREPARATION_ONLY',lock_sha256=file_hash(lock),wheels=len(pins['wheels']),native_executed=False)).decode(),end='')
         return 0
-    import pwd
-    base=Path(pwd.getpwuid(os.getuid()).pw_dir)/'Library/Application Support/IIOS'
-    roots={name:directory(base/name) for name in ('runtime','qualification','evidence')}
+    bound=durable.binding(initialize=args.initialize_roots)
+    roots={name:durable.contained(Path(bound['root'])/name,bound) for name in durable.CHILDREN}
+    if args.initialize_roots:
+        print(canonical(dict(status='ROOTS_INITIALIZED',root_binding=bound,native_executed=False)).decode(),end='')
+        return 0
     if args.stage_artifacts:
         origin=args.stage_artifacts.resolve(strict=True)
         require(origin.is_relative_to(roots['qualification']),'ARTIFACT_SOURCE_DURABLE_ONLY')
@@ -89,7 +93,7 @@ def main(argv=None):
     def cancelled(signum,frame):raise RuntimeError('CONTROLLER_CANCELLED')
     signal.signal(signal.SIGTERM,cancelled)
     current=native.boot();binding=runtime.source_identity(source)
-    store=Store(roots['qualification']/'native-v2')
+    store=Store(durable.contained(roots['qualification']/'native-v2',bound),root_binding=bound)
     with store.locked():
         records=store.load()
         require(not records or args.resume,'EXPLICIT_RESUME_REQUIRED')
@@ -97,10 +101,11 @@ def main(argv=None):
         reconciled=native.reconcile(records,current,inspect_macos)
         history=historical_exception(config['historical'],current)
         revision=sum(r['event']=='BEGIN' for r in records)
-        work=directory(store.root/'work'/f'revision-{revision:06d}')
+        work=durable.contained(store.root/'work'/f'revision-{revision:06d}',bound)
         holder={};deadline=time.monotonic()+config['maximum_seconds']
         def checked(fn):
             def run():
+                require(durable.binding()==bound,'DURABLE_BINDING_CHANGED')
                 require(time.monotonic()<deadline,'TOTAL_DEADLINE')
                 runtime.unchanged(source,binding);require(native.boot()==current,'BOOT_CHANGED')
                 result=fn()
@@ -123,10 +128,11 @@ def main(argv=None):
             value=holder['native'].runtime
             runtime.verify_environment_tree(Path(value['path']),value['manifest']['tree'])
             require(runtime.verify_vendor(config)==value['manifest']['vendor'],'VENDOR_CHANGED')
+            require(durable.binding()==bound,'DURABLE_BINDING_CHANGED')
             runtime.unchanged(source,binding)
             require(native.boot()==current,'BOOT_CHANGED')
             return result
-        stages=dict(source_lock=checked(lambda:dict(source=binding,lock=file_hash(lock),artifacts=file_hash(artifacts))),
+        stages=dict(source_lock=checked(lambda:dict(source=binding,lock=file_hash(lock),artifacts=file_hash(artifacts),root_binding=bound)),
                     runtime=checked(selected_runtime),boot=checked(lambda:dict(current=current,historical_exception=history,prior_children=reconciled)),
                     ownership=checked(lambda:holder['native'].ownership()),confinement=checked(lambda:holder['native'].confinement()),
                     startup_ack=checked(lambda:holder['native'].startup()),loopback_tls=checked(lambda:holder['native'].tls()),

@@ -79,7 +79,11 @@ def publish(path, value):
 
 
 class Store:
-    def __init__(self, root):
+    def __init__(self, root, *, root_binding=None):
+        self.root_binding=root_binding
+        if root_binding is not None:
+            from .roots import contained
+            root=contained(root,root_binding)
         self.root = directory(root)
         self.events = directory(self.root/'checkpoints')
 
@@ -125,8 +129,9 @@ class Store:
         records = self.load()
         if records:
             require(resume, 'EXPLICIT_RESUME_REQUIRED')
+            require(all(row['data'].get('root_binding')==self.root_binding for row in records if row['event']=='BEGIN'),'CHECKPOINT_ROOT_BINDING')
         # Every explicit invocation revalidates native prerequisites. Old receipts stay immutable.
-        data = dict(source=source, boot=boot, revision=sum(r['event']=='BEGIN' for r in records),
+        data = dict(source=source, boot=boot, root_binding=self.root_binding, revision=sum(r['event']=='BEGIN' for r in records),
                     invalidates=list(STAGES), reason='EXPLICIT_RESUME' if records else 'INITIAL')
         return self.append('BEGIN', data)['data']
 
@@ -156,13 +161,17 @@ def verify_export(root):
 
 
 def export(store, evidence, summary):
+    if store.root_binding is not None:
+        from .roots import contained
+        require(Path(evidence)==Path(store.root_binding['root'])/'evidence','EXPORT_ROOT_BINDING')
+        contained(evidence,store.root_binding)
     evidence = directory(evidence)
     records = store.load()
     destination = evidence/records[-1]['hash']
     destination.mkdir(mode=0o700)  # Never replace an earlier export.
     files = {'summary.json': publish(destination/'summary.json', summary),
              'journal.json': publish(destination/'journal.json', records)}
-    publish(destination/'manifest.json', dict(schema=2, journal_head=records[-1]['hash'], files=files))
+    publish(destination/'manifest.json', dict(schema=2, journal_head=records[-1]['hash'], files=files, root_binding=store.root_binding))
     destination.chmod(0o500); fsync_dir(evidence)
     verify_export(destination)
     return str(destination)
