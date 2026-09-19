@@ -64,3 +64,9 @@ class RuntimeTests(unittest.TestCase):
         changed=dict(expected,commit='d'*40)
         with patch('iios_qualification_v2.runtime.source_identity',return_value=identity):
             with self.assertRaisesRegex(ValueError,'MISMATCH'):source_binding(self.root,changed)
+    def test_source_identity_accepts_owner_only_executable_mode(self):
+        script=self.root/'script';script.write_text('#!/bin/sh\n');script.chmod(0o700)
+        staged='100755 '+'a'*40+' 0\tscript\0'
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
+            value=source_identity(self.root)
+        self.assertEqual(value['inventory'][0]['mode'],0o755)

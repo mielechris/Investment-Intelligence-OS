@@ -91,7 +91,12 @@ def source_identity(root, *, sealed=False):
         require(p.is_file() and not p.is_symlink(), 'SOURCE_FILE')
         st=p.stat()
         git_mode=0o755 if mode=='100755' else 0o644
-        require(stat.S_IMODE(st.st_mode)==(git_mode&0o500 if sealed else git_mode),'SOURCE_WORKTREE_MODE')
+        actual_mode=stat.S_IMODE(st.st_mode)
+        if sealed:
+            require(actual_mode==git_mode&0o500,'SOURCE_WORKTREE_MODE')
+        else:
+            require(st.st_uid==os.getuid() and actual_mode&0o600==0o600 and not actual_mode&0o022 and
+                    bool(actual_mode&0o100)==(mode=='100755'),'SOURCE_WORKTREE_MODE')
         files.append({'path':name,'sha256':file_hash(p),'bytes':st.st_size,'mode':git_mode})
     actual=[]
     for path in root.rglob('*'):
