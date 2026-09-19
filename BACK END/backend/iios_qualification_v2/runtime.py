@@ -26,6 +26,92 @@ def command(argv, *, timeout=30, cwd=None):
     return result.stdout.decode('utf-8')
 
 
+VENDOR_REQUIREMENT = 'anchor apple generic and certificate leaf[subject.OU] = "BMM5U3QVKW"'
+VENDOR_TEAM = 'BMM5U3QVKW'
+_CODESIGN_OUTPUT_LIMIT = 65536
+
+
+def _codesign_bytes(value):
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode('utf-8', 'surrogatepass')
+    return b''
+
+
+def _codesign_stderr(raw):
+    if not raw:
+        return 'EMPTY', 'NONE'
+    if len(raw) > _CODESIGN_OUTPUT_LIMIT:
+        return 'TOO_LARGE', hashlib.sha256(raw[:_CODESIGN_OUTPUT_LIMIT]).hexdigest()
+    try:
+        raw.decode('utf-8')
+        category = 'TEXT'
+    except UnicodeDecodeError:
+        category = 'BINARY'
+    return category, hashlib.sha256(raw).hexdigest()
+
+
+def _vendor_codesign_failure(*, target, resolved, outcome, exit_category, stderr=b'', signer='NOT_EVALUATED', action='verify'):
+    """Raise a compact, sanitized diagnostic that survives the RED journal export."""
+    stderr_category, stderr_digest = _codesign_stderr(_codesign_bytes(stderr))
+    fields = dict(stage='runtime', target=target, resolved=resolved, action=action,
+                  outcome=outcome, exit=exit_category, stderr=stderr_category,
+                  stderr_sha256=stderr_digest, signer=signer)
+    raise ValueError('VENDOR_CODESIGN:'+';'.join(f'{key}={value}' for key,value in fields.items()))
+
+
+def codesign_vendor_target(path, *, target, resolved):
+    """Verify one fixed vendor image and retain only bounded failure categories."""
+    verify = ['/usr/bin/codesign','--verify','--strict','--all-architectures',
+              '-R='+VENDOR_REQUIREMENT,str(path)]
+    try:
+        result = subprocess.run(verify, env=ENV, stdin=subprocess.DEVNULL, capture_output=True,
+                                timeout=10, close_fds=True)
+    except subprocess.TimeoutExpired as error:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='TIMEOUT',exit_category='NOT_AVAILABLE',
+                                 stderr=getattr(error,'stderr',b''),action='verify')
+    except OSError as error:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='TOOL_LAUNCH_FAILURE',exit_category='NOT_AVAILABLE',
+                                 stderr=str(getattr(error,'errno',None)).encode(),action='verify')
+    stdout, stderr = _codesign_bytes(result.stdout), _codesign_bytes(result.stderr)
+    if len(stdout)+len(stderr) > _CODESIGN_OUTPUT_LIMIT:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='MALFORMED_OUTPUT',exit_category='EXIT_'+('ZERO' if result.returncode==0 else 'NONZERO'),
+                                 stderr=stderr,action='verify')
+    if result.returncode != 0:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='NONZERO_EXIT',exit_category='EXIT_NONZERO',
+                                 stderr=stderr,action='verify')
+    describe = ['/usr/bin/codesign','-d','--verbose=4',str(path)]
+    try:
+        result = subprocess.run(describe, env=ENV, stdin=subprocess.DEVNULL, capture_output=True,
+                                timeout=10, close_fds=True)
+    except subprocess.TimeoutExpired as error:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='TIMEOUT',exit_category='NOT_AVAILABLE',
+                                 stderr=getattr(error,'stderr',b''),action='describe')
+    except OSError as error:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='TOOL_LAUNCH_FAILURE',exit_category='NOT_AVAILABLE',
+                                 stderr=str(getattr(error,'errno',None)).encode(),action='describe')
+    stdout, stderr = _codesign_bytes(result.stdout), _codesign_bytes(result.stderr)
+    if len(stdout)+len(stderr) > _CODESIGN_OUTPUT_LIMIT or result.returncode != 0:
+        _vendor_codesign_failure(target=target,resolved=resolved,
+                                 outcome='MALFORMED_OUTPUT' if result.returncode==0 else 'NONZERO_EXIT',
+                                 exit_category='EXIT_'+('ZERO' if result.returncode==0 else 'NONZERO'),
+                                 stderr=stderr,action='describe')
+    try:
+        text = (stdout+stderr).decode('utf-8')
+    except UnicodeDecodeError:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='MALFORMED_OUTPUT',exit_category='EXIT_ZERO',
+                                 stderr=stderr,action='describe')
+    teams = re.findall(r'^TeamIdentifier=([^\r\n]+)$', text, re.M)
+    if len(teams) != 1:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='MALFORMED_OUTPUT',exit_category='EXIT_ZERO',
+                                 stderr=stderr,signer='MALFORMED',action='describe')
+    if teams[0] != VENDOR_TEAM:
+        _vendor_codesign_failure(target=target,resolved=resolved,outcome='WRONG_SIGNER',exit_category='EXIT_ZERO',
+                                 stderr=stderr,signer='MISMATCH',action='describe')
+    return dict(target=target,resolved=resolved,signer='MATCHED')
+
+
 def normalized(name):
     return re.sub('[-_.]+', '-', name).lower()
 
@@ -163,16 +249,19 @@ def unchanged(root, source):
 def verify_vendor(config):
     python = Path(config['vendor_python'])
     require(str(python).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'), 'VENDOR_LOCATION')
-    resolved = python.resolve(strict=True)
+    try:
+        resolved = python.resolve(strict=True)
+    except FileNotFoundError:
+        _vendor_codesign_failure(target='launcher',resolved='MISSING',outcome='MISSING_TARGET',
+                                 exit_category='NOT_RUN',signer='NOT_EVALUATED')
     require(str(resolved).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'), 'VENDOR_ALIAS')
     image=Path('/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python')
+    library = Path('/Library/Frameworks/Python.framework/Versions/3.14/Python')
     for p in (resolved,image,*resolved.parents,*image.parents):
         st=p.stat(); require(st.st_uid==0 and not st.st_mode&0o002 and (not st.st_mode&0o020 or st.st_gid in (0,80)), 'VENDOR_OWNER_MODE')
-    requirement = 'anchor apple generic and certificate leaf[subject.OU] = "BMM5U3QVKW"'
-    command(['/usr/bin/codesign','--verify','--strict','--all-architectures','-R='+requirement,resolved])
-    command(['/usr/bin/codesign','--verify','--strict','--all-architectures','-R='+requirement,image])
-    library = Path('/Library/Frameworks/Python.framework/Versions/3.14/Python')
-    command(['/usr/bin/codesign','--verify','--strict','--all-architectures','-R='+requirement,library])
+    codesign_vendor_target(resolved,target='launcher',resolved='FRAMEWORK_3_14')
+    codesign_vendor_target(image,target='app_image',resolved='FRAMEWORK_3_14')
+    codesign_vendor_target(library,target='framework_library',resolved='FRAMEWORK_3_14')
     version = command([python,'-I','-B','-S','-c','import sys;print(".".join(map(str,sys.version_info[:3])))']).strip()
     require(version==config['python_version'], 'VENDOR_VERSION')
     return dict(launcher=str(python), launcher_sha256=file_hash(resolved), image=str(image), image_sha256=file_hash(image),

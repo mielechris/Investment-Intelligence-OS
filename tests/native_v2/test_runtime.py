@@ -4,10 +4,12 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'BACK END/backend'))
 from iios_qualification_v2.runtime import *
@@ -70,3 +72,50 @@ class RuntimeTests(unittest.TestCase):
         with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
             value=source_identity(self.root)
         self.assertEqual(value['inventory'][0]['mode'],0o755)
+
+    def codesign_success(self):
+        return [SimpleNamespace(returncode=0,stdout=b'',stderr=b''),
+                SimpleNamespace(returncode=0,stdout=b'',stderr=b'TeamIdentifier=BMM5U3QVKW\n')]
+
+    def test_vendor_signature_targets_are_fixed_and_psf_bound(self):
+        for target in ('launcher','app_image','framework_library'):
+            with self.subTest(target=target),patch('iios_qualification_v2.runtime.subprocess.run',side_effect=self.codesign_success()) as run:
+                receipt=codesign_vendor_target('/fixed/vendor/image',target=target,resolved='FRAMEWORK_3_14')
+            self.assertEqual(receipt,{'target':target,'resolved':'FRAMEWORK_3_14','signer':'MATCHED'})
+            self.assertIn('-R='+VENDOR_REQUIREMENT,run.call_args_list[0].args[0])
+            self.assertEqual(run.call_args_list[1].args[0][:3],['/usr/bin/codesign','-d','--verbose=4'])
+
+    def test_vendor_codesign_nonzero_exit_is_sanitized(self):
+        result=SimpleNamespace(returncode=1,stdout=b'',stderr=b'raw diagnostic')
+        with patch('iios_qualification_v2.runtime.subprocess.run',return_value=result):
+            with self.assertRaisesRegex(ValueError,'target=launcher;resolved=FRAMEWORK_3_14;action=verify;outcome=NONZERO_EXIT;exit=EXIT_NONZERO;stderr=TEXT;stderr_sha256=[0-9a-f]{64};signer=NOT_EVALUATED'):
+                codesign_vendor_target('/fixed/vendor/image',target='launcher',resolved='FRAMEWORK_3_14')
+
+    def test_vendor_codesign_timeout_is_sanitized(self):
+        timeout=subprocess.TimeoutExpired(['/usr/bin/codesign'],10,stderr=b'late')
+        with patch('iios_qualification_v2.runtime.subprocess.run',side_effect=timeout):
+            with self.assertRaisesRegex(ValueError,'outcome=TIMEOUT;exit=NOT_AVAILABLE;stderr=TEXT;stderr_sha256=[0-9a-f]{64}'):
+                codesign_vendor_target('/fixed/vendor/image',target='launcher',resolved='FRAMEWORK_3_14')
+
+    def test_vendor_codesign_malformed_output_is_sanitized(self):
+        results=[SimpleNamespace(returncode=0,stdout=b'',stderr=b''),SimpleNamespace(returncode=0,stdout=b'',stderr=b'no team')]
+        with patch('iios_qualification_v2.runtime.subprocess.run',side_effect=results):
+            with self.assertRaisesRegex(ValueError,'action=describe;outcome=MALFORMED_OUTPUT;exit=EXIT_ZERO;stderr=TEXT;stderr_sha256=[0-9a-f]{64};signer=MALFORMED'):
+                codesign_vendor_target('/fixed/vendor/image',target='app_image',resolved='FRAMEWORK_3_14')
+
+    def test_vendor_codesign_wrong_signer_is_sanitized(self):
+        results=[SimpleNamespace(returncode=0,stdout=b'',stderr=b''),SimpleNamespace(returncode=0,stdout=b'',stderr=b'TeamIdentifier=WRONG\n')]
+        with patch('iios_qualification_v2.runtime.subprocess.run',side_effect=results):
+            with self.assertRaisesRegex(ValueError,'outcome=WRONG_SIGNER;exit=EXIT_ZERO;.*signer=MISMATCH'):
+                codesign_vendor_target('/fixed/vendor/image',target='framework_library',resolved='FRAMEWORK_3_14')
+
+    def test_vendor_codesign_tool_launch_failure_is_sanitized(self):
+        with patch('iios_qualification_v2.runtime.subprocess.run',side_effect=OSError(2,'missing')):
+            with self.assertRaisesRegex(ValueError,'outcome=TOOL_LAUNCH_FAILURE;exit=NOT_AVAILABLE;stderr=TEXT;stderr_sha256=[0-9a-f]{64}'):
+                codesign_vendor_target('/fixed/vendor/image',target='launcher',resolved='FRAMEWORK_3_14')
+
+    def test_vendor_missing_target_is_sanitized(self):
+        config={'vendor_python':'/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14','python_version':'3.14.7'}
+        with patch.object(Path,'resolve',side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(ValueError,'target=launcher;resolved=MISSING;action=verify;outcome=MISSING_TARGET;exit=NOT_RUN;stderr=EMPTY;stderr_sha256=NONE;signer=NOT_EVALUATED'):
+                verify_vendor(config)
