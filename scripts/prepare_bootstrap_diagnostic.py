@@ -78,14 +78,29 @@ finally:
 stand=Path('/usr/lib/libffi-trampolines.dylib');assert str(stand) not in catalog
 catalog[str(stand)]={'uuid':image_uuid(stand.read_bytes()),'kind':'APPLE_LIBFFI_TRAMPOLINE','backing':{'path':str(stand),'sha256':sha(stand),'size':stand.stat().st_size}}
 catalog_file=put('INDEPENDENT-CANDIDATE-CATALOG.json',{'schema':'IIOS_DISCOVERY_CANDIDATES_V1','catalog':catalog,'cache_set_sha256':sha(cache_set),'purpose':'PROSPECTIVE_DISCOVERY_ONLY_NOT_ACCEPTED_MEMBERSHIP','measured_count':None,'historical_reference_recovered':False})
+acceptance=None;reference_path=None;ca_path=None
+if len(sys.argv)==7:
+ reference_path=Path(sys.argv[6]).resolve();reference_raw=reference_path.read_text();reference=json.loads(reference_raw)
+ assert reference['schema']=='IIOS_REBUILT_BOOTSTRAP_IMAGE_REFERENCE_V1' and reference['runtime_root']==str(B) and reference['runtime_seal_parent']==sha(P/'evidence/FINAL-SEALED-BOOTSTRAP-V2.json')
+ assert reference['boot_session_uuid']==boot and reference['os_build']==osref['source_build'] and reference['cache_uuid']==osref['cache_uuid'] and reference['catalog_parent']
+ import zipfile
+ wheel=P/'downloads/certifi-2026.7.22-py3-none-any.whl'
+ assert wheel.stat().st_size==136983 and sha(wheel)=='62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775'
+ with zipfile.ZipFile(wheel) as archive:ca=archive.read('certifi/cacert.pem')
+ assert hashlib.sha256(ca).hexdigest()=='9cc2a774b5198dcff14d9be1e66091f538975d867ce029a96bce15a55dfd730f' and ca.count(b'-----BEGIN CERTIFICATE-----')==121
+ ca_path=put('PINNED-CA.pem',ca)
+ acceptance={'reference_raw':reference_raw,'reference_parent':sha(reference_path),'ca_path':str(ca_path),'ca_sha256':sha(ca_path),'ca_count':121}
 expires=int(time.time())+24*3600
 source_py=SOURCE/'BACK END/backend/iios_bootstrap_diagnostic.py';source_c=SOURCE/'scripts/iios_bootstrap_diagnostic.c'
 source_text=source_py.read_text();ast.parse(source_text)
 descriptor={'schema':'IIOS_BOOTSTRAP_DIAGNOSTIC_ATTEMPT_V1','scope':'DISCOVERY_ONLY','source_commit':HEAD,'ci_run':CI,'boot_session_uuid':boot,'os_build':osref['source_build'],'bootstrap_root':str(B),'bootstrap_manifest_sha256':sha(P/'evidence/FINAL-SEALED-BOOTSTRAP-V2.json'),'catalog_sha256':sha(catalog_file),'python_source_sha256':sha(source_py),'supervisor_source_sha256':sha(source_c),'imports':list(__import__('iios_bootstrap_diagnostic').IMPORTS),'workload_cwd':str(R),'workload_environment':{'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','TZ':'UTC','OPENSSL_CONF':'/dev/null','__CF_USER_TEXT_ENCODING':'0x1F5:0x0:0x0'},'limits':{'total_seconds':900,'bootstrap_seconds':120,'child_self_alarm_seconds':122,'scan_seconds':90,'images':4096,'stdout_bytes':8*1024*1024,'stderr_bytes':8*1024*1024,'attempts':1},'expires_at':expires,'historical_cleanup':'NOT_ESTABLISHED','bootstrap_accepted':False,'production_qualified':False,'provider_access':False,'credential_access':False,'broker_connected':False,'paper_order_permission':False,'trade_execution_permission':False,'live_execution':False,'new_reference_requires':'OFFLINE_IDENTITY_REVIEW_AND_EXACT_COMMIT_GREEN_CI'}
+if acceptance is not None:
+ descriptor.update(schema='IIOS_BOOTSTRAP_REFERENCE_ACCEPTANCE_ATTEMPT_V1',scope='FINAL_LOCATION_BOOTSTRAP_REFERENCE_ACCEPTANCE_ONLY',reference_parent=acceptance['reference_parent'],reference_path=str(reference_path),ca_sha256=acceptance['ca_sha256'],ca_count=121)
 desc=put('DESCRIPTOR.json',descriptor)
 child=R/'diagnostic-child.py'
-read_files=[str(B/x['path']) for x in seal['files']]+[str(child)]
+read_files=[str(B/x['path']) for x in seal['files']]+[str(child)]+([str(ca_path)] if ca_path else [])
 binding={'descriptor_parent':sha(desc),'source_commit':HEAD,'boot_session_uuid':boot,'runtime_root':str(B),'interpreter':str(B/'bin/python3.14'),'cache_uuid':osref['cache_uuid'],'cache_files':osref['signed_files'],'catalog':catalog,'read_files':read_files,'discovery':regenerate(seal)}
+if acceptance is not None:binding['acceptance']=acceptance
 prelude='''import sys, os
 BINDING = BINDING_LITERAL
 _READS=frozenset(BINDING['read_files'])
@@ -125,6 +140,7 @@ profile='''(version 1)
 '''.replace('BOOTSTRAP_PATH',json.dumps(str(B))).replace('CHILD_PATH',json.dumps(str(child))).replace('INTERPRETER',json.dumps(str(B/'bin/python3.14')))
 for path in (str(Path.home()/'.ssh'),str(Path.home()/'.aws'),str(Path.home()/'Library/Keychains'),'/Library/Keychains','/System/Library/Keychains'):
  profile+='(deny file-read* (subpath '+json.dumps(path)+'))\n'
+if ca_path:profile+='(allow file-read-data (literal '+json.dumps(str(ca_path))+'))\n'
 profile_file=put('network-deny.sb',profile.encode())
 attrs=[];pins=[]
 def pin(path,meta=None):
@@ -136,6 +152,7 @@ def pin(path,meta=None):
  pins.append((str(path),sha(path) if kind==1 else '',os.readlink(path) if kind==3 else '',s.st_size if kind==1 else 0,stat.S_IMODE(s.st_mode),s.st_uid,kind,first,len(meta) if meta is not None else 0))
 for rel,meta in sorted(seal['metadata'].items()):pin(B if rel=='.' else B/rel,meta)
 for file in (desc,child,profile_file,catalog_file,cache_set,P/'evidence/FINAL-SEALED-BOOTSTRAP-V2.json',source_py,source_c):pin(file)
+if reference_path:pin(reference_path);pin(ca_path)
 for file in ('/usr/bin/codesign','/usr/bin/sandbox-exec','/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal',str(stand)):pin(file)
 for row in osref['signed_files']:
  p=Path(row['path']);s=p.lstat();assert s.st_size==row['size'] and s.st_uid==0
@@ -149,5 +166,6 @@ header+='static const Pin PINS[]={\n'+''.join('{'+','.join([q(row[0]),q(row[1]),
 header+='static const char *SIGN_PATHS[]={'+','.join(q(p) for p in sign_paths)+'};\nstatic const int SIGN_APPLE[]={'+','.join(map(str,apple))+'};\n#define SIGN_COUNT '+str(len(sign_paths))+'\n'
 constants={'QUALIFICATION':str(R.parent),'BOOT_UUID':boot,'OS_BUILD':osref['source_build'],'TERMINAL_EXE':'/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal','PACKAGE':str(R),'OUTPUT':str(R/'attempt-01'),'JOURNAL':str(R/'attempt-01/JOURNAL.txt'),'BOOTSTRAP':str(B),'PROFILE':str(profile_file),'INTERPRETER':str(B/'bin/python3.14'),'CHILD_SCRIPT':str(child),'CHILD_OUTPUT':str(R/'attempt-01/child.json'),'CHILD_ERROR':str(R/'attempt-01/child.stderr')}
 header+=''.join('#define '+key+' '+q(value)+'\n' for key,value in constants.items())+'#define EXPIRES_AT '+str(expires)+'\n'
+header+='#define ACCEPTANCE_MODE '+str(int(acceptance is not None))+'\n'
 put('diagnostic_binding.h',header.encode());put('SUPERVISOR-PINS.json',{'pins':pins,'attributes':attrs,'signature_paths':sign_paths,'apple_anchor_required':apple})
 print(json.dumps({'descriptor_sha256':sha(desc),'catalog_candidates':len(catalog),'count_is_not_acceptance':True,'pins':len(pins),'signature_checks_per_phase':len(sign_paths),'expires_at':expires,'native_execution':False}))

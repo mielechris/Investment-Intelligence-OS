@@ -22,6 +22,9 @@
 typedef struct {const char *name,*sha;size_t size;} Attr;
 typedef struct {const char *path,*sha,*target;off_t size;mode_t mode;uid_t uid;int type,first,count;} Pin;
 #include "diagnostic_binding.h"
+#ifndef ACCEPTANCE_MODE
+#define ACCEPTANCE_MODE 0
+#endif
 static double deadline;
 static int journal=-1;
 static double now(void){struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))_exit(91);return t.tv_sec+t.tv_nsec/1e9;}
@@ -118,5 +121,5 @@ int main(int argc,char **argv){(void)argv;NEED(argc==1,"NO_ARGUMENTS");umask(077
  char *child[]={"/usr/bin/sandbox-exec","-f",PROFILE,INTERPRETER,"-I","-B","-S",CHILD_SCRIPT,NULL};
  note("WORKLOAD_BEGIN");int result=bounded(child,CHILD_OUTPUT,CHILD_ERROR,120,8*1024*1024);note(result?"WORKLOAD_REAPED_EXIT_ZERO":"WORKLOAD_REAPED_FAILED");identity();
  for(size_t i=0;i<PIN_COUNT;i++)verify_pin(&PINS[i]);tree(BOOTSTRAP);signatures();
- NEED(result,"DIAGNOSTIC_CHILD_FAILED");note("CAPTURE_COMPLETE_PENDING_OFFLINE_REVIEW_NO_ACCEPTANCE");fchmod(journal,0400);close(journal);puts("Diagnostic captured. No acceptance granted. Return to Codex for independent review.");return 0;
+ NEED(result,"DIAGNOSTIC_CHILD_FAILED");note(ACCEPTANCE_MODE?"REFERENCE_CHECKS_COMPLETE_PENDING_OFFLINE_ACCEPTANCE":"CAPTURE_COMPLETE_PENDING_OFFLINE_REVIEW_NO_ACCEPTANCE");fchmod(journal,0400);close(journal);puts(ACCEPTANCE_MODE?"Bootstrap reference checks captured. No acceptance granted. Return to Codex for independent review.":"Diagnostic captured. No acceptance granted. Return to Codex for independent review.");return 0;
 }

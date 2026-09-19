@@ -80,6 +80,23 @@ def review_scans(first, second, catalog, cache_uuids, expected_cache, expected=N
     return len(first)
 
 
+def reference_rows(rows):
+    return [dict({k:v for k,v in row.items() if k not in ('address','slide','segments')},
+        segments=[{k:v for k,v in segment.items() if k!='address'} for segment in row['segments']]) for row in rows]
+
+
+def verify_reference(reference,rows,origins,*,runtime_root,boot,imports,cache_uuid):
+    need(reference.get('schema')=='IIOS_REBUILT_BOOTSTRAP_IMAGE_REFERENCE_V1' and reference.get('scope')=='REBUILT_BOOTSTRAP_IDENTITY_ONLY','REFERENCE_SCOPE')
+    need(reference.get('historical_cleanup')=='NOT_ESTABLISHED' and reference.get('historical_reference_recovered') is False and reference.get('bootstrap_accepted') is False,'REFERENCE_CLAIM')
+    need(reference.get('mapped_memory_integrity')=='UNVERIFIED' and reference.get('boot_attestation')=='UNRESOLVED','REFERENCE_CLAIM')
+    need(reference.get('runtime_root')==runtime_root and reference.get('boot_session_uuid')==boot,'REFERENCE_HOST_RUNTIME')
+    need(reference.get('imports')==imports and reference.get('cache_uuid')==cache_uuid,'REFERENCE_IMPORT_CACHE')
+    need(type(reference.get('expected_count')) is int and 0<reference['expected_count']<=MAX_IMAGES and len(rows)==reference['expected_count'],'REFERENCE_COUNT')
+    need(reference_rows(rows)==reference.get('ordered_rows'),'REFERENCE_EXACT_ORDERED_IDENTITIES')
+    need([row for row in origins if row['module']!='__main__']==reference.get('module_origins'),'REFERENCE_MODULE_ORIGINS')
+    return True
+
+
 def run(binding):
     # The generated entrypoint installs the read/effect audit before this module body.
     import sys
@@ -88,6 +105,19 @@ def run(binding):
     import ctypes, time, os
     need(sys.executable==binding['interpreter'] and sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode,'INTERPRETER_SCOPE')
     need(sys.version_info[:3]==(3,14,7),'INTERPRETER_VERSION')
+    acceptance=binding.get('acceptance');tls=None;reference=None
+    if acceptance is not None:
+        reference_raw=acceptance['reference_raw'].encode()
+        need(hashlib.sha256(reference_raw).hexdigest()==acceptance['reference_parent'],'REFERENCE_HASH')
+        reference=json.loads(reference_raw)
+        import ssl
+        ca=open(acceptance['ca_path'],'rb').read()
+        need(hashlib.sha256(ca).hexdigest()==acceptance['ca_sha256'],'CA_HASH')
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cadata=ca.decode('ascii'))
+        stats=context.cert_store_stats()
+        need(stats['x509_ca']==stats['x509']==acceptance['ca_count'] and context.check_hostname and context.verify_mode==ssl.CERT_REQUIRED,'TLS_CONTEXT')
+        tls=dict(ca_sha256=acceptance['ca_sha256'],ca_count=stats['x509_ca'],tls_context_only=True,provider_requests=0)
     started=time.monotonic();deadline=started+90
     catalog=binding['catalog'];lib=ctypes.CDLL(None)
     count=lib._dyld_image_count;count.restype=ctypes.c_uint32;count.argtypes=[]
@@ -134,6 +164,10 @@ def run(binding):
             else:
                 origins.append(dict(module=module,path=origin,sha256=hashlib.sha256(open(origin,'rb').read()).hexdigest()))
     need(len(origins)<=512 and time.monotonic()<deadline,'ORIGIN_BOUND')
+    if reference is not None:
+        try:verify_reference(reference,first,origins,runtime_root=binding['runtime_root'],boot=binding['boot_session_uuid'],imports=list(IMPORTS),cache_uuid=binding['cache_uuid'])
+        except ValueError as error:errors.append(str(error))
+
     result=dict(schema='IIOS_BOOTSTRAP_IMAGE_DISCOVERY_V1',status='REJECTED_DISCOVERY' if errors else 'TWO_MATCHING_SCANS_PENDING_INDEPENDENT_REVIEW',
         validation_errors=sorted(set(errors)),complete_matching_scans=first==second,
         descriptor_parent=binding['descriptor_parent'],boot_session_uuid=binding['boot_session_uuid'],
@@ -141,6 +175,8 @@ def run(binding):
         image_count=measured,image_bound=MAX_IMAGES,scans=[first,second],cache_uuids=[cache_first,cache_second],
         module_origins=origins,cache_backing_files=binding['cache_files'],seconds=time.monotonic()-started,historical_cleanup='NOT_ESTABLISHED',
         mapped_memory_integrity='UNVERIFIED',boot_attestation='UNRESOLVED',**FALSE)
+    if acceptance is not None:
+        result.update(schema='IIOS_BOOTSTRAP_REFERENCE_ACCEPTANCE_V1',status='REJECTED_ACCEPTANCE' if errors else 'REFERENCE_CHECKS_COMPLETE_PENDING_STATIC_REVIEW',reference_parent=acceptance['reference_parent'],tls_context=tls)
     raw=json.dumps(result,sort_keys=True,separators=(',',':')).encode()+b'\n'
     need(len(raw)<=MAX_REPORT,'REPORT_BOUND')
     sys.stdout.buffer.write(raw);sys.stdout.buffer.flush()

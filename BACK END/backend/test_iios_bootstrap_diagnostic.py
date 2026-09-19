@@ -130,3 +130,48 @@ class CacheHeaderTests(unittest.TestCase):
     def test_private_zero_offset_remains_required(self):
         raw=DiscoveryTests().header()
         self.assertEqual(mapped_header(raw,4096,0)['segments'][0]['file_offset'],0)
+
+
+class RebuiltReferenceTests(unittest.TestCase):
+    def fixture(self):
+        from iios_bootstrap_diagnostic import reference_rows
+        rows,_=DiscoveryTests().fixture()
+        origins=[dict(module='sample',path='/synthetic/sample.py',sha256='e'*64)]
+        ref=dict(schema='IIOS_REBUILT_BOOTSTRAP_IMAGE_REFERENCE_V1',scope='REBUILT_BOOTSTRAP_IDENTITY_ONLY',historical_cleanup='NOT_ESTABLISHED',historical_reference_recovered=False,bootstrap_accepted=False,mapped_memory_integrity='UNVERIFIED',boot_attestation='UNRESOLVED',runtime_root='/synthetic',boot_session_uuid='boot',imports=['sample'],cache_uuid='d'*32,expected_count=1,ordered_rows=reference_rows(rows),module_origins=origins)
+        return ref,rows,origins
+    def verify(self,ref,rows,origins,**kw):
+        from iios_bootstrap_diagnostic import verify_reference
+        args=dict(runtime_root='/synthetic',boot='boot',imports=['sample'],cache_uuid='d'*32);args.update(kw)
+        return verify_reference(ref,rows,origins,**args)
+    def test_exact_reference_passes_without_acceptance_claim(self):
+        ref,rows,origins=self.fixture();self.assertTrue(self.verify(ref,rows,origins));self.assertFalse(ref['bootstrap_accepted'])
+    def test_aslr_observations_can_change_without_identity_change(self):
+        ref,rows,origins=self.fixture();rows[0]['address']+=4096;rows[0]['slide']+=4096;rows[0]['segments'][0]['address']+=4096
+        self.assertTrue(self.verify(ref,rows,origins))
+    def test_missing_extra_duplicate_rejected(self):
+        ref,rows,origins=self.fixture()
+        for changed in ([],rows+rows):
+            with self.assertRaises(ValueError):self.verify(ref,changed,origins)
+    def test_substituted_header_uuid_backing_mapping_rejected(self):
+        ref,rows,origins=self.fixture()
+        for key,value in [('uuid','b'*32),('header_sha256','e'*64),('backing',{}),('segments',[{'address':4096,'vmaddr':999}])]:
+            changed=copy.deepcopy(rows);changed[0][key]=value
+            with self.assertRaises(ValueError):self.verify(ref,changed,origins)
+    def test_reordered_rows_rejected(self):
+        from iios_bootstrap_diagnostic import reference_rows
+        ref,rows,origins=self.fixture();second=copy.deepcopy(rows[0]);second.update(index=1,path='/synthetic/second',address=8192);rows.append(second);ref.update(expected_count=2,ordered_rows=reference_rows(rows))
+        with self.assertRaises(ValueError):self.verify(ref,list(reversed(rows)),origins)
+    def test_scope_boot_runtime_import_cache_rejected(self):
+        ref,rows,origins=self.fixture()
+        for kw in ({'boot':'changed'},{'runtime_root':'/elsewhere'},{'imports':['extra']},{'cache_uuid':'e'*32}):
+            with self.assertRaises(ValueError):self.verify(ref,rows,origins,**kw)
+        ref['schema']='SCOPED_BOOTSTRAP_IMAGE_REFERENCE_V1'
+        with self.assertRaises(ValueError):self.verify(ref,rows,origins)
+    def test_changed_module_origins_rejected(self):
+        ref,rows,origins=self.fixture()
+        with self.assertRaises(ValueError):self.verify(ref,rows,[])
+        self.assertTrue(self.verify(ref,rows,[dict(module='__main__',path='/new/entry.py',sha256='f'*64)]+origins))
+    def test_historical_cleanup_and_claims_cannot_be_promoted(self):
+        ref,rows,origins=self.fixture()
+        for key,value in [('historical_cleanup','VERIFIED'),('historical_reference_recovered',True),('bootstrap_accepted',True),('mapped_memory_integrity','VERIFIED'),('boot_attestation','VERIFIED')]:
+            with self.assertRaises(ValueError):self.verify({**ref,key:value},rows,origins)
