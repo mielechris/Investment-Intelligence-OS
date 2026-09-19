@@ -52,3 +52,20 @@ class StateTests(unittest.TestCase):
     def test_export_hash_mutation(self):
         s=Store(self.root/'state');s.append('BEGIN',{});p=Path(export(s,self.root/'evidence',{}));f=p/'summary.json';f.chmod(0o600);f.write_text('{}');f.chmod(0o400)
         with self.assertRaises(ValueError):verify_export(p)
+    def test_evidence_sanitizes_machine_identity_and_home(self):
+        value={'runner_name':'secret-runner','hardware_uuid':'secret-uuid','uid':501,
+               'device':42,'inode':99,'path':str(Path.home()/'Library/IIOS'),'authority':AUTHORITY}
+        projected=sanitized(value)
+        self.assertNotIn('runner_name',projected);self.assertNotIn('hardware_uuid',projected)
+        self.assertNotIn('uid',projected);self.assertNotIn('device',projected);self.assertNotIn('inode',projected)
+        self.assertEqual(projected['path'],'$USER_HOME/Library/IIOS');self.assertEqual(projected['authority'],AUTHORITY)
+    def test_evidence_rejects_credential_patterns(self):
+        with self.assertRaisesRegex(ValueError,'SECRET'):sanitized({'error':'Bearer credential'})
+        with self.assertRaisesRegex(ValueError,'SECRET'):sanitized({'token=secret':False})
+    def test_export_manifest_sanitizes_root_binding(self):
+        s=Store(self.root/'state');s.append('BEGIN',{})
+        p=Path(export(s,self.root/'evidence',{}))
+        manifest=json.loads((p/'manifest.json').read_text())
+        rendered=json.dumps(manifest,sort_keys=True)
+        self.assertNotIn(str(Path.home()),rendered)
+        self.assertNotIn('"device"',rendered);self.assertNotIn('"inode"',rendered);self.assertNotIn('"uid"',rendered)

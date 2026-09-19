@@ -23,21 +23,37 @@ def boot():
     return value
 
 
-def selected_host(path, workflow):
+def selected_host(path):
     require(platform.system()=='Darwin' and platform.machine()=='arm64','SELECTED_MAC_ONLY')
     st=path.lstat();require(stat.S_ISREG(st.st_mode) and st.st_uid==os.getuid() and stat.S_IMODE(st.st_mode)==0o600,'HOST_SELECTION_MODE')
     host=decode(path.read_bytes())
+    required={'schema','control_repository','control_repository_id','control_owner_id','control_ref',
+              'workflow','source','runner_name','hardware_uuid','uid'}
+    require(set(host)==required and host['schema']==3,'HOST_SELECTION_SCHEMA')
+    require(set(host['source'])=={'repository','commit','inventory_sha256'},'HOST_SOURCE_SCHEMA')
+    require(host['control_repository']=='mielechris/IIOS-Native-Control' and
+            host['control_ref']=='refs/heads/main' and host['workflow']=='native-qualification.yml' and
+            host['source']['repository']=='mielechris/Investment-Intelligence-OS','HOST_FIXED_SCOPE')
+    require(type(host['control_repository_id']) is int and host['control_repository_id']>0 and
+            type(host['control_owner_id']) is int and host['control_owner_id']>0 and
+            type(host['uid']) is int and re.fullmatch(r'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}',host['hardware_uuid']) and
+            re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',host['runner_name']),'HOST_VALUE')
     require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('RUNNER_ENVIRONMENT')=='self-hosted','SELF_HOSTED_JOB_ONLY')
     require(os.environ.get('GITHUB_EVENT_NAME')=='workflow_dispatch','MANUAL_DISPATCH_ONLY')
-    require(os.environ.get('GITHUB_REPOSITORY')==host['repository'] and os.environ.get('RUNNER_NAME')==host['runner_name'],'RUNNER_SELECTION')
-    require(os.environ.get('GITHUB_WORKFLOW_REF')==host['repository']+'/.github/workflows/'+workflow+'@'+host['trusted_ref'],'TRUSTED_WORKFLOW_REF')
-    require(os.environ.get('GITHUB_REF')==host['trusted_ref'] and host['uid']==os.getuid(),'TRUSTED_REF_ACCOUNT')
+    require(os.environ.get('GITHUB_REPOSITORY')==host['control_repository'] and
+            os.environ.get('GITHUB_REPOSITORY_ID')==str(host['control_repository_id']) and
+            os.environ.get('GITHUB_REPOSITORY_OWNER_ID')==str(host['control_owner_id']) and
+            os.environ.get('RUNNER_NAME')==host['runner_name'],'RUNNER_SELECTION')
+    require(os.environ.get('GITHUB_WORKFLOW_REF')==host['control_repository']+'/.github/workflows/'+host['workflow']+'@'+host['control_ref'],'TRUSTED_WORKFLOW_REF')
+    require(os.environ.get('GITHUB_REF')==host['control_ref'] and os.environ.get('GITHUB_REF_TYPE')=='branch' and
+            not os.environ.get('GITHUB_HEAD_REF') and not os.environ.get('GITHUB_BASE_REF') and
+            host['uid']==os.getuid(),'TRUSTED_REF_ACCOUNT')
     raw=command(['/usr/sbin/ioreg','-rd1','-c','IOPlatformExpertDevice'])
     matches=re.findall(r'"IOPlatformUUID"\s*=\s*"([A-Fa-f0-9-]+)"',raw)
     require(len(matches)==1 and matches[0].lower()==host['hardware_uuid'].lower(),'SELECTED_HARDWARE')
-    return dict(hardware_uuid=matches[0].lower(),runner_name=host['runner_name'],repository=host['repository'],
-                workflow_ref=os.environ['GITHUB_WORKFLOW_REF'],run_id=os.environ['GITHUB_RUN_ID'],
-                run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],uid=os.getuid())
+    return (dict(control_repository=host['control_repository'],control_ref=host['control_ref'],
+                 workflow=host['workflow'],manual_dispatch=True,environment='iios-native-qualification',
+                 selected_host_verified=True,hardware_verified=True,runner_verified=True), host['source'])
 
 
 def profile(source, runtime, work, python, port, denied=None):

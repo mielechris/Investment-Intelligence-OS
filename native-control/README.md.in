@@ -1,0 +1,45 @@
+# IIOS Native Control
+
+Private, dispatch-only control plane for Native Qualification v2.
+
+Approved public source:
+
+- repository: `mielechris/Investment-Intelligence-OS`
+- commit: `@@SOURCE_COMMIT@@`
+- complete inventory SHA-256: `@@SOURCE_INVENTORY_SHA256@@`
+
+The selected-Mac job cannot start until the hosted admission job accepts the exact private repository, `refs/heads/main`, branch ref type, empty pull-request refs and `native=true`. The native job uses environment `iios-native-qualification`, exact runner labels, a detached exact-commit source checkout and a standalone inventory verifier before executing any IIOS source.
+
+## Repository setup
+
+1. Create private repository `mielechris/IIOS-Native-Control` with no template files.
+2. Copy this candidate exactly, verify `CONTROL-FILES.json`, commit it to `main`, and prohibit tags as workflow inputs.
+3. Protect `main`: require pull requests, at least one approving review, dismissal of stale approvals, conversation resolution, signed commits if available, no force pushes and no deletion. Limit bypass to the owner.
+4. Create environment `iios-native-qualification`. Add the owner as required reviewer, prevent self-review when a second administrator exists, restrict deployment to `main`, and add no secrets.
+5. Keep Actions permissions read-only. Permit only actions pinned in the workflow. Do not enable workflows from forks.
+6. If organization runner groups are available, create an `iios-native-control` group accessible only to this private repository.
+
+## Runner labels
+
+Required labels are exactly `self-hosted`, `macOS`, `ARM64`, and `iios-selected-mac`. Do not add a generic organization runner group that other repositories can target.
+
+## One-time installation checklist
+
+1. Review the prepared archive manifest and independently compare its SHA-256 with the GitHub runner release page.
+2. Extract the reviewed archive into `~/Library/IIOS/qualification/runner` only after approval. Keep the directory owner-only.
+3. In the private repository, open **Settings → Actions → Runners → New self-hosted runner**, choose **macOS** and **ARM64**, and obtain the one-hour registration token only at installation time.
+4. Configure the runner for `mielechris/IIOS-Native-Control`, the dedicated work directory `~/Library/IIOS/qualification/runner-work`, and label `iios-selected-mac`. Do not use `--no-default-labels` because the workflow requires the platform labels.
+5. Create `~/Library/IIOS/qualification/selected-host.json` from `config/selected-host.schema.json` using the actual private repository ID, owner ID, runner name, Mac hardware UUID, current UID and pinned source binding. Seal it 0600.
+6. Verify the runner appears offline until deliberately started. Use a user-level process or LaunchAgent; do not install a system LaunchDaemon.
+7. Confirm `main` and the environment protections before starting the runner. Dispatch only with `native=true`, then approve the environment after reviewing the exact commit.
+
+## Removal and revocation
+
+1. Stop the user-level runner before changing GitHub state.
+2. In private-repository **Settings → Actions → Runners**, select the runner and click **Remove**. Use the displayed removal token only with the reviewed runner removal command.
+3. If normal removal is unavailable, delete the runner from GitHub first so its registration is revoked, then preserve diagnostic logs for review.
+4. Move the local runner installation, work directory and `selected-host.json` into a new owner-only retired directory. Do not delete qualification evidence or rewrite historical checkpoints.
+5. Revoke any unused registration/removal token by allowing its short lifetime to expire; never save tokens in files, shell history, evidence or repository settings.
+6. Remove repository access from the runner group and disable the workflow if the control repository is retired.
+
+Historical `cleanup=NOT_ESTABLISHED` remains permanent. Provider requests remain zero and all four trading authorities remain false.

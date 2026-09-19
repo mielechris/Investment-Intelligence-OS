@@ -46,6 +46,29 @@ def decode(raw):
                       parse_constant=lambda _: require(False, 'NONFINITE_JSON'))
 
 
+def sanitized(value):
+    """Project evidence without user paths, runner identity, hardware IDs or secrets."""
+    home = str(Path.home())
+    forbidden = ('authorization:', 'bearer ', 'ghp_', 'github_pat_', 'akia',
+                 'private key-----', 'password=', 'token=')
+    def visit(item, key=''):
+        if isinstance(item, dict):
+            result={}
+            for name,child in item.items():
+                require(isinstance(name,str) and not any(pattern in name.lower() for pattern in forbidden),
+                        'EVIDENCE_SECRET_PATTERN')
+                if name not in {'hardware_uuid','runner_name','run_id','run_attempt','device','inode','uid'}:
+                    result[name]=visit(child,name)
+            return result
+        if isinstance(item, list):return [visit(child,key) for child in item]
+        if isinstance(item, tuple):return [visit(child,key) for child in item]
+        if isinstance(item, str):
+            lowered=item.lower();require(not any(pattern in lowered for pattern in forbidden),'EVIDENCE_SECRET_PATTERN')
+            return item.replace(home,'$USER_HOME')
+        return item
+    return visit(value)
+
+
 def directory(path):
     path = Path(path)
     require(path.is_absolute() and '..' not in path.parts, 'ROOT_PATH')
@@ -169,9 +192,10 @@ def export(store, evidence, summary):
     records = store.load()
     destination = evidence/records[-1]['hash']
     destination.mkdir(mode=0o700)  # Never replace an earlier export.
-    files = {'summary.json': publish(destination/'summary.json', summary),
-             'journal.json': publish(destination/'journal.json', records)}
-    publish(destination/'manifest.json', dict(schema=2, journal_head=records[-1]['hash'], files=files, root_binding=store.root_binding))
+    files = {'summary.json': publish(destination/'summary.json', sanitized(summary)),
+             'journal.json': publish(destination/'journal.json', sanitized(records))}
+    publish(destination/'manifest.json', dict(schema=2, journal_head=records[-1]['hash'],
+            files=files, root_binding=sanitized(store.root_binding)))
     destination.chmod(0o500); fsync_dir(evidence)
     verify_export(destination)
     return str(destination)

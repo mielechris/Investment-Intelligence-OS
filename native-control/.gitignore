@@ -1,0 +1,8 @@
+_work/
+_diag/
+.credentials
+.credentials_rsaparams
+.runner
+native-result.json
+selected-host.json
+*.token

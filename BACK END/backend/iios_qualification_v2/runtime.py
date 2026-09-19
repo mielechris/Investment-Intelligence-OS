@@ -15,7 +15,7 @@ from .state import require, file_hash, digest, decode, publish, directory
 ENV = {'PATH':'/usr/bin:/bin:/usr/sbin', 'LC_ALL':'C', 'TZ':'UTC',
        'PYTHONDONTWRITEBYTECODE':'1', 'PIP_NO_INDEX':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1',
        'PIP_CONFIG_FILE':'/dev/null', 'PIP_NO_CACHE_DIR':'1',
-       'GIT_CONFIG_NOSYSTEM':'1', 'GIT_CONFIG_GLOBAL':'/dev/null'}
+       'GIT_CONFIG_NOSYSTEM':'1', 'GIT_CONFIG_GLOBAL':'/dev/null','GIT_OPTIONAL_LOCKS':'0'}
 
 
 def command(argv, *, timeout=30, cwd=None):
@@ -74,21 +74,61 @@ def verify_wheel(path, pin):
         require(seen=={n for n in names if not n.endswith('/')}, 'RECORD_CLOSURE')
 
 
-def source_identity(root):
+def source_identity(root, *, sealed=False):
     root = Path(root).resolve()
     require(not command(['/usr/bin/git','status','--porcelain','--untracked-files=all'],cwd=root).strip(), 'SOURCE_DIRTY')
     commit = command(['/usr/bin/git','rev-parse','HEAD'],cwd=root).strip()
-    files = {}
-    for name in command(['/usr/bin/git','ls-files','-z'],cwd=root).split('\0'):
-        if not name: continue
+    files = []
+    raw=command(['/usr/bin/git','ls-files','--stage','-z'],cwd=root).encode()
+    for record in raw.split(b'\0'):
+        if not record:continue
+        header,encoded=record.split(b'\t',1);mode,blob,stage=header.decode('ascii').split(' ');name=encoded.decode('utf-8')
+        parts=Path(name).parts
+        require(stage=='0' and mode in ('100644','100755') and not Path(name).is_absolute() and
+                '..' not in parts and '.git' not in parts and not any(ord(c)<32 for c in name),
+                'SOURCE_INDEX_MODE')
         p = root/name
         require(p.is_file() and not p.is_symlink(), 'SOURCE_FILE')
-        files[name] = file_hash(p)
+        st=p.stat()
+        git_mode=0o755 if mode=='100755' else 0o644
+        require(stat.S_IMODE(st.st_mode)==(git_mode&0o500 if sealed else git_mode),'SOURCE_WORKTREE_MODE')
+        files.append({'path':name,'sha256':file_hash(p),'bytes':st.st_size,'mode':git_mode})
+    actual=[]
+    for path in root.rglob('*'):
+        relative=path.relative_to(root)
+        if '.git' in relative.parts:continue
+        st=path.lstat();require(not stat.S_ISLNK(st.st_mode) and
+                               (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
+                               'SOURCE_EXTRA_TYPE')
+        if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
+    require(sorted(actual)==[row['path'] for row in files],'SOURCE_EXTRA_FILE')
     return dict(commit=commit, inventory=files, inventory_sha256=digest(files))
 
 
+def source_binding(root, expected):
+    """Reverify the exact detached checkout after the control-side verifier."""
+    root = Path(root).resolve()
+    require(set(expected)=={'repository','commit','inventory_sha256'}, 'SOURCE_BINDING_SCHEMA')
+    require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', expected['repository']) is not None,
+            'SOURCE_REPOSITORY')
+    require(re.fullmatch(r'[0-9a-f]{40}', expected['commit']) is not None and
+            re.fullmatch(r'[0-9a-f]{64}', expected['inventory_sha256']) is not None,
+            'SOURCE_BINDING_DIGEST')
+    identity = source_identity(root,sealed=True)
+    require(identity['commit']==expected['commit'] and
+            identity['inventory_sha256']==expected['inventory_sha256'], 'SOURCE_BINDING_MISMATCH')
+    origin = command(['/usr/bin/git','remote','get-url','origin'],cwd=root).strip()
+    require(origin in ('https://github.com/'+expected['repository'],
+                       'https://github.com/'+expected['repository']+'.git'), 'SOURCE_ORIGIN')
+    require(command(['/usr/bin/git','rev-parse','--abbrev-ref','HEAD'],cwd=root).strip()=='HEAD',
+            'SOURCE_NOT_DETACHED')
+    return dict(identity,repository=expected['repository'],sealed=True)
+
+
 def unchanged(root, source):
-    require(source_identity(root)==source, 'SOURCE_CHANGED_DURING_QUALIFICATION')
+    current=source_identity(root,sealed=source.get('sealed',False))
+    require(all(current[name]==source[name] for name in ('commit','inventory','inventory_sha256')),
+            'SOURCE_CHANGED_DURING_QUALIFICATION')
 
 
 def verify_vendor(config):

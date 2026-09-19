@@ -1,0 +1,132 @@
+name: IIOS Native Qualification v2 Control
+on:
+  workflow_dispatch:
+    inputs:
+      native:
+        description: Execute the exact approved source on the selected Mac
+        required: true
+        type: boolean
+        default: false
+      resume:
+        description: Resume only after reviewing the prior RED checkpoint
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: iios-native-selected-mac
+  cancel-in-progress: false
+jobs:
+  admission:
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - name: Exact manual control context
+        env:
+          EVENT: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          NATIVE: ${{ inputs.native }}
+        run: |
+          test "$EVENT" = workflow_dispatch
+          test "$REPOSITORY" = mielechris/IIOS-Native-Control
+          test "$REF" = refs/heads/main
+          test "$REF_TYPE" = branch
+          test -z "$HEAD_REF"
+          test -z "$BASE_REF"
+          test "$NATIVE" = true
+  native:
+    needs: admission
+    environment: iios-native-qualification
+    runs-on: [self-hosted, macOS, ARM64, iios-selected-mac]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private control source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: control
+          persist-credentials: false
+          clean: true
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          set-safe-directory: false
+      - name: Verify private control files before use
+        shell: bash
+        run: |
+          /usr/bin/python3 -I -B -S - <<'PY'
+          import hashlib,json,stat
+          from pathlib import Path
+          root=Path('control');manifest_path=root/'CONTROL-FILES.json'
+          assert stat.S_ISREG(manifest_path.lstat().st_mode) and not manifest_path.is_symlink()
+          manifest=json.loads(manifest_path.read_bytes())
+          rows=manifest['files'];actual=[]
+          for p in sorted(root.rglob('*')):
+              if p.is_file() and '.git' not in p.parts and p.name!='CONTROL-FILES.json':
+                  assert stat.S_ISREG(p.lstat().st_mode) and not p.is_symlink()
+                  actual.append(str(p.relative_to(root)))
+          authority={'broker_connection':False,'paper_order_permission':False,
+                     'trade_execution':False,'live_execution':False}
+          assert set(manifest)=={'schema','repository','files','authority'}
+          assert manifest['schema']==1 and manifest['repository']=='mielechris/IIOS-Native-Control'
+          assert manifest['authority']==authority and sorted(rows)==actual
+          for name,row in rows.items():
+              p=root/name;data=p.read_bytes()
+              assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['sha256']
+          PY
+      - name: Checkout exact approved IIOS source read-only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: "@@SOURCE_REPOSITORY@@"
+          ref: "@@SOURCE_COMMIT@@"
+          path: source
+          persist-credentials: false
+          clean: true
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          set-safe-directory: false
+      - name: Verify complete source inventory before execution
+        env:
+          INPUT_NATIVE: ${{ inputs.native }}
+        run: |
+          umask 077
+          /usr/bin/python3 -I -B -S control/scripts/verify_source.py \
+            --binding control/config/source-binding.json \
+            --source source \
+            --receipt "$RUNNER_TEMP/source-binding-receipt.json"
+      - name: Seal source checkout owner-read-only
+        run: /usr/bin/python3 -I -B -S control/scripts/seal_source.py --source source
+      - name: Execute bounded native qualification
+        id: native
+        continue-on-error: true
+        env:
+          EXPLICIT_RESUME: ${{ inputs.resume }}
+        run: |
+          umask 077
+          args=(--profile observation)
+          if [[ "$EXPLICIT_RESUME" == true ]]; then args+=(--resume); fi
+          source/scripts/iios-native-qualify "${args[@]}" > "$RUNNER_TEMP/native-result.json"
+      - name: Collect sanitized evidence only
+        if: always() && steps.native.outcome != 'skipped'
+        run: |
+          /usr/bin/python3 -I -B -S control/scripts/collect_evidence.py \
+            --result "$RUNNER_TEMP/native-result.json" \
+            --output "$RUNNER_TEMP/native-evidence"
+      - name: Export sanitized evidence
+        if: always() && steps.native.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-evidence/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce native result
+        if: always()
+        env:
+          OUTCOME: ${{ steps.native.outcome }}
+        run: test "$OUTCOME" = success

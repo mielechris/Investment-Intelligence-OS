@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from iios_qualification_v2 import roots
-from iios_qualification_v2.state import Store, decode, export
+from iios_qualification_v2.state import Store, decode, export, sanitized
 
 class DurableRootsTests(unittest.TestCase):
     def setUp(self):
@@ -45,4 +45,4 @@ class DurableRootsTests(unittest.TestCase):
         s.begin('source','boot',resume=False)
         self.assertEqual(s.load()[0]['data']['root_binding'],b)
         out=Path(export(s,self.root/'evidence',{'native_qualified':False}))
-        self.assertEqual(decode((out/'manifest.json').read_bytes())['root_binding'],b)
+        self.assertEqual(decode((out/'manifest.json').read_bytes())['root_binding'],sanitized(b))

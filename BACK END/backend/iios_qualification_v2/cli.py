@@ -87,12 +87,12 @@ def main(argv=None):
         print('PREPARATION_ONLY: exact offline wheels staged; no runtime execution')
         return 0
     runtime.ENV['TMPDIR']=str(directory(roots['qualification']/'scratch'))
-    issuer=native.selected_host(roots['qualification']/'selected-host.json',config['workflow'])
-    require(os.environ.get('GITHUB_SHA')==runtime.command(['/usr/bin/git','rev-parse','HEAD'],cwd=source).strip(),'JOB_SOURCE_SHA')
+    issuer, expected_source=native.selected_host(roots['qualification']/'selected-host.json')
+    binding=runtime.source_binding(source,expected_source)
     import signal
     def cancelled(signum,frame):raise RuntimeError('CONTROLLER_CANCELLED')
     signal.signal(signal.SIGTERM,cancelled)
-    current=native.boot();binding=runtime.source_identity(source)
+    current=native.boot()
     store=Store(durable.contained(roots['qualification']/'native-v2',bound),root_binding=bound)
     with store.locked():
         records=store.load()

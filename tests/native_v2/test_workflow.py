@@ -56,11 +56,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('(subpath "/")',text)
     def test_non_mac_cannot_issue_native_evidence(self):
         with patch('iios_qualification_v2.native.platform.system',return_value='Linux'):
-            with self.assertRaisesRegex(ValueError,'SELECTED_MAC'):selected_host(self.root/'absent','workflow.yml')
+            with self.assertRaisesRegex(ValueError,'SELECTED_MAC'):selected_host(self.root/'absent')
     def test_hosted_job_cannot_issue_native_evidence(self):
-        host=self.root/'host';host.write_text('{}');host.chmod(0o600)
+        host=self.root/'host';host.write_text(json.dumps({'schema':3,'control_repository':'mielechris/IIOS-Native-Control','control_repository_id':1,'control_owner_id':2,'control_ref':'refs/heads/main','workflow':'native-qualification.yml','source':{'repository':'mielechris/Investment-Intelligence-OS','commit':'a'*40,'inventory_sha256':'b'*64},'runner_name':'selected','hardware_uuid':'00000000-0000-0000-0000-000000000000','uid':os.getuid()}));host.chmod(0o600)
         with patch('iios_qualification_v2.native.platform.system',return_value='Darwin'),patch('iios_qualification_v2.native.platform.machine',return_value='arm64'),patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted'}):
-            with self.assertRaisesRegex(ValueError,'SELF_HOSTED'):selected_host(host,'workflow.yml')
+            with self.assertRaisesRegex(ValueError,'SELF_HOSTED'):selected_host(host)
+    def test_tag_or_pull_request_context_rejected(self):
+        value={'schema':3,'control_repository':'mielechris/IIOS-Native-Control','control_repository_id':1,'control_owner_id':2,'control_ref':'refs/heads/main','workflow':'native-qualification.yml','source':{'repository':'mielechris/Investment-Intelligence-OS','commit':'a'*40,'inventory_sha256':'b'*64},'runner_name':'selected','hardware_uuid':'00000000-0000-0000-0000-000000000000','uid':os.getuid()}
+        host=self.root/'host';host.write_text(json.dumps(value));host.chmod(0o600)
+        env={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'self-hosted','GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REPOSITORY':value['control_repository'],'GITHUB_REPOSITORY_ID':'1','GITHUB_REPOSITORY_OWNER_ID':'2','RUNNER_NAME':'selected','GITHUB_WORKFLOW_REF':value['control_repository']+'/.github/workflows/native-qualification.yml@refs/heads/main','GITHUB_REF':'refs/tags/v1','GITHUB_REF_TYPE':'tag','GITHUB_HEAD_REF':'fork','GITHUB_BASE_REF':'main'}
+        with patch('iios_qualification_v2.native.platform.system',return_value='Darwin'),patch('iios_qualification_v2.native.platform.machine',return_value='arm64'),patch.dict(os.environ,env,clear=True):
+            with self.assertRaisesRegex(ValueError,'TRUSTED_REF'):selected_host(host)
 
     def test_cancel_is_red_and_cleanup_runs(self):
         calls=[]

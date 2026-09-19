@@ -56,3 +56,11 @@ class RuntimeTests(unittest.TestCase):
     def test_foreign_native_dependency_fails(self):
         with patch('iios_qualification_v2.runtime.command',side_effect=['x:\n\t/etc/passwd (compatibility version 1)\n','']):
             with self.assertRaisesRegex(ValueError,'ESCAPE'):native_dependencies(self.root/'image.so',self.root)
+    def test_source_binding_requires_commit_inventory_origin_and_detached_head(self):
+        expected={'repository':'mielechris/Investment-Intelligence-OS','commit':'a'*40,'inventory_sha256':'b'*64}
+        identity={'commit':'a'*40,'inventory':[{'path':'x','sha256':'c'*64,'bytes':1,'mode':420}],'inventory_sha256':'b'*64}
+        with patch('iios_qualification_v2.runtime.source_identity',return_value=identity),patch('iios_qualification_v2.runtime.command',side_effect=['https://github.com/mielechris/Investment-Intelligence-OS.git\n','HEAD\n']):
+            self.assertEqual(source_binding(self.root,expected)['repository'],expected['repository'])
+        changed=dict(expected,commit='d'*40)
+        with patch('iios_qualification_v2.runtime.source_identity',return_value=identity):
+            with self.assertRaisesRegex(ValueError,'MISMATCH'):source_binding(self.root,changed)
