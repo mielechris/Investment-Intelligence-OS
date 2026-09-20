@@ -263,29 +263,46 @@ def source_identity(root, *, sealed=False):
             require(st.st_uid==os.getuid() and actual_mode&0o600==0o600 and not actual_mode&0o022 and
                     bool(actual_mode&0o100)==(mode=='100755'),'SOURCE_WORKTREE_MODE')
         files.append({'path':name,'sha256':file_hash(p),'bytes':st.st_size,'mode':git_mode})
-    actual=[]
-    for parent, directories, filenames in os.walk(root, topdown=True, followlinks=False):
-        parent=Path(parent)
-        if parent==root and _GENERATED_SOURCE_ROOT in filenames:
-            require(False,'SOURCE_GENERATED_ROOT_TYPE')
-        if parent==root and _GENERATED_SOURCE_ROOT in directories:
-            # `os.walk` already classified this entry as a directory.  Do not open,
-            # stat, or otherwise admit it: Bazel output is never qualification input.
-            # A symlink is still a substitute source root and must fail closed.
-            try:
-                entries={entry.name:entry for entry in os.scandir(root)}
-            except FileNotFoundError:
-                entries={}
-            entry=entries.get(_GENERATED_SOURCE_ROOT)
-            if entry is not None:require(not entry.is_symlink(),'SOURCE_GENERATED_ROOT_TYPE')
-            directories.remove(_GENERATED_SOURCE_ROOT)
-        if '.git' in directories:directories.remove('.git')
-        if '.git' in filenames:filenames.remove('.git')
-        for name in (*directories,*filenames):
-            path=parent/name;relative=path.relative_to(root);st=path.lstat()
+    actual=[];top_directories=[];generated=None
+    # `os.walk(root)` classifies every root entry before yielding it.  A transient
+    # Bazel output directory can disappear in that window, so discover the root
+    # ourselves and remove that one generated directory before recursive walking.
+    with os.scandir(root) as stream:
+        for entry in stream:
+            name=entry.name
+            if name=='.git':continue
+            if name==_GENERATED_SOURCE_ROOT:
+                try:
+                    require(not entry.is_symlink() and entry.is_dir(follow_symlinks=False),'SOURCE_GENERATED_ROOT_TYPE')
+                    generated=entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    generated=None
+                continue
+            path=root/name;st=path.lstat()
             require(not stat.S_ISLNK(st.st_mode) and (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
                     'SOURCE_EXTRA_TYPE')
-            if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
+            if stat.S_ISDIR(st.st_mode):top_directories.append(path)
+            else:actual.append(name)
+    for start in top_directories:
+        for parent, directories, filenames in os.walk(start, topdown=True, followlinks=False):
+            parent=Path(parent)
+            if '.git' in directories:directories.remove('.git')
+            if '.git' in filenames:filenames.remove('.git')
+            for name in (*directories,*filenames):
+                path=parent/name;relative=path.relative_to(root);st=path.lstat()
+                require(not stat.S_ISLNK(st.st_mode) and (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
+                        'SOURCE_EXTRA_TYPE')
+                if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
+    candidate=root/_GENERATED_SOURCE_ROOT
+    try:after=candidate.lstat()
+    except FileNotFoundError:
+        after=None
+    if generated is None:
+        require(after is None,'SOURCE_GENERATED_ROOT_RACE')
+    else:
+        require(after is None or (stat.S_ISDIR(after.st_mode) and not stat.S_ISLNK(after.st_mode) and
+                                  (after.st_dev,after.st_ino)==(generated.st_dev,generated.st_ino)),
+                'SOURCE_GENERATED_ROOT_RACE')
     tracked=[row['path'] for row in files]
     require(len({name.casefold() for name in tracked})==len(tracked) and
             len(actual)==len(tracked) and

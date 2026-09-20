@@ -168,15 +168,33 @@ class RuntimeTests(unittest.TestCase):
             value=source_identity(self.root)
         self.assertEqual([row['path'] for row in value['inventory']],['script'])
 
-    def test_source_identity_allows_generated_directory_to_disappear_during_traversal(self):
+    def test_source_identity_allows_generated_directory_to_disappear_during_initial_enumeration(self):
         script=self.root/'script';script.write_text('x');script.chmod(0o600)
         staged='100644 '+'a'*40+' 0\tscript\0'
-        walked=[(self.root.resolve(),['bazel-out'],['script'])]
+        class Vanishing:
+            name='bazel-out'
+            def is_symlink(self):raise FileNotFoundError()
+        class Stream:
+            def __enter__(self):return iter([Vanishing(),SimpleNamespace(name='script')])
+            def __exit__(self,*args):return False
         with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]),\
-             patch('iios_qualification_v2.runtime.os.walk',return_value=iter(walked)),\
+             patch('iios_qualification_v2.runtime.os.scandir',return_value=Stream()),\
              patch('iios_qualification_v2.runtime.os.open',side_effect=AssertionError('bazel-out must not be opened')):
             value=source_identity(self.root)
         self.assertEqual([row['path'] for row in value['inventory']],['script'])
+
+    def test_source_identity_allows_generated_directory_to_disappear_during_traversal(self):
+        script=self.root/'script';script.write_text('x');script.chmod(0o600)
+        child=self.root/'child';child.mkdir();(child/'item').write_text('x')
+        generated=self.root/'bazel-out';generated.mkdir();(generated/'output').write_text('generated')
+        staged='100644 '+'a'*40+' 0\tscript\0'+'100644 '+'b'*40+' 0\tchild/item\0';real_walk=os.walk
+        def remove_before_recursive_walk(path,*args,**kwargs):
+            if Path(path)==child:shutil.rmtree(generated)
+            return real_walk(path,*args,**kwargs)
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]),\
+             patch('iios_qualification_v2.runtime.os.walk',side_effect=remove_before_recursive_walk):
+            value=source_identity(self.root)
+        self.assertEqual([row['path'] for row in value['inventory']],['script','child/item'])
 
     def test_source_identity_rejects_unrelated_extra_and_generated_substitutes(self):
         script=self.root/'script';script.write_text('x');script.chmod(0o600)
@@ -194,6 +212,21 @@ class RuntimeTests(unittest.TestCase):
         generated='100644 '+'a'*40+' 0\tbazel-out/substitute.py\0'
         with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',generated]):
             with self.assertRaisesRegex(ValueError,'SOURCE_INDEX_MODE'):source_identity(self.root)
+
+    def test_source_identity_rejects_generated_special_node_and_replacement_race(self):
+        script=self.root/'script';script.write_text('x');script.chmod(0o600)
+        staged='100644 '+'a'*40+' 0\tscript\0';generated=self.root/'bazel-out'
+        os.mkfifo(generated)
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
+            with self.assertRaisesRegex(ValueError,'SOURCE_GENERATED_ROOT_TYPE'):source_identity(self.root)
+        generated.unlink();generated.mkdir();child=self.root/'child';child.mkdir();(child/'item').write_text('x')
+        staged+='100644 '+'b'*40+' 0\tchild/item\0';real_walk=os.walk
+        def replace_before_recursive_walk(path,*args,**kwargs):
+            if Path(path).resolve()==child.resolve():shutil.rmtree(generated);generated.symlink_to(script)
+            return real_walk(path,*args,**kwargs)
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]),\
+             patch('iios_qualification_v2.runtime.os.walk',side_effect=replace_before_recursive_walk):
+            with self.assertRaisesRegex(ValueError,'SOURCE_GENERATED_ROOT_RACE'):source_identity(self.root)
 
     def codesign_success(self):
         return [SimpleNamespace(returncode=0,stdout=b'',stderr=b''),
