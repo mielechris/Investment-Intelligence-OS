@@ -17,7 +17,7 @@ from iios_qualification_v2.runtime import *
 from iios_qualification_v2.state import canonical
 
 class RuntimeTests(unittest.TestCase):
-    def setUp(self):self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+    def setUp(self):self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name).resolve()
     def tearDown(self):self.temp.cleanup()
     def wheel(self, extras=None):
         data={'sample.py':b'x=1\n',**(extras or {})};record='sample-1.dist-info/RECORD';out=io.StringIO();w=csv.writer(out)
@@ -139,11 +139,68 @@ class RuntimeTests(unittest.TestCase):
         text=inspect.getsource(environment)
         for flag in ('--no-index','--require-hashes','--no-deps','--only-binary=:all:'):self.assertIn(flag,text)
         self.assertNotIn('sudo',text)
+    def macho(self, commands, architecture=None):
+        header=str(self.root/'image.so')+(f' (architecture {architecture})' if architecture else '')+':'
+        return header+'\n'+''.join(f'Load command {i}\n cmd {kind}\n cmdsize 256\n {"path" if kind=="LC_RPATH" else "name"} {value} (offset 24)\n' for i,(kind,value) in enumerate(commands))
+
+    def test_native_identity_is_metadata_for_any_name_and_node(self):
+        generated=self.root/'bazel-out'
+        for kind in ('absent','directory','file','symlink','fifo'):
+            with self.subTest(kind=kind):
+                if kind=='directory':generated.mkdir()
+                elif kind=='file':generated.write_text('x')
+                elif kind=='symlink':generated.symlink_to(self.root/'missing')
+                elif kind=='fifo':os.mkfifo(generated)
+                output=self.macho([('LC_ID_DYLIB',str(generated)),('LC_LOAD_DYLIB','/usr/lib/libSystem.B.dylib')])
+                with patch('iios_qualification_v2.runtime.command',return_value=output), patch.object(Path,'resolve',side_effect=AssertionError('metadata resolved')), patch.object(Path,'stat',side_effect=AssertionError('metadata stat')):
+                    rows=native_dependencies(self.root/'image.so',self.root)
+                self.assertEqual(len(rows),1)
+                if kind=='directory':generated.rmdir()
+                elif kind!='absent':generated.unlink()
+
+    def test_all_actual_native_load_kinds_are_validated(self):
+        from iios_qualification_v2.runtime import _NATIVE_DYLIB_LOADS
+        for kind in _NATIVE_DYLIB_LOADS:
+            for value in ('bazel-out/missing.so',str(self.root/'missing.so'),'@unknown/missing.so'):
+                with self.subTest(kind=kind,value=value), patch('iios_qualification_v2.runtime.command',return_value=self.macho([(kind,value)])):
+                    with self.assertRaises((ValueError,FileNotFoundError)):native_dependencies(self.root/'image.so',self.root)
+
+    def test_native_dependencies_hash_real_files(self):
+        target=self.root/'bazel-out';target.write_text('native')
+        with patch('iios_qualification_v2.runtime.command',return_value=self.macho([('LC_LOAD_DYLIB',str(target))])):
+            self.assertEqual(native_dependencies(self.root/'image.so',self.root)[0]['sha256'],file_hash(target))
+
+    def test_native_dependency_disappearance_fails_closed(self):
+        target=self.root/'bazel-out';target.write_text('native');original=Path.resolve
+        def disappear(path,*args,**kwargs):
+            if path==target:target.unlink()
+            return original(path,*args,**kwargs)
+        with patch('iios_qualification_v2.runtime.command',return_value=self.macho([('LC_LOAD_DYLIB',str(target))])),patch.object(Path,'resolve',disappear):
+            with self.assertRaises(FileNotFoundError):native_dependencies(self.root/'image.so',self.root)
+
+    def test_native_dependency_escape_symlink_fails(self):
+        target=self.root/'bazel-out';target.symlink_to('/etc/passwd')
+        with patch('iios_qualification_v2.runtime.command',return_value=self.macho([('LC_LOAD_DYLIB',str(target))])):
+            with self.assertRaisesRegex(ValueError,'ESCAPE'):native_dependencies(self.root/'image.so',self.root)
+
+    def test_native_rpaths_are_scoped_to_architecture(self):
+        target=self.root/'dep.dylib';target.write_text('x')
+        output=self.macho([('LC_RPATH',str(self.root)),('LC_LOAD_DYLIB','@rpath/dep.dylib')],'arm64')+self.macho([('LC_LOAD_DYLIB','@rpath/dep.dylib')],'x86_64')
+        with patch('iios_qualification_v2.runtime.command',return_value=output):
+            with self.assertRaisesRegex(ValueError,'RPATH'):native_dependencies(self.root/'image.so',self.root)
+
+    def test_native_malformed_commands_fail_closed(self):
+        good=self.macho([('LC_LOAD_DYLIB','/usr/lib/libSystem.B.dylib')])
+        bad=[good.replace('Load command 0','Load command 1'),good.replace(' (offset 24)',''),good.replace('cmdsize 256','cmdsize 16'),good.replace('LC_LOAD_DYLIB','LC_PREBOUND_DYLIB'),good.replace(str(self.root/'image.so'),'wrong.so'),self.macho([('LC_ID_DYLIB','a'),('LC_ID_DYLIB','b'),('LC_LOAD_DYLIB','/usr/lib/a')])]
+        for output in bad:
+            with self.subTest(output=output),patch('iios_qualification_v2.runtime.command',return_value=output):
+                with self.assertRaises(ValueError):native_dependencies(self.root/'image.so',self.root)
+
     def test_unresolved_native_rpath_fails(self):
-        with patch('iios_qualification_v2.runtime.command',side_effect=['x:\n\t@rpath/missing.dylib (compatibility version 1)\n','']):
+        with patch('iios_qualification_v2.runtime.command',return_value=self.macho([('LC_LOAD_DYLIB','@rpath/missing.dylib')])):
             with self.assertRaisesRegex(ValueError,'RPATH'):native_dependencies(self.root/'image.so',self.root)
     def test_foreign_native_dependency_fails(self):
-        with patch('iios_qualification_v2.runtime.command',side_effect=['x:\n\t/etc/passwd (compatibility version 1)\n','']):
+        with patch('iios_qualification_v2.runtime.command',return_value=self.macho([('LC_LOAD_DYLIB','/etc/passwd')])):
             with self.assertRaisesRegex(ValueError,'ESCAPE'):native_dependencies(self.root/'image.so',self.root)
     def test_source_binding_requires_commit_inventory_origin_and_detached_head(self):
         expected={'repository':'mielechris/Investment-Intelligence-OS','commit':'a'*40,'inventory_sha256':'b'*64}

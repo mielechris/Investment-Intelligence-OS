@@ -382,31 +382,69 @@ def verify_vendor(config):
                 version=version, signature_team='BMM5U3QVKW')
 
 
+_NATIVE_DYLIB_LOADS = frozenset(('LC_LOAD_DYLIB', 'LC_LOAD_WEAK_DYLIB',
+    'LC_REEXPORT_DYLIB', 'LC_LAZY_LOAD_DYLIB', 'LC_LOAD_UPWARD_DYLIB'))
+
+
+def _native_load_commands(path):
+    """Read typed load commands per architecture; LC_ID_DYLIB is not a dependency."""
+    sections=[];section=None;block=[];expected_index=0
+    header=re.compile(re.escape(str(path))+r'(?: \(architecture ([A-Za-z0-9_]+)\))?:')
+    def finish():
+        if not block:return
+        kinds=[line.split()[1] for line in block if line.startswith('cmd ') and len(line.split())==2]
+        require(len(kinds)==1,'NATIVE_LOAD_COMMAND_PARSE');kind=kinds[0]
+        if kind not in _NATIVE_DYLIB_LOADS and kind not in ('LC_ID_DYLIB','LC_RPATH'):
+            require(not kind.endswith('_DYLIB'),'NATIVE_LOAD_COMMAND_UNSUPPORTED')
+            return
+        field='path' if kind=='LC_RPATH' else 'name'
+        values=[re.fullmatch(field+r' (.+) \(offset ([0-9]+)\)',line) for line in block if line.startswith(field+' ')]
+        require(len(values)==1 and values[0] is not None,'NATIVE_LOAD_COMMAND_PATH')
+        sizes=[line.split()[1] for line in block if line.startswith('cmdsize ') and len(line.split())==2]
+        require(len(sizes)==1 and sizes[0].isdigit() and 0<int(values[0][2])<int(sizes[0]),'NATIVE_LOAD_COMMAND_SIZE')
+        value=values[0][1]
+        if kind=='LC_ID_DYLIB':
+            require(not section['identity_seen'],'NATIVE_DUPLICATE_ID')
+            section['identity_seen']=True  # Metadata only: never resolve, stat or scan this name.
+        elif kind=='LC_RPATH':section['rpaths'].append(value)
+        else:section['loads'].append((kind,value))
+    for raw in command(['/usr/bin/otool','-l',path]).splitlines():
+        line=raw.strip();match=header.fullmatch(line)
+        if match:
+            finish();block=[];expected_index=0
+            section=dict(architecture=match[1] or 'native',rpaths=[],loads=[],identity_seen=False)
+            require(all(s['architecture']!=section['architecture'] for s in sections),'NATIVE_ARCHITECTURE_DUPLICATE')
+            sections.append(section)
+        elif line.startswith('Load command '):
+            require(section is not None and line==f'Load command {expected_index}','NATIVE_LOAD_COMMAND_SEQUENCE')
+            finish();block=[];expected_index+=1
+        elif line:
+            require(section is not None and expected_index>0,'NATIVE_LOAD_COMMAND_HEADER')
+            block.append(line)
+    finish()
+    require(sections and all(s['loads'] for s in sections),'NATIVE_DEPENDENCIES_EMPTY')
+    return sections
+
+
 def native_dependencies(path, envroot):
-    lines = command(['/usr/bin/otool','-L',path]).splitlines()
-    dependencies = []
-    load_commands = command(['/usr/bin/otool','-l',path]).splitlines()
-    rpaths = []
-    for index,line in enumerate(load_commands):
-        if line.strip()=='cmd LC_RPATH':
-            value=load_commands[index+2].strip().split(' (offset ')[0]
-            require(value.startswith('path '),'RPATH_PARSE');rpaths.append(value[5:])
+    dependencies=[]
     def expand(value):
         return value.replace('@loader_path',str(path.parent)).replace('@executable_path',str(envroot/'bin'))
-    for line in lines:
-        if not line.startswith('\t'): continue
-        value=line.strip().split(' (compatibility version')[0]
-        if value.startswith('@rpath/'):
-            candidates=[Path(expand(p))/value[7:] for p in rpaths]
-            candidates=[p for p in candidates if p.exists()]
-            require(len(candidates)==1,'NATIVE_RPATH_UNRESOLVED');target=str(candidates[0].resolve())
-        else:target=expand(value)
-        if target.startswith('/System/Library/') or target.startswith('/usr/lib/'):
-            dependencies.append(dict(load=value,resolved=target,kind='OS_SHARED_CACHE'));continue
-        require(not target.startswith('@'), 'NATIVE_DEPENDENCY_UNRESOLVED')
-        p=Path(target).resolve(strict=True)
-        require(p.is_relative_to(envroot) or str(p).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'), 'NATIVE_DEPENDENCY_ESCAPE')
-        dependencies.append(dict(load=value,resolved=str(p),sha256=file_hash(p)))
+    for section in _native_load_commands(path):
+        for kind,value in section['loads']:
+            if value.startswith('@rpath/'):
+                candidates=[Path(expand(p))/value[7:] for p in section['rpaths']]
+                candidates=[p for p in candidates if p.exists()]
+                require(len(candidates)==1,'NATIVE_RPATH_UNRESOLVED');target=str(candidates[0].resolve(strict=True))
+            else:target=expand(value)
+            row=dict(load=value,command=kind,architecture=section['architecture'])
+            if target.startswith('/System/Library/') or target.startswith('/usr/lib/'):
+                dependencies.append(dict(row,resolved=target,kind='OS_SHARED_CACHE'));continue
+            require(not target.startswith('@'), 'NATIVE_DEPENDENCY_UNRESOLVED')
+            require(Path(target).is_absolute(),'NATIVE_DEPENDENCY_RELATIVE')
+            p=Path(target).resolve(strict=True)
+            require(p.is_relative_to(envroot) or str(p).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'), 'NATIVE_DEPENDENCY_ESCAPE')
+            dependencies.append(dict(row,resolved=str(p),sha256=file_hash(p)))
     require(dependencies, 'NATIVE_DEPENDENCIES_EMPTY')
     return dependencies
 
