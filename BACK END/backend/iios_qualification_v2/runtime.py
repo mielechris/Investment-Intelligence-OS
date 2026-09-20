@@ -436,7 +436,10 @@ def environment(root, config, lock, artifacts, *, rebuild=False):
     vendor = verify_vendor(config)
     pins = lock_binding(lock, artifacts)
     wheelhouse = directory(root/'wheelhouse')
-    for row in pins['wheels']:verify_wheel(wheelhouse/row['filename'],row)
+    for row in pins['wheels']:
+        wheel = wheelhouse/row['filename']
+        require(wheel.is_file() and not wheel.is_symlink(), 'WHEELHOUSE_MISSING:'+row['filename'])
+        verify_wheel(wheel,row)
     identity = digest(dict(vendor=vendor,lock=file_hash(lock),artifacts=file_hash(artifacts)))
     venv = root/('venv-'+identity)
     complete = venv/'IIOS-RUNTIME.json'

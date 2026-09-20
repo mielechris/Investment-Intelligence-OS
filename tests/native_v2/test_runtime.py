@@ -48,6 +48,32 @@ class RuntimeTests(unittest.TestCase):
     def test_inventory_rejects_escape_symlink(self):
         (self.root/'link').symlink_to('/etc/passwd')
         with self.assertRaises(ValueError):environment_tree(self.root)
+
+    def test_missing_wheelhouse_fails_before_venv_or_pip(self):
+        pins={'wheels':[{'filename':'missing-1-py3-none-any.whl','size':1,'sha256':'a'*64}]}
+        with patch('iios_qualification_v2.runtime.verify_vendor',return_value={}),\
+             patch('iios_qualification_v2.runtime.lock_binding',return_value=pins),\
+             patch('iios_qualification_v2.runtime.directory',side_effect=lambda path: path),\
+             patch('iios_qualification_v2.runtime.command') as command,\
+             patch('iios_qualification_v2.runtime.pip_command') as pip:
+            with self.assertRaisesRegex(ValueError,'WHEELHOUSE_MISSING:missing-1-py3-none-any.whl'):
+                environment(self.root,{},self.root/'lock',self.root/'artifacts')
+        pip.assert_not_called()
+        command.assert_not_called()
+
+    def test_symlinked_wheelhouse_entry_fails_before_venv_or_pip(self):
+        filename='linked-1-py3-none-any.whl';wheelhouse=self.root/'wheelhouse';wheelhouse.mkdir()
+        (wheelhouse/filename).symlink_to(self.root/'other.whl')
+        pins={'wheels':[{'filename':filename,'size':1,'sha256':'a'*64}]}
+        with patch('iios_qualification_v2.runtime.verify_vendor',return_value={}),\
+             patch('iios_qualification_v2.runtime.lock_binding',return_value=pins),\
+             patch('iios_qualification_v2.runtime.directory',side_effect=lambda path: path),\
+             patch('iios_qualification_v2.runtime.command') as command,\
+             patch('iios_qualification_v2.runtime.pip_command') as pip:
+            with self.assertRaisesRegex(ValueError,'WHEELHOUSE_MISSING:'+filename):
+                environment(self.root,{},self.root/'lock',self.root/'artifacts')
+        pip.assert_not_called()
+        command.assert_not_called()
     def test_no_package_network_or_install_into_system(self):
         import inspect
         text=inspect.getsource(environment)
