@@ -62,7 +62,8 @@ class LocalAppTests(unittest.TestCase):
         from iios_qualification_v2.state import STAGES
         stages={name:(fail if name=='ownership' else lambda:{'verified':True}) for name in STAGES[:-1]}
         result=execute(Store(self.root/'state'),stages,source='s',boot='b',resume=False,
-                       issuer={'launch_mode':'local_app'},evidence=self.root/'evidence',status=lambda a,b:calls.append((a,b)))
+                       issuer={'launch_mode':'local_app'},evidence=self.root/'evidence',status=lambda a,b:calls.append((a,b)),
+                       controller=lambda:{'test_observation':True})
         self.assertEqual(result['status'],'RED');self.assertTrue(result['export'])
         self.assertIn(('ownership','FAILED'),calls);self.assertEqual(result['authority'],AUTHORITY)
     def test_native_ui_has_fixed_command_and_only_confirmation_choices(self):

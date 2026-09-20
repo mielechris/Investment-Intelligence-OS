@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -I -B -S "$script_dir/../BACK END/backend/iios_qualification_v2/cli.py" "$@"
+source_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -I -B -S "$source_dir/BACK END/backend/iios_qualification_v2/cli.py" "$@"

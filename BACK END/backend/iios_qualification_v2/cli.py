@@ -1,26 +1,66 @@
 """One stable command; execution is restricted to the enrolled self-hosted job."""
 import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
 import os
 from pathlib import Path
 import shutil
 import sys
 import time
 
+class _QualificationSourceLoader(importlib.machinery.SourceFileLoader):
+    """Compile qualification source directly; never consult or write a pyc cache."""
+    def get_code(self, fullname):
+        raw=Path(self.path).read_bytes()
+        self.source_sha256=hashlib.sha256(raw).hexdigest()
+        return compile(raw,self.path,'exec',dont_inherit=True,optimize=sys.flags.optimize)
+
+
+class _QualificationSourceFinder:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname!='iios_qualification_v2' and not fullname.startswith('iios_qualification_v2.'):
+            return None
+        parts=fullname.split('.')
+        if not all(p.isidentifier() for p in parts):raise ImportError('QUALIFICATION_MODULE_NAME')
+        base=Path(__file__).resolve().parent
+        filename=base/'__init__.py' if len(parts)==1 else base.joinpath(*parts[1:]).with_suffix('.py')
+        if not filename.is_file() or filename.is_symlink():raise ImportError('QUALIFICATION_SOURCE_ONLY')
+        loader=_QualificationSourceLoader(fullname,str(filename))
+        return importlib.util.spec_from_file_location(fullname,filename,loader=loader,
+            submodule_search_locations=[str(base)] if len(parts)==1 else None)
+
+
 if __package__ in (None,''):
+    sys.dont_write_bytecode=True
+    sys.meta_path.insert(0,_QualificationSourceFinder())
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-from iios_qualification_v2.state import AUTHORITY, STAGES, Store, decode, directory, digest, export, file_hash, historical_exception, require, canonical
+from iios_qualification_v2.state import AUTHORITY, STAGES, Store, decode, directory, digest, export, file_hash, historical_exception, require, canonical, sanitized
 from iios_qualification_v2 import runtime
 from iios_qualification_v2 import native
+from iios_qualification_v2 import provenance
 from iios_qualification_v2 import roots as durable
 from iios_qualification_v2.preflight_evidence import EvidenceUnavailable, Writer, parents_from_host
 
 
-def execute(store, stages, *, source, boot, resume, issuer, evidence, status=None):
+def execute(store, stages, *, source, boot, resume, issuer, evidence, status=None, controller=None):
     """No retry loop. A caller supplies one ordered set of native stage implementations."""
     require(tuple(stages)==STAGES[:-1], 'STAGE_SET')
     store.begin(source,boot,resume=resume)
-    completed=[];failure=None;cleanup=None
+    completed=[];failure=None;cleanup=None;launch=None;launch_hash=None
+    name='controller_launch'
+    diagnostic_source=Path(__file__).resolve().parents[3]
     try:
+        require(issuer is None or controller is not None,'CONTROLLER_RECEIPT_REQUIRED')
+        if controller is not None:
+            records=store.load()
+            context=dict(source=source,boot=boot,issuer_sha256=digest(issuer),
+                         previous=records[-1]['hash'],output_root=str(evidence))
+            observed=controller()
+            launch=provenance.launch_receipt(observed,context=context)
+            provenance.validate_launch(launch,controller(),context=context,records=records)
+            launch_hash=digest(sanitized(launch))
+            store.append('CONTROLLER_LAUNCH',launch)
         for name, operation in stages.items():
             if status:status(name,'STARTED')
             store.append('STAGE_STARTED',dict(stage=name,source=source,boot=boot))
@@ -30,7 +70,9 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence, status=Non
             completed.append(name)
             if name=='cleanup':cleanup=value
     except BaseException as error:
-        failure=dict(stage=name,category=type(error).__name__,predicate=str(error)[:240])
+        failure=dict(stage=name,category=type(error).__name__ if type(error).__module__=='builtins' else 'CUSTOM_EXCEPTION',
+                     predicate='BOUNDED_EXCEPTION_EVIDENCE',
+                     exception=provenance.exception_evidence(error,diagnostic_source,stage=name,controller_sha256=launch_hash))
         store.append('STAGE_FAILED',failure)
         if status:status(name,'FAILED')
         if name!='cleanup':
@@ -38,11 +80,12 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence, status=Non
                 cleanup=stages['cleanup']()
                 store.append('FAILURE_CLEANUP',cleanup)
             except BaseException as cleanup_error:
-                cleanup=dict(verified=False,status='NOT_ESTABLISHED',category=type(cleanup_error).__name__)
+                cleanup=dict(verified=False,status='NOT_ESTABLISHED',
+                    exception=provenance.exception_evidence(cleanup_error,diagnostic_source,stage='cleanup',controller_sha256=launch_hash))
                 store.append('FAILURE_CLEANUP',cleanup)
     status=('GREEN' if issuer is not None else 'OFFLINE_PASS') if failure is None else 'RED'
     summary=dict(schema='iios-native-qualification-v2',profile='observation',status=status,
-                 source=source,boot=boot,issuer=issuer,completed=completed,failure=failure,cleanup=cleanup,
+                 source=source,boot=boot,issuer=issuer,controller_launch=launch,controller_sha256=launch_hash,completed=completed,failure=failure,cleanup=cleanup,
                  authority=AUTHORITY,provider_requests=0,scope='SYNTHETIC_THREE_ROLE_QUALIFICATION_ONLY',
                  root_binding=store.root_binding,production_qualified=False,historical_cleanup='NOT_ESTABLISHED')
     store.append('EXPORT_PENDING',summary)
@@ -50,7 +93,8 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence, status=Non
         destination=export(store,evidence,summary)
         store.append('FINAL',dict(status=status,export=destination,manifest_sha256=file_hash(Path(destination)/'manifest.json')))
     except BaseException as error:
-        summary.update(status='RED',failure=dict(stage='export',category=type(error).__name__))
+        summary.update(status='RED',failure=dict(stage='export',category=type(error).__name__ if type(error).__module__=='builtins' else 'CUSTOM_EXCEPTION',
+            exception=provenance.exception_evidence(error,diagnostic_source,stage='export',controller_sha256=launch_hash)))
         store.append('EXPORT_FAILED',summary['failure'])
         return summary
     return dict(summary,export=destination)
@@ -173,7 +217,7 @@ def main(argv=None):
             if issuer.get('launch_mode')=='local_app':
                 print(canonical(dict(stage=stage,state=value)).decode(),end='',file=sys.stderr,flush=True)
         result=execute(store,stages,source=binding['commit'],boot=current,resume=args.resume,issuer=issuer,
-                       evidence=roots['evidence'],status=app_status)
+                       evidence=roots['evidence'],status=app_status,controller=lambda:provenance.observe(source,binding))
         print(canonical(result).decode(),end='')
         return 0 if result['status']=='GREEN' else 1
 
