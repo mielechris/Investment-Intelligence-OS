@@ -71,7 +71,7 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence, status=Non
             if name=='cleanup':cleanup=value
     except BaseException as error:
         failure=dict(stage=name,category=type(error).__name__ if type(error).__module__=='builtins' else 'CUSTOM_EXCEPTION',
-                     predicate='BOUNDED_EXCEPTION_EVIDENCE',
+                     predicate=provenance.exception_predicate(error),
                      exception=provenance.exception_evidence(error,diagnostic_source,stage=name,controller_sha256=launch_hash))
         store.append('STAGE_FAILED',failure)
         if status:status(name,'FAILED')
@@ -217,7 +217,7 @@ def main(argv=None):
             if issuer.get('launch_mode')=='local_app':
                 print(canonical(dict(stage=stage,state=value)).decode(),end='',file=sys.stderr,flush=True)
         result=execute(store,stages,source=binding['commit'],boot=current,resume=args.resume,issuer=issuer,
-                       evidence=roots['evidence'],status=app_status,controller=lambda:provenance.observe(source,binding))
+                       evidence=roots['evidence'],status=app_status,controller=lambda:provenance.observe(source,binding,config=config))
         print(canonical(result).decode(),end='')
         return 0 if result['status']=='GREEN' else 1
 

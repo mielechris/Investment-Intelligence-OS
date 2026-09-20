@@ -44,3 +44,12 @@ A passing preparation suite or rebuilt app does not establish native qualificati
 provider access, confinement acceptance, production readiness or trading authority.
 One separately authorized fresh application run is needed to diagnose the previous
 runtime failure. Existing failure receipts must remain unchanged.
+
+The macOS framework launcher and kernel-observed Python application image are
+separate executables. Controller admission checks each exact path and hash against
+the existing hash-bound vendor framework inventory; kernel argv[0] must name the
+pinned image. PID, parent PID, start-time presence and source CWD remain required.
+They no longer depend on the incorrect assumption that sys.executable equals the
+OS process image. Each failure has its own fixed predicate. Only exact reviewed
+controller predicate strings from builtin ValueError are exported; arbitrary
+exception messages remain withheld.

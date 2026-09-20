@@ -86,19 +86,83 @@ class ProvenanceTests(unittest.TestCase):
         a=p.environment_projection({'API_KEY':'SECRET_ONE','PATH':'secret-path','PYTHONPATH':'secret-value'})
         b=p.environment_projection({'API_KEY':'SECRET_TWO','PATH':'other-secret','PYTHONPATH':'other-value'})
         self.assertEqual(digest(a),digest(b));self.assertNotIn('SECRET',json.dumps(a));self.assertEqual(a['PATH'],'OTHER')
+    def interpreter_fixture(self):
+        config=dict(vendor_python=str(p.LAUNCHER),vendor_framework_inventory_sha256='c'*64,
+            vendor_framework_inventory_entries=[
+                dict(path=str(p.LAUNCHER.relative_to(p.FRAMEWORK)),type='file',sha256='a'*64),
+                dict(path=str(p.IMAGE.relative_to(p.FRAMEWORK)),type='file',sha256='b'*64)])
+        process=types.SimpleNamespace(pid=os.getpid(),parent_pid=os.getppid(),start_time='2026-09-20T20:00:00+00:00',cwd=str(ROOT),
+            argv=(str(p.IMAGE),'-I','-B','-S',str(ROOT/'BACK END/backend/iios_qualification_v2/cli.py'),'--profile','observation','--resume'),
+            executable=str(p.IMAGE),executable_hash='b'*64)
+        return config,process
+    def test_framework_launcher_and_process_image_are_distinct_and_both_pinned(self):
+        config,process=self.interpreter_fixture()
+        self.assertNotEqual(str(p.LAUNCHER),process.executable)
+        with patch.object(sys,'executable',str(p.LAUNCHER)),patch.object(Path,'resolve',lambda path,strict=False:path),\
+                patch.object(p,'file_hash',side_effect=lambda path:{p.LAUNCHER:'a'*64,p.IMAGE:'b'*64}[path]):
+            result=p.controller_interpreter(config,process)
+        self.assertEqual(result['launcher_sha256'],'a'*64);self.assertEqual(result['image_sha256'],'b'*64)
+        self.assertEqual(result['framework_inventory_sha256'],config['vendor_framework_inventory_sha256'])
+    def test_controller_rejects_unpinned_launcher_image_hash_and_kernel_argv(self):
+        for mutation,predicate in (
+            ('launcher_path','CONTROLLER_LAUNCHER_PATH'),('launcher_hash','CONTROLLER_LAUNCHER_HASH'),
+            ('image_path','CONTROLLER_IMAGE_PATH'),('image_hash','CONTROLLER_IMAGE_HASH'),
+            ('image_disk_hash','CONTROLLER_IMAGE_HASH'),('argv0','CONTROLLER_ARGV_IMAGE'),
+            ('duplicate_pin','CONTROLLER_INTERPRETER_PIN'),('missing_pin','CONTROLLER_INTERPRETER_PIN')):
+            with self.subTest(mutation=mutation):
+                config,process=self.interpreter_fixture();hashes={p.LAUNCHER:'a'*64,p.IMAGE:'b'*64};executable=str(p.LAUNCHER)
+                if mutation=='launcher_path':executable='/alternate/python3.14'
+                if mutation=='launcher_hash':hashes[p.LAUNCHER]='d'*64
+                if mutation=='image_path':process.executable='/alternate/Python'
+                if mutation=='image_hash':process.executable_hash='d'*64
+                if mutation=='image_disk_hash':hashes[p.IMAGE]='d'*64
+                if mutation=='argv0':process.argv=(str(p.LAUNCHER),*process.argv[1:])
+                if mutation=='duplicate_pin':config['vendor_framework_inventory_entries']*=2
+                if mutation=='missing_pin':config['vendor_framework_inventory_entries']=[]
+                with patch.object(sys,'executable',executable),patch.object(Path,'resolve',lambda path,strict=False:path),\
+                        patch.object(p,'file_hash',side_effect=lambda path:hashes[path]):
+                    with self.assertRaisesRegex(ValueError,predicate):p.controller_interpreter(config,process)
     def test_observation_binds_kernel_argv_flags_environment_and_process(self):
-        entry=ROOT/'BACK END/backend/iios_qualification_v2/cli.py'
-        obs=types.SimpleNamespace(pid=os.getpid(),parent_pid=os.getppid(),start_time='2026-09-20T20:00:00+00:00',cwd=str(ROOT),
-            argv=('python','-I','-B','-S',str(entry),'--profile','observation','--resume'),executable=str(Path(sys.executable).resolve()),executable_hash='f'*64)
+        config,obs=self.interpreter_fixture()
         flags=types.SimpleNamespace(dont_write_bytecode=1,isolated=1,no_site=1,ignore_environment=1,optimize=0)
         env={'PATH':'/usr/bin:/bin:/usr/sbin','LC_ALL':'C','TZ':'UTC','HOME':str(Path.home()),'PYTHONDONTWRITEBYTECODE':'1'}
-        with patch.object(sys,'flags',flags),patch.object(sys,'dont_write_bytecode',True),patch.dict(os.environ,env,clear=True),patch.object(p,'module_inventory',return_value=[]):
-            result=p.observe(ROOT,self.binding,lambda _:obs)
+        with patch.object(sys,'flags',flags),patch.object(sys,'dont_write_bytecode',True),patch.dict(os.environ,env,clear=True),\
+                patch.object(p,'module_inventory',return_value=[]),patch.object(sys,'executable',str(p.LAUNCHER)),\
+                patch.object(Path,'resolve',lambda path,strict=False:path),\
+                patch.object(p,'file_hash',side_effect=lambda path:{p.LAUNCHER:'a'*64,p.IMAGE:'b'*64}.get(path,'e'*64)):
+            result=p.observe(ROOT,self.binding,lambda _:obs,config=config)
             self.assertEqual(result['argv_category'],'ISOLATED_OBSERVATION_RESUME')
+            self.assertEqual(result['interpreter']['image'],str(p.IMAGE))
+            for field,value,predicate in [('pid',-1,'CONTROLLER_PID'),('parent_pid',-1,'CONTROLLER_PARENT_PID'),
+                    ('start_time','','CONTROLLER_START_TIME'),('cwd','/alternate','CONTROLLER_CWD')]:
+                before=getattr(obs,field);setattr(obs,field,value)
+                with self.assertRaisesRegex(ValueError,predicate):p.observe(ROOT,self.binding,lambda _:obs,config=config)
+                setattr(obs,field,before)
+            with self.assertRaisesRegex(ValueError,'CONTROLLER_PROCESS_PRESENT'):p.observe(ROOT,self.binding,lambda _:None,config=config)
             flags.dont_write_bytecode=0
-            with self.assertRaisesRegex(ValueError,'BYTECODE_FLAGS'):p.observe(ROOT,self.binding,lambda _:obs)
+            with self.assertRaisesRegex(ValueError,'BYTECODE_FLAGS'):p.observe(ROOT,self.binding,lambda _:obs,config=config)
             flags.dont_write_bytecode=1;obs.argv=obs.argv+('--unknown',)
-            with self.assertRaisesRegex(ValueError,'ARGV'):p.observe(ROOT,self.binding,lambda _:obs)
+            with self.assertRaisesRegex(ValueError,'ARGV'):p.observe(ROOT,self.binding,lambda _:obs,config=config)
+    def test_controller_predicate_is_preserved_in_chain_and_sanitized_export(self):
+        store=Store(self.root/'controller-predicate');calls=[]
+        def failed_observation():
+            p.require(False,'CONTROLLER_IMAGE_HASH')
+        stages={name:(lambda:calls.append('stage') or {}) for name in STAGES[:-1]}
+        result=cli.execute(store,stages,source='a'*40,boot='b',resume=False,issuer={'launch_mode':'local_app'},
+            evidence=self.root/'evidence',controller=failed_observation)
+        self.assertEqual(calls,['stage']) # cleanup only; no runtime or child operation
+        self.assertEqual(result['failure']['predicate'],'CONTROLLER_IMAGE_HASH')
+        self.assertEqual(result['failure']['exception']['predicate'],'CONTROLLER_IMAGE_HASH')
+        self.assertEqual(next(r['data'] for r in store.load() if r['event']=='STAGE_FAILED'),result['failure'])
+        exported=json.loads((Path(result['export'])/'summary.json').read_text())
+        self.assertEqual(exported['failure'],result['failure']);self.assertIsNone(exported['controller_launch'])
+    def test_predicate_export_accepts_only_exact_known_builtin_codes(self):
+        for message in ('password=SECRET','CONTROLLER_IMAGE_HASH password=SECRET','CONTROLLER_UNREVIEWED'):
+            error=ValueError(message)
+            self.assertEqual(p.exception_predicate(error),'BOUNDED_EXCEPTION_EVIDENCE')
+            self.assertNotIn('SECRET',json.dumps(p.exception_evidence(error,ROOT,stage='controller_launch')))
+        class Custom(ValueError):pass
+        self.assertEqual(p.exception_predicate(Custom('CONTROLLER_IMAGE_HASH')),'BOUNDED_EXCEPTION_EVIDENCE')
     def test_uncaught_exception_is_chained_and_exported_without_secrets(self):
         store=Store(self.root/'state');calls=[]
         def runtime_failure():

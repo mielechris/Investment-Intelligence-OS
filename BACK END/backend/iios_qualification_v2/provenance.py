@@ -19,7 +19,25 @@ PREFIX = 'iios_qualification_v2'
 REQUIRED = {PREFIX, *(PREFIX+'.'+n for n in
     ('state', 'runtime', 'native', 'roots', 'preflight_evidence', 'provenance'))}
 MAX_FRAMES = 32
+CONTROLLER_PREDICATES = frozenset((
+    'CONTROLLER_PROCESS', 'CONTROLLER_PROCESS_PRESENT', 'CONTROLLER_PID',
+    'CONTROLLER_PARENT_PID', 'CONTROLLER_START_TIME', 'CONTROLLER_CWD',
+    'CONTROLLER_INTERPRETER_PIN', 'CONTROLLER_LAUNCHER_PATH', 'CONTROLLER_LAUNCHER_HASH',
+    'CONTROLLER_IMAGE_PATH', 'CONTROLLER_IMAGE_HASH', 'CONTROLLER_ARGV_IMAGE',
+    'CONTROLLER_ARGV', 'CONTROLLER_SOURCE_ROOT', 'CONTROLLER_BYTECODE_FLAGS',
+    'CONTROLLER_ENVIRONMENT', 'CONTROLLER_RECEIPT_REQUIRED', 'CONTROLLER_MODULE_MISSING',
+    'CONTROLLER_ENTRYPOINT_MODULE', 'CONTROLLER_MODULE_ROOT', 'CONTROLLER_BYTECODE_OR_LOADER',
+    'CONTROLLER_SOURCE_ONLY_LOADER_REQUIRED', 'CONTROLLER_LOADER_ORIGIN',
+    'CONTROLLER_BYTECODE_CACHE', 'CONTROLLER_MODULE_HASH', 'CONTROLLER_LOADED_SOURCE_HASH',
+    'CONTROLLER_WRAPPER_SUBSTITUTION', 'CONTROLLER_LOADED_CODE_SUBSTITUTION',
+    'CONTROLLER_MODULE_SUBSTITUTION', 'CONTROLLER_RECEIPT_SCHEMA', 'CONTROLLER_NONCE',
+    'CONTROLLER_STALE', 'CONTROLLER_WALL_TIME', 'CONTROLLER_BINDING', 'CONTROLLER_REPLAY',
+))
+FRAMEWORK = Path('/Library/Frameworks/Python.framework/Versions/3.14')
+LAUNCHER = FRAMEWORK/'bin/python3.14'
+IMAGE = FRAMEWORK/'Resources/Python.app/Contents/MacOS/Python'
 OPERATIONS = {
+    'observe': 'CONTROLLER_OBSERVATION', 'controller_interpreter': 'CONTROLLER_INTERPRETER_BINDING',
     'source_identity': 'SOURCE_INVENTORY', 'unchanged': 'SOURCE_REVALIDATION',
     'environment': 'RUNTIME_ADMISSION', 'verify_environment_tree': 'RUNTIME_TREE_VERIFY',
     'verify_vendor': 'VENDOR_VERIFY', 'verify_framework_inventory': 'FRAMEWORK_VERIFY',
@@ -124,14 +142,40 @@ def environment_projection(environ):
         for k in ('PYTHONPATH','PYTHONHOME','PYTHONPYCACHEPREFIX')}
 
 
-def observe(source,binding,inspector=None):
+def controller_interpreter(config, process):
+    """Bind launcher and observed image separately to the already hash-bound inventory."""
+    entries=config.get('vendor_framework_inventory_entries',[])
+    pins={}
+    for role,path in (('launcher',LAUNCHER),('image',IMAGE)):
+        rows=[r for r in entries if r.get('path')==str(path.relative_to(FRAMEWORK))]
+        require(len(rows)==1 and rows[0].get('type')=='file' and
+                isinstance(rows[0].get('sha256'),str) and len(rows[0]['sha256'])==64 and
+                all(c in '0123456789abcdef' for c in rows[0]['sha256']), 'CONTROLLER_INTERPRETER_PIN')
+        pins[role]=rows[0]['sha256']
+    require(config.get('vendor_python')==str(LAUNCHER) and sys.executable==str(LAUNCHER) and
+            LAUNCHER.resolve(strict=True)==LAUNCHER, 'CONTROLLER_LAUNCHER_PATH')
+    require(file_hash(LAUNCHER)==pins['launcher'], 'CONTROLLER_LAUNCHER_HASH')
+    require(process.executable==str(IMAGE) and IMAGE.resolve(strict=True)==IMAGE, 'CONTROLLER_IMAGE_PATH')
+    require(process.executable_hash==pins['image'] and file_hash(IMAGE)==pins['image'], 'CONTROLLER_IMAGE_HASH')
+    require(bool(process.argv) and process.argv[0]==str(IMAGE), 'CONTROLLER_ARGV_IMAGE')
+    return dict(category='PINNED_MACOS_FRAMEWORK_LAUNCHER_AND_IMAGE',
+                launcher=str(LAUNCHER),launcher_sha256=pins['launcher'],
+                image=str(IMAGE),image_sha256=pins['image'],
+                framework_inventory_sha256=config['vendor_framework_inventory_sha256'])
+
+
+def observe(source,binding,inspector=None,*,config):
     if inspector is None:
         from truth_spine_process_identity import inspect_macos
         inspector=inspect_macos
     source=Path(source);require(source.is_absolute() and source.resolve(strict=True)==source,'CONTROLLER_SOURCE_ROOT')
     st=source.stat();process=inspector(os.getpid())
-    require(process is not None and process.pid==os.getpid() and process.parent_pid==os.getppid() and
-            process.start_time and process.executable==str(Path(sys.executable).resolve()) and process.cwd==str(source),'CONTROLLER_PROCESS')
+    require(process is not None,'CONTROLLER_PROCESS_PRESENT')
+    require(process.pid==os.getpid(),'CONTROLLER_PID')
+    require(process.parent_pid==os.getppid(),'CONTROLLER_PARENT_PID')
+    require(bool(process.start_time),'CONTROLLER_START_TIME')
+    require(process.cwd==str(source),'CONTROLLER_CWD')
+    interpreter=controller_interpreter(config,process)
     entry=source/'BACK END/backend/iios_qualification_v2/cli.py'
     args=list(process.argv);tail=args[5:]
     require(len(args)>=7 and args[1:5]==['-I','-B','-S',str(entry)] and tail[:2]==['--profile','observation'] and
@@ -141,7 +185,7 @@ def observe(source,binding,inspector=None):
     projection=environment_projection(os.environ)
     require(all(projection[k]=='EXPECTED' for k in ('PATH','LC_ALL','TZ','HOME','PYTHONDONTWRITEBYTECODE')),
             'CONTROLLER_ENVIRONMENT')
-    return dict(process=dict(pid=process.pid,parent_pid=process.parent_pid,start_time=process.start_time,
+    return dict(interpreter=interpreter,process=dict(pid=process.pid,parent_pid=process.parent_pid,start_time=process.start_time,
                              executable=process.executable,executable_sha256=process.executable_hash),
                 argv_category='ISOLATED_OBSERVATION'+('_RESUME' if '--resume' in tail else '')+
                               ('_REBUILD_RUNTIME' if '--rebuild-runtime' in tail else ''),
@@ -174,6 +218,11 @@ def validate_launch(receipt,observation,*,context,records,now_ns=None):
     return receipt
 
 
+def exception_predicate(error):
+    return error.args[0] if type(error) is ValueError and len(error.args)==1 and \
+        isinstance(error.args[0],str) and error.args[0] in CONTROLLER_PREDICATES else 'BOUNDED_EXCEPTION_EVIDENCE'
+
+
 def exception_evidence(error,source,*,stage,controller_sha256=None):
     source=Path(source);frames=[];count=0;operation='UNKNOWN';tb=error.__traceback__
     while tb is not None:
@@ -187,7 +236,7 @@ def exception_evidence(error,source,*,stage,controller_sha256=None):
         frames.append(location);frames=frames[-MAX_FRAMES:];count+=1
         if c.co_name in OPERATIONS:operation=OPERATIONS[c.co_name]
         tb=tb.tb_next
-    filename=getattr(error,'filename',None);target='UNKNOWN'
+    filename=getattr(error,'filename',None);target='CONTROLLER_PROCESS' if stage=='controller_launch' else 'UNKNOWN'
     if isinstance(filename,(str,bytes)):
         p=Path(os.fsdecode(filename))
         if p==source/'bazel-out' or p.is_relative_to(source/'bazel-out'):target='GENERATED_SOURCE_BAZEL_OUT'
@@ -195,7 +244,7 @@ def exception_evidence(error,source,*,stage,controller_sha256=None):
         elif p.is_relative_to(Path.home()/'Library/IIOS/runtime'):target='QUALIFICATION_RUNTIME'
         elif p.is_relative_to('/Library/Frameworks/Python.framework'):target='VENDOR_FRAMEWORK'
         else:target='EXTERNAL'
-    return dict(schema=1,stage=stage,controller_sha256=controller_sha256,
+    return dict(schema=1,stage=stage,predicate=exception_predicate(error),controller_sha256=controller_sha256,
                 exception_category=type(error).__name__ if type(error).__module__=='builtins' else 'CUSTOM_EXCEPTION',
                 frames=frames,frame_count=count,truncated=count>MAX_FRAMES,
                 traceback_sha256=digest(frames),call_site=frames[-1] if frames else None,
