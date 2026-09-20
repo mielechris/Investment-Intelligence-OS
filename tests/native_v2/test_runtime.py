@@ -167,8 +167,14 @@ class RuntimeTests(unittest.TestCase):
         with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
             value=source_identity(self.root)
         self.assertEqual([row['path'] for row in value['inventory']],['script'])
+
+    def test_source_identity_allows_generated_directory_to_disappear_during_traversal(self):
+        script=self.root/'script';script.write_text('x');script.chmod(0o600)
+        staged='100644 '+'a'*40+' 0\tscript\0'
+        walked=[(self.root.resolve(),['bazel-out'],['script'])]
         with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]),\
-             patch('iios_qualification_v2.runtime.os.open',side_effect=FileNotFoundError):
+             patch('iios_qualification_v2.runtime.os.walk',return_value=iter(walked)),\
+             patch('iios_qualification_v2.runtime.os.open',side_effect=AssertionError('bazel-out must not be opened')):
             value=source_identity(self.root)
         self.assertEqual([row['path'] for row in value['inventory']],['script'])
 

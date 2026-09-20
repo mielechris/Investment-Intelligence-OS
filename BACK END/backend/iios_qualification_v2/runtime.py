@@ -266,16 +266,19 @@ def source_identity(root, *, sealed=False):
     actual=[]
     for parent, directories, filenames in os.walk(root, topdown=True, followlinks=False):
         parent=Path(parent)
-        if parent==root and _GENERATED_SOURCE_ROOT in {*directories,*filenames}:
-            generated=root/_GENERATED_SOURCE_ROOT
-            require(_GENERATED_SOURCE_ROOT in directories,'SOURCE_GENERATED_ROOT_TYPE')
+        if parent==root and _GENERATED_SOURCE_ROOT in filenames:
+            require(False,'SOURCE_GENERATED_ROOT_TYPE')
+        if parent==root and _GENERATED_SOURCE_ROOT in directories:
+            # `os.walk` already classified this entry as a directory.  Do not open,
+            # stat, or otherwise admit it: Bazel output is never qualification input.
+            # A symlink is still a substitute source root and must fail closed.
+            try:
+                entries={entry.name:entry for entry in os.scandir(root)}
+            except FileNotFoundError:
+                entries={}
+            entry=entries.get(_GENERATED_SOURCE_ROOT)
+            if entry is not None:require(not entry.is_symlink(),'SOURCE_GENERATED_ROOT_TYPE')
             directories.remove(_GENERATED_SOURCE_ROOT)
-            try:fd=os.open(generated,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-            except FileNotFoundError:pass
-            except OSError:require(False,'SOURCE_GENERATED_ROOT_TYPE')
-            else:
-                try:require(stat.S_ISDIR(os.fstat(fd).st_mode),'SOURCE_GENERATED_ROOT_TYPE')
-                finally:os.close(fd)
         if '.git' in directories:directories.remove('.git')
         if '.git' in filenames:filenames.remove('.git')
         for name in (*directories,*filenames):
