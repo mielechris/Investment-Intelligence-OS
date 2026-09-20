@@ -264,25 +264,23 @@ def source_identity(root, *, sealed=False):
                     bool(actual_mode&0o100)==(mode=='100755'),'SOURCE_WORKTREE_MODE')
         files.append({'path':name,'sha256':file_hash(p),'bytes':st.st_size,'mode':git_mode})
     actual=[];top_directories=[];generated=None
-    # `os.walk(root)` classifies every root entry before yielding it.  A transient
-    # Bazel output directory can disappear in that window, so discover the root
-    # ourselves and remove that one generated directory before recursive walking.
-    with os.scandir(root) as stream:
-        for entry in stream:
-            name=entry.name
-            if name=='.git':continue
-            if name==_GENERATED_SOURCE_ROOT:
-                try:
-                    require(not entry.is_symlink() and entry.is_dir(follow_symlinks=False),'SOURCE_GENERATED_ROOT_TYPE')
-                    generated=entry.stat(follow_symlinks=False)
-                except FileNotFoundError:
-                    generated=None
-                continue
-            path=root/name;st=path.lstat()
-            require(not stat.S_ISLNK(st.st_mode) and (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
-                    'SOURCE_EXTRA_TYPE')
-            if stat.S_ISDIR(st.st_mode):top_directories.append(path)
-            else:actual.append(name)
+    # `os.walk(root)` and `os.scandir()` classify entries before the caller can
+    # exclude them. Enumerate names only, then isolate the generated root before
+    # any recursive classification. A disappearing generated directory is absent,
+    # while any surviving substitute or replacement fails closed below.
+    for name in os.listdir(root):
+        if name=='.git':continue
+        path=root/name
+        if name==_GENERATED_SOURCE_ROOT:
+            try:generated=path.lstat()
+            except FileNotFoundError:generated=None
+            else:require(stat.S_ISDIR(generated.st_mode) and not stat.S_ISLNK(generated.st_mode),'SOURCE_GENERATED_ROOT_TYPE')
+            continue
+        st=path.lstat()
+        require(not stat.S_ISLNK(st.st_mode) and (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
+                'SOURCE_EXTRA_TYPE')
+        if stat.S_ISDIR(st.st_mode):top_directories.append(path)
+        else:actual.append(name)
     for start in top_directories:
         for parent, directories, filenames in os.walk(start, topdown=True, followlinks=False):
             parent=Path(parent)

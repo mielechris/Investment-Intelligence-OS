@@ -170,16 +170,14 @@ class RuntimeTests(unittest.TestCase):
 
     def test_source_identity_allows_generated_directory_to_disappear_during_initial_enumeration(self):
         script=self.root/'script';script.write_text('x');script.chmod(0o600)
-        staged='100644 '+'a'*40+' 0\tscript\0'
-        class Vanishing:
-            name='bazel-out'
-            def is_symlink(self):raise FileNotFoundError()
-        class Stream:
-            def __enter__(self):return iter([Vanishing(),SimpleNamespace(name='script')])
-            def __exit__(self,*args):return False
+        generated=self.root/'bazel-out';generated.mkdir();(generated/'output').write_text('generated')
+        staged='100644 '+'a'*40+' 0\tscript\0';real_listdir=os.listdir
+        def disappear_after_name_enumeration(path):
+            names=real_listdir(path)
+            if Path(path).resolve()==self.root.resolve():shutil.rmtree(generated)
+            return names
         with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]),\
-             patch('iios_qualification_v2.runtime.os.scandir',return_value=Stream()),\
-             patch('iios_qualification_v2.runtime.os.open',side_effect=AssertionError('bazel-out must not be opened')):
+             patch('iios_qualification_v2.runtime.os.listdir',side_effect=disappear_after_name_enumeration):
             value=source_identity(self.root)
         self.assertEqual([row['path'] for row in value['inventory']],['script'])
 
