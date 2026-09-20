@@ -28,7 +28,13 @@ def command(argv, *, timeout=30, cwd=None):
 
 VENDOR_REQUIREMENT = 'anchor apple generic and certificate leaf[subject.OU] = "BMM5U3QVKW"'
 VENDOR_TEAM = 'BMM5U3QVKW'
+VENDOR_LAUNCHER = '/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14'
 _CODESIGN_OUTPUT_LIMIT = 65536
+_VENDOR_SIGNATURE_TARGETS = frozenset(('launcher', 'app_image'))
+_VENDOR_DANGLING_LINKS = frozenset((
+    ('Frameworks/Tcl.framework/PrivateHeaders', 'Versions/Current/PrivateHeaders'),
+    ('Frameworks/Tk.framework/PrivateHeaders', 'Versions/Current/PrivateHeaders'),
+))
 
 
 def _codesign_bytes(value):
@@ -63,6 +69,7 @@ def _vendor_codesign_failure(*, target, resolved, outcome, exit_category, stderr
 
 def codesign_vendor_target(path, *, target, resolved):
     """Verify one fixed vendor image and retain only bounded failure categories."""
+    require(target in _VENDOR_SIGNATURE_TARGETS, 'VENDOR_SIGNATURE_TARGET')
     verify = ['/usr/bin/codesign','--verify','--strict','--all-architectures',
               '-R='+VENDOR_REQUIREMENT,str(path)]
     try:
@@ -110,6 +117,75 @@ def codesign_vendor_target(path, *, target, resolved):
         _vendor_codesign_failure(target=target,resolved=resolved,outcome='WRONG_SIGNER',exit_category='EXIT_ZERO',
                                  stderr=stderr,signer='MISMATCH',action='describe')
     return dict(target=target,resolved=resolved,signer='MATCHED')
+
+
+def vendor_framework_inventory(root):
+    """Return a pin for every entry in the fixed vendor framework container."""
+    root = Path(root)
+    require(root.is_absolute() and root.is_dir() and not root.is_symlink(), 'VENDOR_FRAMEWORK_ROOT')
+    root = root.resolve(strict=True)
+    paths = []
+    for parent, directories, files in os.walk(root, followlinks=False):
+        paths.extend(Path(parent)/name for name in (*directories, *files))
+    rows = []
+    for path in [root, *sorted(paths,key=lambda item:str(item.relative_to(root)))]:
+        relative = '.' if path == root else str(path.relative_to(root))
+        value = path.lstat(); mode = stat.S_IMODE(value.st_mode)
+        common = dict(path=relative, mode=mode, uid=value.st_uid, gid=value.st_gid, size=value.st_size)
+        if stat.S_ISDIR(value.st_mode):
+            rows.append(dict(common, type='directory'))
+        elif stat.S_ISLNK(value.st_mode):
+            target = os.readlink(path)
+            require(not os.path.isabs(target), 'VENDOR_FRAMEWORK_SYMLINK')
+            try:
+                require((path.parent/target).resolve(strict=True).is_relative_to(root), 'VENDOR_FRAMEWORK_SYMLINK')
+            except FileNotFoundError:
+                require((relative, target) in _VENDOR_DANGLING_LINKS, 'VENDOR_FRAMEWORK_SYMLINK')
+            rows.append(dict(common, type='symlink', target=target))
+        elif stat.S_ISREG(value.st_mode):
+            rows.append(dict(common, type='file', sha256=file_hash(path)))
+        else:
+            require(False, 'VENDOR_FRAMEWORK_TYPE')
+    return rows
+
+
+def bind_vendor_framework_contract(source, config):
+    """Hash-bind and validate the reviewed Python 3.14.7 container inventory."""
+    source = Path(source).resolve(strict=True)
+    name = config.get('vendor_framework_inventory_path')
+    expected_hash = config.get('vendor_framework_inventory_sha256')
+    require(isinstance(name,str) and re.fullmatch(r'config/[A-Za-z0-9._-]+\.json',name),
+            'VENDOR_FRAMEWORK_INVENTORY_PATH')
+    require(isinstance(expected_hash,str) and re.fullmatch(r'[0-9a-f]{64}',expected_hash),
+            'VENDOR_FRAMEWORK_INVENTORY_PIN')
+    path = (source/name).resolve(strict=True)
+    require(path.is_relative_to(source) and path.is_file() and not path.is_symlink() and file_hash(path)==expected_hash,
+            'VENDOR_FRAMEWORK_INVENTORY_PIN')
+    value = decode(path.read_bytes())
+    require(value.get('schema')==1 and value.get('root')=='/Library/Frameworks/Python.framework/Versions/3.14' and
+            value.get('python_version')=='3.14.7' and value.get('installer_sha256')==config.get('vendor_installer_sha256'),
+            'VENDOR_FRAMEWORK_INVENTORY_PARENT')
+    entries = value.get('entries')
+    require(isinstance(entries,list) and entries==sorted(entries,key=lambda row:row.get('path','')),
+            'VENDOR_FRAMEWORK_INVENTORY_ORDER')
+    paths=[]
+    for row in entries:
+        require(isinstance(row,dict) and isinstance(row.get('path'),str) and isinstance(row.get('type'),str),
+                'VENDOR_FRAMEWORK_INVENTORY_ROW')
+        relative=row['path']; require(relative=='.' or (not relative.startswith('/') and '..' not in Path(relative).parts),
+                                       'VENDOR_FRAMEWORK_INVENTORY_PATH')
+        require(isinstance(row.get('mode'),int) and isinstance(row.get('uid'),int) and isinstance(row.get('gid'),int) and
+                isinstance(row.get('size'),int) and row['size']>=0,'VENDOR_FRAMEWORK_INVENTORY_METADATA')
+        if row['type']=='directory': require(set(row)=={'path','type','mode','uid','gid','size'},'VENDOR_FRAMEWORK_INVENTORY_ROW')
+        elif row['type']=='file': require(set(row)=={'path','type','mode','uid','gid','size','sha256'} and
+                                                    isinstance(row['sha256'],str) and re.fullmatch(r'[0-9a-f]{64}',row['sha256']),
+                                                    'VENDOR_FRAMEWORK_INVENTORY_ROW')
+        elif row['type']=='symlink': require(set(row)=={'path','type','mode','uid','gid','size','target'} and
+                                                       isinstance(row['target'],str),'VENDOR_FRAMEWORK_INVENTORY_ROW')
+        else: require(False,'VENDOR_FRAMEWORK_INVENTORY_ROW')
+        paths.append(relative)
+    require(len(paths)==len(set(paths)) and len({path.casefold() for path in paths})==len(paths),'VENDOR_FRAMEWORK_INVENTORY_DUPLICATE')
+    return dict(config,vendor_framework_inventory_entries=entries)
 
 
 def normalized(name):
@@ -248,7 +324,7 @@ def unchanged(root, source):
 
 def verify_vendor(config):
     python = Path(config['vendor_python'])
-    require(str(python).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'), 'VENDOR_LOCATION')
+    require(str(python)==VENDOR_LAUNCHER, 'VENDOR_LOCATION')
     try:
         resolved = python.resolve(strict=True)
     except FileNotFoundError:
@@ -261,11 +337,16 @@ def verify_vendor(config):
         st=p.stat(); require(st.st_uid==0 and not st.st_mode&0o002 and (not st.st_mode&0o020 or st.st_gid in (0,80)), 'VENDOR_OWNER_MODE')
     codesign_vendor_target(resolved,target='launcher',resolved='FRAMEWORK_3_14')
     codesign_vendor_target(image,target='app_image',resolved='FRAMEWORK_3_14')
-    codesign_vendor_target(library,target='framework_library',resolved='FRAMEWORK_3_14')
+    expected_inventory = config.get('vendor_framework_inventory_entries')
+    require(isinstance(expected_inventory,list), 'VENDOR_FRAMEWORK_INVENTORY_PIN')
+    inventory = vendor_framework_inventory(library.parent)
+    require(inventory == expected_inventory, 'VENDOR_FRAMEWORK_INVENTORY')
     version = command([python,'-I','-B','-S','-c','import sys;print(".".join(map(str,sys.version_info[:3])))']).strip()
     require(version==config['python_version'], 'VENDOR_VERSION')
     return dict(launcher=str(python), launcher_sha256=file_hash(resolved), image=str(image), image_sha256=file_hash(image),
-                framework_sha256=file_hash(library), version=version, signature_team='BMM5U3QVKW')
+                framework_sha256=file_hash(library), framework_inventory_sha256=config['vendor_framework_inventory_sha256'],
+                framework_inventory_entries=len(inventory),
+                version=version, signature_team='BMM5U3QVKW')
 
 
 def native_dependencies(path, envroot):

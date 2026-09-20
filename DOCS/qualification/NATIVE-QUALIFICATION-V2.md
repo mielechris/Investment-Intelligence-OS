@@ -27,7 +27,7 @@ Historical `cleanup=NOT_ESTABLISHED` is permanent. Configuration pins the indepe
 ## Native stages and claim
 
 1. Verify clean exact source and artifact/version lock correspondence.
-2. Verify PSF signatures and exact vendor Python version; build/reverify the project venv at its final location.
+2. Verify the exact PSF signature requirement on `bin/python3.14` and the Python.app executable, then compare every entry in the Python 3.14.7 framework container against its source-pinned immutable inventory before building/reverifying the project venv at its final location. The framework-root `Python` container is not submitted to aggregate resource-seal verification: the verified official installer composes it from separate packages and does not provide a valid aggregate seal. This exception is limited to the pinned 3.14.7 installer SHA-256 and `config/vendor-python-3.14.7-framework.inventory.json`; it never applies to either executable code object.
 3. Bind current boot and preserve prior-boot exceptions.
 4. Test the existing macOS ownership inspector with an owned READY/ACK child: PID, PPID, start, executable/hash, argv, cwd and stability.
 5. Perform allowed/denied dummy filesystem, credential-boundary, loopback-network and subprocess comparisons. Require correlated kernel sandbox denials and stable process identity. EPERM alone is insufficient; actual credential stores are never read.

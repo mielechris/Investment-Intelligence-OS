@@ -1,8 +1,11 @@
 {
-  "schema": 2,
+  "schema": 3,
   "profile": "observation",
   "python_version": "3.14.7",
   "vendor_python": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14",
+  "vendor_installer_sha256": "70c5239ad2d62925d2947e46921d0ddd3d35be3d2f0a2d50db33da507dbcb419",
+  "vendor_framework_inventory_path": "config/vendor-python-3.14.7-framework.inventory.json",
+  "vendor_framework_inventory_sha256": "d6ebb824a7caae91836f5276f1283a752506c8bb4a8ef1722846e14f735a31ab",
   "workflow": "native-qualification.yml",
   "maximum_seconds": 900,
   "historical": {

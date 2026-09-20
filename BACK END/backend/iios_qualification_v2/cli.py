@@ -69,6 +69,7 @@ def main(argv=None):
     os.umask(0o077)
     source=Path(__file__).resolve().parents[3]
     config=decode((source/'config/native-qualification-v2.json').read_bytes())
+    config=runtime.bind_vendor_framework_contract(source,config)
     lock=source/'config/production-python-requirements.lock';artifacts=source/'config/production-python-artifacts.lock.json'
     pins=runtime.lock_binding(lock,artifacts)
     if args.check:

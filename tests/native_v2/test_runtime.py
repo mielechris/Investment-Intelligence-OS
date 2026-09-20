@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'BACK END/backend'))
 from iios_qualification_v2.runtime import *
+from iios_qualification_v2.state import canonical
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
@@ -78,12 +79,68 @@ class RuntimeTests(unittest.TestCase):
                 SimpleNamespace(returncode=0,stdout=b'',stderr=b'TeamIdentifier=BMM5U3QVKW\n')]
 
     def test_vendor_signature_targets_are_fixed_and_psf_bound(self):
-        for target in ('launcher','app_image','framework_library'):
+        for target in ('launcher','app_image'):
             with self.subTest(target=target),patch('iios_qualification_v2.runtime.subprocess.run',side_effect=self.codesign_success()) as run:
                 receipt=codesign_vendor_target('/fixed/vendor/image',target=target,resolved='FRAMEWORK_3_14')
             self.assertEqual(receipt,{'target':target,'resolved':'FRAMEWORK_3_14','signer':'MATCHED'})
             self.assertIn('-R='+VENDOR_REQUIREMENT,run.call_args_list[0].args[0])
+            self.assertIn('--strict',run.call_args_list[0].args[0])
+            self.assertNotIn('--ignore-resources',run.call_args_list[0].args[0])
             self.assertEqual(run.call_args_list[1].args[0][:3],['/usr/bin/codesign','-d','--verbose=4'])
+
+    def test_framework_container_is_not_a_codesign_target(self):
+        with self.assertRaisesRegex(ValueError,'VENDOR_SIGNATURE_TARGET'):
+            codesign_vendor_target('/fixed/vendor/framework/Python',target='framework_library',resolved='FRAMEWORK_3_14')
+
+    def framework_tree(self, *, link=False):
+        tree=self.root/'framework';tree.mkdir();item=tree/'item';item.write_text('one');item.chmod(0o640)
+        if link:(tree/'link').symlink_to('item')
+        return tree,item
+
+    def test_vendor_framework_inventory_rejects_content_mode_size_type_extra_and_missing(self):
+        tree,item=self.framework_tree();expected=vendor_framework_inventory(tree)
+        item.write_text('two');self.assertNotEqual(vendor_framework_inventory(tree),expected)
+        item.write_text('one');item.chmod(0o600);self.assertNotEqual(vendor_framework_inventory(tree),expected)
+        item.chmod(0o640);item.write_text('longer');self.assertNotEqual(vendor_framework_inventory(tree),expected)
+        item.write_text('one');(tree/'extra').write_text('x');self.assertNotEqual(vendor_framework_inventory(tree),expected)
+        (tree/'extra').unlink();item.unlink();self.assertNotEqual(vendor_framework_inventory(tree),expected)
+        item.mkdir();self.assertNotEqual(vendor_framework_inventory(tree),expected)
+
+    def test_vendor_framework_inventory_rejects_owner_group_and_size_mutation(self):
+        tree,item=self.framework_tree();expected=vendor_framework_inventory(tree);original=Path.lstat
+        for field in ('st_uid','st_gid','st_size'):
+            with self.subTest(field=field):
+                def changed(path,field=field):
+                    value=original(path)
+                    if path.name=='item':
+                        values=dict(st_mode=value.st_mode,st_uid=value.st_uid,st_gid=value.st_gid,st_size=value.st_size)
+                        values[field]+=1;return SimpleNamespace(**values)
+                    return value
+                with patch.object(Path,'lstat',autospec=True,side_effect=changed):self.assertNotEqual(vendor_framework_inventory(tree),expected)
+
+    def test_vendor_framework_inventory_rejects_symlink_replacement_and_escape(self):
+        tree,item=self.framework_tree(link=True);(tree/'other').write_text('one');expected=vendor_framework_inventory(tree)
+        link=tree/'link';link.unlink();link.symlink_to('other');self.assertNotEqual(vendor_framework_inventory(tree),expected)
+        link.unlink();link.symlink_to('/etc/passwd')
+        with self.assertRaisesRegex(ValueError,'VENDOR_FRAMEWORK_SYMLINK'):vendor_framework_inventory(tree)
+
+    def test_vendor_framework_inventory_allows_only_pinned_dangling_symlink(self):
+        tree=self.root/'framework';tree.mkdir();(tree/'link').symlink_to('missing')
+        with patch('iios_qualification_v2.runtime._VENDOR_DANGLING_LINKS',frozenset((('link','missing'),))):
+            self.assertIsInstance(vendor_framework_inventory(tree),list)
+        with self.assertRaisesRegex(ValueError,'VENDOR_FRAMEWORK_SYMLINK'):vendor_framework_inventory(tree)
+
+    def test_vendor_framework_contract_rejects_inventory_pin_and_duplicate_path(self):
+        source=self.root/'source';config_dir=source/'config';config_dir.mkdir(parents=True);tree,item=self.framework_tree()
+        entries=vendor_framework_inventory(tree);document={'schema':1,'root':'/Library/Frameworks/Python.framework/Versions/3.14',
+            'python_version':'3.14.7','installer_sha256':'a'*64,'entries':entries}
+        path=config_dir/'vendor.json';path.write_bytes(canonical(document))
+        config={'vendor_framework_inventory_path':'config/vendor.json','vendor_framework_inventory_sha256':file_hash(path),'vendor_installer_sha256':'a'*64}
+        self.assertEqual(bind_vendor_framework_contract(source,config)['vendor_framework_inventory_entries'],entries)
+        config['vendor_framework_inventory_sha256']='0'*64
+        with self.assertRaisesRegex(ValueError,'VENDOR_FRAMEWORK_INVENTORY_PIN'):bind_vendor_framework_contract(source,config)
+        document['entries'].append(dict(entries[-1]));path.write_bytes(canonical(document));config['vendor_framework_inventory_sha256']=file_hash(path)
+        with self.assertRaisesRegex(ValueError,'VENDOR_FRAMEWORK_INVENTORY_DUPLICATE'):bind_vendor_framework_contract(source,config)
 
     def test_vendor_codesign_nonzero_exit_is_sanitized(self):
         result=SimpleNamespace(returncode=1,stdout=b'',stderr=b'raw diagnostic')
@@ -107,7 +164,7 @@ class RuntimeTests(unittest.TestCase):
         results=[SimpleNamespace(returncode=0,stdout=b'',stderr=b''),SimpleNamespace(returncode=0,stdout=b'',stderr=b'TeamIdentifier=WRONG\n')]
         with patch('iios_qualification_v2.runtime.subprocess.run',side_effect=results):
             with self.assertRaisesRegex(ValueError,'outcome=WRONG_SIGNER;exit=EXIT_ZERO;.*signer=MISMATCH'):
-                codesign_vendor_target('/fixed/vendor/image',target='framework_library',resolved='FRAMEWORK_3_14')
+                codesign_vendor_target('/fixed/vendor/image',target='app_image',resolved='FRAMEWORK_3_14')
 
     def test_vendor_codesign_tool_launch_failure_is_sanitized(self):
         with patch('iios_qualification_v2.runtime.subprocess.run',side_effect=OSError(2,'missing')):
@@ -119,3 +176,7 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(Path,'resolve',side_effect=FileNotFoundError):
             with self.assertRaisesRegex(ValueError,'target=launcher;resolved=MISSING;action=verify;outcome=MISSING_TARGET;exit=NOT_RUN;stderr=EMPTY;stderr_sha256=NONE;signer=NOT_EVALUATED'):
                 verify_vendor(config)
+
+    def test_vendor_launcher_cannot_substitute_app_executable(self):
+        config={'vendor_python':'/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python','python_version':'3.14.7'}
+        with self.assertRaisesRegex(ValueError,'VENDOR_LOCATION'):verify_vendor(config)
