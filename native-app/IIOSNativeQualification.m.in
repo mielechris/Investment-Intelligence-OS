@@ -44,7 +44,8 @@ static NSString *const EvidenceRoot = @"@@USER_HOME@@/Library/IIOS/evidence";
 }
 - (void)confirm:(NSDictionary *)value {
     NSString *resume=[value[@"resume_required"] boolValue]?@"true (explicit resume after confirmation)":@"false";
-    NSString *text=[NSString stringWithFormat:@"Repository: %@\nCommit: %@\nBranch: %@\nSource inventory: %@\nSelected Mac identity: %@\nQualification profile: %@\nEvidence destination: %@\nResume: %@\nProvider requests: 0\nBroker connection: false\nPaper-order permission: false\nTrade execution: false\nLive execution: false\nHistorical cleanup: NOT_ESTABLISHED",value[@"repository"],value[@"commit"],value[@"branch"],SourceInventory,value[@"selected_mac"],value[@"profile"],value[@"evidence_destination"],resume];
+    NSString *rebuild=[value[@"runtime_rebuild_required"] boolValue]?@"true (explicit clean rebuild after confirmation)":@"false";
+    NSString *text=[NSString stringWithFormat:@"Repository: %@\nCommit: %@\nBranch: %@\nSource inventory: %@\nSelected Mac identity: %@\nQualification profile: %@\nEvidence destination: %@\nResume: %@\nRuntime recovery: %@\nProvider requests: 0\nBroker connection: false\nPaper-order permission: false\nTrade execution: false\nLive execution: false\nHistorical cleanup: NOT_ESTABLISHED",value[@"repository"],value[@"commit"],value[@"branch"],SourceInventory,value[@"selected_mac"],value[@"profile"],value[@"evidence_destination"],resume,rebuild];
     NSAlert *alert=[NSAlert new];alert.messageText=@"Run IIOS Native Qualification?";alert.informativeText=text;alert.alertStyle=NSAlertStyleWarning;
     [alert addButtonWithTitle:@"Run Qualification"];[alert addButtonWithTitle:@"Cancel"];
     if([alert runModal]==NSAlertFirstButtonReturn)[self runQualification:value];else[NSApp terminate:nil];
@@ -61,7 +62,7 @@ static NSString *const EvidenceRoot = @"@@USER_HOME@@/Library/IIOS/evidence";
     dispatch_async(dispatch_get_main_queue(),^{ [self.logView.textStorage appendAttributedString:[[NSAttributedString alloc] initWithString:text]];[self.logView scrollToEndOfDocument:nil]; });
 }
 - (void)runQualification:(NSDictionary *)value {
-    [self makeWindow];NSMutableArray *args=[NSMutableArray arrayWithArray:@[@"--profile",@"observation"]];if([value[@"resume_required"] boolValue])[args addObject:@"--resume"];
+    [self makeWindow];NSMutableArray *args=[NSMutableArray arrayWithArray:@[@"--profile",@"observation"]];if([value[@"resume_required"] boolValue])[args addObject:@"--resume"];if([value[@"runtime_rebuild_required"] boolValue])[args addObject:@"--rebuild-runtime"];
     NSPipe *out=[NSPipe pipe],*err=[NSPipe pipe];NSTask *task=[self fixedProcess:args output:out error:err];
     err.fileHandleForReading.readabilityHandler=^(NSFileHandle *handle){[self appendStatus:handle.availableData];};
     task.terminationHandler=^(NSTask *completed){err.fileHandleForReading.readabilityHandler=nil;NSData *data=[out.fileHandleForReading readDataToEndOfFile];dispatch_async(dispatch_get_main_queue(),^{[self finish:data code:completed.terminationStatus];});};

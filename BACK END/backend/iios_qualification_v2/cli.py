@@ -63,7 +63,7 @@ def main(argv=None):
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--check',action='store_true',help='Static source/lock preparation only; cannot issue native evidence')
     parser.add_argument('--stage-artifacts',type=Path,help='Copy exact already-acquired wheels from a durable qualification directory; no downloads')
-    parser.add_argument('--rebuild-runtime',action='store_true',help='Preserve an incomplete venv under a retired name, then rebuild once')
+    parser.add_argument('--rebuild-runtime',action='store_true',help='Explicitly quarantine one incomplete venv, then build a clean replacement')
     parser.add_argument('--app-preflight',action='store_true',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     os.umask(0o077)
@@ -106,6 +106,7 @@ def main(argv=None):
                   commit=binding['commit'],branch=binding.get('branch'),inventory_sha256=binding['inventory_sha256'],
                   selected_mac=issuer.get('hardware_uuid'),profile=args.profile,evidence_destination=str(roots['evidence']),
                   preflight_evidence=True,provider_requests=0,authority=AUTHORITY,resume_required=bool(records),
+                  runtime_rebuild_required=runtime.partial_rebuild_required(roots['runtime'],runtime.runtime_identity(config,lock,artifacts)),
                   current_boot=current,historical_cleanup='NOT_ESTABLISHED')).decode(),end='')
             return 0
         engine_started=True
@@ -143,7 +144,8 @@ def main(argv=None):
                 return result
             return run
         def selected_runtime():
-            value=runtime.environment(roots['runtime'],config,lock,artifacts,rebuild=args.rebuild_runtime)
+            quarantine=durable.contained(roots['qualification']/'native-v2'/'runtime-quarantine',bound)
+            value=runtime.environment(roots['runtime'],config,lock,artifacts,rebuild=args.rebuild_runtime,quarantine=quarantine,bound=bound)
             holder['native']=native.Native(source,work,store,value,current,deadline)
             return value
         def cleanup():

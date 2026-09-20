@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,65 @@ class RuntimeTests(unittest.TestCase):
     def test_inventory_rejects_escape_symlink(self):
         (self.root/'link').symlink_to('/etc/passwd')
         with self.assertRaises(ValueError):environment_tree(self.root)
+
+    def partial_venv(self, identity='a'*64):
+        runtime=self.root/'runtime';runtime.mkdir();venv=runtime/('venv-'+identity);venv.mkdir();venv.chmod(0o700)
+        for name in ('bin','include','lib'):(venv/name).mkdir()
+        (venv/'pyvenv.cfg').write_text('partial');(venv/'IIOS-REQUIREMENTS.txt').write_text('partial')
+        quarantine=self.root/'qualification'/'native-v2'/'runtime-quarantine';quarantine.mkdir(parents=True)
+        return runtime,venv,quarantine
+
+    def test_explicit_partial_quarantine_moves_only_the_owned_incomplete_venv(self):
+        runtime,venv,quarantine=self.partial_venv()
+        bound={'root':str(self.root)}
+        with patch('iios_qualification_v2.runtime.durable.contained',side_effect=lambda path,bound:path):
+            target=quarantine_partial_venv(runtime,quarantine,'a'*64,bound=bound)
+        self.assertFalse(venv.exists());self.assertEqual(target.name,'venv');self.assertTrue((target/'pyvenv.cfg').is_file())
+        self.assertEqual(target.parent.stat().st_mode&0o777,0o700)
+
+    def test_partial_quarantine_rejects_substitutes_and_completed_venvs(self):
+        runtime,venv,quarantine=self.partial_venv();shutil.rmtree(venv);venv.symlink_to(self.root)
+        with patch('iios_qualification_v2.runtime.durable.contained',side_effect=lambda path,bound:path):
+            with self.assertRaisesRegex(ValueError,'PARTIAL_VENV_OWNER_MODE'):quarantine_partial_venv(runtime,quarantine,'a'*64,bound={'root':str(self.root)})
+        venv.unlink();venv.mkdir();venv.chmod(0o700);(venv/'IIOS-RUNTIME.json').write_text('{}')
+        with patch('iios_qualification_v2.runtime.durable.contained',side_effect=lambda path,bound:path):
+            with self.assertRaisesRegex(ValueError,'RUNTIME_REBUILD_PARTIAL_ONLY'):quarantine_partial_venv(runtime,quarantine,'a'*64,bound={'root':str(self.root)})
+
+    def test_partial_runtime_requires_explicit_rebuild_and_complete_runtime_cannot_move(self):
+        runtime,venv,quarantine=self.partial_venv();identity='a'*64
+        common=dict(verify_vendor=patch('iios_qualification_v2.runtime.verify_vendor',return_value={}),
+                    lock_binding=patch('iios_qualification_v2.runtime.lock_binding',return_value={'wheels':[]}),
+                    directory=patch('iios_qualification_v2.runtime.directory',side_effect=lambda path:path),
+                    digest=patch('iios_qualification_v2.runtime.digest',return_value=identity),
+                    file_hash=patch('iios_qualification_v2.runtime.file_hash',return_value='b'*64))
+        with common['verify_vendor'],common['lock_binding'],common['directory'],common['digest'],common['file_hash']:
+            with self.assertRaisesRegex(ValueError,'PARTIAL_VENV_REQUIRES_EXPLICIT_REBUILD'):
+                environment(runtime,{},self.root/'lock',self.root/'artifacts',quarantine=quarantine,bound={'root':str(self.root)})
+        (venv/'IIOS-RUNTIME.json').write_text('{}')
+        with common['verify_vendor'],common['lock_binding'],common['directory'],common['digest'],common['file_hash']:
+            with self.assertRaisesRegex(ValueError,'RUNTIME_REBUILD_PARTIAL_ONLY'):
+                environment(runtime,{},self.root/'lock',self.root/'artifacts',rebuild=True,quarantine=quarantine,bound={'root':str(self.root)})
+        self.assertTrue(venv.exists());self.assertTrue(partial_rebuild_required(runtime,identity) is False)
+
+    def test_recovery_hint_is_limited_to_the_exact_safe_identity(self):
+        runtime,venv,_=self.partial_venv();identity='a'*64
+        self.assertTrue(partial_rebuild_required(runtime,identity))
+        self.assertFalse(partial_rebuild_required(runtime,'b'*64))
+        venv.chmod(0o755);self.assertFalse(partial_rebuild_required(runtime,identity))
+
+    def test_partial_quarantine_rejects_uncontained_destination(self):
+        runtime,venv,quarantine=self.partial_venv()
+        with self.assertRaisesRegex(ValueError,'PARTIAL_VENV_QUARANTINE_CONTAINMENT'):
+            quarantine_partial_venv(runtime,quarantine,'a'*64,bound={'root':str(self.root/'other')})
+
+    def test_partial_quarantine_fails_closed_if_rename_target_is_replaced(self):
+        runtime,venv,quarantine=self.partial_venv();original=os.rename
+        def replace_after_move(source,target):
+            original(source,target);shutil.rmtree(target);Path(target).mkdir();Path(target).chmod(0o700)
+        with patch('iios_qualification_v2.runtime.durable.contained',side_effect=lambda path,bound:path),\
+             patch('iios_qualification_v2.runtime.os.rename',side_effect=replace_after_move):
+            with self.assertRaisesRegex(ValueError,'PARTIAL_VENV_REPLACED_DURING_MOVE'):
+                quarantine_partial_venv(runtime,quarantine,'a'*64,bound={'root':str(self.root)})
 
     def test_missing_wheelhouse_fails_before_venv_or_pip(self):
         pins={'wheels':[{'filename':'missing-1-py3-none-any.whl','size':1,'sha256':'a'*64}]}

@@ -68,7 +68,8 @@ class LocalAppTests(unittest.TestCase):
     def test_native_ui_has_fixed_command_and_only_confirmation_choices(self):
         text=(ROOT/'native-app/IIOSNativeQualification.m.in').read_text()
         for value in ('@"Run Qualification"','@"Cancel"','@"--profile",@"observation"','provider_requests','Open Evidence',
-                      '[value[@"inventory_sha256"] isEqual:SourceInventory]','EVIDENCE_EXPORT_UNAVAILABLE','preflight_evidence'):
+                      '[value[@"inventory_sha256"] isEqual:SourceInventory]','EVIDENCE_EXPORT_UNAVAILABLE','preflight_evidence',
+                      'runtime_rebuild_required','@"--rebuild-runtime"','Runtime recovery:'):
             self.assertIn(value,text)
         for forbidden in ('NSSearchField','NSOpenPanel','shell -c','/bin/zsh','system('):
             self.assertNotIn(forbidden,text)

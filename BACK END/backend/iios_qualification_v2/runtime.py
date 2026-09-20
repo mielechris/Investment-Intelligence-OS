@@ -10,7 +10,8 @@ import re
 import stat
 import subprocess
 import zipfile
-from .state import require, file_hash, digest, decode, publish, directory
+from .state import require, file_hash, digest, decode, publish, directory, fsync_dir
+from . import roots as durable
 
 ENV = {'PATH':'/usr/bin:/bin:/usr/sbin', 'LC_ALL':'C', 'TZ':'UTC',
        'PYTHONDONTWRITEBYTECODE':'1', 'PIP_NO_INDEX':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1',
@@ -445,7 +446,64 @@ def verify_environment_tree(root, expected):
     require(environment_tree(root)==expected,'RUNTIME_TREE_DRIFT')
 
 
-def environment(root, config, lock, artifacts, *, rebuild=False):
+def _partial_venv_stat(path):
+    """Admit only the exact owner-only incomplete venv object, without following it."""
+    flags=os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0)
+    try:
+        fd=os.open(path,flags)
+    except OSError:
+        require(False,'PARTIAL_VENV_OWNER_MODE')
+    try:
+        value=os.fstat(fd)
+    finally:
+        os.close(fd)
+    require(stat.S_ISDIR(value.st_mode) and value.st_uid==os.getuid() and stat.S_IMODE(value.st_mode)==0o700,
+            'PARTIAL_VENV_OWNER_MODE')
+    complete=Path(path)/'IIOS-RUNTIME.json'
+    try: complete_stat=complete.lstat()
+    except FileNotFoundError: return value
+    require(not stat.S_ISLNK(complete_stat.st_mode),'RUNTIME_REBUILD_PARTIAL_ONLY')
+    require(False,'RUNTIME_REBUILD_PARTIAL_ONLY')
+
+
+def quarantine_partial_venv(root, quarantine, identity, *, bound):
+    """Move one exact incomplete runtime aside only after an explicit recovery choice."""
+    import uuid
+    root=Path(root);quarantine=Path(quarantine);base=Path(bound['root'])
+    require(root==base/'runtime' and quarantine==base/'qualification'/'native-v2'/'runtime-quarantine',
+            'PARTIAL_VENV_QUARANTINE_CONTAINMENT')
+    root=durable.contained(root,bound);quarantine=durable.contained(quarantine,bound);venv=root/('venv-'+identity)
+    before=_partial_venv_stat(venv)
+    entry=quarantine/('recovery-'+identity+'-'+uuid.uuid4().hex);target=entry/'venv'
+    os.mkdir(entry,0o700)
+    try:
+        os.rename(venv,target)
+    except BaseException:
+        fsync_dir(entry);raise
+    # rename cannot be made descriptor-relative on this platform. Pin the opened object's
+    # device/inode after the atomic move; a replacement race fails closed before reuse.
+    after=target.lstat()
+    require((after.st_dev,after.st_ino)==(before.st_dev,before.st_ino),'PARTIAL_VENV_REPLACED_DURING_MOVE')
+    _partial_venv_stat(target)
+    fsync_dir(root);fsync_dir(entry);fsync_dir(quarantine)
+    return target
+
+
+def partial_rebuild_required(root, identity):
+    """Return a recovery hint only for the exact safely-admissible runtime identity."""
+    item=Path(root)/('venv-'+identity)
+    try:
+        _partial_venv_stat(item)
+    except ValueError:
+        return False
+    return True
+
+
+def runtime_identity(config, lock, artifacts):
+    return digest(dict(vendor=verify_vendor(config),lock=file_hash(lock),artifacts=file_hash(artifacts)))
+
+
+def environment(root, config, lock, artifacts, *, rebuild=False, quarantine=None, bound=None):
     ENV['TMPDIR']=str(directory(root/'scratch'))
     vendor = verify_vendor(config)
     pins = lock_binding(lock, artifacts)
@@ -460,10 +518,16 @@ def environment(root, config, lock, artifacts, *, rebuild=False):
     bundled=list(Path('/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ensurepip/_bundled').glob('pip-*.whl'))
     require(len(bundled)==1 and not bundled[0].is_symlink(),'VENDOR_PIP_BUNDLE')
     pip_wheel=bundled[0];pip_parent=file_hash(pip_wheel)
-    if venv.exists() and rebuild:
-        import uuid
-        venv.rename(root/('retired-'+identity+'-'+uuid.uuid4().hex))
-    if venv.exists() and complete.is_file():verify_environment_tree(venv,decode(complete.read_bytes())['tree'])
+    if venv.exists():
+        if complete.exists() or complete.is_symlink():
+            require(complete.is_file() and not complete.is_symlink(),'RUNTIME_REBUILD_PARTIAL_ONLY')
+            require(not rebuild,'RUNTIME_REBUILD_PARTIAL_ONLY')
+            verify_environment_tree(venv,decode(complete.read_bytes())['tree'])
+        else:
+            require(rebuild,'PARTIAL_VENV_REQUIRES_EXPLICIT_REBUILD')
+            require(quarantine is not None,'PARTIAL_VENV_QUARANTINE_REQUIRED')
+            require(bound is not None,'PARTIAL_VENV_QUARANTINE_CONTAINMENT')
+            quarantine_partial_venv(root,quarantine,identity,bound=bound)
     if not venv.exists():
         command([vendor['launcher'],'-I','-B','-S','-c',BUILD_GUARD+'\nimport venv;venv.EnvBuilder(with_pip=False,symlinks=True).create(sys.argv[1])',venv],timeout=120)
         requirements=venv/'IIOS-REQUIREMENTS.txt'
@@ -471,8 +535,6 @@ def environment(root, config, lock, artifacts, *, rebuild=False):
         requirements.chmod(0o400)
         pip_command(venv/'bin/python',pip_wheel,['install','--no-index','--no-deps','--require-hashes',
                  '--only-binary=:all:','--no-compile','--no-cache-dir','--find-links',wheelhouse,'-r',requirements],timeout=180)
-    else:
-        require(complete.is_file(), 'PARTIAL_VENV_REQUIRES_EXPLICIT_REBUILD')
     pip_command(venv/'bin/python',pip_wheel,['check'])
     require(file_hash(pip_wheel)==pip_parent,'VENDOR_PIP_CHANGED')
     inventory = decode(command([venv/'bin/python','-I','-B','-S','-c',INVENTORY]))
