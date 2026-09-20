@@ -52,7 +52,7 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(PermissionError):reconcile([{'event':'CHILD_LAUNCHED','data':{'nonce':'n','pid':2,'boot':'b'}}],'b',failed)
     def test_profile_network_is_only_selected_loopback_port(self):
         text=profile('/source','/runtime','/work','/python',39421,'/canary')
-        for literal in ('(deny network*)','127.0.0.1:39421','(deny process-fork)','(deny file-write*)','(deny file-read-data (literal "/canary"))'):self.assertIn(literal,text)
+        for literal in ('(deny network*)','(local tcp "*:39421")','(remote tcp "*:39421")','(deny process-fork)','(deny file-write*)','(deny file-read-data (literal "/canary"))'):self.assertIn(literal,text)
         self.assertNotIn('(subpath "/")',text)
     def test_non_mac_cannot_issue_native_evidence(self):
         with patch('iios_qualification_v2.native.platform.system',return_value='Linux'):

@@ -73,6 +73,7 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence, status=Non
         failure=dict(stage=name,category=type(error).__name__ if type(error).__module__=='builtins' else 'CUSTOM_EXCEPTION',
                      predicate=provenance.exception_predicate(error),
                      exception=provenance.exception_evidence(error,diagnostic_source,stage=name,controller_sha256=launch_hash))
+        if hasattr(error,'evidence'):failure['protocol']=sanitized(error.evidence)
         store.append('STAGE_FAILED',failure)
         if status:status(name,'FAILED')
         if name!='cleanup':
@@ -82,6 +83,7 @@ def execute(store, stages, *, source, boot, resume, issuer, evidence, status=Non
             except BaseException as cleanup_error:
                 cleanup=dict(verified=False,status='NOT_ESTABLISHED',
                     exception=provenance.exception_evidence(cleanup_error,diagnostic_source,stage='cleanup',controller_sha256=launch_hash))
+                if hasattr(cleanup_error,'evidence'):cleanup.update(sanitized(cleanup_error.evidence))
                 store.append('FAILURE_CLEANUP',cleanup)
     status=('GREEN' if issuer is not None else 'OFFLINE_PASS') if failure is None else 'RED'
     summary=dict(schema='iios-native-qualification-v2',profile='observation',status=status,

@@ -16,6 +16,28 @@ import uuid
 from .state import AUTHORITY, require, decode, digest, publish, file_hash, historical_exception
 from .runtime import command, ENV
 
+_CHILD_STREAM_LIMIT=65536
+
+
+class ChildReplyError(ValueError):
+    def __init__(self, category, raw=b''):
+        super().__init__('CHILD_REPLY_'+category)
+        self.category=category;self.raw=raw
+
+
+class ChildCleanupError(ValueError):
+    def __init__(self, classification, protocol=None):
+        super().__init__('CLEANUP_FAILED:'+classification)
+        self.evidence=dict(classification=classification,protocol=protocol)
+
+
+def stream_evidence(raw):
+    raw=bytes(raw);bounded=raw[:_CHILD_STREAM_LIMIT]
+    try:bounded.decode('utf-8');category='EMPTY' if not bounded else 'UTF8_TEXT'
+    except UnicodeDecodeError:category='BINARY'
+    if len(raw)>_CHILD_STREAM_LIMIT:category='OVER_LIMIT'
+    return dict(category=category,bytes=len(bounded),sha256=__import__('hashlib').sha256(bounded).hexdigest())
+
 
 def close_child_stdin(child):
     """Detach a child input pipe even when its peer has already exited.
@@ -135,8 +157,8 @@ def profile(source, runtime, work, python, port, denied=None):
     literal=lambda value:json.dumps(str(value))
     roots=[source,runtime,work,Path('/Library/Frameworks/Python.framework/Versions/3.14'),Path('/System/Library'),Path('/usr/lib'),Path('/usr/share')]
     lines=['(version 1)','(allow default)','(deny network*)',
-           '(allow network-inbound (local ip "127.0.0.1:'+str(port)+'"))',
-           '(allow network-outbound (remote ip "127.0.0.1:'+str(port)+'"))',
+           '(allow network-inbound (local tcp "*:'+str(port)+'"))',
+           '(allow network-outbound (remote tcp "*:'+str(port)+'"))',
            '(deny file-read-data)','(allow file-read-metadata)','(allow file-read-data (literal "/") (literal "/dev/null") (literal "/dev/urandom"))',
            '(allow file-read-data '+ ' '.join('(subpath '+literal(p)+')' for p in roots)+')',
            '(deny file-write*)','(allow file-write* (subpath '+literal(work)+'))',
@@ -161,10 +183,24 @@ class Native:
         while time.monotonic()<end:
             if select.select([child.stdout],[],[],max(0,end-time.monotonic()))[0]:
                 chunk=os.read(child.stdout.fileno(),1)
-                require(chunk,'CHILD_EOF');raw+=chunk
+                if not chunk:raise ChildReplyError('EOF',raw)
+                raw+=chunk
                 require(len(raw)<=65536,'CHILD_OUTPUT_BOUND')
-                if chunk==b'\n':return decode(raw)
-        raise TimeoutError('CHILD_ACK_DEADLINE')
+                if chunk==b'\n':
+                    try:return decode(raw)
+                    except Exception as error:raise ChildReplyError('MALFORMED',raw) from error
+        raise ChildReplyError('TIMEOUT',raw)
+
+    def protocol_evidence(self, child, error, *, expected, confined):
+        exit_code=child.poll()
+        stderr=b''
+        if exit_code is not None and child.stderr is not None:
+            stderr=child.stderr.read(_CHILD_STREAM_LIMIT+1)
+        return dict(schema=1,expected_reply_category=expected,
+                    observed_reply_category=error.category,
+                    denial_stage='PRE_READY_SANDBOX_ADMISSION' if confined and exit_code==65 else 'PRE_READY_PROTOCOL',
+                    child_exit_category='RUNNING' if exit_code is None else 'EXIT_'+str(exit_code),
+                    stdout=stream_evidence(error.raw),stderr=stream_evidence(stderr))
 
     def identity(self, child, argv):
         rows=[self.inspect(child.pid) for _ in range(3)]
@@ -187,10 +223,17 @@ class Native:
             policy=self.work/(nonce+'.sb');policy.write_text(profile(self.source,Path(self.runtime['path']),self.work,python,port,target));policy.chmod(0o400)
             launch=['/usr/bin/sandbox-exec','-f',str(policy)]+argv
         self.store.append('LAUNCH_INTENT',dict(boot=self.boot,nonce=nonce,role=role))
-        child=subprocess.Popen(launch,cwd=self.work,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,close_fds=True)
+        child=subprocess.Popen(launch,cwd=self.work,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
         entry=dict(child=child,identity=None,config=config,argv=argv);self.children.append(entry)
         self.store.append('CHILD_LAUNCHED',dict(pid=child.pid,boot=self.boot,nonce=nonce,role=role))
-        ready=self.line(child);require(ready.get('event')=='READY' and ready.get('pid')==child.pid,'STARTUP_READY')
+        try:ready=self.line(child)
+        except ChildReplyError as error:
+            detail=self.protocol_evidence(child,error,expected='READY',confined=confined)
+            entry['protocol']=detail
+            self.store.append('CHILD_PROTOCOL_FAILED',dict(boot=self.boot,nonce=nonce,role=role,protocol=detail))
+            error.evidence=detail
+            raise
+        require(ready.get('event')=='READY' and ready.get('pid')==child.pid,'STARTUP_READY')
         row=self.identity(child,argv);entry['identity']=row
         self.store.append('CHILD_OWNED',dict(identity=asdict(row),boot=self.boot,nonce=nonce))
         for k,v in dict(nonce=nonce,role=role,config_parent=digest(config),authority=AUTHORITY).items():require(ready.get(k)==v,'STARTUP_BINDING')
@@ -232,11 +275,17 @@ class Native:
                         child.terminate()
                     child.wait(timeout=15)
                     require(all(self.inspect(child.pid) is None for _ in range(3)),'CLEANUP_ABSENCE')
-                    self.store.append('CHILD_REAPED',dict(pid=child.pid,boot=self.boot,nonce=entry['config']['nonce'],exit=child.returncode,absence_samples=3))
+                    classification=('REAPED_AFTER_PRE_READY_FAILURE' if entry.get('protocol') else
+                                    'REAPED_AFTER_NONCOOPERATIVE_STOP')
+                    self.store.append('CHILD_REAPED',dict(pid=child.pid,boot=self.boot,nonce=entry['config']['nonce'],exit=child.returncode,absence_samples=3,cleanup_classification=classification))
                     self.children.remove(entry)
-                    failures.append('NONCOOPERATIVE_CLEANUP')
+                    failures.append((classification,entry.get('protocol')))
                 except Exception:failures.append('CLEANUP_NOT_ESTABLISHED')
-        require(not failures and not self.children,'CLEANUP_FAILED:'+','.join(failures))
+        if failures:
+            classification=failures[0] if isinstance(failures[0],str) else failures[0][0]
+            protocol=None if isinstance(failures[0],str) else failures[0][1]
+            raise ChildCleanupError(classification,protocol)
+        require(not self.children,'CLEANUP_FAILED:CHILDREN_REMAIN')
         return dict(cooperative=True,outstanding=0,verified=True)
 
     def ownership(self):

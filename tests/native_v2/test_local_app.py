@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -98,6 +99,37 @@ class LocalAppTests(unittest.TestCase):
                        issuer={'launch_mode':'local_app'},evidence=self.root/'evidence',controller=lambda:{'fixture':True})
         self.assertEqual(result['status'],'RED');self.assertTrue(result['export'])
         self.assertTrue((Path(result['export'])/'manifest.json').is_file())
+
+    def test_confinement_profile_uses_only_parser_accepted_tcp_port_selectors(self):
+        value=native.profile(self.root,self.root,self.root,self.root/'python',38493)
+        self.assertIn('(allow network-inbound (local tcp "*:38493"))',value)
+        self.assertIn('(allow network-outbound (remote tcp "*:38493"))',value)
+        self.assertNotIn('local ip "127.0.0.1:',value);self.assertNotIn('remote ip "127.0.0.1:',value)
+
+    def test_pre_ready_sandbox_failure_is_sanitized_and_bound_to_failure_export(self):
+        child=SimpleNamespace(poll=lambda:65,stderr=io.BytesIO(b'profile diagnostic'),stdin=None)
+        error=native.ChildReplyError('EOF')
+        engine=native.Native(self.root,self.root,None,{},'boot',float('inf'))
+        detail=engine.protocol_evidence(child,error,expected='READY',confined=True)
+        self.assertEqual(detail['child_exit_category'],'EXIT_65')
+        self.assertEqual(detail['expected_reply_category'],'READY')
+        self.assertEqual(detail['observed_reply_category'],'EOF')
+        self.assertEqual(detail['denial_stage'],'PRE_READY_SANDBOX_ADMISSION')
+        self.assertNotIn('profile diagnostic',json.dumps(detail))
+        error.evidence=detail
+        def confinement():raise error
+        from iios_qualification_v2.state import STAGES
+        stages={name:(confinement if name=='confinement' else lambda:{'verified':True}) for name in STAGES[:-1]}
+        result=execute(Store(self.root/'protocol-state'),stages,source='s',boot='b',resume=False,
+                       issuer={'launch_mode':'local_app'},evidence=self.root/'evidence',controller=lambda:{'fixture':True})
+        self.assertEqual(result['failure']['protocol'],detail)
+        exported=json.loads((Path(result['export'])/'summary.json').read_text())
+        self.assertEqual(exported['failure']['protocol'],detail)
+
+    def test_reaped_pre_ready_child_keeps_cleanup_not_established(self):
+        error=native.ChildCleanupError('REAPED_AFTER_PRE_READY_FAILURE',{'child_exit_category':'EXIT_65'})
+        self.assertEqual(error.evidence['classification'],'REAPED_AFTER_PRE_READY_FAILURE')
+        self.assertEqual(error.evidence['protocol']['child_exit_category'],'EXIT_65')
     def test_native_ui_has_fixed_command_and_only_confirmation_choices(self):
         text=(ROOT/'native-app/IIOSNativeQualification.m.in').read_text()
         for value in ('@"Run Qualification"','@"Cancel"','@"--profile",@"observation"','provider_requests','Open Evidence',
