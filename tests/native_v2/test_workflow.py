@@ -7,7 +7,8 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'BACK END/backend'))
 from iios_qualification_v2.state import *
 from iios_qualification_v2.cli import execute
-from iios_qualification_v2.native import reconcile, profile, selected_host
+from iios_qualification_v2.native import (reconcile, profile, selected_host, os_denial_log_argv,
+                                           os_denial_telemetry, require_os_denial_attribution)
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.root.chmod(0o700)
@@ -54,6 +55,45 @@ class WorkflowTests(unittest.TestCase):
         text=profile('/source','/runtime','/work','/python',39421,'/canary')
         for literal in ('(deny network*)','(local tcp "*:39421")','(remote tcp "*:39421")','(deny process-fork)','(deny file-write*)','(deny file-read-data (literal "/canary"))'):self.assertIn(literal,text)
         self.assertNotIn('(subpath "/")',text)
+
+    def test_os_denial_telemetry_counts_only_independently_returned_records(self):
+        pid=2468;target='/private/tmp/iios-canary';operation='file-read-data'
+        stdout=(b'info Sandbox: probe(2468) deny file-read-data '+target.encode()+b'\n'
+                b'info Sandbox: probe(2468) deny file-read-data /different\n'
+                b'info Sandbox: probe(9999) deny file-read-data '+target.encode()+b'\n')
+        telemetry=os_denial_telemetry(pid,operation,target,tool_exit_timeout_category='EXIT_0',stdout=stdout,
+                                      stderr=b'diagnostic-not-retained')
+        self.assertEqual(telemetry['returned_record_count'],3)
+        self.assertEqual(telemetry['pid_match_count'],2)
+        self.assertEqual(telemetry['sandbox_sender_count'],3)
+        self.assertEqual(telemetry['deny_action_count'],3)
+        self.assertEqual(telemetry['operation_match_count'],3)
+        self.assertEqual(telemetry['target_match_count'],2)
+        self.assertEqual(telemetry['all_fields_attributable_count'],1)
+        self.assertEqual(telemetry['stdout']['bytes'],len(stdout))
+        self.assertEqual(len(telemetry['stdout']['sha256']),64)
+        require_os_denial_attribution(telemetry)
+
+    def test_os_denial_attribution_never_accepts_child_denial_or_tool_failure(self):
+        telemetry=os_denial_telemetry(1,'file-read-data','/canary',tool_exit_timeout_category='EXIT_0',
+                                      stdout=b'child outcome DENIED errno 13\n')
+        self.assertEqual(telemetry['all_fields_attributable_count'],0)
+        with self.assertRaisesRegex(ValueError,'OS_DENIAL_ATTRIBUTION_UNAVAILABLE'):
+            require_os_denial_attribution(telemetry)
+        tool_failed=dict(telemetry,tool_exit_timeout_category='TIMEOUT',all_fields_attributable_count=1)
+        with self.assertRaisesRegex(ValueError,'OS_DENIAL_TOOL_UNAVAILABLE'):
+            require_os_denial_attribution(tool_failed)
+
+    def test_os_denial_log_query_is_fixed_and_pid_bound(self):
+        self.assertEqual(os_denial_log_argv(2468),['/usr/bin/log','show','--last','2m','--style','compact','--predicate',
+                         'eventMessage CONTAINS "(2468)" AND eventMessage CONTAINS "deny"'])
+
+    def test_selected_mac_prerequisite_is_synthetic_and_never_qualification(self):
+        text=(Path(__file__).resolve().parents[2]/'scripts/verify-os-denial-attribution.py').read_text()
+        for value in ('SYNTHETIC_MACOS_SANDBOX_DENIAL','collect_os_denial_attribution(child.pid',
+                      "'file-read-data'",'require_os_denial_attribution(telemetry)',
+                      "qualification_launched=False",'provider_requests=0','trade_execution=False'):
+            self.assertIn(value,text)
     def test_non_mac_cannot_issue_native_evidence(self):
         with patch('iios_qualification_v2.native.platform.system',return_value='Linux'):
             with self.assertRaisesRegex(ValueError,'SELECTED_MAC'):selected_host(self.root/'absent')

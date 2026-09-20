@@ -17,6 +17,7 @@ from .state import AUTHORITY, require, decode, digest, publish, file_hash, histo
 from .runtime import command, ENV
 
 _CHILD_STREAM_LIMIT=65536
+_OS_DENIAL_LOG_TIMEOUT=20
 
 
 class ChildReplyError(ValueError):
@@ -31,12 +32,87 @@ class ChildCleanupError(ValueError):
         self.evidence=dict(classification=classification,protocol=protocol)
 
 
-def stream_evidence(raw):
+def stream_evidence(raw, *, over_limit=False):
     raw=bytes(raw);bounded=raw[:_CHILD_STREAM_LIMIT]
     try:bounded.decode('utf-8');category='EMPTY' if not bounded else 'UTF8_TEXT'
     except UnicodeDecodeError:category='BINARY'
-    if len(raw)>_CHILD_STREAM_LIMIT:category='OVER_LIMIT'
+    if over_limit or len(raw)>_CHILD_STREAM_LIMIT:category='OVER_LIMIT'
     return dict(category=category,bytes=len(bounded),sha256=__import__('hashlib').sha256(bounded).hexdigest())
+
+
+def os_denial_log_argv(pid):
+    """The fixed, PID-bound unified-log query used for denial attribution."""
+    predicate='eventMessage CONTAINS "('+str(pid)+')" AND eventMessage CONTAINS "deny"'
+    return ['/usr/bin/log','show','--last','2m','--style','compact','--predicate',predicate]
+
+
+def bounded_tool(argv, *, timeout):
+    """Run a diagnostic tool without retaining more than the evidence bound.
+
+    This intentionally returns categories and hashes rather than text, so an
+    unavailable or differently formatted unified log cannot become evidence
+    by accident.
+    """
+    try:
+        child=subprocess.Popen(argv,env=ENV,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE,close_fds=True)
+    except OSError:
+        return 'LAUNCH_FAILURE',b'',False,b'',False
+    buffers={child.stdout:bytearray(),child.stderr:bytearray()};streams=dict(buffers)
+    over={child.stdout:False,child.stderr:False};deadline=time.monotonic()+timeout
+    category=None
+    try:
+        while streams:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                category='TIMEOUT';break
+            ready,_,_=select.select(list(streams),[],[],remaining)
+            if not ready:
+                category='TIMEOUT';break
+            for stream in ready:
+                chunk=os.read(stream.fileno(),4096)
+                if not chunk:
+                    del streams[stream];continue
+                room=_CHILD_STREAM_LIMIT-len(buffers[stream])
+                if len(chunk)>room:
+                    buffers[stream].extend(chunk[:max(room,0)]);over[stream]=True;category='OUTPUT_BOUND';break
+                buffers[stream].extend(chunk)
+            if category:break
+        if category:
+            child.terminate()
+            try:child.wait(timeout=5)
+            except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
+        else:
+            child.wait(timeout=5)
+            category='EXIT_'+str(child.returncode)
+    finally:
+        for stream in (child.stdout,child.stderr):
+            if stream is not None:stream.close()
+    return category,bytes(buffers[child.stdout]),over[child.stdout],bytes(buffers[child.stderr]),over[child.stderr]
+
+
+def os_denial_telemetry(pid, operation, target, *, tool_exit_timeout_category, stdout=b'', stdout_over_limit=False,
+                        stderr=b'', stderr_over_limit=False):
+    """Summarize returned records. No child reply is accepted as OS evidence."""
+    records=bytes(stdout).splitlines();pid_token=('('+str(pid)+')').encode();operation=operation.encode();target=str(target).encode()
+    def count(token):return sum(token in row for row in records)
+    attributable=sum(all(token in row for token in (pid_token,b'Sandbox:',b'deny',operation,target)) for row in records)
+    return dict(tool_exit_timeout_category=tool_exit_timeout_category,
+                stdout=stream_evidence(stdout,over_limit=stdout_over_limit),stderr=stream_evidence(stderr,over_limit=stderr_over_limit),
+                returned_record_count=len(records),pid_match_count=count(pid_token),sandbox_sender_count=count(b'Sandbox:'),
+                deny_action_count=count(b'deny'),operation_match_count=count(operation),target_match_count=count(target),
+                all_fields_attributable_count=attributable)
+
+
+def collect_os_denial_attribution(pid, operation, target):
+    category,stdout,stdout_over,stderr,stderr_over=bounded_tool(os_denial_log_argv(pid),timeout=_OS_DENIAL_LOG_TIMEOUT)
+    return os_denial_telemetry(pid,operation,target,tool_exit_timeout_category=category,stdout=stdout,
+                               stdout_over_limit=stdout_over,stderr=stderr,stderr_over_limit=stderr_over)
+
+
+def require_os_denial_attribution(telemetry):
+    require(telemetry['tool_exit_timeout_category']=='EXIT_0','OS_DENIAL_TOOL_UNAVAILABLE')
+    require(telemetry['all_fields_attributable_count']>0,'OS_DENIAL_ATTRIBUTION_UNAVAILABLE')
 
 
 def close_child_stdin(child):
@@ -305,13 +381,13 @@ class Native:
                 require(denied['result']['outcome']=='DENIED' and denied['result']['errno'] in (1,13),'CONTROLLED_DENIAL')
                 pid=denied['child'].pid
                 require(self.inspect(pid)==denied['identity'],'DENIAL_OWNER_STABLE')
-                predicate='eventMessage CONTAINS "('+str(pid)+')" AND eventMessage CONTAINS "deny"'
-                logs=command(['/usr/bin/log','show','--last','2m','--style','compact','--predicate',predicate],timeout=20)
                 operation={'network':'network-outbound','subprocess':'process-exec'}.get(kind,'file-read-data')
                 expected='/usr/bin/true' if kind=='subprocess' else ('127.0.0.1:'+str(port) if kind=='network' else str(target))
-                matches=[line for line in logs.splitlines() if 'Sandbox:' in line and '('+str(pid)+')' in line and operation in line and expected in line]
-                require(matches,'OS_DENIAL_ATTRIBUTION_UNAVAILABLE')
-                results.append(dict(kind=kind,baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']),os_evidence=matches,cleanup=self.stop(denied)))
+                telemetry=collect_os_denial_attribution(pid,operation,expected)
+                self.store.append('OS_DENIAL_TELEMETRY',dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
+                require_os_denial_attribution(telemetry)
+                results.append(dict(kind=kind,baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']),
+                                    os_denial_telemetry=telemetry,cleanup=self.stop(denied)))
         return results
 
     def startup(self):
