@@ -13,6 +13,7 @@ AUTHORITY={'broker_connection':False,'paper_order_permission':False,
            'trade_execution':False,'live_execution':False}
 ENV={'PATH':'/usr/bin:/bin:/usr/sbin','LC_ALL':'C','TZ':'UTC',
      'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'}
+GENERATED_SOURCE_ROOT='bazel-out'
 
 def require(value, code):
     if not value:raise ValueError(code)
@@ -45,7 +46,7 @@ def inventory(root):
         path=name.decode('utf-8');pure=PurePosixPath(path)
         require(stage=='0' and mode in ('100644','100755'),'SOURCE_INDEX_MODE')
         require(not pure.is_absolute() and '..' not in pure.parts and
-                not any(ord(c)<32 for c in path),'SOURCE_PATH')
+                pure.parts[0]!=GENERATED_SOURCE_ROOT and not any(ord(c)<32 for c in path),'SOURCE_PATH')
         item=(root/pure);st=item.lstat()
         require(stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode),'SOURCE_FILE_TYPE')
         data=item.read_bytes();actual_mode=stat.S_IMODE(st.st_mode)
@@ -54,13 +55,25 @@ def inventory(root):
                      'sha256':hashlib.sha256(data).hexdigest()})
     require(rows and rows==sorted(rows,key=lambda row:row['path']),'SOURCE_INVENTORY_ORDER')
     actual=[]
-    for item in root.rglob('*'):
-        relative=item.relative_to(root)
-        if '.git' in relative.parts:continue
-        st=item.lstat();require(not stat.S_ISLNK(st.st_mode) and
-                               (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
-                               'SOURCE_EXTRA_TYPE')
-        if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
+    for parent,directories,filenames in os.walk(root,topdown=True,followlinks=False):
+        parent=Path(parent)
+        if parent==root and GENERATED_SOURCE_ROOT in {*directories,*filenames}:
+            generated=root/GENERATED_SOURCE_ROOT
+            require(GENERATED_SOURCE_ROOT in directories,'SOURCE_GENERATED_ROOT_TYPE')
+            directories.remove(GENERATED_SOURCE_ROOT)
+            try:fd=os.open(generated,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            except FileNotFoundError:pass
+            except OSError:require(False,'SOURCE_GENERATED_ROOT_TYPE')
+            else:
+                try:require(stat.S_ISDIR(os.fstat(fd).st_mode),'SOURCE_GENERATED_ROOT_TYPE')
+                finally:os.close(fd)
+        if '.git' in directories:directories.remove('.git')
+        if '.git' in filenames:filenames.remove('.git')
+        for name in (*directories,*filenames):
+            item=parent/name;relative=item.relative_to(root);st=item.lstat()
+            require(not stat.S_ISLNK(st.st_mode) and (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
+                    'SOURCE_EXTRA_TYPE')
+            if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
     tracked=[row['path'] for row in rows]
     require(len({name.casefold() for name in tracked})==len(tracked) and
             len(actual)==len(tracked) and

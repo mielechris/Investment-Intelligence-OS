@@ -16,6 +16,7 @@ ENV = {'PATH':'/usr/bin:/bin:/usr/sbin', 'LC_ALL':'C', 'TZ':'UTC',
        'PYTHONDONTWRITEBYTECODE':'1', 'PIP_NO_INDEX':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1',
        'PIP_CONFIG_FILE':'/dev/null', 'PIP_NO_CACHE_DIR':'1',
        'GIT_CONFIG_NOSYSTEM':'1', 'GIT_CONFIG_GLOBAL':'/dev/null','GIT_OPTIONAL_LOCKS':'0'}
+_GENERATED_SOURCE_ROOT = 'bazel-out'
 
 
 def command(argv, *, timeout=30, cwd=None):
@@ -247,7 +248,8 @@ def source_identity(root, *, sealed=False):
         header,encoded=record.split(b'\t',1);mode,blob,stage=header.decode('ascii').split(' ');name=encoded.decode('utf-8')
         parts=Path(name).parts
         require(stage=='0' and mode in ('100644','100755') and not Path(name).is_absolute() and
-                '..' not in parts and '.git' not in parts and not any(ord(c)<32 for c in name),
+                '..' not in parts and '.git' not in parts and parts[0] != _GENERATED_SOURCE_ROOT and
+                not any(ord(c)<32 for c in name),
                 'SOURCE_INDEX_MODE')
         p = root/name
         require(p.is_file() and not p.is_symlink(), 'SOURCE_FILE')
@@ -261,13 +263,25 @@ def source_identity(root, *, sealed=False):
                     bool(actual_mode&0o100)==(mode=='100755'),'SOURCE_WORKTREE_MODE')
         files.append({'path':name,'sha256':file_hash(p),'bytes':st.st_size,'mode':git_mode})
     actual=[]
-    for path in root.rglob('*'):
-        relative=path.relative_to(root)
-        if '.git' in relative.parts:continue
-        st=path.lstat();require(not stat.S_ISLNK(st.st_mode) and
-                               (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
-                               'SOURCE_EXTRA_TYPE')
-        if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
+    for parent, directories, filenames in os.walk(root, topdown=True, followlinks=False):
+        parent=Path(parent)
+        if parent==root and _GENERATED_SOURCE_ROOT in {*directories,*filenames}:
+            generated=root/_GENERATED_SOURCE_ROOT
+            require(_GENERATED_SOURCE_ROOT in directories,'SOURCE_GENERATED_ROOT_TYPE')
+            directories.remove(_GENERATED_SOURCE_ROOT)
+            try:fd=os.open(generated,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            except FileNotFoundError:pass
+            except OSError:require(False,'SOURCE_GENERATED_ROOT_TYPE')
+            else:
+                try:require(stat.S_ISDIR(os.fstat(fd).st_mode),'SOURCE_GENERATED_ROOT_TYPE')
+                finally:os.close(fd)
+        if '.git' in directories:directories.remove('.git')
+        if '.git' in filenames:filenames.remove('.git')
+        for name in (*directories,*filenames):
+            path=parent/name;relative=path.relative_to(root);st=path.lstat()
+            require(not stat.S_ISLNK(st.st_mode) and (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)),
+                    'SOURCE_EXTRA_TYPE')
+            if stat.S_ISREG(st.st_mode):actual.append(relative.as_posix())
     tracked=[row['path'] for row in files]
     require(len({name.casefold() for name in tracked})==len(tracked) and
             len(actual)==len(tracked) and

@@ -50,6 +50,33 @@ class ControlTests(unittest.TestCase):
         binding=self.root/'binding';binding.write_text(json.dumps({'schema':1,'repository':'mielechris/Investment-Intelligence-OS','commit':'a'*40,'inventory':[],'inventory_sha256':'b'*64,'authority':verify.AUTHORITY}))
         with patch.dict(os.environ,dict(self.context(),GITHUB_REF='refs/tags/v1'),clear=True),patch.object(verify,'command',side_effect=AssertionError('git called')):
             with self.assertRaisesRegex(ValueError,'CONTROL_CONTEXT'):verify.verify(binding,self.root,self.root/'receipt')
+
+    def test_control_inventory_excludes_only_generated_bazel_out(self):
+        source=self.root/'source';source.mkdir();item=source/'x.py';item.write_text('x');item.chmod(0o644)
+        generated=source/'bazel-out';generated.mkdir();(generated/'output.py').write_text('generated')
+        staged=b'100644 '+b'a'*40+b' 0\tx.py\0'
+        with patch.object(verify,'command',return_value=Result(staged)):
+            rows=verify.inventory(source)
+        self.assertEqual([row['path'] for row in rows],['x.py'])
+        with patch.object(verify,'command',return_value=Result(staged)),patch.object(verify.os,'open',side_effect=FileNotFoundError):
+            rows=verify.inventory(source)
+        self.assertEqual([row['path'] for row in rows],['x.py'])
+        (source/'extra.py').write_text('extra')
+        with patch.object(verify,'command',return_value=Result(staged)):
+            with self.assertRaisesRegex(ValueError,'SOURCE_EXTRA_FILE'):verify.inventory(source)
+
+    def test_control_inventory_rejects_generated_substitute_roots_and_index_rows(self):
+        source=self.root/'source';source.mkdir();item=source/'x.py';item.write_text('x');item.chmod(0o644)
+        staged=b'100644 '+b'a'*40+b' 0\tx.py\0';(source/'bazel-out').write_text('substitute')
+        with patch.object(verify,'command',return_value=Result(staged)):
+            with self.assertRaisesRegex(ValueError,'SOURCE_GENERATED_ROOT_TYPE'):verify.inventory(source)
+        (source/'bazel-out').unlink();(source/'bazel-out').symlink_to(source/'x.py')
+        with patch.object(verify,'command',return_value=Result(staged)):
+            with self.assertRaisesRegex(ValueError,'SOURCE_GENERATED_ROOT_TYPE'):verify.inventory(source)
+        (source/'bazel-out').unlink()
+        generated=b'100644 '+b'a'*40+b' 0\tbazel-out/substitute.py\0'
+        with patch.object(verify,'command',return_value=Result(generated)):
+            with self.assertRaisesRegex(ValueError,'SOURCE_PATH'):verify.inventory(source)
     def test_evidence_scanner_rejects_machine_paths_tokens_and_ids(self):
         for value in ({'runner_name':'selected'},{'uid':501},{'path':'/Users/person/Library/IIOS'},
                       {'value':'ghp_'+'a'*30},{'value':'Bearer credential'},{'token=secret':False}):

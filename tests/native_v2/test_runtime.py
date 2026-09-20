@@ -100,6 +100,35 @@ class RuntimeTests(unittest.TestCase):
             value=source_identity(self.root)
         self.assertEqual(value['inventory'][0]['mode'],0o755)
 
+    def test_source_identity_excludes_generated_bazel_out_from_inventory(self):
+        script=self.root/'script';script.write_text('x');script.chmod(0o600)
+        generated=self.root/'bazel-out';generated.mkdir();(generated/'output.py').write_text('generated')
+        staged='100644 '+'a'*40+' 0\tscript\0'
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
+            value=source_identity(self.root)
+        self.assertEqual([row['path'] for row in value['inventory']],['script'])
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]),\
+             patch('iios_qualification_v2.runtime.os.open',side_effect=FileNotFoundError):
+            value=source_identity(self.root)
+        self.assertEqual([row['path'] for row in value['inventory']],['script'])
+
+    def test_source_identity_rejects_unrelated_extra_and_generated_substitutes(self):
+        script=self.root/'script';script.write_text('x');script.chmod(0o600)
+        staged='100644 '+'a'*40+' 0\tscript\0'
+        (self.root/'extra.py').write_text('extra')
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
+            with self.assertRaisesRegex(ValueError,'SOURCE_EXTRA_FILE'):source_identity(self.root)
+        (self.root/'extra.py').unlink();(self.root/'bazel-out').write_text('substitute')
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
+            with self.assertRaisesRegex(ValueError,'SOURCE_GENERATED_ROOT_TYPE'):source_identity(self.root)
+        (self.root/'bazel-out').unlink();(self.root/'bazel-out').symlink_to(self.root/'script')
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',staged]):
+            with self.assertRaisesRegex(ValueError,'SOURCE_GENERATED_ROOT_TYPE'):source_identity(self.root)
+        (self.root/'bazel-out').unlink()
+        generated='100644 '+'a'*40+' 0\tbazel-out/substitute.py\0'
+        with patch('iios_qualification_v2.runtime.command',side_effect=['','a'*40+'\n',generated]):
+            with self.assertRaisesRegex(ValueError,'SOURCE_INDEX_MODE'):source_identity(self.root)
+
     def codesign_success(self):
         return [SimpleNamespace(returncode=0,stdout=b'',stderr=b''),
                 SimpleNamespace(returncode=0,stdout=b'',stderr=b'TeamIdentifier=BMM5U3QVKW\n')]
