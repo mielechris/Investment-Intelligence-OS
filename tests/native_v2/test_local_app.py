@@ -66,6 +66,38 @@ class LocalAppTests(unittest.TestCase):
                        controller=lambda:{'test_observation':True})
         self.assertEqual(result['status'],'RED');self.assertTrue(result['export'])
         self.assertIn(('ownership','FAILED'),calls);self.assertEqual(result['authority'],AUTHORITY)
+
+    def test_closed_denied_child_pipe_is_detached_before_failure_export(self):
+        class BufferedPipe:
+            def __init__(self):self.writes=[];self.closed=False
+            def write(self,value):self.writes.append(value)
+            def flush(self):raise BrokenPipeError(32,'Broken pipe')
+            def close(self):self.closed=True;raise BrokenPipeError(32,'Broken pipe')
+        read_fd,write_fd=os.pipe();os.close(read_fd)
+        pipe=os.fdopen(write_fd,'wb');pipe.write(b'STOP n\n');child=SimpleNamespace(stdin=pipe)
+        native.close_child_stdin(child)
+        self.assertTrue(pipe.closed);self.assertIsNone(child.stdin)
+        engine=native.Native(self.root,self.root,None,{},'boot',float('inf'))
+        entry={'child':SimpleNamespace(stdin=BufferedPipe()),'config':{'nonce':'n'}}
+        with self.assertRaises(BrokenPipeError):engine.stop(entry)
+        self.assertIsNone(entry['child'].stdin)
+
+    def test_closed_denied_child_pipe_cannot_block_failure_receipt_export(self):
+        pipe=SimpleNamespace(write=lambda _:None,flush=lambda:(_ for _ in ()).throw(BrokenPipeError(32,'Broken pipe')),
+                             close=lambda:(_ for _ in ()).throw(BrokenPipeError(32,'Broken pipe')))
+        engine=native.Native(self.root,self.root,None,{},'boot',float('inf'))
+        entry={'child':SimpleNamespace(stdin=pipe),'config':{'nonce':'n'}}
+        def confinement():raise ValueError('CONTROLLED_DENIAL')
+        def cleanup():
+            with self.assertRaises(BrokenPipeError):engine.stop(entry)
+            self.assertIsNone(entry['child'].stdin)
+            raise ValueError('CLEANUP_FAILED:NONCOOPERATIVE_CLEANUP')
+        from iios_qualification_v2.state import STAGES
+        stages={name:(confinement if name=='confinement' else cleanup if name=='cleanup' else lambda:{'verified':True}) for name in STAGES[:-1]}
+        result=execute(Store(self.root/'receipt-state'),stages,source='s',boot='b',resume=False,
+                       issuer={'launch_mode':'local_app'},evidence=self.root/'evidence',controller=lambda:{'fixture':True})
+        self.assertEqual(result['status'],'RED');self.assertTrue(result['export'])
+        self.assertTrue((Path(result['export'])/'manifest.json').is_file())
     def test_native_ui_has_fixed_command_and_only_confirmation_choices(self):
         text=(ROOT/'native-app/IIOSNativeQualification.m.in').read_text()
         for value in ('@"Run Qualification"','@"Cancel"','@"--profile",@"observation"','provider_requests','Open Evidence',

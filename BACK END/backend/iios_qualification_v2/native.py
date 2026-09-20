@@ -17,6 +17,22 @@ from .state import AUTHORITY, require, decode, digest, publish, file_hash, histo
 from .runtime import command, ENV
 
 
+def close_child_stdin(child):
+    """Detach a child input pipe even when its peer has already exited.
+
+    A denied sandboxed probe can exit before the controller reaches its STOP
+    exchange.  Its buffered input must be closed here, rather than later by a
+    garbage collector during checkpoint publication.
+    """
+    stream=child.stdin
+    child.stdin=None
+    if stream is None:return
+    try:
+        stream.close()
+    except BrokenPipeError:
+        pass
+
+
 def boot():
     value=command(['/usr/sbin/sysctl','-n','kern.bootsessionuuid']).strip().lower()
     require(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',value),'BOOT_UUID')
@@ -187,18 +203,22 @@ class Native:
     def stop(self, entry):
         child=entry['child'];nonce=entry['config']['nonce']
         # Never signal an inspected PID recovered from a prior controller. This is a held child handle.
-        child.stdin.write(('STOP '+nonce+'\n').encode());child.stdin.flush()
-        stopped=self.line(child,10)
-        require(stopped.get('event')=='STOPPED' and stopped.get('nonce')==nonce,'STOP_ACK')
-        for origin in stopped['origins'].values():
-            p=Path(origin['path'])
-            require(p.is_file() and file_hash(p)==origin['sha256'],'MODULE_HASH')
-            require(p.is_relative_to(self.source) or p.is_relative_to(Path(self.runtime['path'])) or str(p).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'),'MODULE_ORIGIN')
-        require(child.wait(timeout=10)==0,'CHILD_EXIT')
-        require(all(self.inspect(child.pid) is None for _ in range(3)),'CHILD_ABSENCE')
-        self.store.append('CHILD_REAPED',dict(pid=child.pid,boot=self.boot,nonce=nonce,exit=0,absence_samples=3))
-        self.children.remove(entry)
-        return dict(pid=child.pid,exit=0,absence_samples=3,origins=stopped['origins'])
+        try:
+            require(child.stdin is not None,'CHILD_STDIN_CLOSED')
+            child.stdin.write(('STOP '+nonce+'\n').encode());child.stdin.flush()
+            stopped=self.line(child,10)
+            require(stopped.get('event')=='STOPPED' and stopped.get('nonce')==nonce,'STOP_ACK')
+            for origin in stopped['origins'].values():
+                p=Path(origin['path'])
+                require(p.is_file() and file_hash(p)==origin['sha256'],'MODULE_HASH')
+                require(p.is_relative_to(self.source) or p.is_relative_to(Path(self.runtime['path'])) or str(p).startswith('/Library/Frameworks/Python.framework/Versions/3.14/'),'MODULE_ORIGIN')
+            require(child.wait(timeout=10)==0,'CHILD_EXIT')
+            require(all(self.inspect(child.pid) is None for _ in range(3)),'CHILD_ABSENCE')
+            self.store.append('CHILD_REAPED',dict(pid=child.pid,boot=self.boot,nonce=nonce,exit=0,absence_samples=3))
+            self.children.remove(entry)
+            return dict(pid=child.pid,exit=0,absence_samples=3,origins=stopped['origins'])
+        finally:
+            close_child_stdin(child)
 
     def cleanup(self):
         failures=[]
