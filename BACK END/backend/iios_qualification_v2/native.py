@@ -12,12 +12,14 @@ import ssl
 import stat
 import subprocess
 import time
+import unicodedata
 import uuid
 from .state import AUTHORITY, require, decode, digest, publish, file_hash, historical_exception
 from .runtime import command, ENV
 
 _CHILD_STREAM_LIMIT=65536
 _OS_DENIAL_LOG_TIMEOUT=20
+_TARGET_REPRESENTATION_LIMIT=8
 
 
 class ChildReplyError(ValueError):
@@ -97,11 +99,54 @@ def os_denial_telemetry(pid, operation, target, *, tool_exit_timeout_category, s
     records=bytes(stdout).splitlines();pid_token=('('+str(pid)+')').encode();operation=operation.encode();target=str(target).encode()
     def count(token):return sum(token in row for row in records)
     attributable=sum(all(token in row for token in (pid_token,b'Sandbox:',b'deny',operation,target)) for row in records)
+    relevant=[row for row in records if all(token in row for token in (pid_token,b'Sandbox:',b'deny',operation))]
+    relevant.sort(key=lambda row:target not in row)
+    representations=[target_representation(row,operation,target) for row in relevant[:_TARGET_REPRESENTATION_LIMIT]]
+    categories={}
+    for row in representations:categories[row['category']]=categories.get(row['category'],0)+1
     return dict(tool_exit_timeout_category=tool_exit_timeout_category,
                 stdout=stream_evidence(stdout,over_limit=stdout_over_limit),stderr=stream_evidence(stderr,over_limit=stderr_over_limit),
                 returned_record_count=len(records),pid_match_count=count(pid_token),sandbox_sender_count=count(b'Sandbox:'),
                 deny_action_count=count(b'deny'),operation_match_count=count(operation),target_match_count=count(target),
-                all_fields_attributable_count=attributable)
+                all_fields_attributable_count=attributable,
+                expected_target=dict(category=target_category(target.decode('utf-8','strict')),bytes=len(target),
+                                     sha256=__import__('hashlib').sha256(target).hexdigest()),
+                target_representation_counts=categories,target_representation_records=representations,
+                target_representation_total_count=len(relevant),
+                target_representation_records_truncated=len(relevant)>_TARGET_REPRESENTATION_LIMIT)
+
+
+def target_category(target):
+    if re.fullmatch(r'127\.0\.0\.1:[1-9][0-9]{0,4}',target):return 'IPV4_LOOPBACK_EXACT_PORT'
+    if target.startswith('/'):
+        return 'ABSOLUTE_EXECUTABLE_PATH' if target in ('/usr/bin/true',) else 'ABSOLUTE_FILE_PATH'
+    return 'OTHER'
+
+
+def target_representation(record, operation, expected):
+    """Classify only the target suffix; never retain its raw bytes."""
+    suffix=record.split(operation,1)[1].strip();text=suffix.decode('utf-8','replace');expected=expected.decode('utf-8','strict')
+    exact=expected in text;category='EXACT_CANONICAL' if exact else 'OTHER'
+    endpoint=re.fullmatch(r'127\.0\.0\.1:([1-9][0-9]{0,4})',expected)
+    if not exact and endpoint and re.fullmatch(r'remote:\*:'+re.escape(endpoint.group(1)),text):
+        category='REMOTE_WILDCARD_HOST_EXACT_PORT'
+    elif not exact and endpoint and re.fullmatch(r'\*:'+re.escape(endpoint.group(1)),text):
+        category='WILDCARD_HOST_EXACT_PORT'
+    elif not exact and ('...' in text or '\u2026' in text):category='TRUNCATED'
+    prefix='NONE'
+    if text.startswith('/private/'):prefix='PRIVATE_ROOT'
+    elif text.startswith('file://'):prefix='FILE_URI'
+    elif text.startswith('remote:*:'):prefix='REMOTE_WILDCARD_HOST'
+    elif text.startswith('*:'):prefix='WILDCARD_HOST'
+    escaping='NONE'
+    if '%' in text:escaping='PERCENT'
+    elif '\\' in text:escaping='BACKSLASH'
+    quoting='DOUBLE' if '"' in text else ('SINGLE' if "'" in text else 'NONE')
+    return dict(category=category,bytes=len(suffix),sha256=__import__('hashlib').sha256(suffix).hexdigest(),
+                canonical_present=exact,normalization=('NFC_NFD_UNCHANGED' if unicodedata.normalize('NFC',text)==text and
+                                                       unicodedata.normalize('NFD',text)==text else 'NORMALIZED_FORM_CHANGED'),
+                escaping=escaping,quoting=quoting,truncation='PRESENT' if category=='TRUNCATED' else 'ABSENT',
+                prefix=prefix)
 
 
 def collect_os_denial_attribution(pid, operation, target):

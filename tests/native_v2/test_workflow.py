@@ -70,9 +70,29 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(telemetry['operation_match_count'],3)
         self.assertEqual(telemetry['target_match_count'],2)
         self.assertEqual(telemetry['all_fields_attributable_count'],1)
+        self.assertEqual(telemetry['expected_target']['category'],'ABSOLUTE_FILE_PATH')
+        self.assertEqual(telemetry['target_representation_counts'],{'EXACT_CANONICAL':1,'OTHER':1})
         self.assertEqual(telemetry['stdout']['bytes'],len(stdout))
         self.assertEqual(len(telemetry['stdout']['sha256']),64)
         require_os_denial_attribution(telemetry)
+
+    def test_macos_wildcard_network_target_is_diagnosed_but_never_attributed(self):
+        stdout=b'info Sandbox: Python(2468) deny(1) network-outbound remote:*:43117\n'
+        telemetry=os_denial_telemetry(2468,'network-outbound','127.0.0.1:43117',
+                                      tool_exit_timeout_category='EXIT_0',stdout=stdout)
+        self.assertEqual(telemetry['operation_match_count'],1)
+        self.assertEqual(telemetry['target_match_count'],0)
+        self.assertEqual(telemetry['all_fields_attributable_count'],0)
+        self.assertEqual(telemetry['expected_target']['category'],'IPV4_LOOPBACK_EXACT_PORT')
+        self.assertEqual(telemetry['target_representation_counts'],{'REMOTE_WILDCARD_HOST_EXACT_PORT':1})
+        representation=telemetry['target_representation_records'][0]
+        self.assertEqual(representation['prefix'],'REMOTE_WILDCARD_HOST')
+        self.assertEqual(representation['escaping'],'NONE')
+        self.assertEqual(representation['quoting'],'NONE')
+        self.assertEqual(representation['truncation'],'ABSENT')
+        self.assertNotIn('remote:*:43117',json.dumps(telemetry))
+        with self.assertRaisesRegex(ValueError,'OS_DENIAL_ATTRIBUTION_UNAVAILABLE'):
+            require_os_denial_attribution(telemetry)
 
     def test_os_denial_attribution_never_accepts_child_denial_or_tool_failure(self):
         telemetry=os_denial_telemetry(1,'file-read-data','/canary',tool_exit_timeout_category='EXIT_0',
@@ -91,7 +111,8 @@ class WorkflowTests(unittest.TestCase):
     def test_selected_mac_prerequisite_is_synthetic_and_never_qualification(self):
         text=(Path(__file__).resolve().parents[2]/'scripts/verify-os-denial-attribution.py').read_text()
         for value in ('SYNTHETIC_MACOS_SANDBOX_DENIAL','collect_os_denial_attribution(child.pid',
-                      "'file-read-data'",'require_os_denial_attribution(telemetry)',
+                      "'file-read-data'",'require_os_denial_attribution(file_telemetry)',
+                      'REMOTE_WILDCARD_HOST_EXACT_PORT',"exact_target_proven=False",'qualification_attribution=\'RED\'',
                       "qualification_launched=False",'provider_requests=0','trade_execution=False'):
             self.assertIn(value,text)
     def test_non_mac_cannot_issue_native_evidence(self):
