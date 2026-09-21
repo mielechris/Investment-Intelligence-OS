@@ -96,7 +96,10 @@ def bounded_tool(argv, *, timeout):
 def os_denial_telemetry(pid, operation, target, *, tool_exit_timeout_category, stdout=b'', stdout_over_limit=False,
                         stderr=b'', stderr_over_limit=False):
     """Summarize returned records. No child reply is accepted as OS evidence."""
-    records=bytes(stdout).splitlines();pid_token=('('+str(pid)+')').encode();operation=operation.encode();target=str(target).encode()
+    records=bytes(stdout).splitlines();pid_token=('('+str(pid)+')').encode()
+    require(operation in ('file-read-data','network-outbound','process-exec'),'OS_DENIAL_OPERATION')
+    expected_operation=operation
+    operation=operation.encode();target=str(target).encode()
     def count(token):return sum(token in row for row in records)
     attributable=sum(all(token in row for token in (pid_token,b'Sandbox:',b'deny',operation,target)) for row in records)
     relevant=[row for row in records if all(token in row for token in (pid_token,b'Sandbox:',b'deny',operation))]
@@ -108,7 +111,7 @@ def os_denial_telemetry(pid, operation, target, *, tool_exit_timeout_category, s
                 stdout=stream_evidence(stdout,over_limit=stdout_over_limit),stderr=stream_evidence(stderr,over_limit=stderr_over_limit),
                 returned_record_count=len(records),pid_match_count=count(pid_token),sandbox_sender_count=count(b'Sandbox:'),
                 deny_action_count=count(b'deny'),operation_match_count=count(operation),target_match_count=count(target),
-                all_fields_attributable_count=attributable,
+                all_fields_attributable_count=attributable,expected_operation=expected_operation,
                 expected_target=dict(category=target_category(target.decode('utf-8','strict')),bytes=len(target),
                                      sha256=__import__('hashlib').sha256(target).hexdigest()),
                 target_representation_counts=categories,target_representation_records=representations,
@@ -162,7 +165,9 @@ def require_os_denial_attribution(telemetry):
 
 def require_file_attribution_prerequisite(telemetry):
     require_os_denial_attribution(telemetry)
-    require(telemetry['expected_target']['category']=='ABSOLUTE_FILE_PATH' and
+    require(telemetry['expected_operation']=='file-read-data' and
+            telemetry['operation_match_count']>0 and telemetry['target_match_count']>0 and
+            telemetry['expected_target']['category']=='ABSOLUTE_FILE_PATH' and
             telemetry['target_representation_counts'].get('EXACT_CANONICAL',0)>0,
             'OS_DENIAL_FILE_TARGET_UNAVAILABLE')
 
@@ -441,9 +446,9 @@ class Native:
                 'OS_DENIAL_CANARY_IDENTITY')
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
-            allowed=self.launch('probe',confined=False,operation='filesystem',target=canonical,target_port=port)
+            allowed=self.launch('probe',confined=False,operation='file_read_canary',target=canonical,target_port=port)
             require(allowed['result']['outcome']=='ALLOWED','CONTROLLED_BASELINE');self.stop(allowed)
-            denied=self.launch('probe',confined=True,operation='filesystem',target=canonical,target_port=port)
+            denied=self.launch('probe',confined=True,operation='file_read_canary',target=canonical,target_port=port)
             require(denied['result']['outcome']=='DENIED' and denied['result']['errno'] in (1,13),'CONTROLLED_DENIAL')
             pid=denied['child'].pid;require(self.inspect(pid)==denied['identity'],'DENIAL_OWNER_STABLE')
             telemetry=collect_os_denial_attribution(pid,'file-read-data',str(canonical))
@@ -470,16 +475,19 @@ class Native:
                 require(denied['result']['outcome']=='DENIED' and denied['result']['errno'] in (1,13),'CONTROLLED_DENIAL')
                 pid=denied['child'].pid
                 require(self.inspect(pid)==denied['identity'],'DENIAL_OWNER_STABLE')
-                operation={'network':'network-outbound','subprocess':'process-exec'}.get(kind,'file-read-data')
-                expected='/usr/bin/true' if kind=='subprocess' else ('127.0.0.1:'+str(port) if kind=='network' else str(target))
-                telemetry=collect_os_denial_attribution(pid,operation,expected)
-                event='NETWORK_DENIAL_TELEMETRY' if kind=='network' else 'OS_DENIAL_TELEMETRY'
-                self.store.append(event,dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
-                if kind=='network':require_separate_network_denial(telemetry)
-                else:require_os_denial_attribution(telemetry)
-                result=dict(kind=kind,baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']),cleanup=self.stop(denied))
-                if kind=='network':result['network_denial_telemetry']=telemetry;result['exact_host_attribution']=telemetry['all_fields_attributable_count']>0
-                else:result['os_denial_telemetry']=telemetry
+                result=dict(kind=kind,baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']))
+                if kind=='network':
+                    telemetry=collect_os_denial_attribution(pid,'network-outbound','127.0.0.1:'+str(port))
+                    self.store.append('NETWORK_DENIAL_TELEMETRY',dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
+                    require_separate_network_denial(telemetry)
+                    result['network_denial_telemetry']=telemetry
+                    result['exact_host_attribution']=telemetry['all_fields_attributable_count']>0
+                elif kind=='credential_boundary':
+                    telemetry=collect_os_denial_attribution(pid,'file-read-data',str(target.resolve(strict=True)))
+                    self.store.append('OS_DENIAL_TELEMETRY',dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
+                    require_file_attribution_prerequisite(telemetry)
+                    result['os_denial_telemetry']=telemetry
+                result['cleanup']=self.stop(denied)
                 results.append(result)
         return results
 

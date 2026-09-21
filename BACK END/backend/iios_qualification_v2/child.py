@@ -29,7 +29,7 @@ def main():
         import subprocess
         operation = config['operation']; target = config.get('target'); outcome='ALLOWED'; error=None
         try:
-            if operation in ('filesystem','credential_boundary'):
+            if operation in ('file_read_canary','filesystem','credential_boundary'):
                 require(Path(target).read_bytes()==b'IIOS_SYNTHETIC_CANARY\n', 'CANARY')
             elif operation=='network':
                 with socket.create_connection(('127.0.0.1',config['target_port']),timeout=2):pass

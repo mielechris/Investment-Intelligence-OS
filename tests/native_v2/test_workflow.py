@@ -71,12 +71,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(telemetry['operation_match_count'],3)
         self.assertEqual(telemetry['target_match_count'],2)
         self.assertEqual(telemetry['all_fields_attributable_count'],1)
+        self.assertEqual(telemetry['expected_operation'],'file-read-data')
         self.assertEqual(telemetry['expected_target']['category'],'ABSOLUTE_FILE_PATH')
         self.assertEqual(telemetry['target_representation_counts'],{'EXACT_CANONICAL':1,'OTHER':1})
         self.assertEqual(telemetry['stdout']['bytes'],len(stdout))
         self.assertEqual(len(telemetry['stdout']['sha256']),64)
         require_os_denial_attribution(telemetry)
         require_file_attribution_prerequisite(telemetry)
+
+    def test_file_prerequisite_rejects_executable_target_and_zero_operation_matches(self):
+        telemetry=os_denial_telemetry(2468,'file-read-data','/private/tmp/iios-canary',
+                                      tool_exit_timeout_category='EXIT_0',
+                                      stdout=b'info Sandbox: probe(2468) deny file-read-data /private/tmp/iios-canary\n')
+        executable=dict(telemetry,expected_target=dict(telemetry['expected_target'],category='ABSOLUTE_EXECUTABLE_PATH'))
+        with self.assertRaisesRegex(ValueError,'OS_DENIAL_FILE_TARGET_UNAVAILABLE'):
+            require_file_attribution_prerequisite(executable)
+        missing_operation=dict(telemetry,operation_match_count=0)
+        with self.assertRaisesRegex(ValueError,'OS_DENIAL_FILE_TARGET_UNAVAILABLE'):
+            require_file_attribution_prerequisite(missing_operation)
 
     def test_macos_wildcard_network_target_is_diagnosed_but_never_attributed(self):
         stdout=b'info Sandbox: Python(2468) deny(1) network-outbound remote:*:43117\n'
@@ -122,7 +134,9 @@ class WorkflowTests(unittest.TestCase):
     def test_selected_mac_prerequisite_is_synthetic_and_never_qualification(self):
         text=(Path(__file__).resolve().parents[2]/'scripts/verify-os-denial-attribution.py').read_text()
         for value in ('SYNTHETIC_MACOS_SANDBOX_DENIAL','collect_os_denial_attribution(child.pid',
-                      "'file-read-data'",'require_os_denial_attribution(file_telemetry)',
+                      "'file-read-data'",'require_file_attribution_prerequisite(file_telemetry)',
+                      "file_telemetry['expected_operation']!='file-read-data'",
+                      "file_telemetry['operation_match_count']<1",'FILE_PROBE_WIRING_MISMATCH',
                       'EXACT_FILE_REPRESENTATION_NOT_OBSERVED','exact_file_representation_regression=\'GREEN\'',
                       'REMOTE_WILDCARD_HOST_EXACT_PORT',"exact_target_proven=False",'qualification_attribution=\'RED\'',
                       "qualification_launched=False",'provider_requests=0','trade_execution=False'):
@@ -131,13 +145,19 @@ class WorkflowTests(unittest.TestCase):
     def test_confinement_uses_exact_file_prerequisite_and_separate_network_evidence(self):
         text=(Path(__file__).resolve().parents[2]/'BACK END/backend/iios_qualification_v2/native.py').read_text()
         self.assertIn("'OS_DENIAL_ATTRIBUTION_PREREQUISITE'",text)
+        self.assertIn("operation='file_read_canary'",text)
         self.assertIn("canonical=target.resolve(strict=True)",text)
         self.assertIn("'OS_DENIAL_CANARY_REPLACED'",text)
         self.assertIn("'OS_DENIAL_CANARY_RETAINED'",text)
         self.assertIn('require_file_attribution_prerequisite(telemetry)',text)
-        self.assertIn("event='NETWORK_DENIAL_TELEMETRY'",text)
+        self.assertIn("self.store.append('NETWORK_DENIAL_TELEMETRY'",text)
         self.assertIn('require_separate_network_denial(telemetry)',text)
         self.assertIn("result['exact_host_attribution']=telemetry['all_fields_attributable_count']>0",text)
+        child=(Path(__file__).resolve().parents[2]/'BACK END/backend/iios_qualification_v2/child.py').read_text()
+        self.assertIn("operation in ('file_read_canary','filesystem','credential_boundary')",child)
+        self.assertNotIn("'subprocess':'process-exec'",text)
+        self.assertNotIn("expected='/usr/bin/true'",text)
+        self.assertIn("elif kind=='credential_boundary':",text)
     def test_non_mac_cannot_issue_native_evidence(self):
         with patch('iios_qualification_v2.native.platform.system',return_value='Linux'):
             with self.assertRaisesRegex(ValueError,'SELECTED_MAC'):selected_host(self.root/'absent')

@@ -17,13 +17,14 @@ import time
 SOURCE=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(SOURCE/'BACK END/backend'))
 from iios_qualification_v2.native import (collect_os_denial_attribution, profile,
-                                           require_os_denial_attribution)
+                                           require_file_attribution_prerequisite)
 from iios_qualification_v2.runtime import ENV
 
 
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--runtime',required=True,type=Path)
+    parser.add_argument('--file-only',action='store_true')
     args=parser.parse_args()
     runtime=args.runtime.resolve();python=runtime/'bin/python'
     if not (python.is_file() and os.access(python,os.X_OK)):
@@ -46,10 +47,22 @@ def main():
             if file_telemetry['tool_exit_timeout_category']=='EXIT_0' and file_telemetry['all_fields_attributable_count']>0:break
             time.sleep(0.5)
         if file_telemetry is None:raise ValueError('PREREQUISITE_TELEMETRY_UNAVAILABLE')
-        require_os_denial_attribution(file_telemetry)
+        require_file_attribution_prerequisite(file_telemetry)
+        if (file_telemetry['expected_operation']!='file-read-data' or
+                file_telemetry['expected_target']['category']=='ABSOLUTE_EXECUTABLE_PATH'):
+            raise ValueError('FILE_PROBE_WIRING_MISMATCH')
         if (file_telemetry['expected_target']['category']!='ABSOLUTE_FILE_PATH' or
+                file_telemetry['operation_match_count']<1 or file_telemetry['target_match_count']<1 or
                 file_telemetry['target_representation_counts'].get('EXACT_CANONICAL',0)<1):
             raise ValueError('EXACT_FILE_REPRESENTATION_NOT_OBSERVED')
+        if args.file_only:
+            print(json.dumps(dict(schema=1,prerequisite='SYNTHETIC_MACOS_FILE_DENIAL',status='GREEN',
+                                  pid_bound=True,operation_bound=True,file_exact_target_bound=True,
+                                  telemetry=file_telemetry,exact_file_representation_regression='GREEN',
+                                  network_representation_regression='NOT_RUN',
+                                  qualification_attribution='RED',qualification_launched=False,provider_requests=0,
+                                  credentials_accessed=False,trade_execution=False),sort_keys=True))
+            return
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
             if port==38493:raise ValueError('NETWORK_REPRESENTATION_PORT_COLLISION')
