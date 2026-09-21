@@ -160,6 +160,24 @@ def require_os_denial_attribution(telemetry):
     require(telemetry['all_fields_attributable_count']>0,'OS_DENIAL_ATTRIBUTION_UNAVAILABLE')
 
 
+def require_file_attribution_prerequisite(telemetry):
+    require_os_denial_attribution(telemetry)
+    require(telemetry['expected_target']['category']=='ABSOLUTE_FILE_PATH' and
+            telemetry['target_representation_counts'].get('EXACT_CANONICAL',0)>0,
+            'OS_DENIAL_FILE_TARGET_UNAVAILABLE')
+
+
+def require_separate_network_denial(telemetry):
+    """Require an OS network denial while making no exact-host claim."""
+    require(telemetry['tool_exit_timeout_category']=='EXIT_0','OS_DENIAL_TOOL_UNAVAILABLE')
+    require(telemetry['expected_target']['category']=='IPV4_LOOPBACK_EXACT_PORT' and
+            telemetry['target_representation_total_count']>0,'NETWORK_DENIAL_OBSERVATION_UNAVAILABLE')
+    if telemetry['all_fields_attributable_count']==0:
+        require(telemetry['target_match_count']==0 and
+                telemetry['target_representation_counts'].get('REMOTE_WILDCARD_HOST_EXACT_PORT',0)>0,
+                'NETWORK_DENIAL_REPRESENTATION_UNAVAILABLE')
+
+
 def close_child_stdin(child):
     """Detach a child input pipe even when its peer has already exited.
 
@@ -415,7 +433,33 @@ class Native:
 
     def confinement(self):
         results=[]
-        for kind in ('filesystem','credential_boundary','network','subprocess'):
+        target=self.work/(uuid.uuid4().hex+'-os-attribution-canary')
+        target.write_bytes(b'IIOS_SYNTHETIC_CANARY\n');target.chmod(0o600)
+        canary_stat=target.lstat();canonical=target.resolve(strict=True)
+        require(canonical==target and stat.S_ISREG(canary_stat.st_mode) and not stat.S_ISLNK(canary_stat.st_mode) and
+                canary_stat.st_uid==os.getuid() and stat.S_IMODE(canary_stat.st_mode)==0o600,
+                'OS_DENIAL_CANARY_IDENTITY')
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
+            allowed=self.launch('probe',confined=False,operation='filesystem',target=canonical,target_port=port)
+            require(allowed['result']['outcome']=='ALLOWED','CONTROLLED_BASELINE');self.stop(allowed)
+            denied=self.launch('probe',confined=True,operation='filesystem',target=canonical,target_port=port)
+            require(denied['result']['outcome']=='DENIED' and denied['result']['errno'] in (1,13),'CONTROLLED_DENIAL')
+            pid=denied['child'].pid;require(self.inspect(pid)==denied['identity'],'DENIAL_OWNER_STABLE')
+            telemetry=collect_os_denial_attribution(pid,'file-read-data',str(canonical))
+            self.store.append('OS_DENIAL_ATTRIBUTION_PREREQUISITE',dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
+            require_file_attribution_prerequisite(telemetry)
+            cleanup=self.stop(denied)
+            current=target.lstat()
+            require((current.st_dev,current.st_ino,current.st_uid,stat.S_IMODE(current.st_mode))==
+                    (canary_stat.st_dev,canary_stat.st_ino,canary_stat.st_uid,0o600) and
+                    file_hash(target)==__import__('hashlib').sha256(b'IIOS_SYNTHETIC_CANARY\n').hexdigest(),
+                    'OS_DENIAL_CANARY_REPLACED')
+            target.unlink()
+            require(not target.exists() and not target.is_symlink(),'OS_DENIAL_CANARY_RETAINED')
+            results.append(dict(kind='filesystem',baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']),
+                                exact_file_attribution_prerequisite=telemetry,cleanup=cleanup))
+        for kind in ('credential_boundary','network','subprocess'):
             target=self.work/(uuid.uuid4().hex+'-canary');target.write_bytes(b'IIOS_SYNTHETIC_CANARY\n');target.chmod(0o600)
             with socket.socket() as listener:
                 listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
@@ -429,10 +473,14 @@ class Native:
                 operation={'network':'network-outbound','subprocess':'process-exec'}.get(kind,'file-read-data')
                 expected='/usr/bin/true' if kind=='subprocess' else ('127.0.0.1:'+str(port) if kind=='network' else str(target))
                 telemetry=collect_os_denial_attribution(pid,operation,expected)
-                self.store.append('OS_DENIAL_TELEMETRY',dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
-                require_os_denial_attribution(telemetry)
-                results.append(dict(kind=kind,baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']),
-                                    os_denial_telemetry=telemetry,cleanup=self.stop(denied)))
+                event='NETWORK_DENIAL_TELEMETRY' if kind=='network' else 'OS_DENIAL_TELEMETRY'
+                self.store.append(event,dict(boot=self.boot,nonce=denied['config']['nonce'],telemetry=telemetry))
+                if kind=='network':require_separate_network_denial(telemetry)
+                else:require_os_denial_attribution(telemetry)
+                result=dict(kind=kind,baseline='ALLOWED',confined='DENIED',owner=asdict(denied['identity']),cleanup=self.stop(denied))
+                if kind=='network':result['network_denial_telemetry']=telemetry;result['exact_host_attribution']=telemetry['all_fields_attributable_count']>0
+                else:result['os_denial_telemetry']=telemetry
+                results.append(result)
         return results
 
     def startup(self):

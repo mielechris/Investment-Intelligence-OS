@@ -47,6 +47,9 @@ def main():
             time.sleep(0.5)
         if file_telemetry is None:raise ValueError('PREREQUISITE_TELEMETRY_UNAVAILABLE')
         require_os_denial_attribution(file_telemetry)
+        if (file_telemetry['expected_target']['category']!='ABSOLUTE_FILE_PATH' or
+                file_telemetry['target_representation_counts'].get('EXACT_CANONICAL',0)<1):
+            raise ValueError('EXACT_FILE_REPRESENTATION_NOT_OBSERVED')
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
             if port==38493:raise ValueError('NETWORK_REPRESENTATION_PORT_COLLISION')
@@ -75,7 +78,8 @@ def main():
             raise ValueError('WILDCARD_TARGET_INCORRECTLY_ATTRIBUTED')
         print(json.dumps(dict(schema=1,prerequisite='SYNTHETIC_MACOS_SANDBOX_DENIAL',status='GREEN',
                               pid_bound=True,operation_bound=True,file_exact_target_bound=True,
-                              telemetry=file_telemetry,network_representation_regression='GREEN',
+                              telemetry=file_telemetry,exact_file_representation_regression='GREEN',
+                              network_representation_regression='GREEN',
                               network_telemetry=network_telemetry,exact_target_proven=False,
                               qualification_attribution='RED',qualification_launched=False,provider_requests=0,
                               credentials_accessed=False,trade_execution=False),sort_keys=True))

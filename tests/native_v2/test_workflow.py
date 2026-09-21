@@ -8,7 +8,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'BACK END/backend'))
 from iios_qualification_v2.state import *
 from iios_qualification_v2.cli import execute
 from iios_qualification_v2.native import (reconcile, profile, selected_host, os_denial_log_argv,
-                                           os_denial_telemetry, require_os_denial_attribution)
+                                           os_denial_telemetry, require_os_denial_attribution,
+                                           require_file_attribution_prerequisite, require_separate_network_denial)
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.root.chmod(0o700)
@@ -75,6 +76,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(telemetry['stdout']['bytes'],len(stdout))
         self.assertEqual(len(telemetry['stdout']['sha256']),64)
         require_os_denial_attribution(telemetry)
+        require_file_attribution_prerequisite(telemetry)
 
     def test_macos_wildcard_network_target_is_diagnosed_but_never_attributed(self):
         stdout=b'info Sandbox: Python(2468) deny(1) network-outbound remote:*:43117\n'
@@ -93,6 +95,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('remote:*:43117',json.dumps(telemetry))
         with self.assertRaisesRegex(ValueError,'OS_DENIAL_ATTRIBUTION_UNAVAILABLE'):
             require_os_denial_attribution(telemetry)
+        require_separate_network_denial(telemetry)
+
+    def test_network_denial_requires_one_joint_pid_sender_deny_operation_record(self):
+        telemetry=os_denial_telemetry(2468,'network-outbound','127.0.0.1:43117',tool_exit_timeout_category='EXIT_0',
+                                      stdout=(b'info Sandbox: Python(9999) deny(1) network-outbound remote:*:43117\n'
+                                              b'info Python(2468) deny(1) network-outbound remote:*:43117\n'))
+        self.assertEqual(telemetry['target_representation_total_count'],0)
+        with self.assertRaisesRegex(ValueError,'NETWORK_DENIAL_OBSERVATION_UNAVAILABLE'):
+            require_separate_network_denial(telemetry)
 
     def test_os_denial_attribution_never_accepts_child_denial_or_tool_failure(self):
         telemetry=os_denial_telemetry(1,'file-read-data','/canary',tool_exit_timeout_category='EXIT_0',
@@ -112,9 +123,21 @@ class WorkflowTests(unittest.TestCase):
         text=(Path(__file__).resolve().parents[2]/'scripts/verify-os-denial-attribution.py').read_text()
         for value in ('SYNTHETIC_MACOS_SANDBOX_DENIAL','collect_os_denial_attribution(child.pid',
                       "'file-read-data'",'require_os_denial_attribution(file_telemetry)',
+                      'EXACT_FILE_REPRESENTATION_NOT_OBSERVED','exact_file_representation_regression=\'GREEN\'',
                       'REMOTE_WILDCARD_HOST_EXACT_PORT',"exact_target_proven=False",'qualification_attribution=\'RED\'',
                       "qualification_launched=False",'provider_requests=0','trade_execution=False'):
             self.assertIn(value,text)
+
+    def test_confinement_uses_exact_file_prerequisite_and_separate_network_evidence(self):
+        text=(Path(__file__).resolve().parents[2]/'BACK END/backend/iios_qualification_v2/native.py').read_text()
+        self.assertIn("'OS_DENIAL_ATTRIBUTION_PREREQUISITE'",text)
+        self.assertIn("canonical=target.resolve(strict=True)",text)
+        self.assertIn("'OS_DENIAL_CANARY_REPLACED'",text)
+        self.assertIn("'OS_DENIAL_CANARY_RETAINED'",text)
+        self.assertIn('require_file_attribution_prerequisite(telemetry)',text)
+        self.assertIn("event='NETWORK_DENIAL_TELEMETRY'",text)
+        self.assertIn('require_separate_network_denial(telemetry)',text)
+        self.assertIn("result['exact_host_attribution']=telemetry['all_fields_attributable_count']>0",text)
     def test_non_mac_cannot_issue_native_evidence(self):
         with patch('iios_qualification_v2.native.platform.system',return_value='Linux'):
             with self.assertRaisesRegex(ValueError,'SELECTED_MAC'):selected_host(self.root/'absent')
